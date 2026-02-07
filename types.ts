@@ -72,12 +72,15 @@ export interface TabularColumn {
   id: string;
   title: string; // The header (e.g., "Governing Law")
   query: string; // The question (e.g., "What is the governing law?")
+  riskCriteria?: string;
 }
 
 export interface TabularCell {
-  value: string;
-  quote: string;
-  confidence: 'High' | 'Medium' | 'Low';
+  value: string; // Display value (usually summary)
+  citations: string[];
+  risk_level?: 'High' | 'Medium' | 'Low' | 'Info';
+  risk_analysis?: string;
+  confidence?: 'High' | 'Medium' | 'Low'; // Kept for legacy/fallback
   status: 'loading' | 'done' | 'error';
   isEdited?: boolean;
 }
