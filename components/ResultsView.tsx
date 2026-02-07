@@ -2,16 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AnalysisResult, DocumentFile, ChatMessage } from '../types';
 import { PDFViewer } from './PDFViewer';
 import { Mail, FileDown, ShieldAlert, Wand2, MousePointerClick, MessageSquare, Loader, Zap } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface ResultsViewProps {
-  results: AnalysisResult[];
-  documents: DocumentFile[];
-  onDraftEmail: (data: any) => Promise<void>;
-  onSuggestRevision: (clause: string, original: string, issue: string) => void;
-  onChat: (query: string) => Promise<string>;
-  loadingAi: boolean;
-  userCredits: number;
-  onConsumeCredits: (cost: number) => boolean;
+    results: AnalysisResult[];
+    documents: DocumentFile[];
+    onDraftEmail: (data: any) => Promise<void>;
+    onSuggestRevision: (clause: string, original: string, issue: string) => void;
+    onChat: (query: string) => Promise<string>;
+    loadingAi: boolean;
+    userCredits: number;
+    onConsumeCredits: (cost: number) => boolean;
 }
 
 const COSTS = {
@@ -20,8 +22,8 @@ const COSTS = {
     EMAIL: 2,
 };
 
-export const ResultsView: React.FC<ResultsViewProps> = ({ 
-    results, documents, onDraftEmail, onSuggestRevision, onChat, loadingAi, userCredits, onConsumeCredits 
+export const ResultsView: React.FC<ResultsViewProps> = ({
+    results, documents, onDraftEmail, onSuggestRevision, onChat, loadingAi, userCredits, onConsumeCredits
 }) => {
     const [activeResultIdx, setActiveResultIdx] = useState(0);
     const [activeDocIdx, setActiveDocIdx] = useState(0);
@@ -39,7 +41,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [chatHistory]);
-    
+
     // Reset revision loading state when loadingAi becomes false
     useEffect(() => {
         if (!loadingAi) {
@@ -49,8 +51,6 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
     const handleCitationClick = (citations: string[]) => {
         setHighlights(citations);
-        // Switch to the relevant doc if we were in collection mode and not on the right doc
-        // (Simple implementation assumes current doc for now, can be expanded)
     };
 
     const handleSendChat = async () => {
@@ -84,7 +84,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     const handleExport = () => {
         // @ts-ignore - Loaded via CDN
         const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Table, TableRow, TableCell, WidthType, BorderStyle } = window.docx;
-        
+
         const children = [];
         children.push(
             new Paragraph({ text: `Review Report: ${activeResult.title}`, heading: HeadingLevel.TITLE, alignment: AlignmentType.CENTER, spacing: { after: 300 } }),
@@ -95,54 +95,60 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
             const rows = [];
             // Header
             rows.push(new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: key, bold: true, color: "FFFFFF" })] })], columnSpan: 2, shading: { fill: "333333" }, margins: { top: 100, bottom: 100, left: 100, right: 100 } })] }));
-            
+
             // Summary
             rows.push(new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Summary", bold: true })] }), new Paragraph({ text: data.summary })], columnSpan: 2, margins: { top: 100, bottom: 100, left: 100, right: 100 } })] }));
-            
+
             // Risk (if present)
             if (data.risk_level) {
                 let riskColor = "FFFFFF";
                 const level = data.risk_level.toLowerCase();
-                if (level.includes("high")) riskColor = "FFCCCC"; 
-                else if (level.includes("medium")) riskColor = "FFF4CC"; 
+                if (level.includes("high")) riskColor = "FFCCCC";
+                else if (level.includes("medium")) riskColor = "FFF4CC";
                 else if (level.includes("low")) riskColor = "CCFFCC";
-                
-                rows.push(new TableRow({ children: [
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "RISK RATING", bold: true })] }), new Paragraph({ children: [new TextRun({ text: data.risk_level.toUpperCase(), bold: true })] })], width: { size: 20, type: WidthType.PERCENTAGE }, shading: { fill: riskColor }, verticalAlign: "center", margins: { top: 100, bottom: 100, left: 100, right: 100 } }), 
-                    new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Risk Analysis", bold: true })] }), new Paragraph({ text: data.risk_analysis || "No specific analysis provided." })], width: { size: 80, type: WidthType.PERCENTAGE }, margins: { top: 100, bottom: 100, left: 100, right: 100 } })
-                ] }));
-            }
-            
-            // Evidence Header
-            rows.push(new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Evidence", bold: true })] })], columnSpan: 2, shading: { fill: "EEEEEE" }, margins: { top: 50, bottom: 50, left: 100, right: 100 } })] }));
-            
-            // Citations
-            if (data.citations && data.citations.length > 0) {
-                data.citations.forEach((cite: string, idx: number) => { 
-                    rows.push(new TableRow({ children: [
-                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `Ref ${idx + 1}`, bold: true })] })], width: { size: 15, type: WidthType.PERCENTAGE }, margins: { top: 50, bottom: 50, left: 50, right: 50 } }), 
-                        new TableCell({ children: [new Paragraph({ text: `"${cite}"`, italics: true })], width: { size: 85, type: WidthType.PERCENTAGE }, margins: { top: 50, bottom: 50, left: 50, right: 50 } })
-                    ] })); 
-                });
-            } else {
-                 rows.push(new TableRow({ children: [
-                     new TableCell({ children: [new Paragraph({ text: "-" })], width: { size: 15, type: WidthType.PERCENTAGE } }), 
-                     new TableCell({ children: [new Paragraph({ text: "No Relevant Reference Found", italics: true })], width: { size: 85, type: WidthType.PERCENTAGE } })
-                ] }));
+
+                rows.push(new TableRow({
+                    children: [
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "RISK RATING", bold: true })] }), new Paragraph({ children: [new TextRun({ text: data.risk_level.toUpperCase(), bold: true })] })], width: { size: 20, type: WidthType.PERCENTAGE }, shading: { fill: riskColor }, verticalAlign: "center", margins: { top: 100, bottom: 100, left: 100, right: 100 } }),
+                        new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Risk Analysis", bold: true })] }), new Paragraph({ text: data.risk_analysis || "No specific analysis provided." })], width: { size: 80, type: WidthType.PERCENTAGE }, margins: { top: 100, bottom: 100, left: 100, right: 100 } })
+                    ]
+                }));
             }
 
-            children.push(new Table({ 
-                rows: rows, 
-                width: { size: 100, type: WidthType.PERCENTAGE }, 
-                margins: { bottom: 300 }, 
-                borders: { 
-                    top: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" }, 
-                    bottom: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" }, 
-                    left: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" }, 
-                    right: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" }, 
-                    insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "EEEEEE" }, 
-                    insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "EEEEEE" } 
-                } 
+            // Evidence Header
+            rows.push(new TableRow({ children: [new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: "Evidence", bold: true })] })], columnSpan: 2, shading: { fill: "EEEEEE" }, margins: { top: 50, bottom: 50, left: 100, right: 100 } })] }));
+
+            // Citations
+            if (data.citations && data.citations.length > 0) {
+                data.citations.forEach((cite: string, idx: number) => {
+                    rows.push(new TableRow({
+                        children: [
+                            new TableCell({ children: [new Paragraph({ children: [new TextRun({ text: `Ref ${idx + 1}`, bold: true })] })], width: { size: 15, type: WidthType.PERCENTAGE }, margins: { top: 50, bottom: 50, left: 50, right: 50 } }),
+                            new TableCell({ children: [new Paragraph({ text: `"${cite}"`, italics: true })], width: { size: 85, type: WidthType.PERCENTAGE }, margins: { top: 50, bottom: 50, left: 50, right: 50 } })
+                        ]
+                    }));
+                });
+            } else {
+                rows.push(new TableRow({
+                    children: [
+                        new TableCell({ children: [new Paragraph({ text: "-" })], width: { size: 15, type: WidthType.PERCENTAGE } }),
+                        new TableCell({ children: [new Paragraph({ text: "No Relevant Reference Found", italics: true })], width: { size: 85, type: WidthType.PERCENTAGE } })
+                    ]
+                }));
+            }
+
+            children.push(new Table({
+                rows: rows,
+                width: { size: 100, type: WidthType.PERCENTAGE },
+                margins: { bottom: 300 },
+                borders: {
+                    top: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
+                    bottom: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
+                    left: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
+                    right: { style: BorderStyle.SINGLE, size: 1, color: "CCCCCC" },
+                    insideHorizontal: { style: BorderStyle.SINGLE, size: 1, color: "EEEEEE" },
+                    insideVertical: { style: BorderStyle.SINGLE, size: 1, color: "EEEEEE" }
+                }
             }));
             children.push(new Paragraph({ text: "", spacing: { after: 300 } }));
         });
@@ -182,20 +188,19 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                                 <div className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl">
                                     <span className="font-semibold text-sm text-white">{key}</span>
                                     {item.risk_level && (
-                                        <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold ${
-                                            item.risk_level === 'High' ? 'bg-red-500/20 text-red-400' :
+                                        <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold ${item.risk_level === 'High' ? 'bg-red-500/20 text-red-400' :
                                             item.risk_level === 'Medium' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
-                                        }`}>{item.risk_level}</span>
+                                            }`}>{item.risk_level}</span>
                                     )}
                                 </div>
                                 <div className="p-4 space-y-3">
                                     <p className="text-xs text-gray-300 leading-relaxed">{item.summary}</p>
                                     {item.risk_analysis && (
                                         <div className="bg-red-900/10 p-2 rounded border border-red-500/10">
-                                            <div className="text-[10px] text-red-400 font-bold mb-1 flex items-center gap-1"><ShieldAlert className="w-3 h-3"/> RISK ANALYSIS</div>
+                                            <div className="text-[10px] text-red-400 font-bold mb-1 flex items-center gap-1"><ShieldAlert className="w-3 h-3" /> RISK ANALYSIS</div>
                                             <p className="text-xs text-gray-400">{item.risk_analysis}</p>
                                             {(item.risk_level === 'High' || item.risk_level === 'Medium') && (
-                                                <button 
+                                                <button
                                                     onClick={() => handleSuggestRevisionClick(key, item.citations[0] || item.summary, item.risk_analysis)}
                                                     disabled={loadingAi}
                                                     className="mt-2 w-full py-1 text-[10px] bg-red-500/20 text-red-300 rounded hover:bg-red-500/30 flex items-center justify-center gap-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -213,7 +218,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                                         {item.citations?.map((c: string, i: number) => (
                                             <div key={i} className="group relative">
                                                 <button onClick={() => handleCitationClick([c])} className="text-[10px] bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white px-2 py-1 rounded border border-white/5 flex items-center gap-1 transition-colors">
-                                                    <MousePointerClick className="w-3 h-3" /> Ref {i+1}
+                                                    <MousePointerClick className="w-3 h-3" /> Ref {i + 1}
                                                 </button>
                                                 {/* Tooltip: Display to the right (left-full) to avoid clipping on left edge */}
                                                 <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 w-64 p-3 bg-black/90 backdrop-blur border border-white/20 rounded-lg hidden group-hover:block z-50 text-[10px] text-gray-300 shadow-xl pointer-events-none">
@@ -232,7 +237,16 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                         <div className="flex-1 overflow-y-auto p-4 space-y-3">
                             {chatHistory.map((m, i) => (
                                 <div key={i} className={`p-3 rounded-lg text-xs max-w-[90%] ${m.role === 'user' ? 'ml-auto bg-violet-600 text-white' : 'bg-white/10 text-gray-300'}`}>
-                                    {m.content}
+                                    <div className="prose prose-invert prose-sm max-w-none">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                                            h1: ({ node, ...props }) => <h1 className="text-lg font-bold text-violet-300 mb-2 mt-4 border-b border-violet-500/30 pb-1" {...props} />,
+                                            h2: ({ node, ...props }) => <h2 className="text-base font-bold text-violet-200 mb-2 mt-3" {...props} />,
+                                            h3: ({ node, ...props }) => <h3 className="text-sm font-bold text-white mb-1 mt-2" {...props} />,
+                                            ul: ({ node, ...props }) => <ul className="list-disc pl-4 space-y-1 mb-2 text-gray-300" {...props} />,
+                                            li: ({ node, ...props }) => <li className="text-xs" {...props} />,
+                                            p: ({ node, ...props }) => <p className="mb-2 leading-relaxed" {...props} />,
+                                        }}>{m.content}</ReactMarkdown>
+                                    </div>
                                 </div>
                             ))}
                             {chatLoading && <div className="p-2 text-gray-500 text-xs animate-pulse">Assistant is thinking...</div>}
@@ -240,8 +254,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                         </div>
                         <div className="p-3 border-t border-white/10">
                             <div className="flex gap-2">
-                                <input 
-                                    value={chatInput} 
+                                <input
+                                    value={chatInput}
                                     onChange={e => setChatInput(e.target.value)}
                                     onKeyDown={e => e.key === 'Enter' && handleSendChat()}
                                     placeholder="Ask about the contract (1c)..."
@@ -261,7 +275,7 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
                 <div className="h-10 bg-[#161616] border-b border-white/10 flex items-center justify-between px-4">
                     <span className="text-xs text-gray-400 font-medium truncate">{currentDoc?.name || "No Document"}</span>
                     {activeResult.docIndices.length > 1 && (
-                        <select 
+                        <select
                             className="bg-black/50 text-xs text-white border border-white/10 rounded px-2 py-1"
                             onChange={(e) => setActiveDocIdx(Number(e.target.value))}
                             value={activeDocIdx}

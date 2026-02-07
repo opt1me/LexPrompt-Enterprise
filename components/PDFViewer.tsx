@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { ZoomIn, ZoomOut } from 'lucide-react';
 
 interface PDFViewerProps {
-  file: File | null;
-  highlights: string[];
-  initialScale?: number;
+    file: File | null;
+    highlights: string[];
+    initialScale?: number;
 }
 
 const strictNormalize = (text: string) => text.replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -16,7 +16,7 @@ const PDFPage: React.FC<{ pdfDoc: any; pageNum: number; scale: number; highlight
 
     useEffect(() => {
         if (!pdfDoc || !canvasRef.current) return;
-        
+
         pdfDoc.getPage(pageNum).then((page: any) => {
             const vp = page.getViewport({ scale });
             setViewport(vp);
@@ -44,8 +44,8 @@ const PDFPage: React.FC<{ pdfDoc: any; pageNum: number; scale: number; highlight
                 const pdfRect = [rect.x, rect.y, rect.x + rect.w, rect.y + rect.h];
                 const viewRect = viewport.convertToViewportRectangle(pdfRect);
                 return (
-                    <div 
-                        key={i} 
+                    <div
+                        key={i}
                         ref={i === 0 ? highlightRef : null}
                         style={{
                             left: viewRect[0],
@@ -57,7 +57,7 @@ const PDFPage: React.FC<{ pdfDoc: any; pageNum: number; scale: number; highlight
                             borderBottom: '2px solid rgba(255, 193, 7, 0.8)',
                             mixBlendMode: 'multiply',
                             pointerEvents: 'none'
-                        }} 
+                        }}
                     />
                 );
             })}
@@ -80,7 +80,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, highlights, initialS
                 const doc = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
                 setPdfDoc(doc);
                 setPages(Array.from({ length: doc.numPages }, (_, i) => i + 1));
-                
+
                 // Build search index exactly as original
                 const index = [];
                 for (let i = 1; i <= doc.numPages; i++) {
@@ -97,48 +97,66 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, highlights, initialS
     const activeRects = useMemo(() => {
         if (!pdfSearchIndex.length || !highlights.length) return [];
         const rects: any[] = [];
-        
+
         highlights.forEach(quote => {
             if (!quote) return;
             const searchStr = strictNormalize(quote);
-            if(searchStr.length < 5) return; // Ignore very short matches
+            if (searchStr.length < 5) return; // Ignore very short matches
 
             pdfSearchIndex.forEach(({ pageNum, items }) => {
                 // Robust logic from original algorithm
                 let pageStr = "";
-                const charToItemIndex: number[] = []; 
-                
-                items.forEach((item: any, itemIdx: number) => { 
-                    const clean = strictNormalize(item.str); 
-                    if (clean.length > 0) { 
-                        for(let c = 0; c < clean.length; c++) charToItemIndex.push(itemIdx); 
-                        pageStr += clean; 
-                    } 
+                const charToItemIndex: number[] = [];
+
+                items.forEach((item: any, itemIdx: number) => {
+                    const clean = strictNormalize(item.str);
+                    if (clean.length > 0) {
+                        for (let c = 0; c < clean.length; c++) charToItemIndex.push(itemIdx);
+                        pageStr += clean;
+                    }
                 });
-                
+
                 let startIndex = 0;
                 while (true) {
-                    const matchIndex = pageStr.indexOf(searchStr, startIndex);
+                    let matchIndex = pageStr.indexOf(searchStr, startIndex);
+                    let matchLength = searchStr.length;
+
+                    // Fallback: Fuzzy Match (Prefix + Suffix)
+                    if (matchIndex === -1 && searchStr.length > 30) {
+                        const prefix = searchStr.substring(0, 15);
+                        const suffix = searchStr.substring(searchStr.length - 15);
+
+                        const pIdx = pageStr.indexOf(prefix, startIndex);
+                        if (pIdx !== -1) {
+                            // Search for suffix within reasonable distance (1.5x length)
+                            const sIdx = pageStr.indexOf(suffix, pIdx + 15);
+                            if (sIdx !== -1 && (sIdx - pIdx) < searchStr.length * 1.5) {
+                                matchIndex = pIdx;
+                                matchLength = (sIdx + 15) - pIdx;
+                            }
+                        }
+                    }
+
                     if (matchIndex === -1) break;
-                    
-                    const endMatchIndex = matchIndex + searchStr.length - 1;
+
+                    const endMatchIndex = matchIndex + matchLength - 1;
                     const startItemIdx = charToItemIndex[matchIndex];
                     const endItemIdx = charToItemIndex[endMatchIndex];
-                    
+
                     if (startItemIdx !== undefined && endItemIdx !== undefined) {
-                         const relevantItems = items.slice(startItemIdx, endItemIdx + 1);
-                         relevantItems.forEach((item: any) => { 
-                             if(item.str.trim().length === 0) return; 
-                             rects.push({ 
-                                 pageNum, 
-                                 x: item.transform[4], 
-                                 y: item.transform[5], 
-                                 w: item.width, 
-                                 h: item.height || 12 
-                            }); 
+                        const relevantItems = items.slice(startItemIdx, endItemIdx + 1);
+                        relevantItems.forEach((item: any) => {
+                            if (item.str.trim().length === 0) return;
+                            rects.push({
+                                pageNum,
+                                x: item.transform[4],
+                                y: item.transform[5],
+                                w: item.width,
+                                h: item.height || 12
+                            });
                         });
                     }
-                    startIndex = matchIndex + 1;
+                    startIndex = matchIndex + 1; // Correctly advance
                 }
             });
         });
