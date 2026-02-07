@@ -1,0 +1,5 @@
+{
+  "name": "LexPrompt Enterprise",
+  "description": "AI-Powered Contract Review Platform using Gemini 2.5 for clause extraction, risk analysis, and citations.",
+  "requestFramePermissions": []
+}
