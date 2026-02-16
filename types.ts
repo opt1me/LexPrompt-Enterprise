@@ -8,6 +8,22 @@ export interface UserProfile {
   joinedAt?: any;
 }
 
+export type AIProvider = 'google' | 'openai' | 'anthropic';
+
+export interface ProviderKeys {
+  google?: string;
+  openai?: string;
+  anthropic?: string;
+}
+
+export interface Comment {
+  id: string;
+  author: string;
+  text: string;
+  timestamp: string;
+  role?: 'analyst' | 'reviewer';
+}
+
 export interface Clause {
   id: string;
   title: string;
@@ -32,7 +48,7 @@ export interface Template {
 export interface DocumentFile {
   id: string;
   name: string;
-  content: string; // Extracted text
+  content: string;
   fileObj: File;
   type: 'pdf' | 'docx' | 'txt';
 }
@@ -42,48 +58,37 @@ export interface AnalysisFinding {
   citations: string[];
   risk_level?: 'High' | 'Medium' | 'Low' | 'Info';
   risk_analysis?: string;
+  comments?: Comment[]; 
+  reviewedBy?: string;
 }
 
 export interface AnalysisResult {
   id: string;
   title: string;
   data: Record<string, AnalysisFinding>;
-  docIndices: number[]; // Indices of documents in the session array
+  docIndices: number[];
   timestamp: Date;
+  modelUsed?: string;
+  providerUsed?: AIProvider;
 }
 
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'developer';
   content: string;
 }
 
-export interface LogEntry {
-  action: string;
-  user: string;
-  template: string;
-  docs: string[];
-  timestamp: any;
-  analysisResult?: AnalysisResult;
-}
-
-// --- Tabular Review Types ---
-
 export interface TabularColumn {
   id: string;
-  title: string; // The header (e.g., "Governing Law")
-  query: string; // The question (e.g., "What is the governing law?")
-  riskCriteria?: string;
+  title: string;
+  query: string;
 }
 
 export interface TabularCell {
-  value: string; // Display value (usually summary)
-  citations: string[];
-  risk_level?: 'High' | 'Medium' | 'Low' | 'Info';
-  risk_analysis?: string;
-  confidence?: 'High' | 'Medium' | 'Low'; // Kept for legacy/fallback
+  value: string;
+  quote: string;
+  confidence: 'High' | 'Medium' | 'Low';
   status: 'loading' | 'done' | 'error';
   isEdited?: boolean;
 }
 
-// Map: DocID -> ColumnID -> Cell
 export type TabularData = Record<string, Record<string, TabularCell>>;

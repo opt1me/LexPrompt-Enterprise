@@ -1,322 +1,295 @@
 
-import { Clause, Template, DocumentFile, TabularData, TabularColumn } from "../types";
-import { AIProvider, GenerationOptions } from "./ai/types";
-import { GeminiProvider } from "./ai/providers/geminiProvider";
-import { OpenAIProvider } from "./ai/providers/openaiProvider";
-import { ClaudeProvider } from "./ai/providers/claudeProvider";
+import { GoogleGenAI, Type, Schema } from "@google/genai";
+import { Clause, Template, DocumentFile, TabularData, TabularColumn, AIProvider } from "../types";
 
-// --- Configuration State ---
+export const AVAILABLE_MODELS = {
+    // Google Gemini
+    GEMINI_3_FLASH: 'gemini-3-flash-preview',
+    GEMINI_3_PRO: 'gemini-3-pro-preview',
+    
+    // OpenAI
+    GPT_4O: 'gpt-4o',
+    GPT_4O_MINI: 'gpt-4o-mini',
+    O1_PREVIEW: 'o1-preview',
+    O3_MINI: 'o3-mini',
 
-interface AISettings {
-  activeProviderId: string;
-  apiKeys: Record<string, string>;
-}
-
-let settings: AISettings = {
-  activeProviderId: 'gemini',
-  apiKeys: {
-    gemini: process.env.API_KEY || '',
-    openai: '',
-    claude: ''
-  }
+    // Anthropic
+    CLAUDE_3_7_SONNET: 'claude-3-7-sonnet-latest',
+    CLAUDE_3_5_SONNET: 'claude-3-5-sonnet-latest',
+    CLAUDE_3_5_HAIKU: 'claude-3-5-haiku-latest'
 };
 
-let activeProvider: AIProvider | null = null;
-
-export const configureAI = (newSettings: Partial<AISettings>) => {
-  settings = { ...settings, ...newSettings };
-  settings.apiKeys = { ...settings.apiKeys, ...newSettings.apiKeys }; // Merge keys
-  activeProvider = null; // Reset to force re-init
+const getProvider = (model: string): AIProvider => {
+    if (model.includes('gemini')) return 'google';
+    if (model.includes('gpt') || model.startsWith('o')) return 'openai';
+    if (model.includes('claude')) return 'anthropic';
+    return 'google';
 };
 
-const getProvider = (): AIProvider => {
-  if (activeProvider) return activeProvider;
-
-  const id = settings.activeProviderId;
-  const key = settings.apiKeys[id];
-
-  if (!key) {
-    throw new Error(`Missing API Key for ${id}. Please configure it in settings.`);
-  }
-
-  switch (id) {
-    case 'gemini': activeProvider = new GeminiProvider(key); break;
-    case 'openai': activeProvider = new OpenAIProvider(key); break;
-    case 'claude': activeProvider = new ClaudeProvider(key); break;
-    default: throw new Error(`Unknown provider: ${id}`);
-  }
-
-  return activeProvider;
-};
-
-// --- Helper Utilities ---
-
-const getRetryDelay = (attempt: number) => 1000 * Math.pow(2, attempt);
-
-async function withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
-  let lastError: any;
-  for (let i = 0; i < retries; i++) {
-    try {
-      return await fn();
-    } catch (e) {
-      lastError = e;
-      console.warn(`AI Attempt ${i + 1} failed:`, e);
-      if (i < retries - 1) await new Promise(r => setTimeout(r, getRetryDelay(i)));
+const getApiKey = (provider: AIProvider): string | undefined => {
+    const savedKeys = localStorage.getItem('lexprompt_api_keys');
+    if (savedKeys) {
+        const keys = JSON.parse(savedKeys);
+        if (keys[provider]) return keys[provider];
     }
-  }
-  throw lastError;
-}
+    // Fallback for Gemini environment key
+    if (provider === 'google') return process.env.API_KEY;
+    return undefined;
+};
 
-// Helper to convert file to base64 for providers
-async function fileToBase64(file: File): Promise<{ mime: string, data: string }> {
-  const arrayBuffer = await file.arrayBuffer();
-  const base64 = btoa(new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), ''));
-  return {
-    mime: file.type,
-    data: base64
-  };
-}
+/**
+ * Universal Content Generator
+ * Routes requests to Gemini (SDK) or OpenAI/Anthropic (Fetch)
+ */
+const generateUniversalContent = async (params: {
+    model: string;
+    system?: string;
+    prompt: string;
+    responseSchema?: any;
+    temperature?: number;
+    thinkingBudget?: number;
+}) => {
+    const provider = getProvider(params.model);
+    const apiKey = getApiKey(provider);
 
-// --- Business Logic Functions ---
+    if (!apiKey) throw new Error(`Missing API Key for ${provider.toUpperCase()}. Please configure in Settings.`);
+
+    if (provider === 'google') {
+        const ai = new GoogleGenAI({ apiKey });
+        const response = await ai.models.generateContent({
+            model: params.model,
+            contents: params.prompt,
+            config: {
+                systemInstruction: params.system,
+                responseMimeType: params.responseSchema ? "application/json" : "text/plain",
+                responseSchema: params.responseSchema,
+                temperature: params.temperature ?? 0.1,
+                ...(params.thinkingBudget ? { thinkingConfig: { thinkingBudget: params.thinkingBudget } } : {})
+            }
+        });
+        return response.text;
+    }
+
+    if (provider === 'openai') {
+        // Handle O1/O3 models (they often don't support system messages in standard way)
+        const isReasoning = params.model.startsWith('o');
+        const messages = [];
+        if (params.system && !isReasoning) {
+            messages.push({ role: "system", content: params.system });
+        }
+        messages.push({ role: "user", content: params.prompt });
+
+        const body: any = {
+            model: params.model,
+            messages,
+            ...(params.responseSchema ? { 
+                response_format: { type: "json_object" } 
+            } : {}),
+            ...(!isReasoning ? { temperature: params.temperature ?? 0.1 } : {})
+        };
+
+        const res = await fetch("https://api.openai.com/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${apiKey}`
+            },
+            body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error?.message || "OpenAI API Error");
+        }
+        const data = await res.json();
+        return data.choices[0].message.content;
+    }
+
+    if (provider === 'anthropic') {
+        const body: any = {
+            model: params.model,
+            max_tokens: 4096,
+            messages: [{ role: "user", content: params.prompt }],
+            system: params.system,
+            temperature: params.temperature ?? 0.1
+        };
+
+        const res = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-api-key": apiKey,
+                "anthropic-version": "2023-06-01"
+            },
+            body: JSON.stringify(body)
+        });
+
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error?.message || "Anthropic API Error");
+        }
+        const data = await res.json();
+        return data.content[0].text;
+    }
+
+    throw new Error("Unsupported Provider");
+};
 
 export const generateTemplate = async (
   contractType: string,
-  depth: 'Light-Touch' | 'Standard' | 'Detailed',
-  verbosity: 'Concise' | 'Standard' | 'Lengthy',
+  depth: string,
+  verbosity: string,
   context?: string
 ): Promise<Partial<Template>> => {
-
-  const systemPrompt = "You are an expert legal contract architect.";
-
+  const model = AVAILABLE_MODELS.GEMINI_3_FLASH;
+  
   const prompt = `
     Create a contract review template for a "${contractType}".
     Context: ${context || 'None'}
     Depth: ${depth}. Verbosity: ${verbosity}.
-    
     Return a JSON object with: systemPrompt, formatPrompt, riskTolerance, and clauses array.
-    Each clause needs: title, prompt, riskCriteria.
+    Clauses must have: title, prompt, riskCriteria.
   `;
 
-  // We define the schema for providers that support structured output
-  const jsonSchema = {
-    type: "object",
+  const schema: Schema = {
+    type: Type.OBJECT,
     properties: {
-      systemPrompt: { type: "string" },
-      formatPrompt: { type: "string" },
-      riskTolerance: { type: "string" },
+      systemPrompt: { type: Type.STRING },
+      formatPrompt: { type: Type.STRING },
+      riskTolerance: { type: Type.STRING },
       clauses: {
-        type: "array",
+        type: Type.ARRAY,
         items: {
-          type: "object",
+          type: Type.OBJECT,
           properties: {
-            title: { type: "string" },
-            prompt: { type: "string" },
-            riskCriteria: { type: "string" }
+            title: { type: Type.STRING },
+            prompt: { type: Type.STRING },
+            riskCriteria: { type: Type.STRING }
           },
-          required: ["title", "prompt", "riskCriteria"],
-          additionalProperties: false
+          required: ["title", "prompt"]
         }
       }
     },
-    required: ["systemPrompt", "formatPrompt", "riskTolerance", "clauses"],
-    additionalProperties: false
+    required: ["systemPrompt", "clauses"]
   };
 
-  try {
-    const provider = getProvider();
-    const result = await withRetry(() => provider.generate(prompt, {
-      systemPrompt,
-      jsonSchema,
-      temperature: 0.7
-    }));
-    return JSON.parse(result);
-  } catch (error) {
-    console.error("Template Gen Error:", error);
-    throw error;
-  }
+  const text = await generateUniversalContent({
+      model,
+      prompt,
+      responseSchema: schema
+  });
+
+  if (text) return JSON.parse(text);
+  throw new Error("Empty response from AI");
 };
 
 export const analyzeContract = async (
   template: Template,
   documents: DocumentFile[],
+  selectedModel: string = AVAILABLE_MODELS.GEMINI_3_FLASH,
   isRedacted: boolean = false
 ): Promise<Record<string, any>> => {
-
-  // Context Prep
   let fullText = documents.map(d => `--- DOCUMENT: ${d.name} ---\n${d.content}`).join("\n\n");
+  
   if (isRedacted) {
     fullText = fullText.replace(/[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}/g, "[REDACTED_EMAIL]");
-    // ... other redaction patterns
+    fullText = fullText.replace(/(?:\+?(\d{1,3}))?[-. (]*(\d{3})[-. )]*(\d{3})[-. ]*(\d{4})(?: *x(\d+))?/g, "[REDACTED_PHONE]");
   }
 
-  // Schema Build
-  const findingProperties: any = {};
+  const findingProperties: Record<string, Schema> = {};
   template.clauses.forEach(clause => {
     findingProperties[clause.title] = {
-      type: "object",
+      type: Type.OBJECT,
       properties: {
-        summary: { type: "string" },
-        citations: {
-          type: "array",
-          items: { type: "string" },
-          description: "EXACT VERBATIM QUOTES from the document text supporting this finding. Do not use clause numbers like 'Clause 14.2'. Must be the actual text."
-        },
-        risk_level: { type: "string", enum: ["High", "Medium", "Low", "Info"] },
-        risk_analysis: { type: "string" }
+        summary: { type: Type.STRING },
+        citations: { type: Type.ARRAY, items: { type: Type.STRING } },
+        risk_level: { type: Type.STRING, enum: ["High", "Medium", "Low", "Info"] },
+        risk_analysis: { type: Type.STRING }
       },
-      required: ["summary", "citations", "risk_level", "risk_analysis"],
-      additionalProperties: false
+      required: ["summary", "citations", "risk_level"]
     };
   });
 
-  const jsonSchema = {
-    type: "object",
+  const schema: Schema = {
+    type: Type.OBJECT,
     properties: findingProperties,
-    required: Object.keys(findingProperties),
-    additionalProperties: false
+    required: Object.keys(findingProperties)
   };
 
   const isRisk = template.mode === 'risk';
-  const clauseInstructions = template.clauses.map(c =>
+  const clauseInstructions = template.clauses.map(c => 
     `- ${c.title}: ${c.prompt} ${isRisk ? `(Risk Criteria: ${c.riskCriteria || template.riskTolerance})` : ''}`
   ).join("\n");
 
-  const systemPrompt = `${template.systemPrompt}\nRULES: ${template.formatPrompt}\n${isRisk ? `Risk Tol: ${template.riskTolerance}` : ''}`;
-
   const prompt = `
+    Analyze the following contract text based on these instructions.
+    SYSTEM ROLE: ${template.systemPrompt}
+    FORMAT RULES: ${template.formatPrompt}
     CLAUSE INSTRUCTIONS:
     ${clauseInstructions}
-    
     DOCUMENT TEXT:
-    ${fullText.substring(0, 500000)} 
+    ${fullText.substring(0, 1000000)}
   `;
 
-  // Multimodal prep
-  const useMultimodal = documents.some(d => d.type === 'pdf' || d.type === 'docx');
-  let multimodalImages: { mime: string, data: string }[] = [];
+  const text = await generateUniversalContent({
+      model: selectedModel,
+      prompt,
+      responseSchema: schema,
+      thinkingBudget: selectedModel.includes('pro') || selectedModel.includes('claude-3-7') ? 24000 : undefined
+  });
 
-  if (useMultimodal) {
-    // We need to convert fileObjs to base64
-    // Note: In real app, we might need to handle large files carefully.
-    // For now we assume the provider can handle the base64 chunks.
-    // Only generic provider support required here.
-    const images = await Promise.all(documents.map(d => fileToBase64(d.fileObj)));
-    multimodalImages = images;
-  }
-
-  try {
-    const provider = getProvider();
-    const result = await withRetry(() => provider.generate(prompt, {
-      systemPrompt,
-      jsonSchema,
-      temperature: 0.1,
-      multimodalImages: useMultimodal ? multimodalImages : undefined
-    }));
-    return JSON.parse(result);
-  } catch (error) {
-    console.error("Analysis Error:", error);
-    throw error;
-  }
+  if (text) return JSON.parse(text);
+  throw new Error("No analysis generated");
 };
 
 export const chatWithDoc = async (history: string, query: string, context: string): Promise<string> => {
-  const systemPrompt = "You are a helpful legal assistant. OUTPUT FORMATTING RULES: 1) Use ## for main sections. 2) Use ### for subsections. 3) Use - for all lists (no numbered lists unless sequential). 4) Bold **key terms**. 5) Keep paragraphs short.";
+  const model = AVAILABLE_MODELS.GEMINI_3_FLASH;
   const prompt = `
-      CONTEXT: ${context.substring(0, 50000)}
-      HISTORY: ${history}
-      QUERY: ${query}
-    `;
-  const provider = getProvider();
-  return await withRetry(() => provider.generate(prompt, { systemPrompt }));
+    CONTEXT: ${context.substring(0, 50000)}
+    CHAT HISTORY: ${history}
+    USER QUERY: ${query}
+    Answer as a legal assistant. Be concise.
+  `;
+  const text = await generateUniversalContent({ model, prompt });
+  return text || "I could not generate a response.";
 };
 
 export const draftEmail = async (analysisJson: any): Promise<string> => {
-  const systemPrompt = "You are a professional legal consultant.";
-  const prompt = `
-      Draft a concise email to the client summarizing these findings:
-      ${JSON.stringify(analysisJson)}
-      Highlight high-risk items first.
-    `;
-  const provider = getProvider();
-  return await withRetry(() => provider.generate(prompt, { systemPrompt }));
+    const model = AVAILABLE_MODELS.GEMINI_3_FLASH;
+    const prompt = `Draft a professional email summary of these findings: ${JSON.stringify(analysisJson)}`;
+    const text = await generateUniversalContent({ model, prompt });
+    return text || "Could not draft email.";
 };
 
 export const suggestRevision = async (clause: string, original: string, issue: string): Promise<string> => {
-  const systemPrompt = "You are an expert contract drafter.";
-  const prompt = `
-      Clause: ${clause} | Original: "${original}" | Issue: ${issue}
-      Rewrite this clause to mitigate the risk while maintaining commercial viability. Return ONLY the text.
-    `;
-  const provider = getProvider();
-  return await withRetry(() => provider.generate(prompt, { systemPrompt }));
+    const model = AVAILABLE_MODELS.CLAUDE_3_7_SONNET;
+    const prompt = `Mitigate risk for this clause. Clause: ${clause}\nOriginal: ${original}\nIssue: ${issue}`;
+    const text = await generateUniversalContent({ model, prompt });
+    return text || "Could not generate revision.";
 };
 
-export const extractTabularData = async (docContent: string, query: string, riskCriteria?: string) => {
-  const systemPrompt = "You are an expert legal contract analyst. Output as JSON.";
-  const prompt = `
-      DOCUMENT TEXT:
-      ${docContent.substring(0, 50000)}
-      
-      ANALYSIS TASK:
-      Query: "${query}"
-      ${riskCriteria ? `Risk Criteria: ${riskCriteria}` : ''}
-      
-      INSTRUCTIONS:
-      1. Summary: Extract the relevant clause text or answer. Be concise but complete.
-      2. Risk: Analyze if this clause presents a risk based on the criteria (or general commercial reasonableness if none provided).
-      3. Citations: Extract EXACT VERBATIM SUBSTRINGS from the text that support your finding. They must match the document text characters exactly to allow for highlighting. Do not include surrounding quotation marks in the citation string itself.
-      
-      Return JSON with:
-      - summary (string)
-      - citations (string array)
-      - risk_level (High/Medium/Low/Info)
-      - risk_analysis (string)
-    `;
-
-  const jsonSchema = {
-    type: "object",
-    properties: {
-      summary: { type: "string" },
-      citations: { type: "array", items: { type: "string" } },
-      risk_level: { type: "string", enum: ["High", "Medium", "Low", "Info"] },
-      risk_analysis: { type: "string" }
-    },
-    required: ["summary", "citations", "risk_level", "risk_analysis"],
-    additionalProperties: false
-  };
-
-  try {
-    const provider = getProvider();
-    const result = await withRetry(() => provider.generate(prompt, { systemPrompt, jsonSchema, temperature: 0.1 }));
-    const parsed = JSON.parse(result);
-    // Map to TabularCell format (value = summary)
-    return {
-      value: parsed.summary,
-      citations: parsed.citations,
-      risk_level: parsed.risk_level,
-      risk_analysis: parsed.risk_analysis,
-      confidence: "High" // Default internal confidence
-    };
-  } catch (e) {
-    return { value: "Error analyzing", citations: [], confidence: "Low", status: "error" };
-  }
+export const extractTabularData = async (docContent: string, query: string): Promise<any> => {
+    const model = AVAILABLE_MODELS.GEMINI_3_FLASH;
+    const prompt = `Document: ${docContent.substring(0, 30000)}\nQuery: "${query}"\nExtract JSON: {value, quote, confidence: 'High'|'Medium'|'Low'}`;
+    const text = await generateUniversalContent({
+        model,
+        prompt,
+        responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+                value: { type: Type.STRING },
+                quote: { type: Type.STRING },
+                confidence: { type: Type.STRING, enum: ['High', 'Medium', 'Low'] }
+            },
+            required: ["value", "quote", "confidence"]
+        }
+    });
+    return JSON.parse(text!);
 };
 
 export const analyzeTable = async (data: TabularData, columns: TabularColumn[], query: string): Promise<string> => {
-  // Convert table to summary string
-  const tableSummary = Object.keys(data).map(docId => {
-    const row: any = { DocumentID: docId };
-    columns.forEach(col => row[col.title] = data[docId]?.[col.id]?.value || "N/A");
-    return row;
-  });
-
-  const systemPrompt = "You are a legal analyst reviewing aggregated data.";
-  const prompt = `
-      Table Data: ${JSON.stringify(tableSummary, null, 2)}
-      Query: "${query}"
-      Provide insight/summary.
-    `;
-
-  const provider = getProvider();
-  return await withRetry(() => provider.generate(prompt, { systemPrompt }));
+    const model = AVAILABLE_MODELS.CLAUDE_3_7_SONNET;
+    const prompt = `Strategic assessment for table: ${JSON.stringify(data)}\nQuery: ${query}`;
+    const text = await generateUniversalContent({ model, prompt, thinkingBudget: 15000 });
+    return text || "Could not analyze table.";
 };
