@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { X, Wand2, PenTool, BarChart3, AlignLeft, Plus, Copy, ToggleLeft, ToggleRight, MessageSquare, Code, Sparkles, Loader, ArrowRightLeft, AlertTriangle, Key, ShieldCheck } from 'lucide-react';
-import { Template, AIProvider, ProviderKeys } from '../types';
+import { Template, ProviderKeys, ResidencySettings } from '../types';
+import { getRegionLabel, loadAuditEvents } from '../services/residencyService';
 
 interface CreateTemplateModalProps {
   isOpen: boolean;
@@ -129,8 +130,19 @@ export const ProviderSettingsModal: React.FC<{
     onClose: () => void;
     keys: ProviderKeys;
     onSave: (keys: ProviderKeys) => void;
-}> = ({ isOpen, onClose, keys, onSave }) => {
+    residency: ResidencySettings;
+    onSaveResidency: (settings: ResidencySettings) => void;
+    keyPolicy?: 'platform' | 'byok' | 'hybrid';
+}> = ({ isOpen, onClose, keys, onSave, residency, onSaveResidency, keyPolicy = 'hybrid' }) => {
     const [localKeys, setLocalKeys] = useState(keys);
+    const [localResidency, setLocalResidency] = useState(residency);
+    const [auditPreview, setAuditPreview] = useState(() => loadAuditEvents().slice(0, 5));
+
+    useEffect(() => {
+      setLocalKeys(keys);
+      setLocalResidency(residency);
+      setAuditPreview(loadAuditEvents().slice(0, 5));
+    }, [keys, residency, isOpen]);
 
     if (!isOpen) return null;
 
@@ -146,6 +158,17 @@ export const ProviderSettingsModal: React.FC<{
                 </div>
 
                 <div className="p-8 space-y-6">
+                    {keyPolicy !== 'hybrid' && (
+                        <div className={`rounded-2xl border px-4 py-3 text-xs ${
+                            keyPolicy === 'platform'
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-200'
+                                : 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                        }`}>
+                            {keyPolicy === 'platform'
+                                ? 'Platform-managed AI mode is active. Users do not need to enter personal API keys.'
+                                : 'BYOK mode is active. Each user must add their own provider API key before running AI actions.'}
+                        </div>
+                    )}
                     <div className="space-y-3">
                         <div className="flex items-center gap-2 text-violet-400 font-black text-[10px] uppercase tracking-widest"><Key className="w-3.5 h-3.5"/> Google Gemini Key</div>
                         <input 
@@ -158,7 +181,7 @@ export const ProviderSettingsModal: React.FC<{
                     </div>
 
                     <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-emerald-400 font-black text-[10px] uppercase tracking-widest"><Key className="w-3.5 h-3.5"/> OpenAI (GPT-4o, o1) Key</div>
+                        <div className="flex items-center gap-2 text-emerald-400 font-black text-[10px] uppercase tracking-widest"><Key className="w-3.5 h-3.5"/> OpenAI (GPT-5 family) Key</div>
                         <input 
                             type="password"
                             value={localKeys.openai || ''}
@@ -169,7 +192,7 @@ export const ProviderSettingsModal: React.FC<{
                     </div>
 
                     <div className="space-y-3">
-                        <div className="flex items-center gap-2 text-amber-400 font-black text-[10px] uppercase tracking-widest"><Key className="w-3.5 h-3.5"/> Anthropic (Claude 3.7) Key</div>
+                        <div className="flex items-center gap-2 text-amber-400 font-black text-[10px] uppercase tracking-widest"><Key className="w-3.5 h-3.5"/> Anthropic (Claude 4.5 family) Key</div>
                         <input 
                             type="password"
                             value={localKeys.anthropic || ''}
@@ -178,12 +201,80 @@ export const ProviderSettingsModal: React.FC<{
                             className="w-full bg-black/50 border border-white/10 rounded-2xl p-4 text-sm text-white focus:border-amber-500 outline-none transition-all placeholder-gray-700"
                         />
                     </div>
+
+                    <div className="space-y-3 pt-2 border-t border-white/10">
+                        <div className="text-cyan-300 font-black text-[10px] uppercase tracking-widest">Data Residency Policy</div>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="space-y-1">
+                                <label className="text-[10px] text-gray-500 font-black uppercase tracking-widest">Primary Region</label>
+                                <select
+                                    value={localResidency.primaryRegion}
+                                    onChange={(e) => setLocalResidency({ ...localResidency, primaryRegion: e.target.value as ResidencySettings['primaryRegion'] })}
+                                    className="w-full bg-black/50 border border-white/10 rounded-xl p-3 text-xs text-white outline-none"
+                                >
+                                    <option value="uk-london">UK (London)</option>
+                                    <option value="eu-frankfurt">EU (Frankfurt)</option>
+                                    <option value="eu-ireland">EU (Ireland)</option>
+                                </select>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] text-gray-500 font-black uppercase tracking-widest">Fallback Region</label>
+                                <select
+                                    value={localResidency.fallbackRegion}
+                                    onChange={(e) => setLocalResidency({ ...localResidency, fallbackRegion: e.target.value as ResidencySettings['fallbackRegion'] })}
+                                    className="w-full bg-black/50 border border-white/10 rounded-xl p-3 text-xs text-white outline-none"
+                                >
+                                    <option value="eu-frankfurt">EU (Frankfurt)</option>
+                                    <option value="eu-ireland">EU (Ireland)</option>
+                                </select>
+                            </div>
+                            <div className="space-y-1 sm:col-span-2">
+                                <label className="text-[10px] text-gray-500 font-black uppercase tracking-widest">Residency Mode</label>
+                                <select
+                                    value={localResidency.residencyMode}
+                                    onChange={(e) => setLocalResidency({ ...localResidency, residencyMode: e.target.value as ResidencySettings['residencyMode'] })}
+                                    className="w-full bg-black/50 border border-white/10 rounded-xl p-3 text-xs text-white outline-none"
+                                >
+                                    <option value="uk_preferred_eu_fallback">UK-only preferred, EU fallback</option>
+                                    <option value="strict_uk_only">Strict UK-only</option>
+                                    <option value="eu_only">EU-only</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div className="flex items-center justify-between bg-black/40 border border-white/10 rounded-xl px-3 py-2">
+                            <span className="text-xs text-gray-300">No model training use</span>
+                            <button onClick={() => setLocalResidency({ ...localResidency, noTraining: !localResidency.noTraining })} className="text-xs text-cyan-300 font-bold">
+                                {localResidency.noTraining ? 'Enabled' : 'Disabled'}
+                            </button>
+                        </div>
+                        <div className="flex items-center justify-between bg-black/40 border border-white/10 rounded-xl px-3 py-2">
+                            <span className="text-xs text-gray-300">Minimal provider retention</span>
+                            <button onClick={() => setLocalResidency({ ...localResidency, minRetention: !localResidency.minRetention })} className="text-xs text-cyan-300 font-bold">
+                                {localResidency.minRetention ? 'Enabled' : 'Disabled'}
+                            </button>
+                        </div>
+                        <div className="text-[11px] text-gray-400">
+                            Active Region: <span className="text-emerald-300 font-bold">{getRegionLabel(localResidency.residencyMode === 'strict_uk_only' ? 'uk-london' : localResidency.residencyMode === 'eu_only' ? localResidency.fallbackRegion : localResidency.primaryRegion)}</span>
+                        </div>
+                        {auditPreview.length > 0 && (
+                            <div className="pt-2 border-t border-white/10">
+                                <div className="text-[10px] text-gray-500 uppercase tracking-widest font-black mb-2">Residency Audit Preview</div>
+                                <div className="space-y-2 max-h-32 overflow-y-auto pr-1">
+                                    {auditPreview.map((event) => (
+                                        <div key={event.id} className="text-[11px] bg-black/40 border border-white/10 rounded-lg px-2 py-1.5 text-gray-300">
+                                            <span className="text-emerald-300 font-bold">{event.region}</span> · {event.provider}/{event.model} · {event.eventType}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 <div className="p-8 bg-white/5 border-t border-white/5 flex justify-end gap-3">
                     <button onClick={onClose} className="px-6 py-3 rounded-2xl text-sm font-bold text-gray-400 hover:text-white transition-colors">Discard</button>
                     <button 
-                        onClick={() => { onSave(localKeys); onClose(); }} 
+                        onClick={() => { onSave(localKeys); onSaveResidency(localResidency); onClose(); }} 
                         className="px-10 py-3 bg-violet-600 hover:bg-violet-500 text-white rounded-2xl text-sm font-black shadow-xl shadow-violet-900/20 transition-all active:scale-95"
                     >
                         Save Configuration

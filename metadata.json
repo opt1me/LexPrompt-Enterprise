@@ -1,5 +1,5 @@
 {
   "name": "LexPrompt Enterprise",
-  "description": "AI-Powered Contract Review Platform using Gemini 2.5 for clause extraction, risk analysis, and citations.",
+  "description": "AI-powered contract review platform with UK/EU data residency controls, provider-agnostic routing, and audit-ready findings.",
   "requestFramePermissions": []
 }

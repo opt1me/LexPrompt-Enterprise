@@ -1,0 +1,20 @@
+{
+  "functions": {
+    "api/**/*.ts": {
+      "runtime": "nodejs20.x",
+      "regions": ["lhr1", "fra1"],
+      "maxDuration": 30
+    }
+  },
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        {
+          "key": "x-lexprompt-data-region-policy",
+          "value": "uk_preferred_eu_fallback"
+        }
+      ]
+    }
+  ]
+}

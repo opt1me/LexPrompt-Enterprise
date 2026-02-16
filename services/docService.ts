@@ -4,8 +4,11 @@ export const parseFileContent = async (file: File): Promise<DocumentFile> => {
   const type = file.type;
   let content = "";
   let docType: 'pdf' | 'docx' | 'txt' = 'txt';
+  let pageCount: number | undefined;
 
-  if (type === "application/pdf") {
+  const lowerName = file.name.toLowerCase();
+
+  if (type === "application/pdf" || lowerName.endsWith(".pdf")) {
     docType = 'pdf';
     try {
       // @ts-ignore - Loaded via CDN in index.html
@@ -13,6 +16,7 @@ export const parseFileContent = async (file: File): Promise<DocumentFile> => {
       const arrayBuffer = await file.arrayBuffer();
       const loadingTask = pdfjsLib.getDocument(arrayBuffer);
       const pdf = await loadingTask.promise;
+      pageCount = pdf.numPages;
       
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
@@ -23,7 +27,7 @@ export const parseFileContent = async (file: File): Promise<DocumentFile> => {
     } catch (e: any) {
       throw new Error("Failed to parse PDF: " + e.message);
     }
-  } else if (type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+  } else if (type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || lowerName.endsWith(".docx")) {
     docType = 'docx';
     try {
       // @ts-ignore - Loaded via CDN
@@ -41,6 +45,9 @@ export const parseFileContent = async (file: File): Promise<DocumentFile> => {
     name: file.name,
     content,
     fileObj: file,
-    type: docType
+    type: docType,
+    sizeBytes: file.size,
+    charCount: content.length,
+    pageCount
   };
 };

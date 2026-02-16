@@ -5,6 +5,7 @@ interface PDFViewerProps {
   file: File | null;
   highlights: string[];
   initialScale?: number;
+  onHighlightResult?: (matches: number) => void;
 }
 
 const strictNormalize = (text: string) => text.replace(/[^a-z0-9]/gi, '').toLowerCase();
@@ -65,7 +66,7 @@ const PDFPage: React.FC<{ pdfDoc: any; pageNum: number; scale: number; highlight
     );
 };
 
-export const PDFViewer: React.FC<PDFViewerProps> = ({ file, highlights, initialScale = 1.2 }) => {
+export const PDFViewer: React.FC<PDFViewerProps> = ({ file, highlights, initialScale = 1.2, onHighlightResult }) => {
     const [pdfDoc, setPdfDoc] = useState<any>(null);
     const [pages, setPages] = useState<number[]>([]);
     const [scale, setScale] = useState(initialScale);
@@ -144,6 +145,11 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, highlights, initialS
         });
         return rects;
     }, [pdfSearchIndex, highlights]);
+
+    useEffect(() => {
+        if (!highlights.length || !pdfSearchIndex.length) return;
+        onHighlightResult?.(activeRects.length);
+    }, [highlights, activeRects.length, onHighlightResult, pdfSearchIndex.length]);
 
     if (!file) return <div className="h-full flex items-center justify-center text-gray-500">No Document Loaded</div>;
 
