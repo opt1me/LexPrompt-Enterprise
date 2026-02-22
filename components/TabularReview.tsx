@@ -7,10 +7,11 @@ import { Plus, Table, FileText, Download, X, MessageSquare, Loader, CheckCircle2
 interface TabularReviewProps {
     documents: DocumentFile[];
     initialTemplate?: Template | null;
+    workspaceId?: string;
     onClose: () => void;
 }
 
-export const TabularReview: React.FC<TabularReviewProps> = ({ documents, initialTemplate, onClose }) => {
+export const TabularReview: React.FC<TabularReviewProps> = ({ documents, initialTemplate, workspaceId, onClose }) => {
     const [columns, setColumns] = useState<TabularColumn[]>([]);
     const [data, setData] = useState<TabularData>({});
     const [selectedCell, setSelectedCell] = useState<{ docId: string; colId: string } | null>(null);
@@ -59,7 +60,7 @@ export const TabularReview: React.FC<TabularReviewProps> = ({ documents, initial
                 if (data[doc.id]?.[col.id]?.status === 'done') continue;
 
                 try {
-                    const result = await extractTabularData(doc.content, col.query);
+                    const result = await extractTabularData(doc.content, col.query, workspaceId);
                     setData(prev => ({
                         ...prev,
                         [doc.id]: {
@@ -112,7 +113,7 @@ export const TabularReview: React.FC<TabularReviewProps> = ({ documents, initial
         setChatInput("");
         setIsChatLoading(true);
         try {
-            const resp = await analyzeTable(data, columns, q);
+            const resp = await analyzeTable(data, columns, q, workspaceId);
             setChatHistory(prev => [...prev, { role: 'assistant', content: resp }]);
         } catch(e) {
             setChatHistory(prev => [...prev, { role: 'assistant', content: "Error analyzing table." }]);

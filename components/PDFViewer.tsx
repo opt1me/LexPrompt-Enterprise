@@ -76,7 +76,7 @@ export const PDFViewer: React.FC<PDFViewerProps> = ({ file, highlights, initialS
         if (!file) return;
         const loadPdf = async () => {
             try {
-                // @ts-ignore
+                // @ts-ignore - loaded via CDN in index.html
                 const pdfjsLib = window['pdfjs-dist/build/pdf'];
                 const doc = await pdfjsLib.getDocument(await file.arrayBuffer()).promise;
                 setPdfDoc(doc);

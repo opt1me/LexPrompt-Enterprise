@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import {
   ActivityEvent,
   AnalysisFinding,
@@ -100,7 +101,10 @@ const db =
     : null;
 
 const nowIso = () => new Date().toISOString();
-const id = (p: string) => `${p}_${Math.random().toString(36).slice(2, 10)}`;
+const id = (p: string) => `${p}_${randomUUID().replace(/-/g, "").slice(0, 12)}`;
+const token = () => randomBytes(32).toString("hex");
+const hashToken = (raw: string) => createHash("sha256").update(raw).digest("hex");
+const INVITE_EXPIRY_MS = 48 * 60 * 60 * 1000;
 const usingSupabase = () => !!db;
 
 const extractMentions = (text: string): string[] => {
@@ -119,6 +123,7 @@ const mapWorkspace = (row: any): Workspace => ({
   ownerId: row.owner_id,
   createdAt: row.created_at,
   archivedAt: row.archived_at,
+  retainSourceDocuments: Boolean(row.retain_source_documents),
 });
 
 const mapMember = (row: any): WorkspaceMember => ({
@@ -228,7 +233,11 @@ const mapReviewDocumentRef = (row: any): ReviewDocumentRef => ({
 
 export const createWorkspaceWithOwner = async (name: string, ownerEmail: string): Promise<Workspace> => {
   if (usingSupabase()) {
-    const { data, error } = await db!.from("workspaces").insert({ name, owner_id: ownerEmail }).select("*").single();
+    const { data, error } = await db!
+      .from("workspaces")
+      .insert({ name, owner_id: ownerEmail, retain_source_documents: false })
+      .select("*")
+      .single();
     if (error) throw error;
     const ws = mapWorkspace(data);
     await db!.from("workspace_members").insert({
@@ -242,7 +251,14 @@ export const createWorkspaceWithOwner = async (name: string, ownerEmail: string)
     return ws;
   }
 
-  const ws: Workspace = { id: id("ws"), name, ownerId: ownerEmail, createdAt: nowIso(), archivedAt: null };
+  const ws: Workspace = {
+    id: id("ws"),
+    name,
+    ownerId: ownerEmail,
+    createdAt: nowIso(),
+    archivedAt: null,
+    retainSourceDocuments: false,
+  };
   mem.workspaces.push(ws);
   mem.members.push({
     id: id("m"),
@@ -277,6 +293,41 @@ export const getWorkspace = async (workspaceId: string): Promise<Workspace | und
     return data ? mapWorkspace(data) : undefined;
   }
   return mem.workspaces.find((w) => w.id === workspaceId);
+};
+
+export const getWorkspaceSettings = async (workspaceId: string): Promise<{ retainSourceDocuments: boolean }> => {
+  const workspace = await getWorkspace(workspaceId);
+  if (!workspace) throw new Error("Workspace not found");
+  return { retainSourceDocuments: Boolean(workspace.retainSourceDocuments) };
+};
+
+export const updateWorkspaceSettings = async (
+  workspaceId: string,
+  actorEmail: string,
+  patch: { retainSourceDocuments?: boolean }
+): Promise<{ retainSourceDocuments: boolean }> => {
+  const retainSourceDocuments = Boolean(patch.retainSourceDocuments);
+  if (usingSupabase()) {
+    const { data, error } = await db!
+      .from("workspaces")
+      .update({ retain_source_documents: retainSourceDocuments })
+      .eq("id", workspaceId)
+      .select("*")
+      .single();
+    if (error) throw error;
+    await pushActivity(workspaceId, actorEmail, "workspace_settings_updated", workspaceId, {
+      retainSourceDocuments,
+    });
+    return { retainSourceDocuments: Boolean(data?.retain_source_documents) };
+  }
+
+  const workspace = mem.workspaces.find((w) => w.id === workspaceId);
+  if (!workspace) throw new Error("Workspace not found");
+  workspace.retainSourceDocuments = retainSourceDocuments;
+  await pushActivity(workspaceId, actorEmail, "workspace_settings_updated", workspaceId, {
+    retainSourceDocuments,
+  });
+  return { retainSourceDocuments };
 };
 
 export const getMembers = async (workspaceId: string): Promise<WorkspaceMember[]> => {
@@ -320,6 +371,8 @@ export const createReviewSession = async (
 ): Promise<ReviewSessionDetail> => {
   const reviewId = id("rev");
   const status: ReviewStatus = input.status || "complete";
+  const settings = await getWorkspaceSettings(workspaceId);
+  const retainSourceDocuments = settings.retainSourceDocuments;
 
   if (usingSupabase()) {
     const sessionPayload = {
@@ -351,8 +404,8 @@ export const createReviewSession = async (
       char_count: doc.charCount ?? null,
       storage_path: doc.storagePath || `workspaces/${workspaceId}/reviews/${sessionRow.id}/${idx + 1}-${doc.name}`,
       source_url: doc.sourceUrl || null,
-      source_base64: doc.sourceDataUrl || null,
-      content_text: doc.contentText || "",
+      source_base64: retainSourceDocuments ? doc.sourceDataUrl || null : null,
+      content_text: retainSourceDocuments ? doc.contentText || "" : "",
     }));
 
     if (documentsToInsert.length > 0) {
@@ -364,10 +417,12 @@ export const createReviewSession = async (
       reviewId: sessionRow.id,
       docs: documentsToInsert.length,
       model: input.model || undefined,
+      retainSourceDocuments,
     });
     await publishEvent(workspaceId, "analysis_completed", sessionRow.id, {
       reviewId: sessionRow.id,
       docs: documentsToInsert.length,
+      retainSourceDocuments,
     });
 
     return getReviewSessionDetail(workspaceId, sessionRow.id);
@@ -385,8 +440,8 @@ export const createReviewSession = async (
     charCount: doc.charCount,
     storagePath: doc.storagePath || `workspaces/${workspaceId}/reviews/${reviewId}/${idx + 1}-${doc.name}`,
     sourceUrl: doc.sourceUrl,
-    sourceDataUrl: doc.sourceDataUrl,
-    contentText: doc.contentText || "",
+    sourceDataUrl: retainSourceDocuments ? doc.sourceDataUrl : undefined,
+    contentText: retainSourceDocuments ? doc.contentText || "" : "",
     createdAt: nowIso(),
   }));
 
@@ -415,10 +470,12 @@ export const createReviewSession = async (
     reviewId,
     docs: documents.length,
     model: input.model || undefined,
+    retainSourceDocuments,
   });
   await publishEvent(workspaceId, "analysis_completed", reviewId, {
     reviewId,
     docs: documents.length,
+    retainSourceDocuments,
   });
 
   return {
@@ -539,18 +596,22 @@ export const createReviewUploadContract = async (
 };
 
 export const createInvite = async (workspaceId: string, inviterEmail: string, email: string, role: WorkspaceRole): Promise<Invite> => {
+  const rawToken = token();
+  const tokenHash = hashToken(rawToken);
+  const expiresAt = new Date(Date.now() + INVITE_EXPIRY_MS).toISOString();
+
   if (usingSupabase()) {
     const payload = {
       workspace_id: workspaceId,
       email: email.toLowerCase(),
       role,
-      token_hash: id("tok"),
-      expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+      token_hash: tokenHash,
+      expires_at: expiresAt,
     };
     const { data, error } = await db!.from("workspace_invites").insert(payload).select("*").single();
     if (error) throw error;
     await pushActivity(workspaceId, inviterEmail, "invite_created", data.id, { email, role });
-    return mapInvite(data);
+    return { ...mapInvite(data), token: rawToken };
   }
 
   const inv: Invite = {
@@ -558,8 +619,9 @@ export const createInvite = async (workspaceId: string, inviterEmail: string, em
     workspaceId,
     email: email.toLowerCase(),
     role,
-    tokenHash: id("tok"),
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    tokenHash,
+    token: rawToken,
+    expiresAt,
     acceptedAt: null,
   };
   mem.invites.push(inv);
@@ -568,12 +630,13 @@ export const createInvite = async (workspaceId: string, inviterEmail: string, em
 };
 
 export const acceptInvite = async (workspaceId: string, token: string, actorEmail: string): Promise<WorkspaceMember> => {
+  const tokenHash = hashToken(String(token || ""));
   if (usingSupabase()) {
     const { data, error } = await db!
       .from("workspace_invites")
       .select("*")
       .eq("workspace_id", workspaceId)
-      .eq("token_hash", token)
+      .eq("token_hash", tokenHash)
       .maybeSingle();
     if (error) throw error;
     if (!data) throw new Error("Invalid invite token");
@@ -602,7 +665,7 @@ export const acceptInvite = async (workspaceId: string, token: string, actorEmai
     return mapMember(memberData);
   }
 
-  const inv = mem.invites.find((i) => i.workspaceId === workspaceId && i.tokenHash === token);
+  const inv = mem.invites.find((i) => i.workspaceId === workspaceId && i.tokenHash === tokenHash);
   if (!inv) throw new Error("Invalid invite token");
   if (inv.acceptedAt) throw new Error("Invite already accepted");
   if (new Date(inv.expiresAt).getTime() < Date.now()) throw new Error("Invite expired");
@@ -951,19 +1014,29 @@ export const listNotifications = async (workspaceId: string, userEmail: string):
   return mem.notifications.filter((n) => n.workspaceId === workspaceId && n.userEmail.toLowerCase() === userEmail.toLowerCase());
 };
 
-export const markNotificationRead = async (notificationId: string, userEmail: string): Promise<NotificationItem | undefined> => {
+export const markNotificationRead = async (
+  workspaceId: string,
+  notificationId: string,
+  userEmail: string
+): Promise<NotificationItem | undefined> => {
   if (usingSupabase()) {
     const { data, error } = await db!
       .from("notifications")
       .update({ read: true })
       .eq("id", notificationId)
+      .eq("workspace_id", workspaceId)
       .eq("user_email", userEmail.toLowerCase())
       .select("*")
       .maybeSingle();
     if (error) throw error;
     return data ? mapNotification(data) : undefined;
   }
-  const n = mem.notifications.find((x) => x.id === notificationId && x.userEmail.toLowerCase() === userEmail.toLowerCase());
+  const n = mem.notifications.find(
+    (x) =>
+      x.id === notificationId &&
+      x.workspaceId === workspaceId &&
+      x.userEmail.toLowerCase() === userEmail.toLowerCase()
+  );
   if (n) n.read = true;
   return n;
 };

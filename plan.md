@@ -136,3 +136,44 @@ Acceptance criteria:
 - In `platform` mode, users are informed they do not need personal keys.
 - In `byok` mode, analysis is blocked until user adds a provider key in settings.
 - Policy behavior is configurable by env without code changes.
+
+## Current Sprint: Security Audit Hardening (Private Beta)
+
+### Defaults (Locked)
+- Security profile: **Essential Hardened**
+- Retention policy: **Findings-First**
+- Access model: **Invite + Allowlist**
+- Production key mode: **Platform Managed**
+
+### Workstream H: Auth and Identity
+- [x] Replace header-trusted identity with verified bearer auth on API routes.
+- [x] Gate insecure demo auth behind explicit non-production server flag.
+- [x] Enforce beta allowlist checks (`BETA_ALLOWED_EMAILS`, `BETA_ALLOWED_DOMAINS`).
+- [x] Update frontend API client to send bearer token from Supabase session.
+- [x] Enforce workspace membership checks on notifications read/update routes.
+
+### Workstream I: AI Proxy Lockdown
+- [x] Require auth + workspace membership for `/api/ai/generate`.
+- [x] Require `workspaceId` in AI proxy payload.
+- [x] Add model allowlist and payload-size/token caps.
+- [x] Add IP + actor rate limiting and audit activity events for AI calls.
+- [x] Set `store: false` on OpenAI Responses calls (proxy + BYOK fallback) for minimal retention.
+
+### Workstream J: Invite and Token Security
+- [x] Replace weak invite token generation with cryptographic random.
+- [x] Store invite token hash only; return raw token once for invite links.
+- [x] Enforce short invite expiry (48h) and one-time acceptance.
+
+### Workstream K: Data Minimization
+- [x] Add workspace retention setting (`retainSourceDocuments`).
+- [x] Add workspace settings API (`GET/PATCH /workspaces/{id}/settings`).
+- [x] Default to findings-only persistence; source payload persistence is opt-in.
+- [x] Add in-app retention indicator.
+
+### Workstream L: Config, Headers, and Docs
+- [x] Remove client bundle injection of server API keys from Vite config.
+- [x] Add baseline security headers in `vercel.json`.
+- [x] Set secure defaults in `.env.example` and auth service defaults.
+- [x] Update docs (`README.md`, `docs/api-reference.md`, `docs/local-testing.md`, `docs/deployment.md`, `docs/security-and-privacy.md`).
+- [ ] Replace all third-party runtime CDN scripts with bundled npm dependencies.
+  Blocked in this environment due offline npm cache restrictions (`ENOTCACHED`).

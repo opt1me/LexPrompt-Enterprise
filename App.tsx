@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { ActivityEvent, NotificationItem, Template, DocumentFile, AnalysisResult, ProviderKeys, ResidencySettings, Workspace, WorkspaceMember, WorkspaceRole, FindingReviewStatus, ReviewDeepLinkState, ReviewSessionSummary, ReviewSessionDetail } from './types';
 import { generateTemplate, analyzeContract, draftEmail, suggestRevision, chatWithDoc, AVAILABLE_MODELS, getProviderForModel } from './services/aiService';
 import { parseFileContent } from './services/docService';
@@ -9,7 +9,27 @@ import { CreateTemplateModal, MegaPromptModal, ModifyTemplateModal, RevisionModa
 import { TemplateEditor } from './components/TemplateEditor';
 import { TabularReview } from './components/TabularReview';
 import { FileText, Plus, Upload, Play, Loader, LogOut, Layout, Check, AlertCircle, Coins, Zap, ShieldCheck, Settings2, Sliders, Share2, Users, Trash2, RefreshCw, Clock3, Link as LinkIcon, History } from 'lucide-react';
-import { addFindingComment, createInvite, createReviewSession, createWorkspace, deleteReviewSession, getActivity, getFindingComments, getFindingStatus, getNotifications, getReviewSession, listMembers, listReviewSessions, listWorkspaces, markNotificationRead, pollWorkspaceEvents, publishWorkspaceEvent, updateFindingStatus, updateMemberRole } from './services/collabService';
+import {
+  addFindingComment,
+  createInvite,
+  createReviewSession,
+  createWorkspace,
+  deleteReviewSession,
+  getActivity,
+  getFindingComments,
+  getFindingStatus,
+  getNotifications,
+  getReviewSession,
+  getWorkspaceSettings as loadWorkspaceSettings,
+  listMembers,
+  listReviewSessions,
+  listWorkspaces,
+  markNotificationRead,
+  pollWorkspaceEvents,
+  publishWorkspaceEvent,
+  updateFindingStatus,
+  updateMemberRole
+} from './services/collabService';
 import { MembersModal, NotificationsPanel, ShareProjectModal, WorkspaceSwitcher } from './components/CollabPanels';
 import { getCurrentAuthUser, isDemoAuthEnabled, isSupabaseAuthEnabled, onAuthStateChanged, sendMagicLink, signOutAuth } from './services/authService';
 
@@ -126,6 +146,11 @@ const dataUrlToFile = (dataUrl: string, fileName: string, fallbackMimeType: stri
   return new File([bytes], fileName, { type: mimeType });
 };
 
+const randomId = (prefix: string): string => {
+  if (globalThis.crypto?.randomUUID) return `${prefix}_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  return `${prefix}_${Math.random().toString(36).slice(2, 11)}`;
+};
+
 declare global {
   interface AIStudio {
     hasSelectedApiKey: () => Promise<boolean>;
@@ -173,6 +198,9 @@ export default function App() {
   const [residencySettings, setResidencySettings] = useState<ResidencySettings>(loadResidencySettings());
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState<string | null>(null);
+  const [workspaceSettings, setWorkspaceSettings] = useState<{ retainSourceDocuments: boolean }>({
+    retainSourceDocuments: false,
+  });
   const [members, setMembers] = useState<WorkspaceMember[]>([]);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
@@ -188,6 +216,22 @@ export default function App() {
   const [modifyModalOpen, setModifyModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [revisionData, setRevisionData] = useState<{title: string, original: string, revised: string} | null>(null);
+
+  const insecureProdWarnings = useMemo(() => {
+    const env = (import.meta as any).env || {};
+    if (!env.PROD) return [] as string[];
+    const warnings: string[] = [];
+    if (String(env.VITE_ENABLE_DEMO_AUTH ?? "false").toLowerCase() === "true") {
+      warnings.push("Demo auth is enabled in production.");
+    }
+    if (String(env.VITE_ALLOW_CLIENT_SIDE_AI ?? "false").toLowerCase() === "true") {
+      warnings.push("Client-side AI fallback is enabled in production.");
+    }
+    if (String(env.VITE_USE_AI_PROXY ?? "auto").toLowerCase() === "false") {
+      warnings.push("AI proxy is disabled in production.");
+    }
+    return warnings;
+  }, []);
 
   useEffect(() => {
     const checkKey = async () => {
@@ -247,16 +291,18 @@ export default function App() {
         const active = hasWorkspace(activeWorkspaceId) ? activeWorkspaceId : deepLinkedWorkspace || ws[0]?.id || null;
         setActiveWorkspaceId(active);
         if (active) {
-          const [m, a, n, reviews] = await Promise.all([
+          const [m, a, n, reviews, wsSettings] = await Promise.all([
             listMembers(user.email, active),
             getActivity(user.email, active),
             getNotifications(user.email, active),
             listReviewSessions(user.email, active),
+            loadWorkspaceSettings(user.email, active),
           ]);
           setMembers(m);
           setActivity(a);
           setNotifications(n);
           setReviewHistory(reviews);
+          setWorkspaceSettings(wsSettings);
         }
       } catch (e: any) {
         showNotify(e.message || "Failed to load workspaces", "error");
@@ -321,11 +367,12 @@ export default function App() {
               minRetention: residencySettings.minRetention,
               policyVersion: residencySettings.policyVersion
             },
-            selectedModel
+            selectedModel,
+            activeWorkspaceId || undefined
           );
           setCredits(prev => prev - COSTS.TEMPLATE_GEN);
       }
-      const finalT: Template = { ...newT as Template, id: Math.random().toString(36).substr(2, 9), name: params.templateName || params.contractType, createdAt: new Date().toISOString() };
+      const finalT: Template = { ...newT as Template, id: randomId("tpl"), name: params.templateName || params.contractType, createdAt: new Date().toISOString() };
       const updated = [...templates, finalT];
       setTemplates(updated);
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
@@ -390,12 +437,13 @@ export default function App() {
           ...prev,
           [clauseTitle]: { status, detail }
         }));
-      });
+      }, activeWorkspaceId || undefined);
       setCredits(prev => prev - cost);
 
       let persistedReviewId: string | null = null;
       if (activeWorkspaceId && user?.email) {
         try {
+          const retainSourceDocuments = Boolean(workspaceSettings.retainSourceDocuments);
           const reviewDocs = await Promise.all(
             documents.map(async (doc) => ({
               id: doc.id,
@@ -407,8 +455,8 @@ export default function App() {
               charCount: doc.charCount || doc.content.length,
               storagePath: doc.storagePath,
               sourceUrl: doc.sourceUrl,
-              sourceDataUrl: await fileToDataUrl(doc.fileObj),
-              contentText: doc.content,
+              sourceDataUrl: retainSourceDocuments ? await fileToDataUrl(doc.fileObj) : undefined,
+              contentText: retainSourceDocuments ? doc.content : "",
             }))
           );
 
@@ -433,7 +481,7 @@ export default function App() {
       setActiveReviewId(persistedReviewId);
 
       const newResult: AnalysisResult = {
-        id: persistedReviewId || Math.random().toString(),
+        id: persistedReviewId || randomId("run"),
         title: "Contract Analysis",
         data,
         docIndices: documents.map((_, i) => i),
@@ -944,7 +992,7 @@ export default function App() {
           <button onClick={() => setMembersOpen(true)} className="p-2 bg-white/5 rounded-xl hover:bg-white/10 text-gray-400 transition-colors" title="Members"><Users className="w-5 h-5"/></button>
           <NotificationsPanel notifications={notifications} onMarkRead={async (id) => {
             if (!user?.email || !activeWorkspaceId) return;
-            await markNotificationRead(user.email, id);
+            await markNotificationRead(user.email, activeWorkspaceId, id);
             setNotifications(await getNotifications(user.email, activeWorkspaceId));
           }} />
           <div className="hidden md:flex items-center gap-2 bg-black/40 px-3 py-1.5 rounded-xl border border-white/5">
@@ -958,6 +1006,12 @@ export default function App() {
           <button onClick={handleSignOut} className="text-gray-400 hover:text-white"><LogOut className="w-4 h-4" /></button>
         </div>
       </header>
+
+      {insecureProdWarnings.length > 0 && (
+        <div className="px-6 py-2 border-b text-xs font-bold bg-red-950/60 border-red-500/20 text-red-200">
+          Insecure production configuration: {insecureProdWarnings.join(" ")}
+        </div>
+      )}
 
       {keyPolicy !== "hybrid" && (
         <div
@@ -978,6 +1032,12 @@ export default function App() {
           >
             Open Settings
           </button>
+        </div>
+      )}
+
+      {activeWorkspaceId && (
+        <div className="px-6 py-2 border-b border-white/10 text-[11px] text-gray-300 bg-black/20">
+          Data retention: {workspaceSettings.retainSourceDocuments ? "Source + findings" : "Findings only (source documents are not persisted)."}
         </div>
       )}
 
@@ -1176,9 +1236,12 @@ export default function App() {
           <ResultsView
             results={results}
             documents={documents}
-            onDraftEmail={async (d) => alert(await draftEmail(d))}
-            onSuggestRevision={async (c, o, i) => { const r = await suggestRevision(c, o, i); setRevisionData({ title: c, original: o, revised: r }); }}
-            onChat={(q) => chatWithDoc("", q, documents.map(d => d.content).join("\n"))}
+            onDraftEmail={async (d) => alert(await draftEmail(d, activeWorkspaceId || undefined))}
+            onSuggestRevision={async (c, o, i) => {
+              const r = await suggestRevision(c, o, i, activeWorkspaceId || undefined);
+              setRevisionData({ title: c, original: o, revised: r });
+            }}
+            onChat={(q) => chatWithDoc("", q, documents.map(d => d.content).join("\n"), activeWorkspaceId || undefined)}
             loadingAi={loading}
             userCredits={credits}
             onConsumeCredits={(c) => { if(credits >= c) { setCredits(prev => prev - c); return true; } return false; }}

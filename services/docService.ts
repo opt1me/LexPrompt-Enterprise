@@ -1,5 +1,10 @@
 import { DocumentFile } from "../types";
 
+const makeId = (): string => {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  return `doc_${Math.random().toString(36).slice(2, 11)}`;
+};
+
 export const parseFileContent = async (file: File): Promise<DocumentFile> => {
   const type = file.type;
   let content = "";
@@ -11,7 +16,7 @@ export const parseFileContent = async (file: File): Promise<DocumentFile> => {
   if (type === "application/pdf" || lowerName.endsWith(".pdf")) {
     docType = 'pdf';
     try {
-      // @ts-ignore - Loaded via CDN in index.html
+      // @ts-ignore - loaded via CDN in index.html
       const pdfjsLib = window['pdfjs-dist/build/pdf'];
       const arrayBuffer = await file.arrayBuffer();
       const loadingTask = pdfjsLib.getDocument(arrayBuffer);
@@ -30,7 +35,7 @@ export const parseFileContent = async (file: File): Promise<DocumentFile> => {
   } else if (type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" || lowerName.endsWith(".docx")) {
     docType = 'docx';
     try {
-      // @ts-ignore - Loaded via CDN
+      // @ts-ignore - loaded via CDN in index.html
       const result = await window.mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
       content = result.value;
     } catch (e: any) {
@@ -41,7 +46,7 @@ export const parseFileContent = async (file: File): Promise<DocumentFile> => {
   }
 
   return {
-    id: Math.random().toString(36).substring(7),
+    id: makeId(),
     name: file.name,
     content,
     fileObj: file,

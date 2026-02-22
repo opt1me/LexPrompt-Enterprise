@@ -4,7 +4,8 @@ Base path: `api/v1`
 
 ## Authentication
 
-- Current beta routes accept `x-user-email` for actor identity.
+- All beta routes require `Authorization: Bearer <supabase_access_token>`.
+- `x-user-email` is accepted only for explicit local insecure demo mode.
 - Workspace authorization is enforced server-side per route.
 
 ## Workspaces
@@ -12,6 +13,8 @@ Base path: `api/v1`
 - `GET /workspaces`
 - `POST /workspaces`
 - `GET /workspaces/{id}`
+- `GET /workspaces/{id}/settings`
+- `PATCH /workspaces/{id}/settings`
 
 ## Membership and Sharing
 
@@ -26,7 +29,7 @@ Base path: `api/v1`
 - `POST /workspaces/{id}/events`
 - `GET /activity?workspaceId=...`
 - `GET /notifications?workspaceId=...`
-- `PATCH /notifications`
+- `PATCH /notifications` (body: `{ workspaceId, id }`)
 
 ## Finding Collaboration
 
@@ -56,3 +59,4 @@ Separate endpoint:
 - `POST /api/ai/generate`
 
 This route resolves provider credentials from server env vars and applies residency checks.
+Request body must include `workspaceId`; membership is enforced before proxy execution.

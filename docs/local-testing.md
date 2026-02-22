@@ -16,11 +16,12 @@ Minimum local config (OpenAI-only test path):
 ```env
 OPENAI_API_KEY=your_key
 VITE_AI_PROXY_URL=/api/ai/generate
-VITE_USE_AI_PROXY=auto
-VITE_USE_COLLAB_API=auto
+VITE_USE_AI_PROXY=false
+VITE_USE_COLLAB_API=false
 VITE_ALLOW_CLIENT_SIDE_AI=true
 VITE_ENABLE_DEMO_AUTH=true
-VITE_KEY_POLICY=hybrid
+ALLOW_INSECURE_DEMO_AUTH=true
+VITE_KEY_POLICY=byok
 ```
 
 `GEMINI_API_KEY` and `ANTHROPIC_API_KEY` can be omitted for OpenAI-only local testing.
@@ -100,3 +101,4 @@ npm run build
 - If `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are not set, collaboration uses in-memory fallback for local-only testing.
 - Hosted beta should disable client-side AI fallback:
   - `VITE_ALLOW_CLIENT_SIDE_AI=false`
+  - `ALLOW_INSECURE_DEMO_AUTH=false`

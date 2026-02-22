@@ -4,7 +4,6 @@ import { ActivityEvent, AnalysisResult, DocumentFile, ChatMessage, Comment, Find
 import { PDFViewer } from './PDFViewer';
 import { Mail, FileDown, ShieldAlert, Wand2, MousePointerClick, MessageSquare, Loader, MessageCircle, Send, User, CheckCircle, FileText, AlignLeft, AlertCircle, Link2 } from 'lucide-react';
 
-// Access docx library from window (loaded via CDN)
 declare const docx: any;
 
 interface ResultsViewProps {
@@ -199,11 +198,8 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
     };
 
     const handleExport = async () => {
-        // Access docx through window.docx (CDN loaded library)
         const docxLib = (window as any).docx;
         if (!activeResult || !docxLib) {
-            console.error("docx library not loaded from CDN");
-            alert("Export library is still loading. Please wait a moment.");
             return;
         }
         
@@ -211,7 +207,6 @@ export const ResultsView: React.FC<ResultsViewProps> = ({
 
         try {
             const { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType } = docxLib;
-
             const sections = [];
             
             // Document Header

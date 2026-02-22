@@ -5,11 +5,11 @@ import { listStatusesForWorkspace, updateFindingStatus } from "../../../_lib/col
 export default async function handler(req: any, res: any) {
   const findingId = req.query.findingId as string;
   const workspaceId = req.query.workspaceId as string;
-  const actor = getActorEmail(req);
   if (!workspaceId) return res.status(400).json({ error: "workspaceId is required" });
 
   if (req.method === "GET") {
     try {
+      const actor = await getActorEmail(req, res);
       await requireWorkspaceRole(workspaceId, actor, ["owner", "admin", "editor", "reviewer"]);
       const history = (await listStatusesForWorkspace(workspaceId)).filter((x) => x.findingId === findingId);
       return res.status(200).json({ history, current: history[history.length - 1]?.to || "open", version: history.length });
@@ -20,6 +20,7 @@ export default async function handler(req: any, res: any) {
 
   if (req.method === "PATCH") {
     try {
+      const actor = await getActorEmail(req, res);
       await requireWorkspaceRole(workspaceId, actor, ["owner", "admin", "editor", "reviewer"]);
       const next = (req.body?.status || "open") as FindingReviewStatus;
       const expectedVersion = req.body?.expectedVersion;

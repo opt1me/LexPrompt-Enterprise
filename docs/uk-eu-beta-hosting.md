@@ -21,6 +21,9 @@ Host LexPrompt beta in UK first, with EU fallback, and keep AI keys server-side.
 - `VITE_ALLOW_CLIENT_SIDE_AI=false`
 - `VITE_USE_AI_PROXY=true`
 - `VITE_KEY_POLICY=platform`
+- `VITE_ENABLE_DEMO_AUTH=false`
+- `ALLOW_INSECURE_DEMO_AUTH=false`
+- `BETA_ALLOWED_EMAILS=...` and/or `BETA_ALLOWED_DOMAINS=...`
 
 ## Optional BYOK Mode
 - Set `VITE_KEY_POLICY=byok` to force users to add their own keys in Engine Settings.

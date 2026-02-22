@@ -15,6 +15,7 @@ export interface Workspace {
   ownerId: string;
   createdAt: string;
   archivedAt?: string | null;
+  retainSourceDocuments?: boolean;
 }
 
 export interface WorkspaceMember {
@@ -33,6 +34,7 @@ export interface Invite {
   email: string;
   role: WorkspaceRole;
   tokenHash: string;
+  token?: string;
   expiresAt: string;
   acceptedAt?: string | null;
 }

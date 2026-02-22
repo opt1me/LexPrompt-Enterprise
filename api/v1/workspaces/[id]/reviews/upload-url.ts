@@ -5,9 +5,9 @@ export default async function handler(req: any, res: any) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
   const workspaceId = req.query.id as string;
-  const actor = getActorEmail(req);
 
   try {
+    const actor = await getActorEmail(req, res);
     await requireWorkspaceRole(workspaceId, actor, ["owner", "admin", "editor"]);
     const reviewId = String(req.body?.reviewId || "").trim();
     const docs = Array.isArray(req.body?.documents) ? req.body.documents : [];

@@ -13,6 +13,7 @@ import {
   WorkspaceMember,
   WorkspaceRole,
 } from "../types";
+import { getSupabaseClient } from "./authService";
 
 type CollabEvent = {
   id: string;
@@ -29,6 +30,7 @@ type LocalInvite = {
   email: string;
   role: WorkspaceRole;
   tokenHash: string;
+  token?: string;
   expiresAt: string;
   acceptedAt?: string | null;
 };
@@ -51,7 +53,11 @@ type LocalStore = {
 
 const LOCAL_KEY = "lexprompt_collab_local_v1";
 const nowIso = () => new Date().toISOString();
-const id = (p: string) => `${p}_${Math.random().toString(36).slice(2, 10)}`;
+const id = (p: string) => {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c?.randomUUID) return `${p}_${c.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  return `${p}_${Math.random().toString(36).slice(2, 10)}`;
+};
 
 const defaultStore = (): LocalStore => ({
   workspaces: [],
@@ -98,10 +104,30 @@ const shouldUseApi = (): boolean => {
   return true;
 };
 
-const headers = (actorEmail: string) => ({
-  "Content-Type": "application/json",
-  "x-user-email": actorEmail,
-});
+const getAuthHeaders = async (actorEmail: string, includeContentType = false): Promise<Record<string, string>> => {
+  const headers: Record<string, string> = {};
+  if (includeContentType) headers["Content-Type"] = "application/json";
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    const { data } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+      return headers;
+    }
+  }
+
+  const env = (import.meta as any).env || {};
+  const demoEnabled = String(env.VITE_ENABLE_DEMO_AUTH ?? "false").toLowerCase() === "true";
+  // Local fallback for explicit demo-mode development only.
+  if (!env.PROD && demoEnabled) {
+    headers["x-user-email"] = actorEmail.toLowerCase();
+    return headers;
+  }
+
+  throw new Error("Missing authenticated session. Please sign in again.");
+};
 
 const readJson = async (res: Response) => {
   const contentType = res.headers.get("content-type") || "";
@@ -182,7 +208,7 @@ const normalizeDocOrder = (raw: any, docs: ReviewDocumentRef[]): string[] => {
 
 export const listWorkspaces = async (actorEmail: string): Promise<Workspace[]> => {
   if (shouldUseApi()) {
-    const res = await fetch("/api/v1/workspaces", { headers: { "x-user-email": actorEmail } });
+    const res = await fetch("/api/v1/workspaces", { headers: await getAuthHeaders(actorEmail) });
     const body = await readJson(res);
     return body.workspaces || [];
   }
@@ -195,7 +221,7 @@ export const createWorkspace = async (actorEmail: string, name: string): Promise
   if (shouldUseApi()) {
     const res = await fetch("/api/v1/workspaces", {
       method: "POST",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
       body: JSON.stringify({ name }),
     });
     const body = await readJson(res);
@@ -208,6 +234,7 @@ export const createWorkspace = async (actorEmail: string, name: string): Promise
     ownerId: actorEmail,
     createdAt: nowIso(),
     archivedAt: null,
+    retainSourceDocuments: false,
   };
   store.workspaces.push(ws);
   store.members.push({
@@ -229,7 +256,7 @@ export const getWorkspaceDetails = async (
   workspaceId: string
 ): Promise<{ workspace: Workspace; members: WorkspaceMember[] }> => {
   if (shouldUseApi()) {
-    const res = await fetch(`/api/v1/workspaces/${workspaceId}`, { headers: { "x-user-email": actorEmail } });
+    const res = await fetch(`/api/v1/workspaces/${workspaceId}`, { headers: await getAuthHeaders(actorEmail) });
     return readJson(res);
   }
   const store = loadStore();
@@ -238,34 +265,74 @@ export const getWorkspaceDetails = async (
   return { workspace, members: listLocalMembers(store, workspaceId) };
 };
 
+export const getWorkspaceSettings = async (
+  actorEmail: string,
+  workspaceId: string
+): Promise<{ retainSourceDocuments: boolean }> => {
+  if (shouldUseApi()) {
+    const res = await fetch(`/api/v1/workspaces/${workspaceId}/settings`, {
+      headers: await getAuthHeaders(actorEmail),
+    });
+    const body = await readJson(res);
+    return body.settings || { retainSourceDocuments: false };
+  }
+  const store = loadStore();
+  const ws = store.workspaces.find((w) => w.id === workspaceId);
+  return { retainSourceDocuments: Boolean(ws?.retainSourceDocuments) };
+};
+
+export const updateWorkspaceSettings = async (
+  actorEmail: string,
+  workspaceId: string,
+  patch: { retainSourceDocuments?: boolean }
+): Promise<{ retainSourceDocuments: boolean }> => {
+  if (shouldUseApi()) {
+    const res = await fetch(`/api/v1/workspaces/${workspaceId}/settings`, {
+      method: "PATCH",
+      headers: await getAuthHeaders(actorEmail, true),
+      body: JSON.stringify({ retainSourceDocuments: Boolean(patch.retainSourceDocuments) }),
+    });
+    const body = await readJson(res);
+    return body.settings || { retainSourceDocuments: false };
+  }
+  const store = loadStore();
+  const ws = store.workspaces.find((w) => w.id === workspaceId);
+  if (!ws) throw new Error("Workspace not found");
+  ws.retainSourceDocuments = Boolean(patch.retainSourceDocuments);
+  saveStore(store);
+  return { retainSourceDocuments: Boolean(ws.retainSourceDocuments) };
+};
+
 export const createInvite = async (actorEmail: string, workspaceId: string, email: string, role: WorkspaceRole) => {
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/invites`, {
       method: "POST",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
       body: JSON.stringify({ email, role }),
     });
     return readJson(res);
   }
+  const rawToken = id("tok");
   const store = loadStore();
   const invite: LocalInvite = {
     id: id("inv"),
     workspaceId,
     email: email.toLowerCase(),
     role,
-    tokenHash: id("tok"),
-    expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    tokenHash: rawToken,
+    token: rawToken,
+    expiresAt: new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
     acceptedAt: null,
   };
   store.invites.push(invite);
   pushLocalActivity(store, workspaceId, actorEmail, "invite_created", invite.id, { email, role });
   saveStore(store);
-  return { invite, inviteLink: `/accept-invite?workspace=${workspaceId}&token=${invite.tokenHash}` };
+  return { invite, inviteLink: `/accept-invite?workspace=${workspaceId}&token=${invite.token || invite.tokenHash}` };
 };
 
 export const listMembers = async (actorEmail: string, workspaceId: string): Promise<WorkspaceMember[]> => {
   if (shouldUseApi()) {
-    const res = await fetch(`/api/v1/workspaces/${workspaceId}/members`, { headers: { "x-user-email": actorEmail } });
+    const res = await fetch(`/api/v1/workspaces/${workspaceId}/members`, { headers: await getAuthHeaders(actorEmail) });
     const body = await readJson(res);
     return body.members || [];
   }
@@ -277,7 +344,7 @@ export const updateMemberRole = async (actorEmail: string, workspaceId: string, 
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/members/${encodeURIComponent(userId)}`, {
       method: "PATCH",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
       body: JSON.stringify({ role }),
     });
     return readJson(res);
@@ -301,7 +368,7 @@ export const addFindingComment = async (
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/findings/${encodeURIComponent(findingId)}/comments?workspaceId=${encodeURIComponent(workspaceId)}`, {
       method: "POST",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
       body: JSON.stringify({ text }),
     });
     const body = await readJson(res);
@@ -342,7 +409,7 @@ export const addFindingComment = async (
 export const getFindingComments = async (actorEmail: string, workspaceId: string, findingId: string): Promise<FindingComment[]> => {
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/findings/${encodeURIComponent(findingId)}/comments?workspaceId=${encodeURIComponent(workspaceId)}`, {
-      headers: { "x-user-email": actorEmail },
+      headers: await getAuthHeaders(actorEmail),
     });
     const body = await readJson(res);
     return body.comments || [];
@@ -361,7 +428,7 @@ export const updateFindingStatus = async (
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/findings/${encodeURIComponent(findingId)}/status?workspaceId=${encodeURIComponent(workspaceId)}`, {
       method: "PATCH",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
       body: JSON.stringify({ status, expectedVersion }),
     });
     return readJson(res);
@@ -392,7 +459,7 @@ export const updateFindingStatus = async (
 export const getFindingStatus = async (actorEmail: string, workspaceId: string, findingId: string) => {
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/findings/${encodeURIComponent(findingId)}/status?workspaceId=${encodeURIComponent(workspaceId)}`, {
-      headers: { "x-user-email": actorEmail },
+      headers: await getAuthHeaders(actorEmail),
     });
     return readJson(res);
   }
@@ -404,7 +471,7 @@ export const getFindingStatus = async (actorEmail: string, workspaceId: string, 
 export const getActivity = async (actorEmail: string, workspaceId: string): Promise<ActivityEvent[]> => {
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/activity?workspaceId=${encodeURIComponent(workspaceId)}`, {
-      headers: { "x-user-email": actorEmail },
+      headers: await getAuthHeaders(actorEmail),
     });
     const body = await readJson(res);
     return body.activity || [];
@@ -418,7 +485,7 @@ export const getActivity = async (actorEmail: string, workspaceId: string): Prom
 export const getNotifications = async (actorEmail: string, workspaceId: string): Promise<NotificationItem[]> => {
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/notifications?workspaceId=${encodeURIComponent(workspaceId)}`, {
-      headers: { "x-user-email": actorEmail },
+      headers: await getAuthHeaders(actorEmail),
     });
     const body = await readJson(res);
     return body.notifications || [];
@@ -429,17 +496,22 @@ export const getNotifications = async (actorEmail: string, workspaceId: string):
     .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
 };
 
-export const markNotificationRead = async (actorEmail: string, idValue: string) => {
+export const markNotificationRead = async (actorEmail: string, workspaceId: string, idValue: string) => {
   if (shouldUseApi()) {
     const res = await fetch("/api/v1/notifications", {
       method: "PATCH",
-      headers: headers(actorEmail),
-      body: JSON.stringify({ id: idValue }),
+      headers: await getAuthHeaders(actorEmail, true),
+      body: JSON.stringify({ workspaceId, id: idValue }),
     });
     return readJson(res);
   }
   const store = loadStore();
-  const n = store.notifications.find((x) => x.id === idValue && x.userEmail.toLowerCase() === actorEmail.toLowerCase());
+  const n = store.notifications.find(
+    (x) =>
+      x.id === idValue &&
+      x.workspaceId === workspaceId &&
+      x.userEmail.toLowerCase() === actorEmail.toLowerCase()
+  );
   if (n) n.read = true;
   saveStore(store);
   return { notification: n };
@@ -454,7 +526,7 @@ export const createReviewUploadContract = async (
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/reviews/upload-url`, {
       method: "POST",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
       body: JSON.stringify({ reviewId, documents }),
     });
     return readJson(res);
@@ -475,7 +547,7 @@ export const createReviewSession = async (
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/reviews`, {
       method: "POST",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
       body: JSON.stringify(payload),
     });
     const body = await readJson(res);
@@ -537,7 +609,7 @@ export const createReviewSession = async (
 export const listReviewSessions = async (actorEmail: string, workspaceId: string): Promise<ReviewSessionSummary[]> => {
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/reviews`, {
-      headers: { "x-user-email": actorEmail },
+      headers: await getAuthHeaders(actorEmail),
     });
     const body = await readJson(res);
     return body.reviews || [];
@@ -555,7 +627,7 @@ export const getReviewSession = async (
 ): Promise<ReviewSessionDetail> => {
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/reviews/${reviewId}`, {
-      headers: { "x-user-email": actorEmail },
+      headers: await getAuthHeaders(actorEmail),
     });
     const body = await readJson(res);
     return body.review as ReviewSessionDetail;
@@ -577,7 +649,7 @@ export const deleteReviewSession = async (actorEmail: string, workspaceId: strin
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/reviews/${reviewId}`, {
       method: "DELETE",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
     });
     return readJson(res);
   }
@@ -595,7 +667,7 @@ export const deleteReviewSession = async (actorEmail: string, workspaceId: strin
 export const pollWorkspaceEvents = async (actorEmail: string, workspaceId: string, since?: string) => {
   if (shouldUseApi()) {
     const query = since ? `?since=${encodeURIComponent(since)}` : "";
-    const res = await fetch(`/api/v1/workspaces/${workspaceId}/events${query}`, { headers: { "x-user-email": actorEmail } });
+    const res = await fetch(`/api/v1/workspaces/${workspaceId}/events${query}`, { headers: await getAuthHeaders(actorEmail) });
     const body = await readJson(res);
     return body.events || [];
   }
@@ -614,7 +686,7 @@ export const publishWorkspaceEvent = async (
   if (shouldUseApi()) {
     const res = await fetch(`/api/v1/workspaces/${workspaceId}/events`, {
       method: "POST",
-      headers: headers(actorEmail),
+      headers: await getAuthHeaders(actorEmail, true),
       body: JSON.stringify({ type, entityId, payload }),
     });
     return readJson(res);

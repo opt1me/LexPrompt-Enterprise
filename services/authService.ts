@@ -16,7 +16,7 @@ export const isSupabaseAuthEnabled = (): boolean => {
 };
 
 export const isDemoAuthEnabled = (): boolean => {
-  const v = String((import.meta as any).env?.VITE_ENABLE_DEMO_AUTH ?? "true").toLowerCase();
+  const v = String((import.meta as any).env?.VITE_ENABLE_DEMO_AUTH ?? "false").toLowerCase();
   return v === "true";
 };
 
@@ -77,3 +77,10 @@ export const signOutAuth = async (): Promise<void> => {
   await supabase.auth.signOut();
 };
 
+export const getAccessToken = async (): Promise<string | null> => {
+  const supabase = getSupabaseClient();
+  if (!supabase) return null;
+  const { data, error } = await supabase.auth.getSession();
+  if (error) return null;
+  return data.session?.access_token || null;
+};

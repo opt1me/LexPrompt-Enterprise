@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { Clause, Template, DocumentFile, TabularData, TabularColumn, AIProvider, DataRegion, ResidencySettings } from "../types";
+import { getAccessToken } from "./authService";
 
 export const AVAILABLE_MODELS = {
   // Google Gemini (efficient 2.5 family)
@@ -36,6 +37,7 @@ export type ClauseProgressStatus = "queued" | "running" | "done" | "error";
 export type ClauseProgressCallback = (clauseTitle: string, status: ClauseProgressStatus, detail?: string) => void;
 
 interface UniversalParams {
+  workspaceId?: string;
   model: string;
   system?: string;
   prompt: string;
@@ -84,10 +86,6 @@ const getApiKey = (provider: AIProvider): string | undefined => {
     const keys = JSON.parse(savedKeys);
     if (keys[provider]) return keys[provider];
   }
-  if (getKeyPolicy() === "byok") return undefined;
-  if (provider === "google") return process.env.API_KEY || process.env.GEMINI_API_KEY;
-  if (provider === "openai") return process.env.OPENAI_API_KEY;
-  if (provider === "anthropic") return process.env.ANTHROPIC_API_KEY;
   return undefined;
 };
 
@@ -487,7 +485,7 @@ const maybeUseServerProxy = async (params: UniversalParams): Promise<string | nu
   if (keyPolicy === "byok") return null;
 
   const proxyMode = ((import.meta as any).env?.VITE_USE_AI_PROXY ?? "auto").toLowerCase();
-  const allowClientFallback = ((import.meta as any).env?.VITE_ALLOW_CLIENT_SIDE_AI ?? "true") === "true";
+  const allowClientFallback = ((import.meta as any).env?.VITE_ALLOW_CLIENT_SIDE_AI ?? "false") === "true";
 
   // In local Vite dev, API routes are usually unavailable unless a dedicated backend is running.
   if (proxyMode === "false") return null;
@@ -501,11 +499,28 @@ const maybeUseServerProxy = async (params: UniversalParams): Promise<string | nu
     return null;
   }
 
+  if (!params.workspaceId) {
+    if (keyPolicy === "platform") {
+      throw new Error("No workspace is selected for platform-managed AI execution.");
+    }
+    return null;
+  }
+
   const endpoint = (import.meta as any).env?.VITE_AI_PROXY_URL || "/api/ai/generate";
   try {
+    const token = await getAccessToken();
+    if (!token) {
+      if (keyPolicy === "platform") {
+        throw new Error("Missing authenticated session for AI proxy request.");
+      }
+      return null;
+    }
     const res = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
       body: JSON.stringify(params),
     });
     if (!res.ok) {
@@ -514,7 +529,8 @@ const maybeUseServerProxy = async (params: UniversalParams): Promise<string | nu
     }
     const data = await res.json();
     return data.text || null;
-  } catch {
+  } catch (error) {
+    if (keyPolicy === "platform") throw error;
     return null;
   }
 };
@@ -528,7 +544,7 @@ const generateUniversalContent = async (params: UniversalParams): Promise<string
     throw new Error("Workspace-managed AI mode is enabled, but server AI proxy is unavailable. Contact your administrator.");
   }
 
-  const allowClientFallback = ((import.meta as any).env?.VITE_ALLOW_CLIENT_SIDE_AI ?? "true") === "true";
+  const allowClientFallback = ((import.meta as any).env?.VITE_ALLOW_CLIENT_SIDE_AI ?? "false") === "true";
   if (!allowClientFallback) {
     throw new Error("AI proxy unavailable. Enable server routing or set VITE_ALLOW_CLIENT_SIDE_AI=true for local-only testing.");
   }
@@ -538,8 +554,7 @@ const generateUniversalContent = async (params: UniversalParams): Promise<string
   if (!apiKey) {
     throw new Error(
       `Missing or invalid API Key for ${provider.toUpperCase()}. ` +
-      `For local testing, set OPENAI_API_KEY in .env.local and restart npm run dev, ` +
-      `or add it in Engine Settings (BYOK).`
+      `Add it in Engine Settings (BYOK), or switch to platform-managed AI mode.`
     );
   }
 
@@ -581,6 +596,7 @@ const generateUniversalContent = async (params: UniversalParams): Promise<string
     const baseBody: any = {
       model: params.model,
       input: params.prompt,
+      store: false,
       ...(params.system ? { instructions: params.system } : {}),
       ...(supportsCustomTemperature ? { temperature: params.temperature ?? 0.1 } : {}),
       ...(params.maxOutputTokens ? { max_output_tokens: params.maxOutputTokens } : {}),
@@ -640,6 +656,7 @@ const generateUniversalContent = async (params: UniversalParams): Promise<string
         const finalBody: any = {
           model: params.model,
           input: `${params.prompt}\n\nReturn only valid JSON. No markdown, no explanation.`,
+          store: false,
           ...(params.system ? { instructions: params.system } : {}),
           ...(supportsCustomTemperature ? { temperature: params.temperature ?? 0.1 } : {}),
           ...(params.maxOutputTokens ? { max_output_tokens: params.maxOutputTokens } : {}),
@@ -745,7 +762,8 @@ export const generateTemplate = async (
   verbosity: string,
   context: string | undefined,
   compliance: ComplianceContext,
-  preferredModel?: string
+  preferredModel?: string,
+  workspaceId?: string
 ): Promise<Partial<Template>> => {
   const model = preferredModel || pickBestAvailableModel([
     AVAILABLE_MODELS.GPT_5_MINI,
@@ -783,6 +801,7 @@ export const generateTemplate = async (
   };
 
   const text = await generateUniversalContent({
+    workspaceId,
     model,
     prompt,
     responseSchema: schema,
@@ -799,7 +818,8 @@ export const analyzeContract = async (
   selectedModel: string,
   compliance: ComplianceContext,
   isRedacted = false,
-  onClauseProgress?: ClauseProgressCallback
+  onClauseProgress?: ClauseProgressCallback,
+  workspaceId?: string
 ): Promise<{ data: Record<string, any>; meta: AnalysisExecutionMeta }> => {
   let effectiveModel = selectedModel;
   if (getKeyPolicy() !== "platform" && !getApiKey(getProviderForModel(selectedModel))) {
@@ -882,6 +902,7 @@ ${clauseContext}
     try {
       const generateClausePayload = async (retryMode = false): Promise<any> => {
         const text = await generateUniversalContent({
+          workspaceId,
           model: effectiveModel,
           system: template.systemPrompt,
           prompt: buildPrompt(retryMode),
@@ -987,7 +1008,12 @@ const defaultCompliance = (): ComplianceContext => ({
   policyVersion: "beta-uk-eu-v1",
 });
 
-export const chatWithDoc = async (history: string, query: string, context: string): Promise<string> => {
+export const chatWithDoc = async (
+  history: string,
+  query: string,
+  context: string,
+  workspaceId?: string
+): Promise<string> => {
   const model = pickBestAvailableModel([
     AVAILABLE_MODELS.GPT_5_NANO,
     AVAILABLE_MODELS.GEMINI_2_5_FLASH_LITE,
@@ -999,33 +1025,38 @@ export const chatWithDoc = async (history: string, query: string, context: strin
     USER QUERY: ${query}
     Answer as a legal assistant. Be concise.
   `;
-  const text = await generateUniversalContent({ model, prompt, compliance: defaultCompliance() });
+  const text = await generateUniversalContent({ workspaceId, model, prompt, compliance: defaultCompliance() });
   return text || "I could not generate a response.";
 };
 
-export const draftEmail = async (analysisJson: any): Promise<string> => {
+export const draftEmail = async (analysisJson: any, workspaceId?: string): Promise<string> => {
   const model = pickBestAvailableModel([
     AVAILABLE_MODELS.GPT_5_NANO,
     AVAILABLE_MODELS.GEMINI_2_5_FLASH_LITE,
     AVAILABLE_MODELS.CLAUDE_HAIKU_4_5,
   ]);
   const prompt = `Draft a professional email summary of these findings: ${JSON.stringify(analysisJson)}`;
-  const text = await generateUniversalContent({ model, prompt, compliance: defaultCompliance() });
+  const text = await generateUniversalContent({ workspaceId, model, prompt, compliance: defaultCompliance() });
   return text || "Could not draft email.";
 };
 
-export const suggestRevision = async (clause: string, original: string, issue: string): Promise<string> => {
+export const suggestRevision = async (
+  clause: string,
+  original: string,
+  issue: string,
+  workspaceId?: string
+): Promise<string> => {
   const model = pickBestAvailableModel([
     AVAILABLE_MODELS.GPT_5_MINI,
     AVAILABLE_MODELS.CLAUDE_SONNET_4_5,
     AVAILABLE_MODELS.GEMINI_2_5_PRO,
   ]);
   const prompt = `Mitigate risk for this clause. Clause: ${clause}\nOriginal: ${original}\nIssue: ${issue}`;
-  const text = await generateUniversalContent({ model, prompt, compliance: defaultCompliance() });
+  const text = await generateUniversalContent({ workspaceId, model, prompt, compliance: defaultCompliance() });
   return text || "Could not generate revision.";
 };
 
-export const extractTabularData = async (docContent: string, query: string): Promise<any> => {
+export const extractTabularData = async (docContent: string, query: string, workspaceId?: string): Promise<any> => {
   const model = pickBestAvailableModel([
     AVAILABLE_MODELS.GPT_5_NANO,
     AVAILABLE_MODELS.GEMINI_2_5_FLASH_LITE,
@@ -1033,6 +1064,7 @@ export const extractTabularData = async (docContent: string, query: string): Pro
   ]);
   const prompt = `Document: ${docContent.substring(0, 30000)}\nQuery: "${query}"\nExtract JSON: {value, quote, confidence: 'High'|'Medium'|'Low'}`;
   const text = await generateUniversalContent({
+    workspaceId,
     model,
     prompt,
     responseSchema: {
@@ -1049,13 +1081,18 @@ export const extractTabularData = async (docContent: string, query: string): Pro
   return JSON.parse(text);
 };
 
-export const analyzeTable = async (data: TabularData, columns: TabularColumn[], query: string): Promise<string> => {
+export const analyzeTable = async (
+  data: TabularData,
+  columns: TabularColumn[],
+  query: string,
+  workspaceId?: string
+): Promise<string> => {
   const model = pickBestAvailableModel([
     AVAILABLE_MODELS.GPT_5_MINI,
     AVAILABLE_MODELS.CLAUDE_SONNET_4_5,
     AVAILABLE_MODELS.GEMINI_2_5_PRO,
   ]);
   const prompt = `Strategic assessment for table: ${JSON.stringify(data)}\nQuery: ${query}`;
-  const text = await generateUniversalContent({ model, prompt, thinkingBudget: 15000, compliance: defaultCompliance() });
+  const text = await generateUniversalContent({ workspaceId, model, prompt, thinkingBudget: 15000, compliance: defaultCompliance() });
   return text || "Could not analyze table.";
 };

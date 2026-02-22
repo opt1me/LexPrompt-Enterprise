@@ -21,8 +21,10 @@ Controlled by `VITE_KEY_POLICY`:
 ## Document Handling
 
 - Documents are processed for clause-level analysis and review rendering.
-- Persisted review sessions can store document text/metadata for reopen/share flows.
+- Persisted review sessions default to findings-first retention (`retainSourceDocuments=false`).
+- Source document payloads are persisted only when workspace retention is explicitly enabled.
 - Access to persisted content is workspace-scoped.
+- OpenAI Responses requests are sent with `store=false` to minimize provider-side retention.
 
 ## Encryption
 
@@ -33,6 +35,7 @@ Controlled by `VITE_KEY_POLICY`:
 ## Access Control
 
 - Workspace membership and role checks run on API routes.
+- API identity is derived from verified Supabase bearer tokens (not trusted headers).
 - Invite and member role changes are tracked in activity events.
 
 ## Operational Recommendations
@@ -41,4 +44,6 @@ Controlled by `VITE_KEY_POLICY`:
 2. Prefer `VITE_KEY_POLICY=platform` for controlled spend/compliance.
 3. Rotate provider API keys regularly.
 4. Restrict Supabase service role key to server environment only.
-5. Review workspace activity and notification feeds during beta.
+5. Keep `ALLOW_INSECURE_DEMO_AUTH=false` in hosted environments.
+6. Use `BETA_ALLOWED_EMAILS` / `BETA_ALLOWED_DOMAINS` to restrict private beta access.
+7. Review workspace activity and notification feeds during beta.

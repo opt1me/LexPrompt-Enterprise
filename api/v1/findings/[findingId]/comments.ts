@@ -4,11 +4,11 @@ import { addFindingComment, listFindingComments } from "../../../_lib/collabStor
 export default async function handler(req: any, res: any) {
   const findingId = req.query.findingId as string;
   const workspaceId = req.query.workspaceId as string;
-  const actor = getActorEmail(req);
   if (!workspaceId) return res.status(400).json({ error: "workspaceId is required" });
 
   if (req.method === "GET") {
     try {
+      const actor = await getActorEmail(req, res);
       await requireWorkspaceRole(workspaceId, actor, ["owner", "admin", "editor", "reviewer"]);
       return res.status(200).json({ comments: await listFindingComments(workspaceId, findingId) });
     } catch (e: any) {
@@ -18,6 +18,7 @@ export default async function handler(req: any, res: any) {
 
   if (req.method === "POST") {
     try {
+      const actor = await getActorEmail(req, res);
       await requireWorkspaceRole(workspaceId, actor, ["owner", "admin", "editor", "reviewer"]);
       const text = String(req.body?.text || "").trim();
       if (!text) return res.status(400).json({ error: "text is required" });

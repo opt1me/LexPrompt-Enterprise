@@ -7,6 +7,7 @@ create table if not exists public.workspaces (
   id text primary key default gen_random_uuid()::text,
   name text not null,
   owner_id text not null,
+  retain_source_documents boolean not null default false,
   created_at timestamptz not null default now(),
   archived_at timestamptz
 );
@@ -116,9 +117,17 @@ create table if not exists public.review_documents (
   storage_path text,
   source_url text,
   source_base64 text,
-  content_text text not null default '',
+  content_text text,
   created_at timestamptz not null default now()
 );
+
+alter table public.workspaces
+  add column if not exists retain_source_documents boolean not null default false;
+
+alter table public.review_documents
+  alter column content_text drop not null;
+alter table public.review_documents
+  alter column content_text drop default;
 
 create index if not exists idx_workspace_members_workspace on public.workspace_members(workspace_id);
 create index if not exists idx_workspace_members_email on public.workspace_members(email);

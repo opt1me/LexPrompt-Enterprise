@@ -7,6 +7,9 @@ Server:
 - `OPENAI_API_KEY` (and/or other provider keys)
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
+- `ALLOW_INSECURE_DEMO_AUTH=false`
+- `BETA_ALLOWED_EMAILS=...` (optional)
+- `BETA_ALLOWED_DOMAINS=...` (optional)
 
 Client/runtime:
 
@@ -15,6 +18,7 @@ Client/runtime:
 - `VITE_USE_AI_PROXY=true`
 - `VITE_ALLOW_CLIENT_SIDE_AI=false`
 - `VITE_KEY_POLICY=platform`
+- `VITE_ENABLE_DEMO_AUTH=false`
 
 ## 2) Supabase Setup
 

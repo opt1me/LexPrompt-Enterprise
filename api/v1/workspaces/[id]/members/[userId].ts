@@ -7,9 +7,9 @@ export default async function handler(req: any, res: any) {
 
   const workspaceId = req.query.id as string;
   const userId = req.query.userId as string;
-  const actor = getActorEmail(req);
 
   try {
+    const actor = await getActorEmail(req, res);
     await requireWorkspaceRole(workspaceId, actor, ["owner", "admin"]);
     const role = (req.body?.role || "reviewer") as WorkspaceRole;
     const member = await updateMemberRole(workspaceId, userId, role, actor);

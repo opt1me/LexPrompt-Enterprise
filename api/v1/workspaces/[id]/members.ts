@@ -4,10 +4,10 @@ import { acceptInvite, addMemberDirect, getMembers } from "../../../_lib/collabS
 
 export default async function handler(req: any, res: any) {
   const workspaceId = req.query.id as string;
-  const actor = getActorEmail(req);
 
   if (req.method === "GET") {
     try {
+      const actor = await getActorEmail(req, res);
       await requireWorkspaceRole(workspaceId, actor, ["owner", "admin", "editor", "reviewer"]);
       return res.status(200).json({ members: await getMembers(workspaceId) });
     } catch (e: any) {
@@ -18,6 +18,7 @@ export default async function handler(req: any, res: any) {
   if (req.method === "POST") {
     const token = req.body?.token as string | undefined;
     try {
+      const actor = await getActorEmail(req, res);
       if (token) {
         const member = await acceptInvite(workspaceId, token, actor);
         return res.status(201).json({ member });

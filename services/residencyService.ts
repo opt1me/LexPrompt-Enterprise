@@ -67,7 +67,9 @@ export const createAuditEvent = (
     metadata?: AnalysisAuditEvent["metadata"];
   }
 ): AnalysisAuditEvent => ({
-  id: `audit_${Math.random().toString(36).slice(2, 10)}`,
+  id: globalThis.crypto?.randomUUID
+    ? `audit_${globalThis.crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`
+    : `audit_${Math.random().toString(36).slice(2, 10)}`,
   eventType,
   createdAt: new Date().toISOString(),
   provider: data.provider,

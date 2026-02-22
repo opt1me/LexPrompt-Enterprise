@@ -10,6 +10,23 @@ LexPrompt is a collaboration-first contract review app with:
 - Durable immutable review sessions per run with deep links.
 - UK-first/EU-fallback residency controls.
 
+## Latest Release Notes
+
+- Security hardening for private beta:
+  - verified bearer-token auth on API routes
+  - workspace-enforced authorization for collaboration and AI proxy actions
+  - cryptographically strong invite tokens (hashed at rest, one-time, expiring)
+  - rate limiting for auth and AI proxy paths
+  - platform-managed key safety (no server provider keys injected into client bundle)
+- Findings-first retention by default:
+  - source documents are not persisted unless workspace setting explicitly enables retention
+- Durable review sessions:
+  - immutable saved analysis runs with workspace-scoped deep links
+- Collaboration upgrades:
+  - comments, status history, activity feed, notifications, and review history in workspace context
+- UK/EU beta hosting posture:
+  - UK-first with EU fallback policy docs and deployment guides
+
 ## Quickstart (Local)
 
 1. Install deps:
@@ -17,8 +34,9 @@ LexPrompt is a collaboration-first contract review app with:
 2. Copy `.env.example` to `.env.local`.
 3. For OpenAI-only local testing, set:
    - `OPENAI_API_KEY=...`
-   - `VITE_ALLOW_CLIENT_SIDE_AI=true` (or configure proxy route envs)
-   - `VITE_KEY_POLICY=hybrid`
+   - `VITE_KEY_POLICY=byok`
+   - `VITE_ALLOW_CLIENT_SIDE_AI=true`
+   - `VITE_USE_AI_PROXY=false`
 4. Run:
    - `npm run dev`
 5. Open:
@@ -56,13 +74,19 @@ Implemented routes under `api/v1/...`:
 ## Auth Modes
 
 - Hosted beta: Supabase Magic Link (`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`).
-- Local fallback: demo auth via `VITE_ENABLE_DEMO_AUTH=true`.
+- Local fallback: demo auth via `VITE_ENABLE_DEMO_AUTH=true` plus server `ALLOW_INSECURE_DEMO_AUTH=true`.
 
 ## Key Policy Toggle
 
 - `VITE_KEY_POLICY=platform`: users rely on your server-managed provider keys.
 - `VITE_KEY_POLICY=byok`: users must enter their own provider key in Engine Settings.
 - `VITE_KEY_POLICY=hybrid`: either server-managed or BYOK path is allowed.
+
+## API Security Baseline
+
+- API routes require `Authorization: Bearer <supabase_access_token>`.
+- AI proxy (`/api/ai/generate`) requires authenticated workspace membership and `workspaceId` in the request body.
+- Private beta allowlist can be enforced with `BETA_ALLOWED_EMAILS` / `BETA_ALLOWED_DOMAINS`.
 
 ## Residency + Hosting
 

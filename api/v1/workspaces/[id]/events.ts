@@ -3,10 +3,11 @@ import { listEvents, publishEvent, pushActivity } from "../../../_lib/collabStor
 
 export default async function handler(req: any, res: any) {
   const workspaceId = req.query.id as string;
-  const actor = getActorEmail(req);
+  let actor = "";
 
   if (req.method === "POST") {
     try {
+      actor = await getActorEmail(req, res);
       await requireWorkspaceRole(workspaceId, actor, ["owner", "admin", "editor"]);
       const type = req.body?.type || "analysis_completed";
       const entityId = req.body?.entityId || "analysis";
@@ -20,6 +21,7 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
+    actor = await getActorEmail(req, res);
     await requireWorkspaceMember(workspaceId, actor);
   } catch (e: any) {
     return res.status(e.status || 500).json({ error: e.message });
