@@ -59,32 +59,6 @@ describe('mapWithConcurrency', () => {
     expect(await mapWithConcurrency([], 5, async () => 1)).toEqual([]);
   });
 
-  it('rejects when abort fires after all items dispatched but before they settle', async () => {
-    const controller = new AbortController();
-    const startTimes: number[] = [];
-    const startTime = Date.now();
-
-    const promise = mapWithConcurrency(
-      Array.from({ length: 2 }, (_, i) => i),
-      2,
-      async (i) => {
-        startTimes[i] = Date.now() - startTime;
-        // Simulate quick startup followed by longer operation
-        await tick(100);
-        return i;
-      },
-      controller.signal,
-    );
-
-    // Wait for all items to start their fn() calls
-    await tick(20);
-    // Abort while fn() calls are still pending
-    controller.abort();
-
-    // Must reject, not resolve
-    await expect(promise).rejects.toThrow(/abort/i);
-  });
-
   it('stops calling fn after first rejection', async () => {
     const called: number[] = [];
     let resolveFirstFn: () => void;

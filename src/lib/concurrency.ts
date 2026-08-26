@@ -28,6 +28,9 @@ export async function mapWithConcurrency<T, R>(
   }
 
   await Promise.all(Array.from({ length: width }, worker));
+  // Defensive check for abort fired in the microtask gap between the last worker's return
+  // and this line resuming. The in-loop check catches every abort reachable with real
+  // (macrotask) timing; this one guards only the microtask-gap case a future refactor could widen.
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   return results;
 }
