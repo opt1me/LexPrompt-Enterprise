@@ -15,6 +15,7 @@ import {
   listReviews, getReview, saveReview, createDebouncedReviewSaver,
 } from './lib/db/reviews';
 import { getProfile } from './lib/db/profile';
+import { migrateIfNeeded } from './lib/db/migrate';
 import { DbBlockedError } from './lib/db/open';
 import { useRoute, type Route } from './lib/router';
 import { generateTemplate } from './features/templates/generateTemplate';
@@ -80,6 +81,39 @@ function LoadErrorPanel({ message, onRetry }: { message: string; onRetry: () => 
 
 const AUTH_ERROR_MESSAGE = 'Your OpenRouter API key was rejected. Update it in Settings and try again.';
 
+/** Rendered INSTEAD OF the entire app when the one-time v1→IndexedDB
+ *  playbook migration fails (see `App`'s gate below) — never alongside a
+ *  library that would otherwise render empty and be mistaken for a fresh
+ *  install with nothing in it. `migrateIfNeeded()` never deletes the v1
+ *  localStorage source on any failure path, so the reassurance here is a
+ *  fact about the implementation, not a guess. */
+function MigrationBlockedScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-surface p-8">
+      <div className="max-w-md text-center space-y-4">
+        <h1 className="text-lg font-semibold text-white">Your playbook library couldn't be set up</h1>
+        <p className="text-gray-300">
+          Nothing has been lost. Your existing playbooks are still safely stored in the browser's
+          older storage and were <strong>not</strong> deleted — moving them to the new storage just
+          didn't succeed this time.
+        </p>
+        <p className="text-red-400 text-sm break-words">{error}</p>
+        <button
+          onClick={onRetry}
+          className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type MigrationState =
+  | { kind: 'pending' }
+  | { kind: 'ok'; migratedCount: number | null }
+  | { kind: 'failed'; error: string };
+
 /** Maps a URL route to the `view` it corresponds to today. `matter` now has
  * its own screen (Task 11): `MatterHome`. `review` also renders — reusing
  * the existing results/tabular views scoped to a matter (see
@@ -115,7 +149,15 @@ const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
   settings: { name: 'settings' },
 };
 
-export default function App() {
+/**
+ * The real app. Split out from the default-exported `App` below so that
+ * none of its mount effects — `loadLibrary` foremost among them, since it's
+ * the one reading the very store the migration writes into — can run until
+ * the one-time v1→IndexedDB playbook migration has resolved. `App` doesn't
+ * mount this component at all while migration is pending or failed, so
+ * there is no ordering race to get right here; it's structural.
+ */
+function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // The inline closure defers the actual `confirmDiscardIfDirty` reference
   // (declared further down, once `view`/`activeTemplate` exist) until the
   // guard is actually invoked — never before this render has finished, so
@@ -152,6 +194,20 @@ export default function App() {
   const [runPanelKey, setRunPanelKey] = useState(0);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const { notify, toast } = useToast();
+
+  // Fires exactly once, on the render where the migration gate first hands
+  // control to this component — `migratedCount` is a mount-time prop, not a
+  // value that changes again for the lifetime of this component instance
+  // (`App` unmounts and remounts a fresh `AppShell` on retry instead of
+  // reusing this one). `null` means `not-needed`: proceed silently, per
+  // spec — the whole point of the flag `migrateIfNeeded` writes is that a
+  // returning user hits this path on every load after their first.
+  useEffect(() => {
+    if (migratedCount !== null) {
+      notify(`Migrated ${migratedCount} playbook${migratedCount === 1 ? '' : 's'}.`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createLoading, setCreateLoading] = useState(false);
@@ -1097,4 +1153,70 @@ export default function App() {
       />
     </div>
   );
+}
+
+/**
+ * Startup gate for the one-time v1→IndexedDB playbook migration (Task 14).
+ * Runs `migrateIfNeeded()` once, before `AppShell` — and with it, every
+ * effect that could read the `playbooks` store, `loadLibrary` foremost —
+ * is even mounted. That ordering is structural, not timing-dependent:
+ * `AppShell` only appears in the tree once `migration.kind === 'ok'`.
+ *
+ * - `not-needed` (`migratedCount: null`) → `AppShell` mounts silently.
+ * - `migrated` → `AppShell` mounts and toasts the count once, from the
+ *   `migratedCount` prop (see the effect near the top of `AppShell`).
+ * - `failed` → `AppShell` never mounts. `MigrationBlockedScreen` renders
+ *   instead, for as long as the failure persists — the exact "empty
+ *   library" failure this project exists to design out, at its last and
+ *   most visible possible occurrence: an app that has never rendered
+ *   anything yet.
+ *
+ * `migrateIfNeeded()` is contractually documented to never reject — every
+ * failure path resolves to `{ status: 'failed' }` — but the `.catch` below
+ * is kept anyway: it is the one moment a user's existing playbooks are
+ * being moved, and an unhandled rejection there must never be able to
+ * regress into a white screen, whatever a future change to `migrate.ts`
+ * does.
+ */
+export default function App() {
+  const [migration, setMigration] = useState<MigrationState>({ kind: 'pending' });
+
+  const runMigration = () => {
+    setMigration({ kind: 'pending' });
+    migrateIfNeeded()
+      .then((result) => {
+        if (result.status === 'failed') {
+          setMigration({
+            kind: 'failed',
+            error: result.error || 'The playbook migration failed for an unknown reason.',
+          });
+        } else {
+          setMigration({
+            kind: 'ok',
+            migratedCount: result.status === 'migrated' ? result.count : null,
+          });
+        }
+      })
+      .catch((e) => {
+        setMigration({ kind: 'failed', error: e instanceof Error ? e.message : String(e) });
+      });
+  };
+
+  useEffect(() => {
+    runMigration();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (migration.kind === 'pending') {
+    // Deliberately blank rather than a spinner: this resolves in a single
+    // IndexedDB round trip (typically sub-frame), and the fast, common
+    // `not-needed` case shouldn't flash a loading screen ahead of it.
+    return <div className="min-h-screen bg-surface" />;
+  }
+
+  if (migration.kind === 'failed') {
+    return <MigrationBlockedScreen error={migration.error} onRetry={runMigration} />;
+  }
+
+  return <AppShell migratedCount={migration.migratedCount} />;
 }
