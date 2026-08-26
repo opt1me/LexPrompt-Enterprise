@@ -87,9 +87,42 @@ describe('extractClause', () => {
     expect(finding.status).toBe('done');
   });
 
+  it('coerces citations to empty when the model sends a bare string instead of an array', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: 'not an array' });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.citations).toEqual([]);
+  });
+
+  it('coerces citations to empty when the model sends null', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: null });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.citations).toEqual([]);
+  });
+
+  it('drops non-string entries from a mixed-type citations array, keeping only the strings', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: ['ok', 42, null, 'fine'] });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.citations).toEqual(['ok', 'fine']);
+  });
+
   it('drops a risk level the model invented outside the allowed set', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [], risk_level: 'Catastrophic' });
     expect((await extractClause(doc, clause, template, settings)).riskLevel).toBeUndefined();
+  });
+
+  it('drops a null risk level', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [], risk_level: null });
+    expect((await extractClause(doc, clause, template, settings)).riskLevel).toBeUndefined();
+  });
+
+  it('drops a numeric risk level', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [], risk_level: 7 });
+    expect((await extractClause(doc, clause, template, settings)).riskLevel).toBeUndefined();
+  });
+
+  it('normalises a lowercase risk level to the canonical casing', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [], risk_level: 'high' });
+    expect((await extractClause(doc, clause, template, settings)).riskLevel).toBe('High');
   });
 
   it('attaches page images for a scanned document', async () => {

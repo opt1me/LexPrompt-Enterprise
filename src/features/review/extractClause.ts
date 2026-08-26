@@ -79,7 +79,14 @@ export async function extractClause(
       signal,
     );
 
-    const level = RISK_LEVELS.find(l => l === raw.risk_level);
+    // Case-insensitive on purpose: a mismatched case can only reach here via
+    // parseJsonLoose's fallback for models that don't honour the strict
+    // schema — exactly the models most likely to emit 'high' instead of
+    // 'High'. Still strict about everything else: an unrecognised string,
+    // null, or a non-string value all fall through to undefined.
+    const level = typeof raw.risk_level === 'string'
+      ? RISK_LEVELS.find(l => l.toLowerCase() === raw.risk_level!.toLowerCase())
+      : undefined;
 
     return {
       clauseId: clause.id,
