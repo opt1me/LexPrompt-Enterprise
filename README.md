@@ -20,7 +20,7 @@ Beyond the core loop:
 
 ## No backend, no accounts
 
-LexPrompt is a static bundle of HTML, CSS, and JavaScript. There is no server component, no database, and nothing to sign up for. Everything the app knows about — your templates, your settings, the documents you've uploaded — lives only in the browser you're using, for as long as that browser's storage isn't cleared.
+LexPrompt is a static bundle of HTML, CSS, and JavaScript. There is no server component, no database, and nothing to sign up for. Everything the app knows about — your matters, your documents, your templates, your settings — lives only in the browser you're using, for as long as that browser's storage isn't cleared. See [Privacy](#privacy) for exactly what's stored and where.
 
 ## You need an OpenRouter API key
 
@@ -32,14 +32,26 @@ LexPrompt doesn't call any model provider directly. Instead, every request goes 
 
 **Where the key lives:** your API key is stored only in your browser's local storage, on the device and browser you entered it in. It is sent to exactly one place — `openrouter.ai` — as an `Authorization` header on each request you make. It is never sent anywhere else, and there is no server for LexPrompt to leak it to, because LexPrompt has no server.
 
+## Matters
+
+Work in LexPrompt is organised around **matters** — a matter is the top-level object, and it holds the documents you've added to it and every review you've run over them. This replaced an earlier, session-only version of the app where a review's results vanished on reload; a matter that forgot its documents wasn't really a matter, so this was changed deliberately (see [Privacy](#privacy) below for exactly what that means for your data).
+
+Matters, reviews, and templates are addressable by URL: `/matters/:id` opens a matter, `/matters/:id/reviews/:id` opens one of its reviews, and `/playbooks/:id` opens a template (called a "playbook" internally and in the URL, and in the storage layer) for editing. These are real deep links — reloading the page on one, or sharing the URL with yourself, returns to the same place.
+
+**This means any static host you deploy to must rewrite all paths to `index.html` (SPA fallback).** Without it, refreshing the page on a deep link like `/matters/abc123` returns a 404 from the host, not from the app — which looks like LexPrompt is broken rather than like a hosting configuration gap. `firebase.json` in this repository already configures this rewrite for Firebase Hosting; if you deploy elsewhere (Netlify, Vercel, GitHub Pages, S3 + CloudFront, nginx, etc.), you must configure the equivalent yourself. See [Building and deploying](#building-and-deploying) below.
+
 ## Privacy
 
 This matters if you're evaluating LexPrompt for real contract work, so it's stated plainly:
 
-- **Templates and settings are per-browser.** They're written to `localStorage` in the browser you're using. There is no sync, no account, and no cloud copy. Clearing site data, switching browsers, or switching devices means starting over — export a template first (the Library's Export button) if you want to move it or keep an external backup.
-- **Documents are never persisted anywhere.** An uploaded contract is parsed and held in memory for the current session only. It is not written to disk, not saved to local storage, and not uploaded to any LexPrompt-operated service, because none exists.
-- **The only place document content goes is the model you chose, via OpenRouter**, exactly as OpenRouter's own privacy and data-retention policies describe. Read your chosen model provider's policy on OpenRouter if that matters for your use case — LexPrompt does not add any retention of its own on top of it.
-- Closing the tab or reloading the page discards the current run. Only templates you explicitly save persist.
+- **Matters, documents, and reviews are stored in this browser's IndexedDB** — on the device and in the browser you're using, and nowhere else. This includes the original file bytes of every document you add to a matter, not just its extracted text, so a document can still be viewed and re-reviewed after a reload.
+- **Nothing is uploaded anywhere except to the model you chose, via OpenRouter**, at the moment you run a review, exactly as OpenRouter's own privacy and data-retention policies describe. Read your chosen model provider's policy on OpenRouter if that matters for your use case — LexPrompt does not add any retention of its own on top of it.
+- **Deleting a matter deletes its documents and their stored bytes**, not just the matter's entry in a list. This cascade is real and covered by tests, not just a UI-level hide.
+- **Data is per-browser**, with no sync and no backup. Clearing this browser's site data (or switching browsers or devices) removes your matters, documents, reviews, and templates permanently. Export a template first (the Library's Export button) if you want to move it or keep an external copy — there is no equivalent export for matters or documents yet.
+- **Page images generated for scanned PDFs are never stored.** When a scanned page needs an image (because it has no usable text layer), it's rendered on demand from the document's stored original bytes and kept only in memory for that session — never written to IndexedDB.
+- Templates now live in IndexedDB alongside everything else above (an existing browser's `localStorage` templates are migrated in automatically, once, the first time you open this version). Only your OpenRouter key and a couple of small settings remain in `localStorage`, as in earlier versions of this app — also per-browser, also cleared by clearing site data.
+
+This is a deliberate reversal of an earlier, stricter position (contract text was never persisted at all). It was made because a matter that can't be returned to isn't a matter — but the reversal is bounded to your own browser, and it's stated here because you shouldn't have to find out otherwise.
 
 ## Local development
 
@@ -59,7 +71,7 @@ npm test          # runs the full suite once
 npm run test:watch  # watch mode
 ```
 
-The suite is unit and integration tests (Vitest) covering the storage layer, the OpenRouter client, PDF/DOCX parsing, citation matching, the review engine, and CSV/DOCX export. It does not include end-to-end browser tests or make real network calls — everything that talks to OpenRouter is mocked.
+The suite is unit and integration tests (Vitest) covering the IndexedDB storage layer (matters, documents, blobs, reviews, playbooks, and the cascade-delete and localStorage-to-IndexedDB migration paths, run against `fake-indexeddb`), the OpenRouter client, PDF/DOCX parsing, citation matching, the review engine, and CSV/DOCX export. It does not include end-to-end browser tests or make real network calls — everything that talks to OpenRouter is mocked.
 
 ## Building and deploying
 

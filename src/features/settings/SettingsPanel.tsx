@@ -96,6 +96,30 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
           </div>
         </section>
 
+        <section className="bg-[#1a1a1a] p-6 rounded-xl border border-white/10 space-y-3">
+          <h3 className="font-bold text-white">Where your documents go</h3>
+          <div className="flex items-start gap-2 p-3 bg-black/30 border border-white/5 rounded-lg">
+            <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+            <div className="text-xs text-gray-400 leading-relaxed space-y-2">
+              <p>
+                Matters, documents (including the original file bytes), and reviews are stored in
+                this browser's IndexedDB — on this device, in this browser, and nowhere else.
+                Nothing is uploaded anywhere except to the model you chose, via OpenRouter, at the
+                moment you run a review.
+              </p>
+              <p>
+                Deleting a matter deletes its documents and their stored bytes, not just its entry
+                in a list. Data is per-browser: clearing this browser's site data removes your
+                matters permanently, and there is no sync or backup.
+              </p>
+              <p>
+                Page images generated for scanned PDFs are never stored — they're regenerated from
+                the original file bytes whenever they're needed again.
+              </p>
+            </div>
+          </div>
+        </section>
+
         <section className="bg-[#1a1a1a] p-6 rounded-xl border border-white/10 space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="font-bold text-white">Model</h3>

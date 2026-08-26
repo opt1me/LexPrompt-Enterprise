@@ -32,7 +32,7 @@ import { RunPanel, RunProgressBar, RunCancelledBanner } from './features/review/
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
-import { parseFiles, toDocumentRecord, documentFileForViewing, documentFileForReview } from './lib/documents';
+import { parseFiles, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
 
 type View = 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter';
 
@@ -774,6 +774,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const handleRemoveMatterDocument = async (matterId: string, documentId: string) => {
     try {
       await deleteDocument(documentId);
+      evictPageImages(documentId);
       await loadMatterDocuments(matterId);
       notify('Document removed.');
     } catch (e) {
