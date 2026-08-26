@@ -113,6 +113,46 @@ describe('parseFile', () => {
 
     createElementSpy.mockRestore();
   });
+
+  it('still returns the extracted text when canvas rendering throws (real jsdom behavior)', async () => {
+    // Real jsdom does not return null from getContext('2d') -- it throws
+    // "Not implemented" (HTMLCanvasElement-impl.js). A scanned PDF must
+    // still open with whatever text it has; only the page image is lost.
+    const fakeCanvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => {
+        throw new Error('Not implemented: HTMLCanvasElement.prototype.getContext');
+      }),
+      toDataURL: vi.fn(),
+    };
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation((tag: string) =>
+        tag === 'canvas' ? (fakeCanvas as unknown as HTMLCanvasElement) : originalCreateElement(tag),
+      );
+
+    const pdfjs = await import('pdfjs-dist');
+    vi.mocked(pdfjs.getDocument).mockReturnValueOnce({
+      promise: Promise.resolve({
+        numPages: 1,
+        getPage: async () => ({
+          getTextContent: async () => ({ items: [{ str: 'sparse' }] }), // far below threshold
+          getViewport: () => ({ width: 10, height: 10 }),
+          render: vi.fn(() => ({ promise: Promise.resolve() })),
+        }),
+      }),
+    } as unknown as ReturnType<typeof pdfjs.getDocument>);
+
+    const doc = await parseFile(makeFile('scan.pdf', 'application/pdf'));
+
+    expect(doc.parseError).toBeUndefined();
+    expect(doc.text).toContain('sparse');
+    expect(doc.pageImages).toBeUndefined();
+
+    createElementSpy.mockRestore();
+  });
 });
 
 describe('parseFiles', () => {

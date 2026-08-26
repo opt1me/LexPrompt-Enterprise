@@ -50,16 +50,25 @@ type MinimalPdfPage = {
 };
 
 async function renderPageToJpeg(page: MinimalPdfPage): Promise<{ mime: string; data: string } | null> {
-  const viewport = page.getViewport({ scale: 2.0 });
-  const canvas = document.createElement('canvas');
-  canvas.width = viewport.width;
-  canvas.height = viewport.height;
-  // pdfjs-dist v6's RenderParameters requires `canvas` (canvasContext is now
-  // an optional backwards-compat field); we still need a 2D context to be
-  // sure the canvas is usable before handing it to render().
-  if (!canvas.getContext('2d')) return null;
-  await page.render({ canvas, viewport }).promise;
-  return { mime: 'image/jpeg', data: canvas.toDataURL('image/jpeg', 0.8).split(',')[1] };
+  // A canvas problem should cost the page image, never the whole document.
+  // Some environments (real jsdom, older browsers without a 2D backend)
+  // *throw* out of getContext('2d') rather than returning null, so this
+  // whole body is guarded, not just a falsy-context check.
+  try {
+    const viewport = page.getViewport({ scale: 2.0 });
+    const canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    // pdfjs-dist v6's RenderParameters requires `canvas` (canvasContext is now
+    // an optional backwards-compat field); we still need a 2D context to be
+    // sure the canvas is usable before handing it to render().
+    if (!canvas.getContext('2d')) return null;
+    await page.render({ canvas, viewport }).promise;
+    return { mime: 'image/jpeg', data: canvas.toDataURL('image/jpeg', 0.8).split(',')[1] };
+  } catch (error) {
+    debug('renderPageToJpeg failed, continuing without a page image', error);
+    return null;
+  }
 }
 
 async function parsePdf(file: File): Promise<{ text: string; pageImages?: { mime: string; data: string }[] }> {
@@ -100,7 +109,7 @@ export async function parseFile(file: File): Promise<DocumentFile> {
     if (kind === 'docx') {
       const mammoth = (await import('mammoth')).default;
       const result = await mammoth.extractRawText({ arrayBuffer: await readArrayBuffer(file) });
-      return { ...base, text: result.value };
+      return { ...base, text: result.value ?? '' };
     }
     return { ...base, text: await file.text() };
   } catch (error) {
