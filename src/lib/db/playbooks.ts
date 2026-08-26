@@ -96,17 +96,22 @@ export async function getPlaybook(id: string): Promise<Playbook | null> {
   return raw ? migrate(raw) : null;
 }
 
-async function nextSeq(db: Awaited<ReturnType<typeof getDb>>): Promise<number> {
-  const existing = (await db.getAll(STORES.playbooks)) as StoredPlaybook[];
-  return existing.reduce((max, r) => Math.max(max, seqOf(r)), 0) + 1;
-}
-
 export async function savePlaybook(playbook: Playbook): Promise<Playbook> {
   const db = await getDb();
   const saved: Playbook = { ...playbook, updatedAt: Date.now(), schemaVersion: TEMPLATE_SCHEMA_VERSION };
   try {
-    const record: StoredPlaybook = { ...saved, _seq: await nextSeq(db) };
-    await db.put(STORES.playbooks, record);
+    // The read (current max _seq) and the write share ONE readwrite
+    // transaction, so two concurrent savePlaybook calls can never both read
+    // the same max before either has written theirs — the race that would
+    // let a rapid batch import mis-order a same-millisecond tie. Nothing
+    // non-IDB is awaited between the getAll and the put, which is what
+    // keeps IndexedDB from auto-committing the transaction early.
+    const tx = db.transaction(STORES.playbooks, 'readwrite');
+    const existing = (await tx.store.getAll()) as StoredPlaybook[];
+    const seq = existing.reduce((max, r) => Math.max(max, seqOf(r)), 0) + 1;
+    const record: StoredPlaybook = { ...saved, _seq: seq };
+    await tx.store.put(record);
+    await tx.done;
   } catch {
     throw new Error(STORAGE_FULL_MESSAGE);
   }

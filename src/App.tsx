@@ -6,6 +6,7 @@ import {
   listPlaybooks as listTemplates, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
 } from './lib/db/playbooks';
+import { DbBlockedError } from './lib/db/open';
 import { generateTemplate } from './features/templates/generateTemplate';
 import { listModels, isAuthError } from './lib/openrouter';
 import { useToast, Toast } from './components/Toast';
@@ -59,10 +60,34 @@ export default function App() {
 
   const isConfigured = Boolean(settings.apiKey && settings.modelId);
 
+  // Set only by the initial load below — a failure here must never resolve
+  // to an empty library (indistinguishable from "you have no playbooks");
+  // it has to be its own visible state with a way back in. The post-action
+  // refreshes after save/delete/import intentionally do NOT touch this: a
+  // refresh failing right after a successful save is reported through that
+  // action's own toast instead (see handleSaveTemplate etc.), not routed
+  // through this banner.
+  const [libraryLoadError, setLibraryLoadError] = useState<string | null>(null);
+
   const refreshTemplates = () => listTemplates().then(setTemplates);
 
+  const loadLibrary = () => {
+    setLibraryLoadError(null);
+    return refreshTemplates().catch((e) => {
+      // DbBlockedError's own message already tells the user exactly what's
+      // wrong (another tab has the DB open) and how to fix it; anything
+      // else is an opaque IndexedDB failure the user can't diagnose, so it
+      // gets a generic message plus a Retry action instead.
+      setLibraryLoadError(
+        e instanceof DbBlockedError
+          ? e.message
+          : 'The playbook library could not be loaded. Try again.',
+      );
+    });
+  };
+
   useEffect(() => {
-    refreshTemplates();
+    loadLibrary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -346,15 +371,27 @@ export default function App() {
 
       <main className="flex-1 overflow-hidden overflow-y-auto">
         {view === 'library' && (
-          <TemplateLibrary
-            templates={templates}
-            onOpen={handleOpenTemplate}
-            onRun={handleRunTemplate}
-            onDelete={handleDeleteTemplate}
-            onCreate={() => setCreateOpen(true)}
-            onImport={handleImportTemplate}
-            importing={importing}
-          />
+          libraryLoadError ? (
+            <div className="p-8 max-w-md mx-auto text-center space-y-4">
+              <p className="text-red-400">{libraryLoadError}</p>
+              <button
+                onClick={() => loadLibrary()}
+                className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+              >
+                Retry
+              </button>
+            </div>
+          ) : (
+            <TemplateLibrary
+              templates={templates}
+              onOpen={handleOpenTemplate}
+              onRun={handleRunTemplate}
+              onDelete={handleDeleteTemplate}
+              onCreate={() => setCreateOpen(true)}
+              onImport={handleImportTemplate}
+              importing={importing}
+            />
+          )
         )}
         {view === 'editor' && (
           activeTemplate ? (

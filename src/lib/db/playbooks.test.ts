@@ -82,15 +82,37 @@ describe('playbook CRUD', () => {
   });
 
   it('savePlaybook rejects with a clear message when storage is full', async () => {
+    // savePlaybook does its read-then-write inside one explicit
+    // db.transaction() (see the atomicity comment in playbooks.ts), so the
+    // fault needs to be injected at that level rather than on db.put.
     const db = await getDb();
-    const putSpy = vi.spyOn(db, 'put').mockImplementation(() => {
-      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
-    });
+    const txSpy = vi.spyOn(db, 'transaction').mockReturnValue({
+      store: {
+        getAll: () => Promise.resolve([]),
+        put: () => {
+          throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+        },
+      },
+      done: Promise.resolve(),
+    } as never);
     try {
       await expect(savePlaybook(newPlaybook('Too Big'))).rejects.toThrow(/storage is full/i);
     } finally {
-      putSpy.mockRestore();
+      txSpy.mockRestore();
     }
+  });
+
+  it('savePlaybook allocates seq and put in one transaction, not two', async () => {
+    // Guards the fix for the non-atomicity review finding: if getAll and
+    // put ever moved back to separate implicit transactions, this would
+    // observe db.transaction() called zero times (or the two ops split
+    // across independently-opened transactions) instead of exactly once.
+    const db = await getDb();
+    const txSpy = vi.spyOn(db, 'transaction');
+    await savePlaybook(newPlaybook('Atomic'));
+    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(txSpy).toHaveBeenCalledWith(STORES.playbooks, 'readwrite');
+    txSpy.mockRestore();
   });
 
   it('deletePlaybook rejects with a clear message when storage is full', async () => {
@@ -132,6 +154,18 @@ describe('import / export', () => {
 
   it('rejects JSON that is not a playbook', async () => {
     await expect(importPlaybook('{"hello":"world"}')).rejects.toThrow(/not a template/i);
+  });
+
+  it('never leaks the internal _seq write-counter into an export', async () => {
+    const saved = await savePlaybook(newPlaybook('No Leak'));
+    // Read back through the two paths that touch the raw (_seq-bearing)
+    // stored record, to pin that migrate() reconstructs field-by-field
+    // rather than spreading it — a future refactor that spread the raw
+    // record instead would fail this immediately.
+    const viaGet = await getPlaybook(saved.id);
+    const [viaList] = await listPlaybooks();
+    expect('_seq' in JSON.parse(await exportPlaybook(viaGet!).text())).toBe(false);
+    expect('_seq' in JSON.parse(await exportPlaybook(viaList).text())).toBe(false);
   });
 
   it('migrates a v1 template that used content-era field names', async () => {
