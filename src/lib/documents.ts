@@ -25,15 +25,25 @@ let pdfjsPromise: Promise<PdfjsModule> | null = null;
  */
 export function loadPdfjs(): Promise<PdfjsModule> {
   if (!pdfjsPromise) {
-    pdfjsPromise = import('pdfjs-dist').then(mod => {
-      // Worker resolved through Vite rather than a CDN global. This is what
-      // removes the `window['pdfjs-dist/build/pdf']` bug class permanently.
-      mod.GlobalWorkerOptions.workerSrc = new URL(
-        'pdfjs-dist/build/pdf.worker.mjs',
-        import.meta.url,
-      ).toString();
-      return mod;
-    });
+    pdfjsPromise = import('pdfjs-dist')
+      .then(mod => {
+        // Worker resolved through Vite rather than a CDN global. This is what
+        // removes the `window['pdfjs-dist/build/pdf']` bug class permanently.
+        mod.GlobalWorkerOptions.workerSrc = new URL(
+          'pdfjs-dist/build/pdf.worker.mjs',
+          import.meta.url,
+        ).toString();
+        return mod;
+      })
+      .catch(error => {
+        // Only the success case is worth memoising. A failed import (e.g. a
+        // stale chunk hash after a redeploy while the tab stayed open) must
+        // not poison every future call forever with no way to recover short
+        // of a full page refresh — clear the memo so the next PDF gets a
+        // fresh attempt, while still failing the caller that hit this one.
+        pdfjsPromise = null;
+        throw error;
+      });
   }
   return pdfjsPromise;
 }

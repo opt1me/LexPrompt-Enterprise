@@ -193,3 +193,53 @@ describe('parseFiles', () => {
     expect(docs[3].text).toBe('second');
   });
 });
+
+// Placed last and using its own fresh module instance (via vi.resetModules +
+// a dynamic re-import) rather than the file's top-level `parseFile`/`parseFiles`
+// bindings: this test needs the *dynamic import of pdfjs-dist itself* to fail
+// once, not just `getDocument()`, which the other tests' shared mock can't
+// express without disturbing them. Kept last so its vi.doMock overrides can't
+// leak into earlier tests' `await import('pdfjs-dist')` calls.
+describe('loadPdfjs retry after a failed import', () => {
+  it('recovers on the next parseFile instead of staying broken forever', async () => {
+    vi.resetModules();
+    // Simulates a chunk load failure (e.g. a redeploy invalidated the pdf.js
+    // chunk hash while this tab was still open) rather than a
+    // getDocument()-level error: the dynamic import() itself rejects.
+    vi.doMock('pdfjs-dist', () => Promise.reject(new Error('Failed to fetch dynamically imported module')));
+
+    const fresh = await import('./documents');
+
+    const failed = await fresh.parseFile(makeFile('a.pdf', 'application/pdf'));
+    // Contract preserved: a failed pdfjs-dist import still comes back as an
+    // error Finding on the document, never a thrown exception out of
+    // parseFile. (The exact message is Vitest's own module-mocking error
+    // text, not the one thrown above — vi.doMock rewrites factory failures
+    // before they reach the caller — so only the shape of the contract is
+    // asserted here, not the wording.)
+    expect(typeof failed.parseError).toBe('string');
+    expect(failed.parseError).toBeTruthy();
+    expect(failed.text).toBe('');
+
+    // Without clearing the memo on rejection, every later call would reuse
+    // the same rejected promise and fail identically forever.
+    vi.doMock('pdfjs-dist', () => ({
+      GlobalWorkerOptions: { workerSrc: '' },
+      getDocument: vi.fn(() => ({
+        promise: Promise.resolve({
+          numPages: 1,
+          getPage: async () => ({
+            getTextContent: async () => ({ items: [{ str: 'Hello world from the PDF' }] }),
+            getViewport: () => ({ width: 100, height: 100 }),
+          }),
+        }),
+      })),
+    }));
+
+    const recovered = await fresh.parseFile(makeFile('b.pdf', 'application/pdf'));
+    expect(recovered.parseError).toBeUndefined();
+    expect(recovered.text).toContain('Hello world from the PDF');
+
+    vi.resetModules();
+  });
+});
