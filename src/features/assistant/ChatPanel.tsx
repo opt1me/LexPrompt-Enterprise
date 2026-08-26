@@ -3,59 +3,40 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MessageSquare } from 'lucide-react';
 import type { DocumentFile, Settings } from '../../types';
-import { chatStream, listModels } from '../../lib/openrouter';
+import { listModels } from '../../lib/openrouter';
+import { sendChatMessage, type ChatMessage } from './chatContext';
 
 export interface ChatPanelProps {
   documents: DocumentFile[];
   settings: Settings;
 }
 
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-const SYSTEM_PROMPT =
-  'You are a helpful legal assistant. OUTPUT FORMATTING RULES: 1) Use ## for main sections. ' +
-  '2) Use ### for subsections. 3) Use - for all lists (no numbered lists unless sequential). ' +
-  '4) Bold **key terms**. 5) Keep paragraphs short. ALWAYS provide detailed reasoning based on CONTEXT.';
-
-// A rough, explicit heuristic rather than an unexplained number: English
-// legal prose runs close to 4 characters per token for OpenRouter's
-// tokenizers, so `contextLength * 4` approximates the model's character
-// budget. Half of that is reserved for the system prompt, prior turns and
-// the model's own reply, leaving the other half for document context. This
-// replaces the original's hardcoded 50,000-character cutoff, which was the
-// same regardless of whether the selected model had an 8K or a 1M window.
-const CHARS_PER_TOKEN = 4;
-const CONTEXT_RESERVE_FRACTION = 0.5;
-// Used only when the model's context length couldn't be looked up (list
-// fetch failed, or the selected id isn't in the list) — a mid-sized window
-// chosen so a lookup failure degrades to "conservative" rather than either
-// "unusably tiny" or "silently unbounded".
-const FALLBACK_CONTEXT_LENGTH = 32_000;
-
-function contextBudgetChars(contextLength: number | undefined): number {
-  const length = contextLength && contextLength > 0 ? contextLength : FALLBACK_CONTEXT_LENGTH;
-  return Math.floor(length * CHARS_PER_TOKEN * CONTEXT_RESERVE_FRACTION);
-}
-
 /**
  * Assistant tab beside Findings in ResultsView. Ported from the deleted
- * ResultsView.tsx:249-283, with one bug fixed along the way: the original
- * streamed tokens by mutating `next[next.length - 1].content` in place,
- * which mutates React state directly instead of replacing it. Every update
- * here builds a new array with a new last-message object instead.
+ * ResultsView.tsx:249-283, with two bugs fixed along the way:
+ *
+ *  1. The original streamed tokens by mutating `next[next.length - 1].content`
+ *     in place, which mutates React state directly. Every update here builds
+ *     a new array with a new last-message object instead.
+ *  2. The original sent `doc.text` as context unconditionally. On a scanned
+ *     document `text` is empty (or, worse, just page-number markers with no
+ *     real content) and the model would answer anyway — a confabulated
+ *     answer about a document it never read. `sendChatMessage` (chatContext.ts)
+ *     now mirrors `extractClause`'s fallback: send page images when there's
+ *     no text and the model can read images, and decline honestly — without
+ *     spending a request — when there's nothing usable at all.
  */
 export function ChatPanel({ documents, settings }: ChatPanelProps) {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [contextLength, setContextLength] = useState<number | undefined>(undefined);
+  const [modelSupportsImages, setModelSupportsImages] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
-  // Best-effort: the model list is only needed to size the context budget,
-  // so a failed fetch just falls back to FALLBACK_CONTEXT_LENGTH rather than
+  // Best-effort: the model list is only needed to size the context budget
+  // and to know whether the selected model can read page images, so a
+  // failed fetch just falls back to conservative defaults rather than
   // blocking or erroring the chat panel.
   useEffect(() => {
     let cancelled = false;
@@ -64,9 +45,13 @@ export function ChatPanel({ documents, settings }: ChatPanelProps) {
         if (cancelled) return;
         const match = models.find(m => m.id === settings.modelId);
         setContextLength(match?.contextLength);
+        setModelSupportsImages(match?.supportsImages ?? false);
       })
       .catch(() => {
-        if (!cancelled) setContextLength(undefined);
+        if (!cancelled) {
+          setContextLength(undefined);
+          setModelSupportsImages(false);
+        }
       });
     return () => { cancelled = true; };
   }, [settings.modelId]);
@@ -84,24 +69,29 @@ export function ChatPanel({ documents, settings }: ChatPanelProps) {
     setHistory(prev => [...prev, { role: 'user', content: query }, { role: 'assistant', content: '' }]);
     setLoading(true);
 
-    const budget = contextBudgetChars(contextLength);
-    const context = documents
-      .map(d => `--- ${d.name} ---\n${d.text}`)
-      .join('\n\n')
-      .slice(0, budget);
-    const historyText = priorHistory.map(m => `${m.role.toUpperCase()}: ${m.content}`).join('\n');
-    const user = `CONTEXT: ${context}\nHISTORY: ${historyText}\nQUERY: ${query}`;
-
     try {
-      await chatStream(
-        { apiKey: settings.apiKey, modelId: settings.modelId, system: SYSTEM_PROMPT, user },
-        (chunk) => {
+      const full = await sendChatMessage({
+        documents,
+        query,
+        history: priorHistory,
+        contextLength,
+        modelSupportsImages,
+        settings,
+        onDelta: (chunk) => {
           setHistory(prev => [
             ...prev.slice(0, -1),
             { ...prev[prev.length - 1], content: prev[prev.length - 1].content + chunk },
           ]);
         },
-      );
+      });
+      // A decline (no readable text or images) resolves without ever
+      // calling onDelta, so the placeholder is still empty here. Setting
+      // the final text directly — rather than trusting only the deltas —
+      // also guards the streamed path against a dropped final event.
+      setHistory(prev => [
+        ...prev.slice(0, -1),
+        { ...prev[prev.length - 1], content: full },
+      ]);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Error processing request.';
       setHistory(prev => [
