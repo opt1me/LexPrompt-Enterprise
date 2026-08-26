@@ -273,8 +273,10 @@ export default function App() {
                   <ResultsView
                     run={run}
                     documents={documents}
+                    settings={settings}
                     onRetryCell={handleRetryCell}
                     onOpenTabular={() => setView('tabular')}
+                    onError={(message) => notify(message, 'error')}
                   />
                 ) : (
                   <TabularReview

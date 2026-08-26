@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader, ShieldAlert, MousePointerClick, AlertTriangle, RotateCcw } from 'lucide-react';
+import { Loader, ShieldAlert, MousePointerClick, AlertTriangle, RotateCcw, Wand2 } from 'lucide-react';
 import type { Clause, Finding } from '../../types';
 import { RiskBadge } from '../../components/RiskBadge';
 import { Button } from '../../components/Button';
@@ -9,6 +9,13 @@ export interface FindingCardProps {
   finding: Finding | undefined;
   onCiteClick: (quotes: string[]) => void;
   onRetry: (clauseId: string) => void;
+  /** Optional: wired in Task 18. Renders "Suggest Fix" on High/Medium risk
+   *  findings only. Omitted entirely (e.g. in the tabular cell detail panel)
+   *  when the caller has no revision flow to hand it off to. */
+  onSuggestFix?: (clause: Clause, finding: Finding) => void;
+  /** Shows a spinner on this card's Suggest Fix button while a revision for
+   *  this specific clause is being generated. */
+  suggestFixLoading?: boolean;
 }
 
 // Written fresh, not ported: the corresponding classes in the deleted
@@ -24,7 +31,7 @@ const CARD_SHELL = 'bg-[#1a1a1a] rounded-xl border';
  * error surfaces the message with a Retry, and done is the full card with
  * citations that drive the document viewer's highlights.
  */
-export function FindingCard({ clause, finding, onCiteClick, onRetry }: FindingCardProps) {
+export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
 
   if (status === 'pending') {
@@ -84,6 +91,16 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry }: FindingCa
               <ShieldAlert className="w-3 h-3" /> RISK ANALYSIS
             </div>
             <p className="text-xs text-gray-400">{finding.riskAnalysis}</p>
+            {onSuggestFix && (finding.riskLevel === 'High' || finding.riskLevel === 'Medium') && (
+              <Button
+                variant="ghost"
+                onClick={() => onSuggestFix(clause, finding)}
+                loading={suggestFixLoading}
+                className="mt-2 w-full py-1 text-[10px] bg-red-500/20 text-red-300 border-red-500/10 hover:bg-red-500/30"
+              >
+                <Wand2 className="w-3 h-3" /> Suggest Fix
+              </Button>
+            )}
           </div>
         )}
 
