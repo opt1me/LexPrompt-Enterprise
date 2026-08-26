@@ -180,6 +180,19 @@ export async function chat(req: ChatRequest, signal?: AbortSignal): Promise<stri
         body: JSON.stringify(buildBody(req)),
       });
     } catch (err) {
+      // A cancellation (AbortController.abort()) is a deliberate user
+      // decision, not a transient fault — it must propagate immediately,
+      // unwrapped, and must never be retried. Without this check it fell
+      // into the network-error branch below and got retried 3 times over
+      // ~3 seconds, during which the UI looks like it's still working right
+      // when the user expects Cancel to have taken effect. Check both
+      // shapes: a real DOMException (browsers) and a plain object with
+      // `.name === 'AbortError'` (some environments/mocks don't produce an
+      // actual DOMException).
+      if ((err instanceof DOMException && err.name === 'AbortError') ||
+          (err as { name?: string } | null)?.name === 'AbortError') {
+        throw err;
+      }
       // A network-level failure (offline, DNS, CORS) never reaches an HTTP
       // response — it throws a raw TypeError out of fetch() itself. Without
       // this catch it would skip the retry loop entirely (exactly the kind

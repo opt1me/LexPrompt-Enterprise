@@ -145,6 +145,24 @@ describe('chat', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  // Finding 4 (fix round 2): the network-error catch added for finding 1 was
+  // unconditional, so a user-initiated cancellation (AbortController.abort())
+  // got wrapped as a retryable OpenRouterError and retried 3 times over ~3s
+  // instead of failing immediately. A cancellation is a deliberate user
+  // decision, not a transient fault, and retrying it makes the UI appear to
+  // keep working during the exact window the user might click Cancel again.
+  it('propagates an abort immediately, without retrying, when the request is cancelled', async () => {
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    const fetchMock = vi.fn().mockRejectedValue(abortError);
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await expect(chat(req, controller.signal)).rejects.toBe(abortError);
+    // The call-count assertion is the important half: without it, this test
+    // would still pass even if the retry loop kept running underneath.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('includes a json_schema response format when a schema is supplied', async () => {
     const fetchMock = vi.fn().mockResolvedValue(completion('{"ok":true}'));
     vi.stubGlobal('fetch', fetchMock);
