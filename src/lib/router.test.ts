@@ -154,16 +154,16 @@ describe('useRoute', () => {
     navigate: (route: Route) => void;
   }
 
-  function Harness({ capture }: { capture: (api: RouteApi) => void }) {
-    const [route, navigate] = useRoute();
+  function Harness({ capture, canLeave }: { capture: (api: RouteApi) => void; canLeave?: () => boolean }) {
+    const [route, navigate] = useRoute(canLeave);
     capture({ route, navigate });
     return null;
   }
 
-  function render(): RouteApi {
+  function render(canLeave?: () => boolean): RouteApi {
     let latest!: RouteApi;
     act(() => {
-      root.render(React.createElement(Harness, { capture: (api) => { latest = api; } }));
+      root.render(React.createElement(Harness, { capture: (api) => { latest = api; }, canLeave }));
     });
     return latest;
   }
@@ -214,6 +214,64 @@ describe('useRoute', () => {
 
     const rendered = render();
     expect(rendered.route).toEqual({ name: 'playbook', playbookId: 'p1' });
+  });
+
+  it('blocks a Back/Forward navigation when canLeaveCurrentView returns false, restoring the prior URL', () => {
+    window.history.replaceState(null, '', '/playbooks/p1');
+    const canLeave = false;
+    const api = render(() => canLeave);
+    expect(api.route).toEqual({ name: 'playbook', playbookId: 'p1' });
+
+    // Simulate the browser having already moved location for a Back press
+    // (as it does before popstate fires), landing on the library route.
+    window.history.pushState(null, '', '/playbooks');
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    // The guard vetoed it: the route state must not have changed, and the
+    // address bar must have been pushed back to where it actually still is.
+    const rendered = render(() => canLeave);
+    expect(rendered.route).toEqual({ name: 'playbook', playbookId: 'p1' });
+    expect(window.location.pathname).toBe('/playbooks/p1');
+  });
+
+  it('allows a Back/Forward navigation once canLeaveCurrentView returns true', () => {
+    window.history.replaceState(null, '', '/playbooks/p1');
+    const canLeave = true;
+    const api = render(() => canLeave);
+    expect(api.route).toEqual({ name: 'playbook', playbookId: 'p1' });
+
+    window.history.pushState(null, '', '/playbooks');
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    const rendered = render(() => canLeave);
+    expect(rendered.route).toEqual({ name: 'playbooks' });
+    expect(window.location.pathname).toBe('/playbooks');
+  });
+
+  it('re-reads the guard on every render rather than a stale closure, so a component need not memoize it', () => {
+    window.history.replaceState(null, '', '/playbooks/p1');
+    // Two distinct closures, each closing over its own fixed value — unlike
+    // a shared mutable variable, honoring the second one only works if the
+    // guard ref is actually updated on the later render.
+    const api = render(() => false);
+    expect(api.route).toEqual({ name: 'playbook', playbookId: 'p1' });
+
+    // The consuming component "saves" — becomes clean — and re-renders with
+    // a new guard closure that now allows leaving, without ever calling
+    // navigate() itself.
+    render(() => true);
+
+    window.history.pushState(null, '', '/playbooks');
+    act(() => {
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+
+    const rendered = render(() => true);
+    expect(rendered.route).toEqual({ name: 'playbooks' });
   });
 
   it('removes its popstate listener on unmount so a leaked handler cannot fire against a detached component', () => {

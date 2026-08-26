@@ -10,6 +10,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { DbBlockedError } from './lib/db/open';
 
 const listPlaybooksMock = vi.fn();
+const getPlaybookMock = vi.fn();
 const listMattersMock = vi.fn();
 const listReviewsMock = vi.fn();
 
@@ -19,6 +20,7 @@ const listReviewsMock = vi.fn();
 // failure mode.
 vi.mock('./lib/db/playbooks', () => ({
   listPlaybooks: (...args: unknown[]) => listPlaybooksMock(...args),
+  getPlaybook: (...args: unknown[]) => getPlaybookMock(...args),
   savePlaybook: vi.fn(),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),
@@ -220,5 +222,116 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
 
     expect(container.textContent).toContain('No templates yet');
     expect(container.textContent).not.toContain('could not be loaded');
+  });
+});
+
+describe('App — playbook editor route (Task 12)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const originalPath = window.location.pathname;
+
+  const playbook = {
+    id: 'pb1',
+    name: 'NDA Review',
+    contractType: 'NDA',
+    mode: 'extraction' as const,
+    systemPrompt: 'You are an expert.',
+    formatPrompt: 'Quote verbatim.',
+    clauses: [],
+    createdAt: 1,
+    updatedAt: 1,
+    schemaVersion: 1,
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    listPlaybooksMock.mockReset().mockResolvedValue([playbook]);
+    getPlaybookMock.mockReset();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.replaceState(null, '', originalPath);
+  });
+
+  it('opening a playbook from the library navigates to /playbooks/:playbookId', async () => {
+    window.history.replaceState(null, '', '/');
+    act(() => { root.render(<App />); });
+    await flush();
+    clickNav(container, 'Library');
+    await flush();
+
+    const card = Array.from(container.querySelectorAll('h3'))
+      .find(h => h.textContent === 'NDA Review');
+    expect(card).toBeTruthy();
+    act(() => { (card as HTMLElement).click(); });
+    await flush();
+
+    expect(window.location.pathname).toBe('/playbooks/pb1');
+    const nameInput = container.querySelector('input') as HTMLInputElement | null;
+    expect(nameInput?.value).toBe('NDA Review');
+  });
+
+  it('a cold load of /playbooks/:id fetches that playbook from storage and opens it in the editor', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    getPlaybookMock.mockResolvedValue(playbook);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect(getPlaybookMock).toHaveBeenCalledWith('pb1');
+    const nameInput = container.querySelector('input') as HTMLInputElement | null;
+    expect(nameInput?.value).toBe('NDA Review');
+  });
+
+  it('a cold load of /playbooks/:id for an id that no longer exists shows an honest not-found state, not a blank editor', async () => {
+    window.history.replaceState(null, '', '/playbooks/gone');
+    getPlaybookMock.mockResolvedValue(null);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect(getPlaybookMock).toHaveBeenCalledWith('gone');
+    expect(container.textContent).toContain('could not be found');
+    expect(container.querySelector('input')).toBeNull();
+  });
+
+  it('a DbBlockedError on a cold load of /playbooks/:id surfaces its own message with a working retry', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    getPlaybookMock.mockRejectedValueOnce(new DbBlockedError());
+    getPlaybookMock.mockResolvedValueOnce(playbook);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect(container.textContent).toContain('another tab');
+    const retryButton = Array.from(container.querySelectorAll('button'))
+      .find(b => /retry/i.test(b.textContent || '')) as HTMLButtonElement;
+    expect(retryButton).toBeTruthy();
+
+    act(() => { retryButton.click(); });
+    await flush();
+
+    expect(container.textContent).not.toContain('another tab');
+    const nameInput = container.querySelector('input') as HTMLInputElement | null;
+    expect(nameInput?.value).toBe('NDA Review');
+  });
+
+  it('closing the editor navigates back to /playbooks', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    getPlaybookMock.mockResolvedValue(playbook);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    const closeButton = Array.from(container.querySelectorAll('button'))
+      .find(b => /^close$/i.test(b.textContent || '')) as HTMLButtonElement;
+    expect(closeButton).toBeTruthy();
+    act(() => { closeButton.click(); });
+    await flush();
+
+    expect(window.location.pathname).toBe('/playbooks');
   });
 });

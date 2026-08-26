@@ -3,7 +3,7 @@ import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lu
 import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, Settings, Matter } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
 import {
-  listPlaybooks as listTemplates, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
+  listPlaybooks as listTemplates, getPlaybook as getTemplate, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
 } from './lib/db/playbooks';
 import {
@@ -85,28 +85,30 @@ const AUTH_ERROR_MESSAGE = 'Your OpenRouter API key was rejected. Update it in S
  * the existing results/tabular views scoped to a matter (see
  * `openReview`) — since a persisted review's cards and viewer are the same
  * v1 components a live run uses, just fed hydrated-from-IndexedDB data
- * instead of an in-session run. `playbook` (a single-playbook deep link)
- * has no screen yet and falls through to the matters list, the app's entry
- * point, rather than rendering nothing. */
+ * instead of an in-session run. `playbook` (a single-playbook deep link,
+ * Task 12) maps to `editor` — see `playbookRouteId`'s effect below for how
+ * a cold load of that URL hydrates `activeTemplate` from storage. */
 function viewForRoute(route: Route): View {
   switch (route.name) {
     case 'matters': return 'matters';
     case 'matter': return 'matter';
     case 'review': return 'results';
     case 'playbooks': return 'library';
+    case 'playbook': return 'editor';
     case 'settings': return 'settings';
     default: return 'matters';
   }
 }
 
 /** The inverse mapping, for the views that own a canonical URL. Views with
- * no route of their own (editor/run/tabular — all still session-scoped) are
+ * no route of their own (run/tabular — still session-scoped) are
  * intentionally absent: switching to one of them must not push a history
- * entry it can't be deep-linked back into yet. `matter` and `results` are
- * NOT listed here either, even though both now have routes — both carry an
- * id (`matterId`, or `matterId`+`reviewId`) that this static per-`View`
- * table cannot express, so their navigation goes through `navigate(...)`
- * directly at the call site instead of through `requestView`. */
+ * entry it can't be deep-linked back into yet. `matter`, `results` and
+ * `editor` are NOT listed here either, even though all three now have
+ * routes — each carries an id (`matterId`, `matterId`+`reviewId`, or
+ * `playbookId`) that this static per-`View` table cannot express, so their
+ * navigation goes through `navigate(...)` directly at the call site instead
+ * of through `requestView`. */
 const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
   matters: { name: 'matters' },
   library: { name: 'playbooks' },
@@ -114,7 +116,13 @@ const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
 };
 
 export default function App() {
-  const [route, navigate] = useRoute();
+  // The inline closure defers the actual `confirmDiscardIfDirty` reference
+  // (declared further down, once `view`/`activeTemplate` exist) until the
+  // guard is actually invoked — never before this render has finished, so
+  // the forward reference is safe. See useRoute's doc comment for why this
+  // is how Back/Forward gets the same unsaved-changes guard as a nav-link
+  // click (`requestView`, below).
+  const [route, navigate] = useRoute(() => confirmDiscardIfDirty());
   const [view, setView] = useState<View>(() => viewForRoute(route));
   const [templates, setTemplates] = useState<Template[]>([]);
   const [matters, setMatters] = useState<MattersListItem[]>([]);
@@ -389,13 +397,62 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewRouteKey]);
 
+  // --- Opening the playbook editor by URL (Task 12) -----------------------
+  //
+  // Mirrors loadMatterHome/openReview above: a cold load (or a
+  // browser-back/forward landing on) `/playbooks/:playbookId` must open
+  // that exact playbook from IndexedDB rather than rendering a blank editor
+  // or crashing, and a genuinely missing id gets its own honest not-found
+  // state distinct from a load failure.
+  const [playbookLoadError, setPlaybookLoadError] = useState<string | null>(null);
+  const [playbookNotFound, setPlaybookNotFound] = useState(false);
+  const [playbookLoading, setPlaybookLoading] = useState(false);
+
+  const loadPlaybookForEdit = (id: string) => {
+    setPlaybookLoadError(null);
+    setPlaybookNotFound(false);
+    setPlaybookLoading(true);
+    return getTemplate(id)
+      .then((t) => {
+        if (!t) {
+          setPlaybookNotFound(true);
+          return;
+        }
+        setActiveTemplate(t);
+        setSavedTemplateSnapshot(JSON.stringify(t));
+      })
+      .catch((e) => {
+        setPlaybookLoadError(
+          e instanceof DbBlockedError
+            ? e.message
+            : 'This playbook could not be loaded. Try again.',
+        );
+      })
+      .finally(() => setPlaybookLoading(false));
+  };
+
+  const playbookRouteId = route.name === 'playbook' ? route.playbookId : null;
+  useEffect(() => {
+    if (!playbookRouteId) return;
+    // Skip the fetch when `activeTemplate` already IS this exact playbook —
+    // true right after `handleOpenTemplate` or `handleCreateTemplate`
+    // navigate here in the same render, both of which already hold the
+    // full Template in memory (the latter often not saved to IndexedDB
+    // yet, which a fetch would wrongly report as not-found). A cold load,
+    // refresh, or browser back/forward into this URL always starts with no
+    // matching `activeTemplate`, so it still fetches from storage then.
+    if (activeTemplate && activeTemplate.id === playbookRouteId) return;
+    loadPlaybookForEdit(playbookRouteId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playbookRouteId]);
+
   // Keeps `view` in step with the URL for the routes an existing screen
   // understands (see `viewForRoute`) — fires on browser back/forward
   // (`useRoute`'s popstate listener updates `route`) and on our own
   // `navigate` calls below. Views with no route of their own are untouched
   // by this: `route` only changes via `navigate`, and nothing here calls it
-  // for editor/run/results/tabular, so this effect never fires while one of
-  // those is showing.
+  // for run/tabular, so this effect never fires while one of those is
+  // showing.
   useEffect(() => {
     setView(viewForRoute(route));
   }, [route]);
@@ -493,7 +550,7 @@ export default function App() {
   const handleOpenTemplate = (t: Template) => {
     setActiveTemplate(t);
     setSavedTemplateSnapshot(JSON.stringify(t));
-    setView('editor');
+    navigate({ name: 'playbook', playbookId: t.id });
   };
 
   const handleRunTemplate = (t: Template) => {
@@ -731,7 +788,7 @@ export default function App() {
       // the discard warning (Important 7).
       setSavedTemplateSnapshot(null);
       setCreateOpen(false);
-      setView('editor');
+      navigate({ name: 'playbook', playbookId: t.id });
     } catch (e) {
       if (isAuthError(e)) {
         setCreateOpen(false);
@@ -936,14 +993,31 @@ export default function App() {
           ) : null
         )}
         {view === 'editor' && (
-          activeTemplate ? (
+          route.name === 'playbook' && playbookLoadError ? (
+            <LoadErrorPanel
+              message={playbookLoadError}
+              onRetry={() => loadPlaybookForEdit(route.playbookId)}
+            />
+          ) : route.name === 'playbook' && playbookNotFound ? (
+            <div className="p-8 max-w-md mx-auto text-center space-y-4">
+              <p className="text-gray-400">This playbook could not be found. It may have been deleted.</p>
+              <button
+                onClick={() => navigate({ name: 'playbooks' })}
+                className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+              >
+                Back to Library
+              </button>
+            </div>
+          ) : route.name === 'playbook' && playbookLoading && !activeTemplate ? (
+            <div className="p-8 text-gray-500">Loading playbook…</div>
+          ) : activeTemplate ? (
             <TemplateEditor
               template={activeTemplate}
               onChange={setActiveTemplate}
               onSave={handleSaveTemplate}
               onExport={() => handleExportTemplate(activeTemplate)}
               onShowMegaPrompt={() => setMegaPromptOpen(true)}
-              onClose={() => { if (confirmDiscardIfDirty()) setView('library'); }}
+              onClose={() => { if (confirmDiscardIfDirty()) navigate({ name: 'playbooks' }); }}
             />
           ) : (
             <div className="p-8 text-gray-500">No template selected.</div>

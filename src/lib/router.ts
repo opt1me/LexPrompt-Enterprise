@@ -10,7 +10,7 @@
  * navigation survives a refresh. A static host WITHOUT an SPA fallback will
  * 404 on refresh into a deep link — see the README.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export type Route =
   | { name: 'matters' }
@@ -86,12 +86,37 @@ export function buildPath(route: Route): string {
 
 /** Current route plus a navigate function that pushes a new history entry
  * (never replaces one, so back/forward keeps working) and updates state.
- * Responds to browser back/forward via `popstate`. */
-export function useRoute(): [Route, (route: Route) => void] {
+ * Responds to browser back/forward via `popstate`.
+ *
+ * `canLeaveCurrentView`, if given, is consulted on every `popstate` — a
+ * Back/Forward press, not a `navigate()` call — before the route change is
+ * applied. Returning `false` means the browser has already moved
+ * `window.location` for that step by the time this fires; there is no way
+ * to veto it after the fact, so instead this pushes the route we were
+ * actually still on back onto the stack, undoing the move so the address
+ * bar and the (unchanged) rendered view stay in sync. This is what lets a
+ * caller wire the same unsaved-changes guard that blocks a click on a nav
+ * link (e.g. `confirmDiscardIfDirty` in App.tsx) onto Back/Forward too,
+ * without `useRoute` itself knowing anything about templates or dirty
+ * state. Re-read on every render (no memoization required of the caller),
+ * so it always sees current component state rather than a stale closure. */
+export function useRoute(canLeaveCurrentView?: () => boolean): [Route, (route: Route) => void] {
   const [route, setRoute] = useState<Route>(() => parseRoute(window.location.pathname));
 
+  const routeRef = useRef(route);
+  useEffect(() => { routeRef.current = route; }, [route]);
+
+  const guardRef = useRef(canLeaveCurrentView);
+  useEffect(() => { guardRef.current = canLeaveCurrentView; });
+
   useEffect(() => {
-    const onPopState = () => setRoute(parseRoute(window.location.pathname));
+    const onPopState = () => {
+      if (guardRef.current && !guardRef.current()) {
+        window.history.pushState(null, '', buildPath(routeRef.current));
+        return;
+      }
+      setRoute(parseRoute(window.location.pathname));
+    };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
