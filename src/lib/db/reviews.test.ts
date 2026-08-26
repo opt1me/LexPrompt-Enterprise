@@ -281,4 +281,51 @@ describe('createDebouncedReviewSaver', () => {
     await wait(80);
     expect(await getReview(r.id)).toBeNull();
   });
+
+  it('reports a failed debounced save via onError instead of an unhandled rejection', async () => {
+    // scheduleSave's eventual write is fire-and-forget (nothing awaits it),
+    // so a rejection there cannot surface on any promise a caller holds —
+    // it must be caught internally or it becomes an unhandled rejection.
+    const db = await getDb();
+    const original = db.transaction.bind(db);
+    const txSpy = vi.spyOn(db, 'transaction').mockImplementation(((...args: unknown[]) => {
+      if (args[0] === STORES.reviews && args[1] === 'readwrite') {
+        throw new Error('boom');
+      }
+      return (original as unknown as (...a: unknown[]) => unknown)(...args);
+    }) as typeof db.transaction);
+
+    let unhandled: unknown = 'not set';
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandled = reason;
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+
+    const errors: Array<{ error: unknown; review: Review }> = [];
+    const saver = createDebouncedReviewSaver(30, (error, review) => {
+      errors.push({ error, review });
+    });
+
+    try {
+      const r = makeReview();
+      saver.scheduleSave(r);
+      await wait(80);
+
+      expect(errors.length).toBe(1);
+      expect(errors[0].review.id).toBe(r.id);
+      expect((errors[0].error as Error).message).toBe('boom');
+
+      // The failed write must not have landed.
+      txSpy.mockRestore();
+      expect(await getReview(r.id)).toBeNull();
+
+      // Give a would-be unhandled rejection a chance to surface as one.
+      await wait(0);
+      expect(unhandled).toBe('not set');
+    } finally {
+      saver.dispose();
+      txSpy.mockRestore();
+      process.off('unhandledRejection', onUnhandledRejection);
+    }
+  });
 });

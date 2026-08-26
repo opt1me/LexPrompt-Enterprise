@@ -1,4 +1,5 @@
 import { getDb } from './open';
+import { debug } from '../debug';
 import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
 import type { Review } from '../../types';
@@ -69,6 +70,12 @@ export async function saveReview(r: Review): Promise<Review> {
   // between the seq read and the put, which is what keeps IndexedDB from
   // auto-committing the transaction early. Mirrors playbooks.ts/matters.ts.
   const tx = db.transaction(STORES.reviews, 'readwrite');
+  // `nextSeq`'s parameter type only accepts a 'readwrite' store from a
+  // transaction scoped to this one store — so `tx.store` here is
+  // load-bearing, not incidental: passing e.g. `{ getAll: () =>
+  // db.getAll(STORES.reviews) }` instead would fail to compile, because
+  // that shape opens its own transaction and would silently break the
+  // atomicity below. See seq.ts's `SeqStore`.
   const seq = await nextSeq(tx.store);
   const record: StoredReview = { ...saved, _seq: seq };
   await tx.store.put(record);
@@ -101,9 +108,19 @@ const DEFAULT_REVIEW_SAVE_DEBOUNCE_MS = 2000;
  *    one every debounceMs while updates keep coming" is what actually
  *    delivers "a crash costs seconds, not the run".
  *  - `saveNow` cancels any pending timer and persists immediately — call it
- *    on completion and on cancellation, per the brief.
+ *    on completion and on cancellation, per the brief. Its promise is
+ *    returned to the caller as-is, so a failure there is never swallowed.
  *  - `dispose` cancels a pending timer without persisting (e.g. on
  *    unmount), so a stale save cannot land after the caller has moved on.
+ *
+ *  The debounced write that `scheduleSave` eventually fires is
+ *  fire-and-forget by nature — nothing is `await`ing it — so a failure
+ *  there (quota, a blocked upgrade) cannot surface as a rejection on any
+ *  promise the caller holds. It is always reported through `debug()` so it
+ *  is not dropped silently, and additionally handed to the optional
+ *  `onError` callback below so a caller that wants to surface "your
+ *  in-progress review isn't saving" to the user can do so without this
+ *  module needing to guess what that should look like.
  *
  *  This only persists `Review` records; converting a `ReviewRun` (the
  *  in-progress shape `runReview` operates on) into a `Review` and wiring
@@ -116,6 +133,7 @@ export interface DebouncedReviewSaver {
 
 export function createDebouncedReviewSaver(
   debounceMs: number = DEFAULT_REVIEW_SAVE_DEBOUNCE_MS,
+  onError?: (error: unknown, review: Review) => void,
 ): DebouncedReviewSaver {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let pending: Review | null = null;
@@ -135,7 +153,15 @@ export function createDebouncedReviewSaver(
         const toSave = pending;
         timer = null;
         pending = null;
-        if (toSave) void saveReview(toSave);
+        if (toSave) {
+          // Deliberately not awaited (this callback isn't async) — but the
+          // rejection MUST still be handled here, not left to become an
+          // unhandled rejection: nobody else is holding this promise.
+          saveReview(toSave).catch(error => {
+            debug('debounced review auto-save failed', error);
+            onError?.(error, toSave);
+          });
+        }
       }, debounceMs);
     },
     async saveNow(review: Review): Promise<Review> {
