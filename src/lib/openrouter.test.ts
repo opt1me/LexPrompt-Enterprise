@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { chat, chatJson, chatStream, listModels, parseJsonLoose, OpenRouterError } from './openrouter';
+import { chat, chatJson, chatStream, listModels, parseJsonLoose, OpenRouterError, isAuthError } from './openrouter';
 
 const KEY = 'test-key';
 const req = { apiKey: KEY, modelId: 'test/model', user: 'hello' };
@@ -13,6 +13,34 @@ function completion(content: string) {
 
 beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+describe('isAuthError', () => {
+  it('is true for a 401 OpenRouterError', () => {
+    expect(isAuthError(new OpenRouterError('rejected', 401))).toBe(true);
+  });
+
+  it('is true for a 403 OpenRouterError', () => {
+    expect(isAuthError(new OpenRouterError('forbidden', 403))).toBe(true);
+  });
+
+  it('is false for a 429 OpenRouterError', () => {
+    expect(isAuthError(new OpenRouterError('rate limited', 429))).toBe(false);
+  });
+
+  it('is false for a 500 OpenRouterError', () => {
+    expect(isAuthError(new OpenRouterError('server error', 500))).toBe(false);
+  });
+
+  it('is false for a plain Error', () => {
+    expect(isAuthError(new Error('boom'))).toBe(false);
+  });
+
+  it('is false for a non-error value', () => {
+    expect(isAuthError('nope')).toBe(false);
+    expect(isAuthError(null)).toBe(false);
+    expect(isAuthError(undefined)).toBe(false);
+  });
+});
 
 describe('parseJsonLoose', () => {
   it('parses clean JSON', () => {

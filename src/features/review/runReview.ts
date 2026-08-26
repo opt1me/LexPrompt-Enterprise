@@ -48,6 +48,33 @@ function withFinding(run: ReviewRun, docId: string, finding: Finding): ReviewRun
   };
 }
 
+function isAbort(error: unknown): boolean {
+  return (error instanceof DOMException && error.name === 'AbortError') ||
+    (error as { name?: string } | null)?.name === 'AbortError';
+}
+
+/**
+ * Marks every cell still `pending` at the moment a run is cancelled as
+ * `cancelled` instead. Without this, a queued cell that never got a turn
+ * before `AbortController.abort()` fired stayed "Pending" forever — with
+ * nothing on screen to say the run had actually stopped, contradicting
+ * App.tsx's own (correct) treatment of an abort as a deliberate stop, not a
+ * failure. `running` cells are not swept here: each one resolves through
+ * `extractClause`'s own AbortError handling to a `cancelled` Finding on its
+ * own, via the normal `onUpdate` call below.
+ */
+function cancelPendingCells(run: ReviewRun): ReviewRun {
+  let next = run;
+  for (const [docId, byClause] of Object.entries(run.findings)) {
+    for (const finding of Object.values(byClause)) {
+      if (finding.status === 'pending') {
+        next = withFinding(next, docId, { clauseId: finding.clauseId, status: 'cancelled', citations: [] });
+      }
+    }
+  }
+  return next;
+}
+
 export async function runReview(
   initial: ReviewRun,
   docs: DocumentFile[],
@@ -60,21 +87,29 @@ export async function runReview(
 
   let current = initial;
 
-  await mapWithConcurrency(
-    cells,
-    settings.concurrency,
-    async ({ doc, clause }) => {
-      current = withFinding(current, doc.id, {
-        clauseId: clause.id, status: 'running', citations: [],
-      });
-      onUpdate(current);
+  try {
+    await mapWithConcurrency(
+      cells,
+      settings.concurrency,
+      async ({ doc, clause }) => {
+        current = withFinding(current, doc.id, {
+          clauseId: clause.id, status: 'running', citations: [],
+        });
+        onUpdate(current);
 
-      const finding = await extractClause(doc, clause, template, settings, signal);
-      current = withFinding(current, doc.id, finding);
+        const finding = await extractClause(doc, clause, template, settings, signal);
+        current = withFinding(current, doc.id, finding);
+        onUpdate(current);
+      },
+      signal,
+    );
+  } catch (error) {
+    if (isAbort(error)) {
+      current = { ...cancelPendingCells(current), cancelledAt: Date.now() };
       onUpdate(current);
-    },
-    signal,
-  );
+    }
+    throw error;
+  }
 
   current = { ...current, completedAt: Date.now() };
   onUpdate(current);

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { AlignLeft, Download, FileText, Loader, LayoutList, RotateCcw } from 'lucide-react';
+import { AlignLeft, Download, FileText, Loader, LayoutList, RotateCcw, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { Clause, DocumentFile, Finding, ReviewRun, RiskLevel } from '../../types';
 import { CellDetail } from './CellDetail';
 import { buildTabularCsv } from './csv';
@@ -217,14 +217,43 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry }: CellProps) {
     );
   }
 
+  // Cancelled: calm and neutral, distinct from an error — the run was
+  // stopped deliberately, this cell simply never finished.
+  if (status === 'cancelled') {
+    return (
+      <td
+        onClick={onOpen}
+        className={`p-3 border-b border-r border-white/10 text-xs cursor-pointer opacity-70 ${selectedRing}`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-gray-400 flex items-center gap-1.5">
+            <CircleSlash className="w-3 h-3" /> Cancelled
+          </span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onRetry(); }}
+            className="p-1 hover:bg-white/10 rounded text-gray-400 hover:text-white shrink-0"
+            title="Retry"
+          >
+            <RotateCcw className="w-3 h-3" />
+          </button>
+        </div>
+      </td>
+    );
+  }
+
   // done
   return (
     <td
       onClick={onOpen}
       className={`p-3 border-b border-r border-white/10 text-xs cursor-pointer transition-colors ${riskClass} ${selectedRing}`}
     >
-      <div className={`${wrapText ? 'whitespace-normal' : 'truncate'} text-gray-300 max-h-32 overflow-hidden`}>
-        {finding?.summary || <span className="text-gray-600 italic">Empty</span>}
+      <div className="flex items-start gap-1">
+        {finding?.truncated && (
+          <TriangleAlert className="w-3 h-3 text-yellow-400 shrink-0 mt-0.5" aria-label="Document truncated to fit context budget" />
+        )}
+        <div className={`${wrapText ? 'whitespace-normal' : 'truncate'} text-gray-300 max-h-32 overflow-hidden min-w-0`}>
+          {finding?.summary || <span className="text-gray-600 italic">Empty</span>}
+        </div>
       </div>
     </td>
   );

@@ -1,6 +1,7 @@
 import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Table, Mail, FileDown, Loader } from 'lucide-react';
 import type { Clause, DocumentFile, Finding, ReviewRun, Settings } from '../../types';
+import { isAuthError } from '../../lib/openrouter';
 import { FindingCard } from './FindingCard';
 import { DocumentViewer } from './DocumentViewer';
 import { exportDocx } from './exportDocx';
@@ -27,6 +28,11 @@ export interface ResultsViewProps {
    *  the caller can surface it however it surfaces other errors (a toast in
    *  App.tsx). Failures here are non-fatal to the run itself. */
   onError?: (message: string) => void;
+  /** A 401/403 from OpenRouter anywhere in this view (draft email, export,
+   *  suggest fix, or the chat panel) — routed here instead of through
+   *  `onError` so the caller can send the user to Settings rather than
+   *  showing the rejection as if it were a normal failure (Important 4). */
+  onAuthError?: () => void;
 }
 
 type Tab = 'findings' | 'chat';
@@ -42,7 +48,7 @@ type Tab = 'findings' | 'chat';
  * Findings holds the cards plus Draft Email / Export DOCX actions, and
  * Assistant is the chat panel scoped to the active document.
  */
-export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabular, onError }: ResultsViewProps) {
+export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError }: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>('findings');
@@ -79,6 +85,13 @@ export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabul
   const findings = run.findings[activeDocId] ?? {};
 
   const reportError = (fallback: string, error: unknown) => {
+    // A rejected API key is never just "this one action failed" — it means
+    // every subsequent call will fail the same way, so it routes to
+    // Settings instead of surfacing as an ordinary toast (Important 4).
+    if (isAuthError(error)) {
+      onAuthError?.();
+      return;
+    }
     onError?.(error instanceof Error ? error.message : fallback);
   };
 
@@ -205,7 +218,7 @@ export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabul
           </div>
         ) : (
           <Suspense fallback={<div className="p-4 text-xs text-gray-500">Loading assistant…</div>}>
-            <ChatPanel documents={activeDoc ? [activeDoc] : []} settings={settings} />
+            <ChatPanel documents={activeDoc ? [activeDoc] : []} settings={settings} onAuthError={onAuthError} />
           </Suspense>
         )}
       </div>

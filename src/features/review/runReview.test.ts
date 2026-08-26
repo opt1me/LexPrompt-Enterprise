@@ -110,6 +110,59 @@ describe('runReview', () => {
     await expect(promise).rejects.toThrow(/abort/i);
   });
 
+  // Important 5: a cancelled run must leave cells in a calm, distinct
+  // "cancelled" state rather than an error, and a queued cell that never
+  // got a turn must not stay "Pending" forever with no indication the run
+  // stopped.
+  it('marks cells still pending at the moment of cancellation as cancelled, not left pending forever', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    vi.mocked(extractClause).mockImplementation(async (_d, c) => {
+      calls++;
+      await new Promise(r => setTimeout(r, 20));
+      return ok(c.id);
+    });
+
+    // concurrency 2 over 3 documents x 2 clauses = 6 cells: two start
+    // immediately, the rest queue behind them.
+    const docs = [doc('d1'), doc('d2'), doc('d3')];
+    let last: import('../../types').ReviewRun | undefined;
+    const promise = runReview(
+      emptyRun(template, docs),
+      docs,
+      { ...settings, concurrency: 2 },
+      r => { last = r; },
+      controller.signal,
+    );
+    // Abort before any cell has had time to resolve (they take 20ms).
+    setTimeout(() => controller.abort(), 5);
+
+    await expect(promise).rejects.toThrow(/abort/i);
+    expect(calls).toBeLessThan(6);
+    const statuses = Object.values(last!.findings).flatMap(byClause => Object.values(byClause).map(f => f.status));
+    expect(statuses).not.toContain('pending');
+    expect(statuses.filter(s => s === 'cancelled').length).toBeGreaterThan(0);
+    expect(last!.cancelledAt).toBeGreaterThan(0);
+    expect(last!.completedAt).toBeUndefined();
+  });
+
+  it('resolves an in-flight cell to cancelled (not error) when its own extraction rejects with AbortError', async () => {
+    const controller = new AbortController();
+    vi.mocked(extractClause).mockImplementation(async (_d, c) => {
+      if (c.id === 'c1') return { clauseId: c.id, status: 'cancelled' as const, citations: [] };
+      return ok(c.id);
+    });
+
+    const docs = [doc('d1')];
+    let last: import('../../types').ReviewRun | undefined;
+    const promise = runReview(emptyRun(template, docs), docs, settings, r => { last = r; }, controller.signal);
+    controller.abort();
+
+    await expect(promise).rejects.toThrow(/abort/i);
+    // Whatever landed for c1 before the sweep must not be 'error'.
+    expect(last!.findings.d1.c1.status).not.toBe('error');
+  });
+
   it('handles a template with no clauses', async () => {
     const bare = { ...template, clauses: [] };
     const docs = [doc('d1')];

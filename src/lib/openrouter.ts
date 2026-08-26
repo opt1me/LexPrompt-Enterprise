@@ -31,6 +31,18 @@ export class OpenRouterError extends Error {
   }
 }
 
+/**
+ * True for a rejected API key (401) or a forbidden request (403) —
+ * distinct from every other failure mode because there is nothing a Retry
+ * button can do about it and it must never be presented as if it were a
+ * model's answer (see ChatPanel, App.tsx). Callers anywhere in the app that
+ * surface an OpenRouter failure to the user should check this and route to
+ * Settings instead of showing the raw error in place.
+ */
+export function isAuthError(error: unknown): boolean {
+  return error instanceof OpenRouterError && (error.status === 401 || error.status === 403);
+}
+
 export interface ChatRequest {
   apiKey: string;
   modelId: string;

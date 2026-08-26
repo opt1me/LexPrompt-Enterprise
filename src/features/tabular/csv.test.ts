@@ -113,8 +113,43 @@ describe('buildTabularCsv', () => {
     );
     const lines = csv.split('\r\n');
     expect(lines[1]).toBe('"Agreement One.pdf","Auto-renews annually.","Capped at fees paid."');
-    // pending/error findings with no summary become empty fields, not "undefined".
-    expect(lines[2]).toBe('"Agreement, Two.pdf","",""');
+    // Critical 3: pending/error findings must NEVER become an empty field —
+    // in a spreadsheet an empty cell reads as "checked, nothing found."
+    expect(lines[2]).not.toBe('"Agreement, Two.pdf","",""');
+    expect(lines[2]).toContain('This clause could not be reviewed: not yet reviewed');
+    expect(lines[2]).toContain('This clause could not be reviewed: boom');
+  });
+
+  it('never exports a pending, cancelled or errored cell as a blank field (Critical 3)', () => {
+    const csv = buildTabularCsv(
+      run(['d1'], {
+        d1: {
+          c1: { clauseId: 'c1', status: 'pending', citations: [] },
+          c2: { clauseId: 'c2', status: 'cancelled', citations: [] },
+        },
+      }),
+      docs,
+    );
+    const dataLine = csv.split('\r\n')[1];
+    expect(dataLine).not.toContain('""');
+    expect(dataLine).toContain('This clause could not be reviewed: not yet reviewed');
+    expect(dataLine).toContain('This clause could not be reviewed: the run was cancelled before this clause was reviewed');
+  });
+
+  it('reports an error with no message as "unknown error" rather than a blank field', () => {
+    const csv = buildTabularCsv(
+      run(['d1'], { d1: { c1: { clauseId: 'c1', status: 'error', citations: [] }, c2: { clauseId: 'c2', status: 'done', summary: 'ok', citations: [] } } }),
+      docs,
+    );
+    const dataLine = csv.split('\r\n')[1];
+    expect(dataLine).toContain('This clause could not be reviewed: unknown error');
+  });
+
+  it('exports a missing finding (no entry at all for that clause) as "not yet reviewed", not blank', () => {
+    const csv = buildTabularCsv(run(['d1'], { d1: {} }), docs);
+    const dataLine = csv.split('\r\n')[1];
+    expect(dataLine).not.toContain('""');
+    expect(dataLine).toContain('This clause could not be reviewed: not yet reviewed');
   });
 
   it('does not let a comma in a summary split into extra columns', () => {
@@ -150,7 +185,8 @@ describe('buildTabularCsv', () => {
   it('falls back to the document id when the document is not found in the documents array', () => {
     const csv = buildTabularCsv(run(['missing'], { missing: {} }), []);
     const lines = csv.split('\r\n');
-    expect(lines[1]).toBe('"missing","",""');
+    expect(lines[1]).toContain('"missing"');
+    expect(lines[1]).toContain('This clause could not be reviewed: not yet reviewed');
   });
 
   it('joins rows with CRLF', () => {

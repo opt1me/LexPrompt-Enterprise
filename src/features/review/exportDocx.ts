@@ -1,4 +1,5 @@
 import type { ReviewRun, RiskLevel } from '../../types';
+import { describeFindingOutcome } from '../../lib/findingOutcome';
 
 export interface ReportRow {
   title: string;
@@ -26,12 +27,9 @@ export function buildReportRows(run: ReviewRun, docId: string): ReportRow[] {
     const finding = findings[clause.id];
 
     if (!finding || finding.status !== 'done') {
-      const reason = finding?.status === 'error'
-        ? (finding.error ?? 'unknown error')
-        : 'not yet reviewed';
       return {
         title: clause.title,
-        summary: `This clause could not be reviewed: ${reason}`,
+        summary: describeFindingOutcome(finding),
         citations: [],
       };
     }

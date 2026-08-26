@@ -37,13 +37,27 @@ export interface DocumentFile {
 
 export interface Finding {
   clauseId: string;
-  status: 'pending' | 'running' | 'done' | 'error';
+  /** 'cancelled' is distinct from 'error': the run was stopped by the user
+   *  (or a queued cell never got a turn before that happened), not a failed
+   *  request. It is a calm, non-retryable-looking state, never a raw
+   *  DOMException string behind an error banner. */
+  status: 'pending' | 'running' | 'done' | 'error' | 'cancelled';
   summary?: string;
   citations: string[];
   riskLevel?: RiskLevel;
   riskAnalysis?: string;
   error?: string;
   edited?: boolean;
+  /** Set when the request failed because OpenRouter rejected the API key
+   *  (401/403). The container (App.tsx) watches for this and routes to
+   *  Settings instead of leaving a wall of identical red cards — a rejected
+   *  key is not a per-clause problem the user can fix with Retry. */
+  authError?: boolean;
+  /** Set when the document's usable text exceeded the model's context
+   *  budget and was truncated before review, so a "silent on this point"
+   *  finding can be told apart from one that actually saw the whole
+   *  document. */
+  truncated?: boolean;
 }
 
 export interface ReviewRun {
@@ -55,12 +69,26 @@ export interface ReviewRun {
   findings: Record<string, Record<string, Finding>>;
   startedAt: number;
   completedAt?: number;
+  /** Set when the run was stopped via AbortSignal rather than running to
+   *  completion. Mutually exclusive with `completedAt` — read together they
+   *  tell a finished run apart from a cancelled one, which nothing did
+   *  before (`completedAt` was written and never read). */
+  cancelledAt?: number;
 }
 
 export interface Settings {
   apiKey: string;
   modelId: string;
   concurrency: number;
+  /** Capabilities of the currently selected model, filled in from the
+   *  cached OpenRouter model list whenever it's available. `undefined`
+   *  means "unknown" (list not loaded yet, fetch failed, or a manually
+   *  entered model id with no matching list entry) and is always treated
+   *  conservatively — the same posture `chatContext.ts` already takes for
+   *  an unresolved model. */
+  modelSupportsImages?: boolean;
+  modelSupportsStructuredOutput?: boolean;
+  modelContextLength?: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

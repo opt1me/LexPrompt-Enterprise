@@ -30,3 +30,6 @@ test_docs/
 
 # Firebase deploy cache
 .firebase/
+
+# Design handoff (reference material, not source)
+design_handoff_lexprompt_redesign/

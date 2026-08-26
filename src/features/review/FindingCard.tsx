@@ -1,5 +1,5 @@
 import React from 'react';
-import { Loader, ShieldAlert, MousePointerClick, AlertTriangle, RotateCcw, Wand2 } from 'lucide-react';
+import { Loader, ShieldAlert, MousePointerClick, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { Clause, Finding } from '../../types';
 import { RiskBadge } from '../../components/RiskBadge';
 import { Button } from '../../components/Button';
@@ -75,6 +75,28 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
     );
   }
 
+  // Cancelled: the run was stopped deliberately (or this cell never got a
+  // turn before that happened). Calm and neutral on purpose — never the red
+  // error treatment, and never a raw DOMException string — but still
+  // offers Retry, since re-running just this one cell is a reasonable next
+  // step once the user is ready.
+  if (status === 'cancelled') {
+    return (
+      <div className={`${CARD_SHELL} border-white/10`}>
+        <div className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl">
+          <span className="font-semibold text-sm text-white">{clause.title}</span>
+          <CircleSlash className="w-3.5 h-3.5 text-gray-400" />
+        </div>
+        <div className="p-4 space-y-3">
+          <p className="text-xs text-gray-400 leading-relaxed">Cancelled before this clause was reviewed.</p>
+          <Button variant="ghost" onClick={() => onRetry(clause.id)} className="w-full text-xs">
+            <RotateCcw className="w-3 h-3" /> Retry
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   // done
   return (
     <div className={`${CARD_SHELL} border-white/5`}>
@@ -83,6 +105,15 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
         <RiskBadge level={finding?.riskLevel} />
       </div>
       <div className="p-4 space-y-3">
+        {finding?.truncated && (
+          <div className="flex items-start gap-2 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-[11px] text-yellow-300">
+            <TriangleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>
+              This document exceeds the selected model&apos;s context budget — only part of it was reviewed for
+              this clause.
+            </span>
+          </div>
+        )}
         <p className="text-xs text-gray-300 leading-relaxed">{finding?.summary}</p>
 
         {finding?.riskAnalysis && (

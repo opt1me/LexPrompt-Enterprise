@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Upload, X, Play, FileWarning } from 'lucide-react';
+import { Upload, X, Play, FileWarning, CircleSlash } from 'lucide-react';
 import type { DocumentFile, ReviewRun, Template } from '../../types';
 import { parseFiles } from '../../lib/documents';
 import { Button } from '../../components/Button';
@@ -127,6 +127,23 @@ export function RunProgressBar({ run, onCancel }: RunProgressBarProps) {
         </div>
       </div>
       <Button variant="ghost" onClick={onCancel} className="shrink-0">Cancel</Button>
+    </div>
+  );
+}
+
+/**
+ * Shown once a run has stopped via cancellation rather than running to
+ * completion — the two are told apart by `run.cancelledAt` vs
+ * `run.completedAt` (Important 5: before this, `completedAt` was written
+ * and never read anywhere, so nothing distinguished a finished run from a
+ * cancelled one once the progress bar disappeared).
+ */
+export function RunCancelledBanner({ run }: { run: ReviewRun }) {
+  const { done, total } = runProgress(run);
+  return (
+    <div className="shrink-0 border-b border-white/10 bg-[#111] px-6 py-3 flex items-center gap-3 text-sm text-gray-400">
+      <CircleSlash className="w-4 h-4 shrink-0" />
+      <span>Run cancelled — {done} of {total} clauses were reviewed before it stopped.</span>
     </div>
   );
 }

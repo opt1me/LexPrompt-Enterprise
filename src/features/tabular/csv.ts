@@ -1,4 +1,5 @@
 import type { DocumentFile, ReviewRun } from '../../types';
+import { describeFindingOutcome } from '../../lib/findingOutcome';
 
 // Characters that Excel/Google Sheets treat as the start of a formula when a
 // cell is opened, regardless of the field being quoted — quoting only
@@ -28,9 +29,14 @@ export function escapeCsvField(value: string): string {
 
 /**
  * One row per document, one column per clause (in template order), cells
- * holding the finding's summary. A missing finding (still pending, or an
- * error with no summary) renders as an empty field rather than throwing.
- * Rows are joined with CRLF per RFC 4180, which is what most spreadsheet
+ * holding the finding's summary. A clause that is pending, running,
+ * cancelled or errored — not just missing — renders as an honest "This
+ * clause could not be reviewed: …" cell via `describeFindingOutcome`,
+ * never an empty field: in a spreadsheet an empty cell reads as "checked,
+ * nothing found," which is exactly the confident-wrong-answer failure this
+ * app exists to avoid (Critical 3 — `exportDocx.ts` already got this right
+ * for the DOCX report; this keeps the CSV from disagreeing with it). Rows
+ * are joined with CRLF per RFC 4180, which is what most spreadsheet
  * software expects for CSV.
  */
 export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): string {
@@ -41,7 +47,7 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
     const doc = documents.find(d => d.id === docId);
     const fields = [
       doc?.name ?? docId,
-      ...clauses.map(c => run.findings[docId]?.[c.id]?.summary ?? ''),
+      ...clauses.map(c => describeFindingOutcome(run.findings[docId]?.[c.id])),
     ];
     return fields.map(escapeCsvField).join(',');
   });

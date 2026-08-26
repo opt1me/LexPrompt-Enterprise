@@ -2,10 +2,20 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractClause, buildClausePrompt, CLAUSE_SCHEMA } from './extractClause';
 import type { Clause, Template, DocumentFile, Settings } from '../../types';
 
-vi.mock('../../lib/openrouter', () => ({ chatJson: vi.fn() }));
-const { chatJson } = await import('../../lib/openrouter');
+vi.mock('../../lib/openrouter', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
+  return { ...actual, chatJson: vi.fn() };
+});
+const { chatJson, OpenRouterError } = await import('../../lib/openrouter');
 
-const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
+// A fully capable model (reads images, honours a strict schema, generous
+// context window) is the default fixture so the existing happy-path tests
+// below are unaffected by the capability gating added for Critical 1/9 —
+// tests that specifically exercise the gating override these fields.
+const settings: Settings = {
+  apiKey: 'k', modelId: 'm', concurrency: 5,
+  modelSupportsImages: true, modelSupportsStructuredOutput: true, modelContextLength: 1_000_000,
+};
 
 const clause: Clause = {
   id: 'c1',
@@ -146,5 +156,143 @@ describe('extractClause', () => {
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/corrupt file/);
     expect(chatJson).not.toHaveBeenCalled();
+  });
+});
+
+// Critical 1 + 2: the review engine must decline — without calling the
+// model — exactly when chatContext.ts's buildChatContext would, instead of
+// sending an empty or near-empty prompt and getting back a confident,
+// entirely fictional finding.
+describe('extractClause: readability guard (Critical 1 & 2)', () => {
+  it('reports an error finding, without calling the model, for a scanned PDF on a text-only model', async () => {
+    const scan: DocumentFile = {
+      ...doc,
+      text: '[Page 1]\n\n',
+      pageImages: [{ mime: 'image/jpeg', data: 'AAA' }],
+    };
+    const textOnly: Settings = { ...settings, modelSupportsImages: false };
+
+    const finding = await extractClause(scan, clause, template, textOnly);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/scan/i);
+    expect(finding.error).toMatch(/image/i);
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
+  it('reports an error finding, without calling the model, for a scan with no page images at all', async () => {
+    const blank: DocumentFile = { ...doc, text: '[Page 1]\n\n' };
+    const finding = await extractClause(blank, clause, template, settings);
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/no readable text or images/i);
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
+  it('treats unknown image support as "cannot" (conservative default), matching ChatPanel\'s initial state', async () => {
+    const scan: DocumentFile = {
+      ...doc,
+      text: '',
+      pageImages: [{ mime: 'image/jpeg', data: 'AAA' }],
+    };
+    const unknownCapabilities: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
+
+    const finding = await extractClause(scan, clause, template, unknownCapabilities);
+
+    expect(finding.status).toBe('error');
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
+  it('still reviews a mixed document, keeping the readable page and declining only what is unreadable', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
+    const mixed: DocumentFile = {
+      ...doc,
+      text: '[Page 1]\nThis is a perfectly readable cover page with real content.\n\n[Page 2]\nAB\n\n',
+    };
+
+    const finding = await extractClause(mixed, clause, template, settings);
+
+    expect(finding.status).toBe('done');
+    const prompt = vi.mocked(chatJson).mock.calls[0][0].user as string;
+    expect(prompt).toContain('readable cover page');
+    expect(prompt).not.toContain('AB');
+  });
+
+  it('reports an empty-document error finding for a DOCX mammoth resolved to no text (Critical 2)', async () => {
+    const empty: DocumentFile = { id: 'd2', name: 'blank.docx', kind: 'docx', text: '', file: new File([''], 'blank.docx') };
+    const finding = await extractClause(empty, clause, template, settings);
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/no readable text or images/i);
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
+  it('reports an empty-document error finding for any text-free document, not only a parse failure', async () => {
+    const empty: DocumentFile = { ...doc, text: '   ' };
+    const finding = await extractClause(empty, clause, template, settings);
+    expect(finding.status).toBe('error');
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+});
+
+describe('extractClause: structured output capability', () => {
+  it('sends the JSON schema when the model advertises structured output support', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
+    await extractClause(doc, clause, template, { ...settings, modelSupportsStructuredOutput: true });
+    expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBe(CLAUSE_SCHEMA);
+  });
+
+  it('omits the JSON schema when the model does not advertise structured output support', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
+    await extractClause(doc, clause, template, { ...settings, modelSupportsStructuredOutput: false });
+    expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBeUndefined();
+  });
+
+  it('omits the JSON schema when structured-output support is unknown', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
+    const unknown: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
+    await extractClause(doc, clause, template, unknown);
+    expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBeUndefined();
+  });
+});
+
+describe('extractClause: context budget (Important 9)', () => {
+  it('truncates document text to the model\'s context budget and flags the finding as truncated', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
+    const long: DocumentFile = { ...doc, text: 'x'.repeat(1000) };
+    // contextLength 100 -> budget = floor(100 * 4 * 0.5) = 200 characters.
+    const tightBudget: Settings = { ...settings, modelContextLength: 100 };
+
+    const finding = await extractClause(long, clause, template, tightBudget);
+
+    const prompt = vi.mocked(chatJson).mock.calls[0][0].user as string;
+    expect(prompt).toContain('TRUNCATED');
+    expect(finding.truncated).toBe(true);
+  });
+
+  it('does not flag a finding as truncated when the document fits the budget', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.truncated).toBeUndefined();
+  });
+});
+
+describe('extractClause: auth errors and cancellation (Important 4 & 5)', () => {
+  it('tags the finding as an auth error on a 401 from OpenRouter', async () => {
+    vi.mocked(chatJson).mockRejectedValue(new OpenRouterError('Your OpenRouter API key was rejected: bad key', 401));
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.status).toBe('error');
+    expect(finding.authError).toBe(true);
+  });
+
+  it('does not tag an ordinary failure as an auth error', async () => {
+    vi.mocked(chatJson).mockRejectedValue(new Error('rate limited'));
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.authError).toBeUndefined();
+  });
+
+  it('resolves an aborted request to a calm "cancelled" finding, not an error with a raw DOMException message', async () => {
+    vi.mocked(chatJson).mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.status).toBe('cancelled');
+    expect(finding.error).toBeUndefined();
   });
 });

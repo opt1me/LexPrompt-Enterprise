@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import type { PDFDocumentProxy, PageViewport } from 'pdfjs-dist';
+import type { PDFDocumentProxy, PageViewport, RenderTask } from 'pdfjs-dist';
 import { ZoomIn, ZoomOut, ScanSearch, SearchX } from 'lucide-react';
 import { extractPageText, loadPdfjs, readArrayBuffer } from '../../lib/documents';
 import { findQuoteRects, hasNoTextLayer, type PdfPageText, type QuoteRect } from '../../lib/citations';
@@ -27,6 +27,8 @@ function PdfPage({ pdfDoc, pageNum, scale, highlightRects }: PdfPageProps) {
 
   useEffect(() => {
     let cancelled = false;
+    let renderTask: RenderTask | null = null;
+
     pdfDoc.getPage(pageNum).then(async page => {
       if (cancelled) return;
       const vp = page.getViewport({ scale });
@@ -37,14 +39,30 @@ function PdfPage({ pdfDoc, pageNum, scale, highlightRects }: PdfPageProps) {
       canvas.height = vp.height;
       // v6's RenderParameters takes `canvas` directly; `canvasContext` is
       // kept only for backwards compatibility (see src/lib/documents.ts).
+      const task = page.render({ canvas, viewport: vp });
+      renderTask = task;
       try {
-        await page.render({ canvas, viewport: vp }).promise;
+        await task.promise;
       } catch (error) {
-        debug('PdfPage render failed', pageNum, error);
+        // pdf.js rejects the in-flight render's promise with a
+        // RenderingCancelledException when `.cancel()` below fires (rapid
+        // zoom clicks each trigger a new render before the previous one
+        // finishes). That is expected and silent; only a genuine render
+        // failure is worth logging.
+        if (!cancelled) debug('PdfPage render failed', pageNum, error);
       }
     });
+
     return () => {
       cancelled = true;
+      // Without this, a second render (triggered by a scale/page change
+      // before the first finished) ran concurrently against the same
+      // canvas — pdf.js throws "Cannot use the same canvas during multiple
+      // render() operations", which was being swallowed into `debug()`
+      // above and left the canvas blank with no visible error. Cancelling
+      // the superseded task here means only the current one ever touches
+      // the canvas.
+      renderTask?.cancel();
     };
   }, [pdfDoc, pageNum, scale]);
 

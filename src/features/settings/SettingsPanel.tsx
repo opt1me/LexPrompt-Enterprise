@@ -120,13 +120,57 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
             <div className="space-y-3">
               <p className="text-sm text-red-400">{modelsState.message}</p>
               <Button variant="ghost" onClick={loadModels}>Retry</Button>
+              {/* Important 8: a failed model list must not brick the app —
+                  `isConfigured` (App.tsx) only requires a non-empty modelId,
+                  so a manually entered one still works. Its capabilities are
+                  unknown until the list loads again, and are treated
+                  conservatively everywhere they gate behaviour
+                  (extractClause, ChatPanel). */}
+              <div className="pt-2 border-t border-white/5">
+                <label className="block text-xs text-gray-500 mb-1 uppercase font-bold">
+                  Or enter a model id manually
+                </label>
+                <input
+                  type="text"
+                  defaultValue={settings.modelId}
+                  onBlur={e => {
+                    const modelId = e.target.value.trim();
+                    if (modelId === settings.modelId) return;
+                    update({
+                      modelId,
+                      modelSupportsImages: undefined,
+                      modelSupportsStructuredOutput: undefined,
+                      modelContextLength: undefined,
+                    });
+                  }}
+                  placeholder="e.g. openai/gpt-4o"
+                  className="w-full p-3 bg-black/50 border border-white/10 rounded text-white font-mono text-sm focus:border-violet-500 outline-none"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  The model list couldn't be loaded, so this can't be validated against it. Use the
+                  exact OpenRouter model id (see{' '}
+                  <a href="https://openrouter.ai/models" target="_blank" rel="noreferrer" className="text-violet-400 hover:text-violet-300">
+                    openrouter.ai/models
+                  </a>
+                  ).
+                </p>
+              </div>
             </div>
           )}
 
           {modelsState.status === 'ready' && (
             <select
               value={settings.modelId}
-              onChange={e => update({ modelId: e.target.value })}
+              onChange={e => {
+                const modelId = e.target.value;
+                const match = modelsState.models.find(m => m.id === modelId);
+                update({
+                  modelId,
+                  modelSupportsImages: match?.supportsImages,
+                  modelSupportsStructuredOutput: match?.supportsStructuredOutput,
+                  modelContextLength: match?.contextLength,
+                });
+              }}
               className="w-full p-3 bg-black/50 border border-white/10 rounded text-white text-sm focus:border-violet-500 outline-none"
             >
               <option value="" disabled>Select a model…</option>

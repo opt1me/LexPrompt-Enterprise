@@ -1,20 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FileText, Settings as SettingsIcon } from 'lucide-react';
+import { FileText, Settings as SettingsIcon, ClipboardList } from 'lucide-react';
 import type { Template, DocumentFile, ReviewRun, Settings } from './types';
-import { loadSettings, listTemplates, saveTemplate, deleteTemplate, newTemplate, exportTemplate, importTemplate } from './lib/storage';
+import { loadSettings, saveSettings, listTemplates, saveTemplate, deleteTemplate, newTemplate, exportTemplate, importTemplate } from './lib/storage';
 import { generateTemplate } from './features/templates/generateTemplate';
+import { listModels, isAuthError } from './lib/openrouter';
 import { useToast, Toast } from './components/Toast';
 import { SettingsPanel } from './features/settings/SettingsPanel';
 import { TemplateLibrary } from './features/templates/TemplateLibrary';
 import { TemplateEditor } from './features/templates/TemplateEditor';
 import { CreateTemplateDialog, type CreateTemplateParams } from './features/templates/CreateTemplateDialog';
 import { MegaPromptModal } from './features/templates/MegaPromptModal';
-import { RunPanel, RunProgressBar } from './features/review/RunPanel';
+import { RunPanel, RunProgressBar, RunCancelledBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
 
 type View = 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings';
+
+const AUTH_ERROR_MESSAGE = 'Your OpenRouter API key was rejected. Update it in Settings and try again.';
 
 export default function App() {
   const [view, setView] = useState<View>('library');
@@ -33,6 +36,23 @@ export default function App() {
   const [megaPromptOpen, setMegaPromptOpen] = useState(false);
   const [importing, setImporting] = useState(false);
 
+  // Tracks the template as last saved (or as last opened/generated) so the
+  // editor can tell whether there are unsaved changes worth warning about
+  // before they're discarded (Important 7). `null` means "nothing to
+  // compare against" — an editor with no template open, or a freshly
+  // generated/created one that has never been saved and so is unsaved by
+  // definition, even before the user touches anything: closing it right
+  // after a ~30s paid AI generation is exactly the loss this guards.
+  const [savedTemplateSnapshot, setSavedTemplateSnapshot] = useState<string | null>(null);
+  const isTemplateDirty =
+    view === 'editor' && activeTemplate !== null &&
+    (savedTemplateSnapshot === null || JSON.stringify(activeTemplate) !== savedTemplateSnapshot);
+
+  // Guards against re-showing the "your key was rejected" prompt for every
+  // remaining clause in a run once the first one hits a 401/403 — reset
+  // whenever a new run starts.
+  const authErrorHandledRef = useRef(false);
+
   const isConfigured = Boolean(settings.apiKey && settings.modelId);
 
   const refreshTemplates = () => listTemplates().then(setTemplates);
@@ -41,6 +61,65 @@ export default function App() {
     refreshTemplates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Best-effort: keeps `settings.model*` capability fields in step with the
+  // OpenRouter model list for whichever model is currently selected, even
+  // when the user never opens Settings this session (e.g. a model chosen
+  // in an earlier session, then jumping straight to Run). This is what lets
+  // extractClause's image/structured-output/context-budget gating (Critical
+  // 1, Important 9) work from live data rather than whatever was persisted
+  // — possibly nothing — the last time Settings happened to be open. A
+  // failed fetch leaves the existing (possibly unknown/conservative)
+  // capability fields alone rather than erroring.
+  useEffect(() => {
+    if (!settings.modelId) return;
+    let cancelled = false;
+    listModels()
+      .then(models => {
+        if (cancelled) return;
+        const match = models.find(m => m.id === settings.modelId);
+        if (!match) return;
+        setSettings(prev => {
+          if (prev.modelId !== match.id) return prev;
+          if (
+            prev.modelSupportsImages === match.supportsImages &&
+            prev.modelSupportsStructuredOutput === match.supportsStructuredOutput &&
+            prev.modelContextLength === match.contextLength
+          ) return prev;
+          const next: Settings = {
+            ...prev,
+            modelSupportsImages: match.supportsImages,
+            modelSupportsStructuredOutput: match.supportsStructuredOutput,
+            modelContextLength: match.contextLength,
+          };
+          saveSettings(next);
+          return next;
+        });
+      })
+      .catch(() => { /* best-effort; keep whatever capabilities we already have */ });
+    return () => { cancelled = true; };
+  }, [settings.modelId]);
+
+  // Important 4: a rejected API key must route to Settings with an
+  // explanation, not sit as a wall of identical red error cards. Per-clause
+  // failures are isolated by design (extractClause never rejects), so the
+  // only reliable place to notice "the key itself is bad" is by watching
+  // the findings as they land.
+  useEffect(() => {
+    if (!run || authErrorHandledRef.current) return;
+    const hasAuthError = Object.values(run.findings).some(byClause =>
+      Object.values(byClause).some(f => f.authError));
+    if (!hasAuthError) return;
+    authErrorHandledRef.current = true;
+    abortControllerRef.current?.abort();
+    notify(AUTH_ERROR_MESSAGE, 'error');
+    setView('settings');
+  }, [run]);
+
+  const handleAuthError = () => {
+    notify(AUTH_ERROR_MESSAGE, 'error');
+    setView('settings');
+  };
 
   /**
    * Anything that calls the API — running a review, generating a template —
@@ -54,13 +133,23 @@ export default function App() {
     return false;
   };
 
+  /** Important 7: leaving the editor with unsaved changes needs a chance to
+   *  back out, rather than silently discarding a paid AI generation or a
+   *  half-finished edit. */
+  const confirmDiscardIfDirty = () => {
+    if (!isTemplateDirty) return true;
+    return window.confirm('This template has unsaved changes. Discard them?');
+  };
+
   const requestView = (next: View) => {
+    if (view === 'editor' && next !== 'editor' && !confirmDiscardIfDirty()) return;
     if (next === 'run' && !ensureConfigured()) return;
     setView(next);
   };
 
   const handleOpenTemplate = (t: Template) => {
     setActiveTemplate(t);
+    setSavedTemplateSnapshot(JSON.stringify(t));
     setView('editor');
   };
 
@@ -81,6 +170,7 @@ export default function App() {
   const handleStartRun = (docs: DocumentFile[]) => {
     if (!activeTemplate || docs.length === 0) return;
     const newRun = emptyRun(activeTemplate, docs);
+    authErrorHandledRef.current = false;
     setDocuments(docs);
     setRun(newRun);
     setIsRunning(true);
@@ -135,10 +225,19 @@ export default function App() {
             onStatus: setGenerationStatus,
           });
       setActiveTemplate(t);
+      // Never-saved: any further edit (or none at all) counts as unsaved —
+      // this is what makes closing right after a paid AI generation trigger
+      // the discard warning (Important 7).
+      setSavedTemplateSnapshot(null);
       setCreateOpen(false);
       setView('editor');
     } catch (e) {
-      notify(e instanceof Error ? e.message : 'Template creation failed.', 'error');
+      if (isAuthError(e)) {
+        setCreateOpen(false);
+        handleAuthError();
+      } else {
+        notify(e instanceof Error ? e.message : 'Template creation failed.', 'error');
+      }
     } finally {
       setCreateLoading(false);
       setGenerationStatus('');
@@ -150,6 +249,7 @@ export default function App() {
     try {
       const saved = await saveTemplate(activeTemplate);
       setActiveTemplate(saved);
+      setSavedTemplateSnapshot(JSON.stringify(saved));
       await refreshTemplates();
       notify('Template saved.');
     } catch (e) {
@@ -216,6 +316,19 @@ export default function App() {
           >
             Library
           </button>
+          {run && (
+            // Important 6: nothing else sets `view` back to 'results' once
+            // the user navigates elsewhere (e.g. to Library), so a run was
+            // otherwise stranded for the rest of the session with no way
+            // back except starting a brand new one.
+            <button
+              onClick={() => requestView('results')}
+              className={`text-sm flex items-center gap-1.5 ${view === 'results' || view === 'tabular' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+              title="Back to the current run's results"
+            >
+              <ClipboardList className="w-4 h-4" /> Current run
+            </button>
+          )}
           <div className="h-4 w-px bg-white/10" />
           <button
             onClick={() => requestView('settings')}
@@ -247,7 +360,7 @@ export default function App() {
               onSave={handleSaveTemplate}
               onExport={() => handleExportTemplate(activeTemplate)}
               onShowMegaPrompt={() => setMegaPromptOpen(true)}
-              onClose={() => setView('library')}
+              onClose={() => { if (confirmDiscardIfDirty()) setView('library'); }}
             />
           ) : (
             <div className="p-8 text-gray-500">No template selected.</div>
@@ -268,6 +381,7 @@ export default function App() {
           run ? (
             <div className="h-[calc(100vh-64px)] flex flex-col">
               {isRunning && <RunProgressBar run={run} onCancel={handleCancelRun} />}
+              {!isRunning && run.cancelledAt && !run.completedAt && <RunCancelledBanner run={run} />}
               <div className="flex-1 min-h-0">
                 {view === 'results' ? (
                   <ResultsView
@@ -277,6 +391,7 @@ export default function App() {
                     onRetryCell={handleRetryCell}
                     onOpenTabular={() => setView('tabular')}
                     onError={(message) => notify(message, 'error')}
+                    onAuthError={handleAuthError}
                   />
                 ) : (
                   <TabularReview

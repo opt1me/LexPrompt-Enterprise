@@ -3,12 +3,16 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MessageSquare } from 'lucide-react';
 import type { DocumentFile, Settings } from '../../types';
-import { listModels } from '../../lib/openrouter';
+import { listModels, isAuthError } from '../../lib/openrouter';
 import { sendChatMessage, type ChatMessage } from './chatContext';
 
 export interface ChatPanelProps {
   documents: DocumentFile[];
   settings: Settings;
+  /** A rejected API key (401/403) must never be presented as if it were a
+   *  model's answer (Important 4) — reported here instead of appearing in
+   *  the chat history, so the caller can route to Settings. */
+  onAuthError?: () => void;
 }
 
 /**
@@ -26,7 +30,7 @@ export interface ChatPanelProps {
  *     no text and the model can read images, and decline honestly — without
  *     spending a request — when there's nothing usable at all.
  */
-export function ChatPanel({ documents, settings }: ChatPanelProps) {
+export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -93,6 +97,15 @@ export function ChatPanel({ documents, settings }: ChatPanelProps) {
         { ...prev[prev.length - 1], content: full },
       ]);
     } catch (error) {
+      if (isAuthError(error)) {
+        // A rejected key must never be presented as if it were a model's
+        // answer — drop the empty placeholder bubble entirely rather than
+        // filling it with the rejection, and let the caller route to
+        // Settings (Important 4).
+        setHistory(prev => prev.slice(0, -1));
+        onAuthError?.();
+        return;
+      }
       const message = error instanceof Error ? error.message : 'Error processing request.';
       setHistory(prev => [
         ...prev.slice(0, -1),

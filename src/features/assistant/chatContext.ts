@@ -1,6 +1,8 @@
 import type { DocumentFile, Settings } from '../../types';
 import { chatStream } from '../../lib/openrouter';
-import { SCAN_TEXT_THRESHOLD } from '../../lib/documents';
+import { extractableText, usableText, contextBudgetChars } from '../../lib/modelContext';
+
+export { extractableText, contextBudgetChars };
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -26,81 +28,10 @@ export const NEEDS_IMAGE_MODEL_MESSAGE =
   "Settings doesn't support image input, so it can't read the scanned pages. Choose an " +
   'image-capable model to analyze this document.';
 
-// A rough, explicit heuristic rather than an unexplained number: English
-// legal prose runs close to 4 characters per token for OpenRouter's
-// tokenizers, so `contextLength * 4` approximates the model's character
-// budget. Half of that is reserved for the system prompt, prior turns and
-// the model's own reply, leaving the other half for document context. This
-// replaces the original's hardcoded 50,000-character cutoff, which was the
-// same regardless of whether the selected model had an 8K or a 1M window.
-const CHARS_PER_TOKEN = 4;
-const CONTEXT_RESERVE_FRACTION = 0.5;
-// Used only when the model's context length couldn't be looked up (list
-// fetch failed, or the selected id isn't in the list) — a mid-sized window
-// chosen so a lookup failure degrades to "conservative" rather than either
-// "unusably tiny" or "silently unbounded".
-const FALLBACK_CONTEXT_LENGTH = 32_000;
-
-export function contextBudgetChars(contextLength: number | undefined): number {
-  const length = contextLength && contextLength > 0 ? contextLength : FALLBACK_CONTEXT_LENGTH;
-  return Math.floor(length * CHARS_PER_TOKEN * CONTEXT_RESERVE_FRACTION);
-}
-
-const PAGE_MARKER = /\[Page \d+\]/g;
-
-/**
- * Strips the `[Page N]` markers `lib/documents.ts` inserts unconditionally
- * around every page's extracted text (`parsePdf`), so a fully scanned PDF —
- * whose pages contribute only those markers, no real content — is correctly
- * recognised as having no extractable text. Without stripping them, a
- * multi-page scan's `doc.text` reads as non-empty ("[Page 1]\n\n[Page 2]\n...")
- * even though there is nothing in it a model could actually read.
- */
-export function extractableText(doc: DocumentFile): string {
-  return doc.text.replace(PAGE_MARKER, '').trim();
-}
-
-/**
- * Splits a PDF's page-marked text back into the per-page segments
- * `parsePdf` (lib/documents.ts) concatenated — each written as
- * `[Page N]\n<pageText>\n\n`. A document with no such markers (docx, txt,
- * or anything parsePdf never touched) is treated as a single "page" so the
- * threshold check below still applies to it.
- */
-function pageSegments(text: string): string[] {
-  if (!/\[Page \d+\]\n/.test(text)) return [text];
-  return text.split(/\[Page \d+\]\n/g).slice(1);
-}
-
-/**
- * The per-page-aware equivalent of the truthy check this replaced. Reuses
- * `SCAN_TEXT_THRESHOLD` — the exact same "is this page too sparse to be
- * text" judgement `parsePdf` already made when deciding whether to capture
- * a page image — rather than a bare non-empty check (which let 1-19
- * characters of OCR noise, a watermark, or a stray header count as "has
- * text" and silently skip the page images captured for that very
- * document) or a second, separately-tuned number.
- *
- * Applied per page, not to the document's combined length, on purpose.
- * `parsePdf` decides per page whether a page needs an image, and a mixed
- * document — a typed cover page followed by scanned, unreadable pages —
- * has real text on page 1 and captured images for the rest. A
- * document-wide character count would let a single readable cover page
- * carry the whole document over the bar, silently forwarding the scanned
- * body's noise as if it were content instead of falling back to the
- * images that exist specifically because those pages aren't readable as
- * text. Deciding per page keeps the cover page's real text, drops each
- * sparse page's noise rather than sending it as if it were content, and
- * (see `buildChatContext`) still attaches that document's page images
- * regardless of whether other pages had usable text — so the scanned
- * pages aren't lost, just not passed off as plain text.
- */
-function usableText(doc: DocumentFile): string {
-  return pageSegments(doc.text)
-    .map(page => page.trim())
-    .filter(page => page.length >= SCAN_TEXT_THRESHOLD)
-    .join('\n\n');
-}
+// contextBudgetChars, extractableText and usableText now live in
+// lib/modelContext.ts, shared with the review engine's per-document
+// readability guard (extractClause.ts) so both apply the identical rule
+// rather than two separately-tuned checks.
 
 export type ChatContext =
   | { kind: 'ok'; text: string; images: ChatImage[] }
