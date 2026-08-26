@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PageViewport } from 'pdfjs-dist';
-import { ZoomIn, ZoomOut, ScanSearch } from 'lucide-react';
+import { ZoomIn, ZoomOut, ScanSearch, SearchX } from 'lucide-react';
 import { extractPageText, loadPdfjs, readArrayBuffer } from '../../lib/documents';
 import { findQuoteRects, hasNoTextLayer, type PdfPageText, type QuoteRect } from '../../lib/citations';
 import { debug } from '../../lib/debug';
@@ -141,6 +141,20 @@ export function PdfCanvas({ file, highlights }: PdfCanvasProps) {
   // has actually loaded, not before, so a normal PDF never flashes it.
   const noTextLayer = pageTexts.length > 0 && hasNoTextLayer(pageTexts);
 
+  // Document-wide `noTextLayer` misses a real case: a mixed document (a
+  // typed cover page plus scanned signature pages) has plenty of text
+  // overall, so the banner above stays silent, yet a citation that happens
+  // to land on a scanned page still can't be found. Attaching the feedback
+  // to the actual failed lookup instead of to a document-wide proxy also
+  // catches a third case neither `noTextLayer` nor a per-page threshold
+  // would: an ordinary text PDF where the model's quote doesn't match
+  // exactly (paraphrased, or the text layer split oddly). This is a plain
+  // derived value, not accumulated state, so a later successful click
+  // clears it automatically (`rects` becomes non-empty) and clicking the
+  // same failing citation twice can't stack duplicate messages — there's
+  // only ever the one condition, recomputed each render.
+  const citationNotFound = highlights.length > 0 && pageTexts.length > 0 && rects.length === 0;
+
   if (error) {
     return (
       <div className="h-full flex items-center justify-center text-red-400 text-sm p-8 text-center">
@@ -178,6 +192,17 @@ export function PdfCanvas({ file, highlights }: PdfCanvasProps) {
         <div className="sticky top-[4.5rem] z-40 flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 text-xs px-4 py-2 rounded-lg mb-6 max-w-md text-center shadow-lg">
           <ScanSearch className="w-4 h-4 shrink-0" />
           <span>This document is a scan with no searchable text, so citations can&apos;t be located in it.</span>
+        </div>
+      )}
+      {citationNotFound && (
+        <div
+          className={`sticky z-40 flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-300 text-xs px-4 py-2 rounded-lg mb-6 max-w-md text-center shadow-lg ${noTextLayer ? 'top-[8rem]' : 'top-[4.5rem]'}`}
+        >
+          <SearchX className="w-4 h-4 shrink-0" />
+          <span>
+            Couldn&apos;t locate this quote in the document. The page may be a scan with no searchable text, or the
+            wording may not match exactly.
+          </span>
         </div>
       )}
       {pageNumbers.map(p => (
