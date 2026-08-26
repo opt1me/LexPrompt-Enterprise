@@ -96,13 +96,30 @@ Return systemPrompt, formatPrompt, riskTolerance, and clausePlans[{title, instru
     throw new Error('The model returned a plan with no clauses. Try again, or pick a different model.');
   }
 
-  onStatus?.(`Planned ${plan.clausePlans.length} clauses for ${contractType}. Writing prompts...`);
+  // A loosely-parsed response (the fallback path for the ~86/417 OpenRouter
+  // models that don't advertise structured_outputs) can satisfy "non-empty
+  // array" while still containing an entry missing title/instructionSummary.
+  // That garbage would otherwise get baked into a SAVED, reusable template —
+  // every future review run against it burns a live API call on nonsense
+  // like "CLAUSE TO REVIEW: undefined". Drop those entries here, before they
+  // ever reach clause generation or storage.
+  const validClausePlans = plan.clausePlans.filter(
+    (cp): cp is ClausePlan =>
+      typeof cp?.title === 'string' && cp.title.trim() !== '' &&
+      typeof cp?.instructionSummary === 'string' && cp.instructionSummary.trim() !== '',
+  );
+
+  if (validClausePlans.length === 0) {
+    throw new Error('The model returned a plan with no usable clauses. Try again, or pick a different model.');
+  }
+
+  onStatus?.(`Planned ${validClausePlans.length} clauses for ${contractType}. Writing prompts...`);
 
   // Phase 2: bounded, not Promise.all over up to 35 at once — the old code
   // reliably tripped rate limits. A failed clause degrades to its planned
   // summary rather than losing the whole template.
   const clauses = await mapWithConcurrency<ClausePlan, Clause>(
-    plan.clausePlans,
+    validClausePlans,
     settings.concurrency,
     async cp => {
       try {
