@@ -274,37 +274,69 @@ export async function chatStream(
   let buffer = '';
   let full = '';
 
-  while (true) {
-    // No try/catch here: if the signal aborts mid-stream, `reader.read()`
-    // rejects (an AbortError, per the fetch spec) and that rejection
-    // propagates straight out of this function as the caller's promise
-    // rejection — not swallowed into a normal `done` completion and not
-    // retried.
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    // Events are separated by a blank line; a partial event stays in the buffer.
-    const events = buffer.split('\n\n');
-    buffer = events.pop() ?? '';
-
-    for (const event of events) {
-      for (const line of event.split('\n')) {
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
-        try {
-          const parsed = JSON.parse(payload);
-          const delta = parsed?.choices?.[0]?.delta?.content;
-          if (typeof delta === 'string' && delta) {
-            full += delta;
-            onDelta(delta);
-          }
-        } catch {
-          // A malformed event is skipped rather than failing the stream.
+  // Parses one SSE event's `data:` lines and forwards any content delta.
+  // Tolerates a trailing `\r` on an individual line — belt-and-braces beyond
+  // the buffer-level CRLF normalisation below, in case a lone `\r` ever ends
+  // up adjacent to a line split some other way.
+  const processEvent = (event: string) => {
+    for (const rawLine of event.split('\n')) {
+      const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+      try {
+        const parsed = JSON.parse(payload);
+        const delta = parsed?.choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta) {
+          full += delta;
+          onDelta(delta);
         }
+      } catch {
+        // A malformed event is skipped rather than failing the stream.
       }
     }
+  };
+
+  try {
+    while (true) {
+      // No try/catch here: if the signal aborts mid-stream, `reader.read()`
+      // rejects (an AbortError, per the fetch spec) and that rejection
+      // propagates straight out of this function as the caller's promise
+      // rejection — not swallowed into a normal `done` completion and not
+      // retried.
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      // Normalise CRLF to LF as data arrives, so a single separator style
+      // (`\n\n`) reliably identifies event boundaries no matter what
+      // OpenRouter's upstream proxies (it sits behind Cloudflare) do to line
+      // endings. Without this, a CRLF-terminated event never matches
+      // `\n\n` (there's a stray `\r` between the two `\n`s) and the whole
+      // stream silently parses as empty — no error, no deltas, nothing —
+      // which for a panel answering questions about a contract is worse
+      // than a visible failure.
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+
+      // Events are separated by a blank line; a partial event stays in the buffer.
+      const events = buffer.split('\n\n');
+      buffer = events.pop() ?? '';
+      for (const event of events) processEvent(event);
+    }
+
+    // The stream can end without a trailing blank-line separator after the
+    // final event (the connection just closes right after the last chunk).
+    // Flush any decoder-buffered bytes and process whatever is left as one
+    // final event — otherwise that last event, which may carry the final
+    // content delta, is silently dropped and the caller gets a
+    // truncated-but-apparently-successful response.
+    buffer += decoder.decode();
+    if (buffer) processEvent(buffer);
+  } finally {
+    // Release the reader lock on every exit path — normal completion, a
+    // thrown parse/network error, or an abort — so a non-abort mid-stream
+    // failure never leaves `response.body` locked with nothing to release
+    // it. (Harmless to call redundantly on an already-errored stream.)
+    reader.releaseLock();
   }
 
   return full;

@@ -344,6 +344,136 @@ describe('chatStream', () => {
       .rejects.toThrow(/rejected/i);
   });
 
+  // Fix round 1, Finding 1 (Important): the read loop only flushes buffered
+  // content when it finds a `\n\n` separator. If the stream ends right after
+  // the final event's data — no trailing blank line — that whole event was
+  // silently discarded and the caller got a truncated response with no error
+  // at all. Real providers/proxies may not append a trailing separator after
+  // the last chunk.
+  it('does not drop the final event when the stream ends without a trailing blank-line separator', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"lo"}}]}',
+    ])));
+
+    const chunks: string[] = [];
+    const full = await chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, c => chunks.push(c));
+
+    expect(chunks).toEqual(['Hel', 'lo']);
+    expect(full).toBe('Hello');
+  });
+
+  // Fix round 1, Finding 2 (Important): `buffer.split('\n\n')` never matches
+  // a CRLF-terminated event (`\r\n\r\n`) because a stray `\r` sits between the
+  // two `\n`s. OpenRouter sits behind Cloudflare and proxies/CDNs routinely
+  // normalise line endings, so this is a real, not hypothetical, failure
+  // mode. Before the fix this resolved to "" with zero deltas and NO error —
+  // a confidently-empty answer is worse than a visible failure for a panel
+  // answering questions about a contract.
+  it('parses CRLF-terminated events instead of silently returning nothing', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      'data: {"choices":[{"delta":{"content":"Hello"}}]}\r\n\r\n',
+      'data: [DONE]\r\n\r\n',
+    ])));
+
+    const chunks: string[] = [];
+    const full = await chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, c => chunks.push(c));
+
+    expect(chunks).toEqual(['Hello']);
+    expect(full).toBe('Hello');
+  });
+
+  // Deliberately puts the CRLF event LAST with no further LF-terminated
+  // chunk after it, and no [DONE] line. An earlier version of this test put
+  // a plain `\n\n`-terminated [DONE] chunk after the CRLF event, which
+  // accidentally "rescued" the buggy code: concatenating the un-normalised
+  // CRLF chunk with the next chunk happened to create a literal `\n\n`
+  // boundary a few characters later by coincidence, so the old, broken code
+  // passed this test for the wrong reason. Ending the stream immediately
+  // after the CRLF event instead exercises Findings 1 and 2 together: a
+  // CRLF-terminated final event with no trailing LF chunk to bail it out.
+  it('handles a stream mixing LF and CRLF event separators', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"lo"}}]}\r\n\r\n',
+    ])));
+
+    const chunks: string[] = [];
+    const full = await chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, c => chunks.push(c));
+
+    expect(chunks).toEqual(['Hel', 'lo']);
+    expect(full).toBe('Hello');
+  });
+
+  // Isolates Finding 2 from Finding 1: the aggregate `full` text and chunk
+  // order for a CRLF stream can come out correct even WITHOUT CRLF-aware
+  // boundary detection, because Finding 1's end-of-stream flush eventually
+  // reprocesses whatever is left in the buffer as one blob, and
+  // `payload.trim()` already strips a trailing `\r` from an individual
+  // line. That masks a real remaining defect: without recognising `\r\n\r\n`
+  // as an event boundary while the stream is still open, a CRLF event never
+  // gets flushed until the connection closes — so a CRLF-heavy stream would
+  // silently stop being a *stream* (no incremental deltas) even though the
+  // final answer still lands correctly. This test holds the connection open
+  // after the first CRLF event and asserts onDelta already fired for it
+  // before the stream ends, proving the event was recognised as complete
+  // as it arrived rather than recovered only in bulk at the end.
+  it('flushes a CRLF event as soon as it arrives, before the stream ends', async () => {
+    const encoder = new TextEncoder();
+    let releaseSecondPull: (() => void) | undefined;
+    let pullCount = 0;
+
+    const stream = new ReadableStream({
+      pull(ctrl) {
+        pullCount++;
+        if (pullCount === 1) {
+          ctrl.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Hello"}}]}\r\n\r\n'));
+          return;
+        }
+        if (pullCount === 2) {
+          // Hangs until released below, so the test can observe state after
+          // only the first event has been delivered to the reader.
+          return new Promise<void>(resolve => { releaseSecondPull = resolve; });
+        }
+        ctrl.enqueue(encoder.encode('data: [DONE]\r\n\r\n'));
+        ctrl.close();
+      },
+    });
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    ));
+
+    const chunks: string[] = [];
+    const promise = chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, c => chunks.push(c));
+
+    // Let the first read()/pull() resolve and its event get processed,
+    // without letting the stream close.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(chunks).toEqual(['Hello']);
+
+    releaseSecondPull?.();
+    await promise;
+  });
+
+  // Fix round 1, Finding 3 (Minor): nothing released the reader lock on any
+  // exit path. Harmless on abort (the request tear-down disposes the
+  // stream), but a non-abort mid-stream failure would leave `response.body`
+  // locked forever with nothing to release it. Getting a second reader from
+  // the same body throws "ReadableStream is already locked to a reader" if
+  // the first was never released.
+  it('releases the stream reader after normal completion', async () => {
+    const response = sseResponse(['data: [DONE]\n\n']);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response));
+
+    await chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, () => {});
+
+    expect(() => response.body!.getReader()).not.toThrow();
+  });
+
   // Regression guard for the bug fixed in chat(): a cancellation must
   // propagate immediately, unwrapped, and chatStream must NEVER retry it
   // (chatStream isn't retried at all, but the risk is the same shape of bug —
