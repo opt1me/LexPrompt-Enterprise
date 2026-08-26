@@ -79,7 +79,7 @@ rm -rf tests/
 - [ ] **Step 3: Verify no secret literal remains in the working tree**
 
 ```bash
-grep -rn 'sk-proj-C1JzKMAoWAVwYuh' --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist .
+grep -rnE 'sk-proj-[A-Za-z0-9_-]{20,}' --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=dist .
 ```
 
 Expected: no matches. (`App.tsx` contains the harmless placeholder string `"sk-proj-..."`; that is not a match for this pattern.)
@@ -3304,6 +3304,6 @@ git commit -m "docs: rewrite README for the backend-free OpenRouter build"
 
 ## Post-Plan Notes
 
-**Rotate the OpenAI key.** `bench.ts`, `tests/performance.test.ts` and `test_responses.ts` each contained a live `sk-proj-` key. They were untracked and the key never entered git history, but it sat unencrypted on disk and was compiled into `dist/` at least once. Task 1 deletes the files; rotating the key at platform.openai.com is a separate action only you can take, and nothing in this plan depends on it.
+**Rotate the OpenAI key.** `bench.ts`, `tests/performance.test.ts` and `test_responses.ts` each contained a live `sk-proj-` key. They were untracked and the key never entered git history, but it sat unencrypted on disk and was compiled into `dist/` at least once. Task 1 deletes the files; the key was retired by the repository owner on 2026-08-26, so this is discharged.
 
 **Deferred deliberately.** Multi-user accounts, sharing, server-side persistence, and migration of any templates still in the Firebase project. The last of these is a small standalone task if it turns out those templates matter.
