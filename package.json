@@ -8,13 +8,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "tsc && vite build",
-    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
     "hosting:off": "npx firebase-tools@13 hosting:disable",
     "hosting:on": "npm run build && npx firebase-tools@13 deploy"
   },
   "dependencies": {
-    "@tailwindcss/vite": "^4.3.3",
     "docx": "^9.7.1",
     "lucide-react": "^0.561.0",
     "mammoth": "^1.12.1",
@@ -22,13 +20,14 @@
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "tailwindcss": "^4.3.3"
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",
     "jsdom": "^26.0.0",
+    "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
