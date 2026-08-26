@@ -66,6 +66,13 @@ export interface Finding {
    *  finding can be told apart from one that actually saw the whole
    *  document. */
   truncated?: boolean;
+  /** Set when the model returned a schema-valid response with an empty (or
+   *  whitespace-only) `summary`. A model with a genuine answer — including
+   *  "this document is silent on this point" — always writes something; an
+   *  empty string is a non-answer, not a finding, so this is surfaced as an
+   *  `error` status rather than `done` (see `extractClause.ts`). Lets
+   *  run-level UI count this pattern without string-matching `error`. */
+  noContent?: boolean;
 }
 
 export interface ReviewRun {

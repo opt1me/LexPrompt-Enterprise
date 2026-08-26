@@ -150,6 +150,55 @@ describe('extractClause', () => {
     expect(vi.mocked(chatJson).mock.calls[0][0].images).toBeUndefined();
   });
 
+  // Task 16: a schema-valid but empty summary is a non-answer, not a
+  // finding — see empty-review-investigation.md. A model with a genuine
+  // answer, including "the document is silent on this point," always
+  // writes something; an empty string must not be indistinguishable from
+  // a real 'done' finding.
+  it('reports an empty summary as an error finding, not done', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: '', citations: [], risk_level: 'Low' });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.status).toBe('error');
+    expect(finding.noContent).toBe(true);
+    expect(finding.error).toMatch(/no content/i);
+  });
+
+  it('reports a whitespace-only summary as an error finding, not done', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: '   \n\t  ', citations: [] });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.status).toBe('error');
+    expect(finding.noContent).toBe(true);
+  });
+
+  it('keeps citations and risk level on a no-content finding, for whatever use the UI has for them', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      summary: '',
+      citations: ['stray quote'],
+      risk_level: 'High',
+      risk_analysis: 'stray analysis',
+    });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.citations).toEqual(['stray quote']);
+    expect(finding.riskLevel).toBe('High');
+    expect(finding.riskAnalysis).toBe('stray analysis');
+  });
+
+  // The boundary this guard must not cross: a real summary describing a
+  // clause that is genuinely absent from the document is a legitimate
+  // finding, whether or not it has citations to back it up.
+  it('treats a real summary with no citations as done (boundary: clause genuinely absent)', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 'The agreement is silent on this point.', citations: [] });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.status).toBe('done');
+    expect(finding.summary).toBe('The agreement is silent on this point.');
+  });
+
+  it('treats a real summary with citations as done', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 'Governed by English law.', citations: ['English law'] });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.status).toBe('done');
+  });
+
   it('reports a parse failure without calling the model', async () => {
     const broken: DocumentFile = { ...doc, text: '', parseError: 'corrupt file' };
     const finding = await extractClause(broken, clause, template, settings);

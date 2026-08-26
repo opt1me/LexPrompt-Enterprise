@@ -156,13 +156,37 @@ export async function extractClause(
       ? RISK_LEVELS.find(l => l.toLowerCase() === raw.risk_level!.toLowerCase())
       : undefined;
 
+    const summary = typeof raw.summary === 'string' ? raw.summary : '';
+    const citations = Array.isArray(raw.citations) ? raw.citations.filter(c => typeof c === 'string') : [];
+    const riskAnalysis = typeof raw.risk_analysis === 'string' ? raw.risk_analysis : undefined;
+
+    // A model with a genuine answer always writes something — even "the
+    // agreement is silent on this point" for a clause that's genuinely
+    // absent. An empty (or whitespace-only) summary is not that; it's a
+    // non-answer the schema happened to accept, and mapping it to 'done'
+    // makes it indistinguishable from a real finding (the failure mode this
+    // whole guard exists for — see empty-review-investigation.md). Checked
+    // on `summary` alone: a real summary with no citations is a legitimate
+    // "clause not present" finding and must stay 'done'.
+    if (summary.trim() === '') {
+      return {
+        ...base,
+        citations,
+        riskLevel: level,
+        riskAnalysis,
+        truncated: truncated || undefined,
+        error: 'The model returned no content for this clause.',
+        noContent: true,
+      };
+    }
+
     return {
       clauseId: clause.id,
       status: 'done',
-      summary: typeof raw.summary === 'string' ? raw.summary : '',
-      citations: Array.isArray(raw.citations) ? raw.citations.filter(c => typeof c === 'string') : [],
+      summary,
+      citations,
       riskLevel: level,
-      riskAnalysis: typeof raw.risk_analysis === 'string' ? raw.risk_analysis : undefined,
+      riskAnalysis,
       truncated: truncated || undefined,
     };
   } catch (error) {

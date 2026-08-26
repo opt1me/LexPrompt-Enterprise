@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { Upload, X, Play, FileWarning, CircleSlash } from 'lucide-react';
+import { Upload, X, Play, FileWarning, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { DocumentFile, ReviewRun, Template } from '../../types';
 import { parseFiles } from '../../lib/documents';
 import { Button } from '../../components/Button';
-import { runProgress } from './runReview';
+import { runProgress, countNoContent } from './runReview';
 
 export interface RunPanelProps {
   template: Template;
@@ -152,6 +152,36 @@ export function RunCancelledBanner({ run }: { run: ReviewRun }) {
     <div className="shrink-0 border-b border-white/10 bg-[#111] px-6 py-3 flex items-center gap-3 text-sm text-gray-400">
       <CircleSlash className="w-4 h-4 shrink-0" />
       <span>Run cancelled — {done} of {total} clauses were reviewed before it stopped.</span>
+    </div>
+  );
+}
+
+/**
+ * Shown once a completed run includes one or more clauses the model
+ * answered with a schema-valid but empty response (`Finding.noContent`,
+ * set by `extractClause` — see empty-review-investigation.md). A single
+ * empty clause among populated ones is unremarkable; a review where most or
+ * all clauses came back empty looks, at a glance, exactly like a fully
+ * answered one — no error, no risk badge, just quiet blank cards. This is
+ * a plain count, not a threshold or a block on the run: it makes the raw
+ * number visible so the user can judge for themselves whether the pattern
+ * looks like genuine silence or a model that couldn't read the document.
+ *
+ * Placed here, next to `RunProgressBar`/`RunCancelledBanner` above the
+ * results pane in App.tsx, so it is visible across both the per-document
+ * ResultsView and the all-documents TabularReview, and doesn't disappear
+ * when the user switches documents (unlike a per-document header count
+ * would).
+ */
+export function RunEmptyFindingsBanner({ run }: { run: ReviewRun }) {
+  const noContent = countNoContent(run);
+  const { total } = runProgress(run);
+  if (noContent === 0) return null;
+
+  return (
+    <div className="shrink-0 border-b border-yellow-500/20 bg-yellow-500/5 px-6 py-3 flex items-center gap-3 text-sm text-yellow-300">
+      <TriangleAlert className="w-4 h-4 shrink-0" />
+      <span>{noContent} of {total} clauses returned no content from the model.</span>
     </div>
   );
 }

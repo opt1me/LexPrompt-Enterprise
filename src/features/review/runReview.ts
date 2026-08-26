@@ -38,6 +38,25 @@ export function runProgress(run: ReviewRun): { done: number; total: number; erro
   return { done, total, errors };
 }
 
+/**
+ * How many clause instances across the whole run (every document x every
+ * clause) came back with `noContent: true` — a schema-valid but empty
+ * response from `extractClause`. A single one of these among otherwise
+ * populated findings is unremarkable (see empty-review-investigation.md);
+ * this exists so run-level UI can show the raw count and let the user judge
+ * whether the pattern looks like "a clause or two is genuinely silent" or
+ * "this document didn't get reviewed at all."
+ */
+export function countNoContent(run: ReviewRun): number {
+  let count = 0;
+  for (const byClause of Object.values(run.findings)) {
+    for (const finding of Object.values(byClause)) {
+      if (finding.noContent) count++;
+    }
+  }
+  return count;
+}
+
 function withFinding(run: ReviewRun, docId: string, finding: Finding): ReviewRun {
   return {
     ...run,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { emptyRun, runReview, retryCell, runProgress } from './runReview';
+import { emptyRun, runReview, retryCell, runProgress, countNoContent } from './runReview';
 import type { DocumentFile, Settings, Template, Finding } from '../../types';
 
 vi.mock('./extractClause', () => ({ extractClause: vi.fn() }));
@@ -161,6 +161,28 @@ describe('runReview', () => {
     await expect(promise).rejects.toThrow(/abort/i);
     // Whatever landed for c1 before the sweep must not be 'error'.
     expect(last!.findings.d1.c1.status).not.toBe('error');
+  });
+
+  // Task 16: the run-level count that surfaces the "all/nearly all empty"
+  // pattern (see empty-review-investigation.md) has to reflect exactly the
+  // findings extractClause flagged as no-content, across every document.
+  it('counts no-content findings across the whole run via countNoContent', async () => {
+    vi.mocked(extractClause).mockImplementation(async (_d, c) =>
+      c.id === 'c1'
+        ? { clauseId: c.id, status: 'error', citations: [], error: 'no content', noContent: true }
+        : ok(c.id));
+
+    const docs = [doc('d1'), doc('d2')];
+    const run = await runReview(emptyRun(template, docs), docs, settings, () => {});
+
+    // c1 is flagged noContent for both documents; c2 is a normal done finding.
+    expect(countNoContent(run)).toBe(2);
+  });
+
+  it('reports zero no-content findings for a fully populated run', async () => {
+    const docs = [doc('d1')];
+    const run = await runReview(emptyRun(template, docs), docs, settings, () => {});
+    expect(countNoContent(run)).toBe(0);
   });
 
   it('handles a template with no clauses', async () => {

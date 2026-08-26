@@ -28,7 +28,7 @@ import { TemplateLibrary } from './features/templates/TemplateLibrary';
 import { TemplateEditor } from './features/templates/TemplateEditor';
 import { CreateTemplateDialog, type CreateTemplateParams } from './features/templates/CreateTemplateDialog';
 import { MegaPromptModal } from './features/templates/MegaPromptModal';
-import { RunPanel, RunProgressBar, RunCancelledBanner } from './features/review/RunPanel';
+import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
@@ -1109,6 +1109,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             <div className="h-[calc(100vh-64px)] flex flex-col">
               {isRunning && <RunProgressBar run={run} onCancel={handleCancelRun} />}
               {!isRunning && run.cancelledAt && !run.completedAt && <RunCancelledBanner run={run} />}
+              {!isRunning && run.completedAt && <RunEmptyFindingsBanner run={run} />}
               <div className="flex-1 min-h-0">
                 {view === 'results' ? (
                   <ResultsView

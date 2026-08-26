@@ -120,6 +120,7 @@ vi.mock('./features/review/RunPanel', () => ({
   },
   RunProgressBar: () => null,
   RunCancelledBanner: () => null,
+  RunEmptyFindingsBanner: () => null,
 }));
 
 import App from './App';
