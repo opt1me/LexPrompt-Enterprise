@@ -84,4 +84,49 @@ describe('getDb blocked-upgrade guard', () => {
     await vi.advanceTimersByTimeAsync(3000);
     await expect(promise).resolves.toBe(fakeDb);
   });
+
+  it('does not let a stale blocked open null a fresher, already-resolved memo', async () => {
+    // The exact reachable sequence a stale, unconditional `dbPromise = null`
+    // gets wrong:
+    //   1. O1 starts and gets blocked (never settles).
+    //   2. Something calls closeDb() — nulls the memo out from under O1.
+    //   3. A fresh getDb() call starts O2, which succeeds and is memoised.
+    //   4. O1's 3s timeout finally fires and rejects internally.
+    // O1's own rejection handling must not clobber O2's now-current memo,
+    // or O2's connection is orphaned with nothing left to close it — which
+    // is precisely the kind of leaked connection this task exists to avoid.
+    vi.useFakeTimers();
+
+    let capturedBlocked: (() => void) | undefined;
+    mockOpenDB.mockImplementationOnce((..._args: unknown[]) => {
+      const opts = _args[2] as { blocked?: () => void };
+      capturedBlocked = opts.blocked;
+      return new Promise(() => {}); // O1: never settles
+    });
+
+    const first = getDb(); // O1
+    await Promise.resolve();
+    capturedBlocked?.();
+
+    // A caller (or blocking() on some other stale connection) decides to
+    // close out from under the still-pending, blocked O1.
+    closeDb();
+
+    // A fresh open starts and succeeds while O1 is still hanging.
+    const fakeDb2 = { close: vi.fn() };
+    mockOpenDB.mockImplementationOnce(() => Promise.resolve(fakeDb2 as never));
+    const second = await getDb(); // O2
+    expect(second).toBe(fakeDb2);
+
+    // Now let O1's 3s timeout finally fire and reject.
+    const firstAssertion = expect(first).rejects.toBeInstanceOf(DbBlockedError);
+    await vi.advanceTimersByTimeAsync(3000);
+    await firstAssertion;
+
+    // The live memo must still be O2's connection, not nulled by O1's
+    // stale rejection, and getDb() must not open a third connection.
+    const third = await getDb();
+    expect(third).toBe(fakeDb2);
+    expect(mockOpenDB).toHaveBeenCalledTimes(2);
+  });
 });

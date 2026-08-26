@@ -19,6 +19,10 @@ let dbPromise: Promise<IDBPDatabase<LexPromptDB>> | null = null;
 export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
   if (!dbPromise) {
     let blockedFlag = false;
+    // Declared up front so `terminated()` — which can only fire after this
+    // synchronous block has finished and `opening` has been assigned below —
+    // can compare against it by reference.
+    let opening: Promise<IDBPDatabase<LexPromptDB>>;
 
     const openPromise = openDB<LexPromptDB>(DB_NAME, DB_VERSION, {
       upgrade(db) {
@@ -55,7 +59,11 @@ export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
         closeDb();
       },
       terminated() {
-        dbPromise = null;
+        // Only clear the memo if it still points at *this* connection's
+        // promise. If closeDb() (e.g. via blocking()) already replaced it
+        // with a fresh, later open, that fresh open must survive this old
+        // connection's termination notice.
+        if (dbPromise === opening) dbPromise = null;
       },
     });
 
@@ -81,13 +89,21 @@ export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
       );
     });
 
-    dbPromise = guarded.catch(err => {
+    opening = guarded.catch(err => {
       // Never memoise a rejection — one transient failure (or a blocked
       // upgrade) must not poison the database for the rest of the page's
-      // lifetime.
-      dbPromise = null;
+      // lifetime. But only clear the memo if it still points at *this*
+      // attempt: closeDb() may already have replaced it with a fresh,
+      // successful open by the time this rejection settles — e.g. a
+      // blocked open's 3s timeout firing after a newer getDb() call has
+      // already resolved. Nulling unconditionally here would discard that
+      // fresh connection with nothing left to close it, which is exactly
+      // the leaked-connection failure this task exists to prevent.
+      if (dbPromise === opening) dbPromise = null;
       throw err;
     });
+
+    dbPromise = opening;
   }
   return dbPromise;
 }
