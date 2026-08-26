@@ -18,10 +18,15 @@ function readAll(): Template[] {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) {
       // Corrupt: not an array. Quarantine and clear the original.
-      const quarantineKey = `lexprompt.templates.v2.corrupt.${Date.now()}`;
-      localStorage.setItem(quarantineKey, raw);
-      localStorage.removeItem(TEMPLATES_KEY);
-      debug(`Corrupted template storage quarantined to ${quarantineKey}`);
+      try {
+        const quarantineKey = `lexprompt.templates.v2.corrupt.${Date.now()}`;
+        localStorage.setItem(quarantineKey, raw);
+        localStorage.removeItem(TEMPLATES_KEY);
+        debug(`Corrupted template storage quarantined to ${quarantineKey}`);
+      } catch (e) {
+        // Quarantine write failed (e.g., quota exceeded). Best effort only.
+        debug(`Failed to quarantine corrupt storage: ${e instanceof Error ? e.message : String(e)}`);
+      }
       return [];
     }
     return parsed.map(migrate);
@@ -29,10 +34,15 @@ function readAll(): Template[] {
     // Parse error or other issue. Quarantine the raw value if it exists.
     const raw = localStorage.getItem(TEMPLATES_KEY);
     if (raw) {
-      const quarantineKey = `lexprompt.templates.v2.corrupt.${Date.now()}`;
-      localStorage.setItem(quarantineKey, raw);
-      localStorage.removeItem(TEMPLATES_KEY);
-      debug(`Corrupted template storage quarantined to ${quarantineKey}`);
+      try {
+        const quarantineKey = `lexprompt.templates.v2.corrupt.${Date.now()}`;
+        localStorage.setItem(quarantineKey, raw);
+        localStorage.removeItem(TEMPLATES_KEY);
+        debug(`Corrupted template storage quarantined to ${quarantineKey}`);
+      } catch (e) {
+        // Quarantine write failed (e.g., quota exceeded). Best effort only.
+        debug(`Failed to quarantine corrupt storage: ${e instanceof Error ? e.message : String(e)}`);
+      }
     }
     return [];
   }
@@ -90,14 +100,20 @@ export function newTemplate(name: string): Template {
 
 export async function listTemplates(): Promise<Template[]> {
   const all = readAll();
+  // Precompute position map to avoid indexOf during sort
+  const positionMap = new Map<string, number>();
+  all.forEach((t, idx) => {
+    positionMap.set(t.id, idx);
+  });
+
   // Sort by updatedAt descending, tiebreaking on reverse array position
   // (later in array = more recent when updatedAt is equal)
   return all.sort((a, b) => {
     const diff = b.updatedAt - a.updatedAt;
     if (diff !== 0) return diff;
-    // Tiebreaker: find positions in the array
-    const aIdx = all.indexOf(a);
-    const bIdx = all.indexOf(b);
+    // Tiebreaker: use precomputed position map
+    const aIdx = positionMap.get(a.id) ?? 0;
+    const bIdx = positionMap.get(b.id) ?? 0;
     return bIdx - aIdx; // Later in array comes first
   });
 }

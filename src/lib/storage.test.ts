@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   listTemplates, getTemplate, saveTemplate, deleteTemplate,
   newTemplate, exportTemplate, importTemplate,
@@ -72,6 +72,31 @@ describe('template CRUD', () => {
 
     expect(quarantineKeys.length).toBe(1);
     expect(localStorage.getItem(quarantineKeys[0])).toBe(corruptBlob);
+  });
+
+  it('survives quarantine write failure (quota exceeded)', async () => {
+    // Seed localStorage with corrupt JSON
+    const corruptBlob = '{not valid json';
+    localStorage.setItem('lexprompt.templates.v2', corruptBlob);
+
+    // Mock setItem to throw for quarantine keys (simulating quota exceeded)
+    const originalSetItem = localStorage.setItem;
+    const setItemMock = vi.fn((key: string, value: string) => {
+      if (key.startsWith('lexprompt.templates.v2.corrupt.')) {
+        throw new Error('QuotaExceededError');
+      }
+      originalSetItem.call(localStorage, key, value);
+    });
+    Object.defineProperty(Storage.prototype, 'setItem', { value: setItemMock });
+
+    // listTemplates should still resolve to [] without throwing, even if quarantine fails
+    expect(await listTemplates()).toEqual([]);
+
+    // getTemplate should also work without throwing
+    expect(await getTemplate('any-id')).toBeNull();
+
+    // Restore original setItem
+    Object.defineProperty(Storage.prototype, 'setItem', { value: originalSetItem });
   });
 });
 
