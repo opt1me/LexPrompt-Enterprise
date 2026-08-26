@@ -1,9 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { FileText, Settings as SettingsIcon } from 'lucide-react';
 import type { Template, DocumentFile, ReviewRun, Settings } from './types';
-import { loadSettings } from './lib/storage';
+import { loadSettings, listTemplates, saveTemplate, deleteTemplate, newTemplate, exportTemplate, importTemplate } from './lib/storage';
+import { generateTemplate } from './features/templates/generateTemplate';
 import { useToast, Toast } from './components/Toast';
 import { SettingsPanel } from './features/settings/SettingsPanel';
+import { TemplateLibrary } from './features/templates/TemplateLibrary';
+import { TemplateEditor } from './features/templates/TemplateEditor';
+import { CreateTemplateDialog, type CreateTemplateParams } from './features/templates/CreateTemplateDialog';
+import { MegaPromptModal } from './features/templates/MegaPromptModal';
 
 type View = 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings';
 
@@ -16,20 +21,125 @@ export default function App() {
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const { notify, toast } = useToast();
 
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createLoading, setCreateLoading] = useState(false);
+  const [generationStatus, setGenerationStatus] = useState('');
+  const [megaPromptOpen, setMegaPromptOpen] = useState(false);
+  const [importing, setImporting] = useState(false);
+
   const isConfigured = Boolean(settings.apiKey && settings.modelId);
 
+  const refreshTemplates = () => listTemplates().then(setTemplates);
+
+  useEffect(() => {
+    refreshTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /**
-   * Views that need an OpenRouter key/model (running a review, generating a
-   * template) route to Settings instead, with an explanatory toast, rather
-   * than opening a view that can only fail.
+   * Anything that calls the API — running a review, generating a template —
+   * routes to Settings with an explanatory toast instead of opening (or
+   * proceeding into) a flow that can only fail with an obscure error.
    */
+  const ensureConfigured = (message = 'Add your OpenRouter key to get started.') => {
+    if (isConfigured) return true;
+    notify(message, 'error');
+    setView('settings');
+    return false;
+  };
+
   const requestView = (next: View) => {
-    if (next === 'run' && !isConfigured) {
-      notify('Add your OpenRouter key to get started.', 'error');
-      setView('settings');
+    if (next === 'run' && !ensureConfigured()) return;
+    setView(next);
+  };
+
+  const handleOpenTemplate = (t: Template) => {
+    setActiveTemplate(t);
+    setView('editor');
+  };
+
+  const handleRunTemplate = (t: Template) => {
+    setActiveTemplate(t);
+    requestView('run');
+  };
+
+  const handleCreateTemplate = async (params: CreateTemplateParams) => {
+    if (params.type === 'ai' && !ensureConfigured('Add your OpenRouter key to generate a template.')) {
+      setCreateOpen(false);
       return;
     }
-    setView(next);
+
+    setCreateLoading(true);
+    setGenerationStatus('');
+    try {
+      const t = params.type === 'manual'
+        ? newTemplate(params.name)
+        : await generateTemplate({
+            contractType: params.contractType,
+            depth: params.depth,
+            verbosity: params.verbosity,
+            context: params.context,
+            settings,
+            onStatus: setGenerationStatus,
+          });
+      setActiveTemplate(t);
+      setCreateOpen(false);
+      setView('editor');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Template creation failed.', 'error');
+    } finally {
+      setCreateLoading(false);
+      setGenerationStatus('');
+    }
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!activeTemplate) return;
+    try {
+      const saved = await saveTemplate(activeTemplate);
+      setActiveTemplate(saved);
+      await refreshTemplates();
+      notify('Template saved.');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not save the template.', 'error');
+    }
+  };
+
+  const handleExportTemplate = (t: Template) => {
+    const blob = exportTemplate(t);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${t.name}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDeleteTemplate = async (id: string) => {
+    try {
+      await deleteTemplate(id);
+      await refreshTemplates();
+      notify('Template deleted.');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not delete the template.', 'error');
+    }
+  };
+
+  const handleImportTemplate = async (file: File) => {
+    setImporting(true);
+    try {
+      const text = await file.text();
+      await importTemplate(text);
+      await refreshTemplates();
+      notify('Template imported.');
+    } catch (e) {
+      // importTemplate throws two distinct, user-actionable messages
+      // ("not valid JSON" vs "not a template") — surface them verbatim
+      // rather than a generic failure.
+      notify(e instanceof Error ? e.message : 'Import failed.', 'error');
+    } finally {
+      setImporting(false);
+    }
   };
 
   return (
@@ -67,9 +177,30 @@ export default function App() {
 
       <main className="flex-1 overflow-hidden overflow-y-auto">
         {view === 'library' && (
-          <div className="p-8 text-gray-500">Template library — Task 14.</div>
+          <TemplateLibrary
+            templates={templates}
+            onOpen={handleOpenTemplate}
+            onRun={handleRunTemplate}
+            onDelete={handleDeleteTemplate}
+            onCreate={() => setCreateOpen(true)}
+            onImport={handleImportTemplate}
+            importing={importing}
+          />
         )}
-        {view === 'editor' && <div className="p-8 text-gray-500">Template editor — Task 14.</div>}
+        {view === 'editor' && (
+          activeTemplate ? (
+            <TemplateEditor
+              template={activeTemplate}
+              onChange={setActiveTemplate}
+              onSave={handleSaveTemplate}
+              onExport={() => handleExportTemplate(activeTemplate)}
+              onShowMegaPrompt={() => setMegaPromptOpen(true)}
+              onClose={() => setView('library')}
+            />
+          ) : (
+            <div className="p-8 text-gray-500">No template selected.</div>
+          )
+        )}
         {view === 'run' && <div className="p-8 text-gray-500">Run panel — Task 16.</div>}
         {view === 'results' && <div className="p-8 text-gray-500">Results view — Task 16.</div>}
         {view === 'tabular' && <div className="p-8 text-gray-500">Tabular review — Task 17.</div>}
@@ -77,6 +208,20 @@ export default function App() {
           <SettingsPanel settings={settings} onChange={setSettings} />
         )}
       </main>
+
+      <CreateTemplateDialog
+        isOpen={createOpen}
+        onClose={() => setCreateOpen(false)}
+        onCreate={handleCreateTemplate}
+        loading={createLoading}
+        status={generationStatus}
+        canGenerate={isConfigured}
+      />
+      <MegaPromptModal
+        isOpen={megaPromptOpen}
+        onClose={() => setMegaPromptOpen(false)}
+        template={activeTemplate}
+      />
     </div>
   );
 }

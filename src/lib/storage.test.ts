@@ -98,6 +98,32 @@ describe('template CRUD', () => {
     // Restore original setItem
     Object.defineProperty(Storage.prototype, 'setItem', { value: originalSetItem });
   });
+
+  it('saveTemplate rejects with a clear message when storage is full', async () => {
+    const originalSetItem = localStorage.setItem;
+    Object.defineProperty(Storage.prototype, 'setItem', {
+      value: vi.fn(() => { throw new Error('QuotaExceededError'); }),
+    });
+    try {
+      await expect(saveTemplate(newTemplate('Too Big'))).rejects.toThrow(/storage is full/i);
+    } finally {
+      Object.defineProperty(Storage.prototype, 'setItem', { value: originalSetItem });
+    }
+  });
+
+  it('deleteTemplate rejects with a clear message when storage is full', async () => {
+    const t = newTemplate('Doomed');
+    await saveTemplate(t);
+    const originalSetItem = localStorage.setItem;
+    Object.defineProperty(Storage.prototype, 'setItem', {
+      value: vi.fn(() => { throw new Error('QuotaExceededError'); }),
+    });
+    try {
+      await expect(deleteTemplate(t.id)).rejects.toThrow(/storage is full/i);
+    } finally {
+      Object.defineProperty(Storage.prototype, 'setItem', { value: originalSetItem });
+    }
+  });
 });
 
 describe('import / export', () => {

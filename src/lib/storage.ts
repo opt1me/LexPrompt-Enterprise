@@ -49,7 +49,14 @@ function readAll(): Template[] {
 }
 
 function writeAll(templates: Template[]): void {
-  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+  try {
+    localStorage.setItem(TEMPLATES_KEY, JSON.stringify(templates));
+  } catch (e) {
+    debug(`Failed to write templates: ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(
+      'Could not save — your browser storage is full. Try deleting an old template, or exporting and removing some data.',
+    );
+  }
 }
 
 /** Brings a template of any earlier shape up to the current one. Anything
