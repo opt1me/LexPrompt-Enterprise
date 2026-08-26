@@ -87,11 +87,48 @@ describe('buildChatContext', () => {
   });
 
   it('uses text from one document and does not require every document to have text', () => {
-    const textDoc = doc({ id: 'd1', name: 'a.txt', text: 'readable' });
+    const textDoc = doc({ id: 'd1', name: 'a.txt', text: 'this is a perfectly readable document' });
     const scanDoc = doc({ id: 'd2', name: 'b.pdf', text: '[Page 1]\n\n' });
     const ctx = buildChatContext([textDoc, scanDoc], false, 10_000);
     expect(ctx.kind).toBe('ok');
     if (ctx.kind === 'ok') expect(ctx.text).toContain('readable');
+  });
+
+  // Regression coverage for the truthy-check bug: a page that yielded a
+  // few characters of OCR noise (below SCAN_TEXT_THRESHOLD) must NOT count
+  // as "has text" — that would silently skip the page images captured for
+  // that very page and send the model a near-empty prompt instead.
+  it('treats sub-threshold junk text as unreadable and sends the page images instead', () => {
+    const junkScan = doc({ text: '[Page 1]\nAB\n\n', pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
+    const ctx = buildChatContext([junkScan], true, 10_000);
+    expect(ctx.kind).toBe('ok');
+    if (ctx.kind === 'ok') {
+      expect(ctx.text).toBe('');
+      expect(ctx.text).not.toContain('AB');
+      expect(ctx.images).toEqual([{ mime: 'image/jpeg', data: 'AAA' }]);
+    }
+  });
+
+  it('declines rather than sending sub-threshold junk text when there are no images to fall back on', () => {
+    const junkScan = doc({ text: '[Page 1]\nAB\n\n' });
+    const ctx = buildChatContext([junkScan], true, 10_000);
+    expect(ctx.kind).toBe('unreadable');
+  });
+
+  it('declines with needs-image-model for sub-threshold junk text when images exist but the model cannot read them', () => {
+    const junkScan = doc({ text: '[Page 1]\nAB\n\n', pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
+    const ctx = buildChatContext([junkScan], false, 10_000);
+    expect(ctx.kind).toBe('needs-image-model');
+  });
+
+  it('keeps a good page\'s text and drops only the sparse page in a mixed document', () => {
+    const mixed = doc({ text: '[Page 1]\nThis is a perfectly readable cover page.\n\n[Page 2]\nAB\n\n' });
+    const ctx = buildChatContext([mixed], false, 10_000);
+    expect(ctx.kind).toBe('ok');
+    if (ctx.kind === 'ok') {
+      expect(ctx.text).toContain('readable cover page');
+      expect(ctx.text).not.toContain('AB');
+    }
   });
 });
 
@@ -169,5 +206,29 @@ describe('sendChatMessage', () => {
     expect(vi.mocked(chatStream).mock.calls[0][0].images).toBeUndefined();
     expect(vi.mocked(chatStream).mock.calls[0][0].user).toContain('twelve months');
     expect(result).toBe('Twelve months.');
+  });
+
+  // Regression coverage at the sendChatMessage level (not just
+  // buildChatContext): sub-threshold OCR noise must route to the images
+  // that were actually captured for that page, not leak into the prompt
+  // as if it were real content.
+  it('sends the page images, not sub-threshold junk text, to the model', async () => {
+    vi.mocked(chatStream).mockResolvedValue('Answer from the image.');
+    const junkScan = doc({ text: '[Page 1]\nAB\n\n', pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
+
+    const result = await sendChatMessage({ ...baseParams, documents: [junkScan], modelSupportsImages: true });
+
+    expect(chatStream).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(chatStream).mock.calls[0][0].images).toEqual([{ mime: 'image/jpeg', data: 'AAA' }]);
+    expect(vi.mocked(chatStream).mock.calls[0][0].user).not.toContain('AB');
+    expect(result).toBe('Answer from the image.');
+  });
+
+  it('declines without calling the model when the only text is sub-threshold junk and there are no images', async () => {
+    const junkScan = doc({ text: '[Page 1]\nAB\n\n' });
+    const result = await sendChatMessage({ ...baseParams, documents: [junkScan], modelSupportsImages: true });
+
+    expect(result).toBe(UNREADABLE_MESSAGE);
+    expect(chatStream).not.toHaveBeenCalled();
   });
 });

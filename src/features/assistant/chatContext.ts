@@ -1,5 +1,6 @@
 import type { DocumentFile, Settings } from '../../types';
 import { chatStream } from '../../lib/openrouter';
+import { SCAN_TEXT_THRESHOLD } from '../../lib/documents';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -59,24 +60,71 @@ export function extractableText(doc: DocumentFile): string {
   return doc.text.replace(PAGE_MARKER, '').trim();
 }
 
+/**
+ * Splits a PDF's page-marked text back into the per-page segments
+ * `parsePdf` (lib/documents.ts) concatenated — each written as
+ * `[Page N]\n<pageText>\n\n`. A document with no such markers (docx, txt,
+ * or anything parsePdf never touched) is treated as a single "page" so the
+ * threshold check below still applies to it.
+ */
+function pageSegments(text: string): string[] {
+  if (!/\[Page \d+\]\n/.test(text)) return [text];
+  return text.split(/\[Page \d+\]\n/g).slice(1);
+}
+
+/**
+ * The per-page-aware equivalent of the truthy check this replaced. Reuses
+ * `SCAN_TEXT_THRESHOLD` — the exact same "is this page too sparse to be
+ * text" judgement `parsePdf` already made when deciding whether to capture
+ * a page image — rather than a bare non-empty check (which let 1-19
+ * characters of OCR noise, a watermark, or a stray header count as "has
+ * text" and silently skip the page images captured for that very
+ * document) or a second, separately-tuned number.
+ *
+ * Applied per page, not to the document's combined length, on purpose.
+ * `parsePdf` decides per page whether a page needs an image, and a mixed
+ * document — a typed cover page followed by scanned, unreadable pages —
+ * has real text on page 1 and captured images for the rest. A
+ * document-wide character count would let a single readable cover page
+ * carry the whole document over the bar, silently forwarding the scanned
+ * body's noise as if it were content instead of falling back to the
+ * images that exist specifically because those pages aren't readable as
+ * text. Deciding per page keeps the cover page's real text, drops each
+ * sparse page's noise rather than sending it as if it were content, and
+ * (see `buildChatContext`) still attaches that document's page images
+ * regardless of whether other pages had usable text — so the scanned
+ * pages aren't lost, just not passed off as plain text.
+ */
+function usableText(doc: DocumentFile): string {
+  return pageSegments(doc.text)
+    .map(page => page.trim())
+    .filter(page => page.length >= SCAN_TEXT_THRESHOLD)
+    .join('\n\n');
+}
+
 export type ChatContext =
   | { kind: 'ok'; text: string; images: ChatImage[] }
   /** No document contributed text or images — there is nothing to send. */
   | { kind: 'unreadable' }
-  /** Every document that lacked text had page images, but the selected
-   *  model can't read images — sending them would waste a request on
-   *  content the model is guaranteed not to use. */
+  /** At least one document had nothing but page images to offer, and the
+   *  selected model can't read images — sending them would waste a
+   *  request on content the model is guaranteed not to use. */
   | { kind: 'needs-image-model' };
 
 /**
  * Decides what the chat can actually work with, mirroring the fallback
- * `extractClause` already uses: text when a document has it, page images
- * when it doesn't (and the model can read them), and — this is the part
- * the original chat code skipped — an honest decline when a document has
+ * `extractClause` already uses: text when a page has it, page images when
+ * it doesn't (and the model can read them), and — this is the part the
+ * original chat code skipped — an honest decline when a document has
  * neither. Sending an empty "CONTEXT:" and letting the model answer anyway
  * is exactly the confident-wrong-answer failure this app's error handling
  * elsewhere (parseJsonLoose, the DOCX "could not be reviewed" rows) exists
  * to avoid; a scanned document deserves the same honesty.
+ *
+ * Text and images are not mutually exclusive per document: `parsePdf`
+ * captures an image for every page that was too sparse to be text,
+ * independent of whether other pages in the same document had real text,
+ * so a mixed document can and should contribute both.
  */
 export function buildChatContext(
   documents: DocumentFile[],
@@ -88,15 +136,17 @@ export function buildChatContext(
   let sawUnusableImages = false;
 
   for (const doc of documents) {
-    const text = extractableText(doc);
-    if (text) {
-      textParts.push(`--- ${doc.name} ---\n${text}`);
-      continue;
-    }
+    const text = usableText(doc);
+    if (text) textParts.push(`--- ${doc.name} ---\n${text}`);
+
     if (doc.pageImages?.length) {
       if (modelSupportsImages) {
         images.push(...doc.pageImages);
-      } else {
+      } else if (!text) {
+        // Only worth flagging "needs an image-capable model" when this
+        // document had nothing else to offer — one with usable text from
+        // another page isn't a lost cause just because its scanned pages
+        // can't also be read.
         sawUnusableImages = true;
       }
     }

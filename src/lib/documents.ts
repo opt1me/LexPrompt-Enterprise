@@ -2,9 +2,14 @@ import type { DocumentFile } from '../types';
 import type { PdfPageText } from './citations';
 import { debug } from './debug';
 
-/** A page with almost no extractable text is a scan; we render it to an image
- *  so a vision-capable model can read it instead. */
-const SCAN_TEXT_THRESHOLD = 20;
+/**
+ * A page with almost no extractable text is a scan; we render it to an
+ * image so a vision-capable model can read it instead. Exported so other
+ * consumers of a page's extracted text (the chat panel's context builder)
+ * apply the exact same "is this page too sparse to be text" judgement
+ * `parsePdf` made, rather than a second, separately-tuned number.
+ */
+export const SCAN_TEXT_THRESHOLD = 20;
 
 type PdfjsModule = typeof import('pdfjs-dist');
 
