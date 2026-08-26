@@ -1,16 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FileText, Settings as SettingsIcon, ClipboardList } from 'lucide-react';
-import type { Template, DocumentFile, ReviewRun, Settings } from './types';
+import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
+import type { Template, DocumentFile, ReviewRun, Settings, Matter } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
 import {
   listPlaybooks as listTemplates, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
 } from './lib/db/playbooks';
+import {
+  listMatters, saveMatter, newMatter, deleteMatter,
+} from './lib/db/matters';
+import { listReviews } from './lib/db/reviews';
+import { getProfile } from './lib/db/profile';
 import { DbBlockedError } from './lib/db/open';
+import { useRoute, type Route } from './lib/router';
 import { generateTemplate } from './features/templates/generateTemplate';
 import { listModels, isAuthError } from './lib/openrouter';
 import { useToast, Toast } from './components/Toast';
 import { SettingsPanel } from './features/settings/SettingsPanel';
+import { MattersList, type MattersListItem, type CreateMatterParams } from './features/matters/MattersList';
 import { TemplateLibrary } from './features/templates/TemplateLibrary';
 import { TemplateEditor } from './features/templates/TemplateEditor';
 import { CreateTemplateDialog, type CreateTemplateParams } from './features/templates/CreateTemplateDialog';
@@ -20,13 +27,40 @@ import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
 
-type View = 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings';
+type View = 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings';
 
 const AUTH_ERROR_MESSAGE = 'Your OpenRouter API key was rejected. Update it in Settings and try again.';
 
+/** Maps a URL route to the `view` it corresponds to today. Only the routes
+ * an existing screen actually understands are listed here — `matter`,
+ * `review` and `playbook` (single-item deep links) have no screen yet
+ * (Tasks 11/12) and fall through to the matters list, the app's entry
+ * point, rather than rendering nothing. */
+function viewForRoute(route: Route): View {
+  switch (route.name) {
+    case 'matters': return 'matters';
+    case 'playbooks': return 'library';
+    case 'settings': return 'settings';
+    default: return 'matters';
+  }
+}
+
+/** The inverse mapping, for the views that own a canonical URL. Views with
+ * no route of their own (editor/run/results/tabular — all still
+ * session-scoped pending Task 12) are intentionally absent: switching to
+ * one of them must not push a history entry it can't be deep-linked back
+ * into yet. */
+const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
+  matters: { name: 'matters' },
+  library: { name: 'playbooks' },
+  settings: { name: 'settings' },
+};
+
 export default function App() {
-  const [view, setView] = useState<View>('library');
+  const [route, navigate] = useRoute();
+  const [view, setView] = useState<View>(() => viewForRoute(route));
   const [templates, setTemplates] = useState<Template[]>([]);
+  const [matters, setMatters] = useState<MattersListItem[]>([]);
   const [activeTemplate, setActiveTemplate] = useState<Template | null>(null);
   const [documents, setDocuments] = useState<DocumentFile[]>([]);
   const [run, setRun] = useState<ReviewRun | null>(null);
@@ -90,6 +124,57 @@ export default function App() {
     loadLibrary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Mirrors `libraryLoadError` above (same Critical fix, applied to the new
+  // entry point): a failure loading matters must render its own visible
+  // error branch instead of the list, never fall back to an empty "no
+  // matters" state, which would be indistinguishable from a user who
+  // genuinely has none yet.
+  const [mattersLoadError, setMattersLoadError] = useState<string | null>(null);
+
+  const refreshMatters = async () => {
+    const list = await listMatters();
+    // Review counts are a nice-to-have, not load-bearing: if they fail to
+    // fetch (e.g. the reviews store errors independently of the matters
+    // store), the matters list itself must still render — so failures here
+    // are swallowed and just leave every count omitted, rather than routing
+    // through mattersLoadError and hiding matters that loaded just fine.
+    let counts: Record<string, number> = {};
+    try {
+      const perMatter = await Promise.all(list.map(m => listReviews(m.id)));
+      counts = Object.fromEntries(list.map((m, i) => [m.id, perMatter[i].length]));
+    } catch {
+      counts = {};
+    }
+    setMatters(list.map(matter => ({ matter, reviewCount: counts[matter.id] })));
+  };
+
+  const loadMatters = () => {
+    setMattersLoadError(null);
+    return refreshMatters().catch((e) => {
+      setMattersLoadError(
+        e instanceof DbBlockedError
+          ? e.message
+          : 'The matters list could not be loaded. Try again.',
+      );
+    });
+  };
+
+  useEffect(() => {
+    loadMatters();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Keeps `view` in step with the URL for the routes an existing screen
+  // understands (see `viewForRoute`) — fires on browser back/forward
+  // (`useRoute`'s popstate listener updates `route`) and on our own
+  // `navigate` calls below. Views with no route of their own are untouched
+  // by this: `route` only changes via `navigate`, and nothing here calls it
+  // for editor/run/results/tabular, so this effect never fires while one of
+  // those is showing.
+  useEffect(() => {
+    setView(viewForRoute(route));
+  }, [route]);
 
   // Best-effort: keeps `settings.model*` capability fields in step with the
   // OpenRouter model list for whichever model is currently selected, even
@@ -174,6 +259,11 @@ export default function App() {
     if (view === 'editor' && next !== 'editor' && !confirmDiscardIfDirty()) return;
     if (next === 'run' && !ensureConfigured()) return;
     setView(next);
+    // Keeps the URL in sync for the views that own a route, so a refresh or
+    // a shared link lands back where the user was. Views with no route yet
+    // (editor/run/results/tabular) deliberately push nothing.
+    const routeForNext = ROUTE_FOR_VIEW[next];
+    if (routeForNext) navigate(routeForNext);
   };
 
   const handleOpenTemplate = (t: Template) => {
@@ -323,6 +413,28 @@ export default function App() {
     }
   };
 
+  const handleCreateMatter = async ({ name, client }: CreateMatterParams) => {
+    try {
+      const profile = await getProfile();
+      const matter: Matter = { ...newMatter(name, profile.id), client };
+      await saveMatter(matter);
+      await refreshMatters();
+      notify('Matter created.');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not create the matter.', 'error');
+    }
+  };
+
+  const handleDeleteMatter = async (id: string) => {
+    try {
+      await deleteMatter(id);
+      await refreshMatters();
+      notify('Matter deleted.');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not delete the matter.', 'error');
+    }
+  };
+
   return (
     <div className="min-h-screen flex flex-col bg-surface">
       <Toast toast={toast} />
@@ -330,7 +442,7 @@ export default function App() {
       <header className="h-16 border-b border-white/10 bg-[#111] flex items-center justify-between px-6 shrink-0">
         <button
           className="flex items-center gap-2"
-          onClick={() => requestView('library')}
+          onClick={() => requestView('matters')}
         >
           <div className="w-8 h-8 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-lg flex items-center justify-center text-white">
             <FileText className="w-5 h-5" />
@@ -339,6 +451,12 @@ export default function App() {
         </button>
 
         <div className="flex items-center gap-6">
+          <button
+            onClick={() => requestView('matters')}
+            className={`text-sm flex items-center gap-1.5 ${view === 'matters' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+          >
+            <Briefcase className="w-4 h-4" /> Matters
+          </button>
           <button
             onClick={() => requestView('library')}
             className={`text-sm ${view === 'library' || view === 'editor' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
@@ -370,6 +488,25 @@ export default function App() {
       </header>
 
       <main className="flex-1 overflow-hidden overflow-y-auto">
+        {view === 'matters' && (
+          mattersLoadError ? (
+            <div className="p-8 max-w-md mx-auto text-center space-y-4">
+              <p className="text-red-400">{mattersLoadError}</p>
+              <button
+                onClick={() => loadMatters()}
+                className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+              >
+                Retry
+              </button>
+            </div>
+          ) : (
+            <MattersList
+              matters={matters}
+              onCreate={handleCreateMatter}
+              onDelete={handleDeleteMatter}
+            />
+          )
+        )}
         {view === 'library' && (
           libraryLoadError ? (
             <div className="p-8 max-w-md mx-auto text-center space-y-4">

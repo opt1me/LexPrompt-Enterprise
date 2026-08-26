@@ -57,6 +57,14 @@ describe('parseRoute', () => {
     expect(parseRoute('/matters/a%2Fb')).toEqual({ name: 'matter', matterId: 'a/b' });
     expect(parseRoute('/playbooks/a%20b')).toEqual({ name: 'playbook', playbookId: 'a b' });
   });
+
+  it('strips a query string and hash fragment before parsing, rather than absorbing them into the last id segment', () => {
+    expect(parseRoute('/matters/m1?foo=bar')).toEqual({ name: 'matter', matterId: 'm1' });
+    expect(parseRoute('/matters/m1#section')).toEqual({ name: 'matter', matterId: 'm1' });
+    expect(parseRoute('/matters/m1?foo=bar#section')).toEqual({ name: 'matter', matterId: 'm1' });
+    expect(parseRoute('/?foo=bar')).toEqual({ name: 'matters' });
+    expect(parseRoute('/playbooks/p1/?x=1')).toEqual({ name: 'playbook', playbookId: 'p1' });
+  });
 });
 
 describe('buildPath', () => {

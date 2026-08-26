@@ -33,7 +33,15 @@ export function parseRoute(pathname: string): Route {
 }
 
 function parsePath(pathname: string): Route {
-  const trimmed = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  // Defensive: `useRoute` only ever passes a bare `window.location.pathname`
+  // (which the URL spec guarantees excludes `?search` and `#hash`), so this
+  // is a no-op today. But a future caller passing `location.href` or
+  // `pathname + search` would otherwise have the query string silently
+  // absorbed into the last id segment — a wrong route presented as a valid
+  // one rather than a 404. Stripping both up front closes that off for good.
+  const withoutHash = pathname.split('#')[0];
+  const withoutQuery = withoutHash.split('?')[0];
+  const trimmed = withoutQuery.length > 1 && withoutQuery.endsWith('/') ? withoutQuery.slice(0, -1) : withoutQuery;
   const segments = trimmed.split('/').filter((s) => s.length > 0).map(decodeURIComponent);
 
   if (segments.length === 0) return { name: 'matters' };
