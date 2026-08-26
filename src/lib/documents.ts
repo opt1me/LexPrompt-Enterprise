@@ -1,18 +1,42 @@
-import * as pdfjs from 'pdfjs-dist';
 import type { DocumentFile } from '../types';
 import type { PdfPageText } from './citations';
 import { debug } from './debug';
 
-// Worker resolved through Vite rather than a CDN global. This is what removes
-// the `window['pdfjs-dist/build/pdf']` bug class permanently.
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.mjs',
-  import.meta.url,
-).toString();
-
 /** A page with almost no extractable text is a scan; we render it to an image
  *  so a vision-capable model can read it instead. */
 const SCAN_TEXT_THRESHOLD = 20;
+
+type PdfjsModule = typeof import('pdfjs-dist');
+
+let pdfjsPromise: Promise<PdfjsModule> | null = null;
+
+/**
+ * Lazily imports pdfjs-dist and configures its worker exactly once. pdfjs-dist
+ * is large enough that a top-level `import` here would pull it into the main
+ * bundle even for documents that never touch it (parseFiles handles txt/docx
+ * too) — this keeps it out of the initial load, only fetching it the first
+ * time a PDF is actually parsed or viewed.
+ *
+ * `PdfCanvas` (the PDF viewer) funnels through this too, since it previously
+ * relied on this module's top-level side effect to configure the worker
+ * merely by importing `readArrayBuffer`/`extractPageText` from it. Memoising
+ * the import means concurrent `parseFile` calls (parseFiles runs a whole
+ * batch in parallel) and the viewer never race to set `workerSrc` twice.
+ */
+export function loadPdfjs(): Promise<PdfjsModule> {
+  if (!pdfjsPromise) {
+    pdfjsPromise = import('pdfjs-dist').then(mod => {
+      // Worker resolved through Vite rather than a CDN global. This is what
+      // removes the `window['pdfjs-dist/build/pdf']` bug class permanently.
+      mod.GlobalWorkerOptions.workerSrc = new URL(
+        'pdfjs-dist/build/pdf.worker.mjs',
+        import.meta.url,
+      ).toString();
+      return mod;
+    });
+  }
+  return pdfjsPromise;
+}
 
 function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -72,6 +96,7 @@ async function renderPageToJpeg(page: MinimalPdfPage): Promise<{ mime: string; d
 }
 
 async function parsePdf(file: File): Promise<{ text: string; pageImages?: { mime: string; data: string }[] }> {
+  const pdfjs = await loadPdfjs();
   // v6's getDocument() takes a DocumentInitParameters object, not a bare
   // ArrayBuffer -- passing the buffer directly does not match the installed
   // .d.ts (`getDocument(src?: DocumentInitParameters)`), so it must be wrapped

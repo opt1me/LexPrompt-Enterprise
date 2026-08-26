@@ -1,8 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import * as pdfjs from 'pdfjs-dist';
 import type { PDFDocumentProxy, PageViewport } from 'pdfjs-dist';
 import { ZoomIn, ZoomOut } from 'lucide-react';
-import { extractPageText, readArrayBuffer } from '../../lib/documents';
+import { extractPageText, loadPdfjs, readArrayBuffer } from '../../lib/documents';
 import { findQuoteRects, type PdfPageText, type QuoteRect } from '../../lib/citations';
 import { debug } from '../../lib/debug';
 
@@ -108,6 +107,7 @@ export function PdfCanvas({ file, highlights }: PdfCanvasProps) {
 
     (async () => {
       try {
+        const pdfjs = await loadPdfjs();
         // v6's getDocument() takes { data } rather than a bare ArrayBuffer.
         const doc = await pdfjs.getDocument({ data: await readArrayBuffer(file) }).promise;
         if (cancelled) return;
