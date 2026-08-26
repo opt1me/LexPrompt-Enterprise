@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseFile, parseFiles } from './documents';
+import { parseFile, parseFiles, toDocumentRecord } from './documents';
 
 // pdf.js and mammoth are heavy and DOM-bound; the unit tests cover dispatch
 // and error isolation. Real PDF parsing is covered by manual verification
@@ -191,6 +191,68 @@ describe('parseFiles', () => {
     expect(docs.map(d => d.parseError !== undefined)).toEqual([true, true, false, false]);
     expect(docs[2].text).toBe('first');
     expect(docs[3].text).toBe('second');
+  });
+});
+
+describe('toDocumentRecord', () => {
+  it('builds a DocumentRecord carrying the parsed metadata, and the File as bytes', async () => {
+    const doc = await parseFile(makeFile('nda.txt', 'text/plain', 'the body'));
+    const { record, bytes } = toDocumentRecord(doc, 'matter-1', 'user-1');
+
+    expect(record.id).toBe(doc.id);
+    expect(record.matterId).toBe('matter-1');
+    expect(record.name).toBe('nda.txt');
+    expect(record.kind).toBe('txt');
+    expect(record.text).toBe('the body');
+    expect(record.byteSize).toBe(doc.file.size);
+    expect(record.addedByUserId).toBe('user-1');
+    expect(record.addedAt).toBeGreaterThan(0);
+    expect(bytes).toBe(doc.file);
+  });
+
+  it('carries a parse error through onto the record', async () => {
+    const pdfjs = await import('pdfjs-dist');
+    vi.mocked(pdfjs.getDocument).mockImplementationOnce(() => {
+      throw new Error('corrupt file');
+    });
+    const doc = await parseFile(makeFile('bad.pdf', 'application/pdf'));
+
+    const { record } = toDocumentRecord(doc, 'matter-1', 'user-1');
+    expect(record.parseError).toMatch(/corrupt file/);
+  });
+
+  it('never carries pageImages onto the record — LexPrompt persists source bytes, not derived page images', async () => {
+    const fakeCanvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => ({})),
+      toDataURL: vi.fn(() => 'data:image/jpeg;base64,ZmFrZWRhdGE='),
+    };
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation((tag: string) =>
+        tag === 'canvas' ? (fakeCanvas as unknown as HTMLCanvasElement) : originalCreateElement(tag),
+      );
+    const pdfjs = await import('pdfjs-dist');
+    vi.mocked(pdfjs.getDocument).mockReturnValueOnce({
+      promise: Promise.resolve({
+        numPages: 1,
+        getPage: async () => ({
+          getTextContent: async () => ({ items: [{ str: 'x' }] }),
+          getViewport: () => ({ width: 10, height: 10 }),
+          render: vi.fn(() => ({ promise: Promise.resolve() })),
+        }),
+      }),
+    } as unknown as ReturnType<typeof pdfjs.getDocument>);
+
+    const doc = await parseFile(makeFile('scan.pdf', 'application/pdf'));
+    expect(doc.pageImages?.length).toBe(1); // sanity: this document did produce page images
+
+    const { record } = toDocumentRecord(doc, 'matter-1', 'user-1');
+    expect('pageImages' in record).toBe(false);
+
+    createElementSpy.mockRestore();
   });
 });
 
