@@ -21,7 +21,7 @@ function uid(): string {
 /** `File.prototype.arrayBuffer()` is standard in real browsers but is not
  *  implemented by jsdom's Blob/File (used in the test environment), so a
  *  FileReader fallback keeps this working under both. */
-function readArrayBuffer(file: File): Promise<ArrayBuffer> {
+export function readArrayBuffer(file: File): Promise<ArrayBuffer> {
   if (typeof file.arrayBuffer === 'function') {
     return file.arrayBuffer();
   }
