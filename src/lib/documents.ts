@@ -1,6 +1,7 @@
 import type { DocumentFile, DocumentRecord } from '../types';
 import type { PdfPageText } from './citations';
 import { debug } from './debug';
+import { pageSegments } from './pageSegments';
 
 /**
  * A page with almost no extractable text is a scan; we render it to an
@@ -205,24 +206,6 @@ export function toDocumentRecord(
 export const BLOB_UNAVAILABLE_MESSAGE = 'The original file for this document is no longer available.';
 
 /**
- * Splits `record.text` back into the per-page segments `parsePdf` wrote it
- * as (`[Page N]\n<pageText>\n\n`, concatenated). A document with no such
- * markers (docx, txt, or a pdf with zero pages) comes back as one segment
- * so the threshold check below still applies to it.
- *
- * Deliberately duplicated from `modelContext.ts`'s private `pageSegments`
- * rather than imported: `modelContext.ts` already imports
- * `SCAN_TEXT_THRESHOLD` from this module, so importing the reverse
- * direction would cycle. Both implementations parse the exact same marker
- * convention `parsePdf` defines below, so keep them in sync if that ever
- * changes.
- */
-function pageSegments(text: string): string[] {
-  if (!/\[Page \d+\]\n/.test(text)) return [text];
-  return text.split(/\[Page \d+\]\n/g).slice(1);
-}
-
-/**
  * Whether a persisted document needs its page images regenerated before a
  * review can use them: a PDF with at least one page whose extracted text
  * falls below `SCAN_TEXT_THRESHOLD`.
@@ -245,6 +228,8 @@ function documentNeedsPageImages(record: DocumentRecord): boolean {
   return pageSegments(record.text).some(page => page.trim().length < SCAN_TEXT_THRESHOLD);
 }
 
+type PageImages = NonNullable<DocumentFile['pageImages']>;
+
 /**
  * Session-only cache of regenerated page images, keyed by document id, so a
  * second review of the same document in the same tab doesn't re-render a
@@ -259,8 +244,62 @@ function documentNeedsPageImages(record: DocumentRecord): boolean {
  * failed" (see `renderPageToJpeg`'s per-page tolerance) — and must still
  * short-circuit a later review rather than retrying a render already known
  * to fail.
+ *
+ * Bounded, not unbounded: page images are the largest objects this app
+ * holds in memory (a base64 JPEG per page, roughly a third larger than the
+ * bytes it was rendered from), so a session that reviews many scanned
+ * documents back to back must not grow this map forever — that would
+ * reproduce, in memory instead of on disk, exactly the storage-cost problem
+ * that motivated never persisting page images in the first place. Evicted
+ * least-recently-used via `pageImageCache`'s own iteration order (a `Map`
+ * iterates in insertion order, so `cacheGet` re-inserts on a hit to move an
+ * entry to the "most recent" end, and `cacheSet` evicts from the "oldest"
+ * end — `.keys().next().value` — once the cap is exceeded).
+ *
+ * Capped at `PAGE_IMAGE_CACHE_MAX_DOCUMENTS` documents (not bytes): a
+ * reviewer works through one matter's documents at a time, and a matter
+ * rarely has more than a handful of scans in flight in a single sitting —
+ * ten is generous headroom for that real usage pattern while still bounding
+ * the worst case (many separate matters' scans reviewed back to back in one
+ * long session) to a fixed, small number of documents' worth of images
+ * rather than letting it climb indefinitely.
  */
-const pageImageCache = new Map<string, NonNullable<DocumentFile['pageImages']>>();
+export const PAGE_IMAGE_CACHE_MAX_DOCUMENTS = 10;
+const pageImageCache = new Map<string, PageImages>();
+
+function cachedPageImages(documentId: string): PageImages | undefined {
+  const hit = pageImageCache.get(documentId);
+  if (hit) {
+    // Move to the most-recently-used end so eviction below takes the
+    // actual least-recently-used entry, not just the least-recently-added.
+    pageImageCache.delete(documentId);
+    pageImageCache.set(documentId, hit);
+  }
+  return hit;
+}
+
+function setCachedPageImages(documentId: string, images: PageImages): void {
+  pageImageCache.delete(documentId);
+  pageImageCache.set(documentId, images);
+  if (pageImageCache.size > PAGE_IMAGE_CACHE_MAX_DOCUMENTS) {
+    const oldest = pageImageCache.keys().next().value;
+    if (oldest !== undefined) pageImageCache.delete(oldest);
+  }
+}
+
+/**
+ * Removes one document's regenerated page images from the session cache —
+ * for a caller to invoke once a document is deleted from its matter
+ * (`deleteDocument`), so a removed document's images don't linger in memory
+ * for the rest of the session with nothing left that can ever request them
+ * again. Exported rather than wired in here: the call site is
+ * `handleRemoveMatterDocument` in `App.tsx`, which another change is
+ * currently editing — safe to call any time, including for a document id
+ * that was never cached (a no-op `Map.delete` on a missing key).
+ */
+export function evictPageImages(documentId: string): void {
+  pageImageCache.delete(documentId);
+}
 
 /** Rebuilds a `DocumentFile` for VIEWING a persisted document: wraps the
  *  stored blob back into a `File` and reuses the text already extracted at
@@ -330,7 +369,7 @@ export async function documentFileForReview(record: DocumentRecord, blob: Blob |
     return { id: record.id, name: record.name, text: record.text, file, kind: record.kind };
   }
 
-  const cached = pageImageCache.get(record.id);
+  const cached = cachedPageImages(record.id);
   if (cached) {
     return {
       id: record.id,
@@ -349,7 +388,7 @@ export async function documentFileForReview(record: DocumentRecord, blob: Blob |
   // "this document has no images" verdict, in case the failure was
   // transient (e.g. a corrupt-looking read that succeeds on a retry).
   if (!reparsed.parseError) {
-    pageImageCache.set(record.id, reparsed.pageImages ?? []);
+    setCachedPageImages(record.id, reparsed.pageImages ?? []);
   }
   // parseFile mints its own fresh id (it has no notion of a persisted
   // document); overridden here so the returned DocumentFile keeps the

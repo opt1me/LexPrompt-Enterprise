@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseFile, parseFiles, toDocumentRecord, documentFileForReview, BLOB_UNAVAILABLE_MESSAGE } from './documents';
+import {
+  parseFile, parseFiles, toDocumentRecord, documentFileForReview, evictPageImages,
+  BLOB_UNAVAILABLE_MESSAGE, PAGE_IMAGE_CACHE_MAX_DOCUMENTS,
+} from './documents';
 import type { DocumentRecord } from '../types';
 
 // pdf.js and mammoth are heavy and DOM-bound; the unit tests cover dispatch
@@ -276,6 +279,41 @@ describe('documentFileForReview', () => {
     return new Blob(['%PDF-1.4 fake bytes'], { type: 'application/pdf' });
   }
 
+  /** Stubs the canvas so `renderPageToJpeg` succeeds in jsdom; returns a
+   *  restore function to call at the end of the test. */
+  function mockScanCanvas(): () => void {
+    const fakeCanvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => ({})),
+      toDataURL: vi.fn(() => 'data:image/jpeg;base64,eA=='),
+    };
+    const originalCreateElement = document.createElement.bind(document);
+    const spy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation((tag: string) =>
+        tag === 'canvas' ? (fakeCanvas as unknown as HTMLCanvasElement) : originalCreateElement(tag),
+      );
+    return () => spy.mockRestore();
+  }
+
+  /** A one-page, below-threshold "scan" pdfjs document, freshly built each
+   *  call so a `mockImplementation` (as opposed to `mockReturnValueOnce`)
+   *  can serve an unbounded number of `getDocument()` calls in the cache
+   *  bound test below. */
+  function scanPdfDocument() {
+    return {
+      promise: Promise.resolve({
+        numPages: 1,
+        getPage: async () => ({
+          getTextContent: async () => ({ items: [{ str: 'x' }] }),
+          getViewport: () => ({ width: 10, height: 10 }),
+          render: vi.fn(() => ({ promise: Promise.resolve() })),
+        }),
+      }),
+    };
+  }
+
   it('does not re-parse a document whose text layer is healthy on every page', async () => {
     const record = makeRecord({
       text: '[Page 1]\nThis page has plenty of real, readable text content.\n\n'
@@ -403,6 +441,60 @@ describe('documentFileForReview', () => {
     const doc = await documentFileForReview(record, null);
     expect(doc.parseError).toBe(BLOB_UNAVAILABLE_MESSAGE);
     expect(doc.pageImages).toBeUndefined();
+  });
+
+  it('evictPageImages removes a cached entry, so the next review regenerates instead of reusing it', async () => {
+    const record = makeRecord({ id: 'doc-evict', text: '[Page 1]\nx\n\n' });
+    const restoreCanvas = mockScanCanvas();
+    const pdfjs = await import('pdfjs-dist');
+    vi.mocked(pdfjs.getDocument).mockReturnValueOnce(
+      scanPdfDocument() as unknown as ReturnType<typeof pdfjs.getDocument>,
+    );
+
+    const first = await documentFileForReview(record, makeBlob());
+    expect(first.pageImages?.length).toBe(1);
+    expect(pdfjs.getDocument).toHaveBeenCalledTimes(1);
+
+    evictPageImages('doc-evict');
+
+    vi.mocked(pdfjs.getDocument).mockReturnValueOnce(
+      scanPdfDocument() as unknown as ReturnType<typeof pdfjs.getDocument>,
+    );
+    const second = await documentFileForReview(record, makeBlob());
+    expect(pdfjs.getDocument).toHaveBeenCalledTimes(2); // re-rendered, not served from a stale cache entry
+    expect(second.pageImages?.length).toBe(1);
+
+    restoreCanvas();
+  });
+
+  it('bounds the session cache to PAGE_IMAGE_CACHE_MAX_DOCUMENTS documents, evicting least-recently-used', async () => {
+    const restoreCanvas = mockScanCanvas();
+    const pdfjs = await import('pdfjs-dist');
+    vi.mocked(pdfjs.getDocument).mockImplementation(
+      () => scanPdfDocument() as unknown as ReturnType<typeof pdfjs.getDocument>,
+    );
+
+    // Fill the cache past its cap with one more document than it holds.
+    const overflow = PAGE_IMAGE_CACHE_MAX_DOCUMENTS + 1;
+    for (let i = 0; i < overflow; i++) {
+      const record = makeRecord({ id: `doc-bound-${i}`, text: '[Page 1]\nx\n\n' });
+      await documentFileForReview(record, makeBlob());
+    }
+    const callsAfterFill = vi.mocked(pdfjs.getDocument).mock.calls.length;
+    expect(callsAfterFill).toBe(overflow);
+
+    // The first document inserted was evicted to make room for the last —
+    // reviewing it again must re-render, not hit a stale cache entry.
+    const evicted = makeRecord({ id: 'doc-bound-0', text: '[Page 1]\nx\n\n' });
+    await documentFileForReview(evicted, makeBlob());
+    expect(vi.mocked(pdfjs.getDocument).mock.calls.length).toBe(callsAfterFill + 1);
+
+    // The most recently inserted document is still cached (no re-render).
+    const recent = makeRecord({ id: `doc-bound-${overflow - 1}`, text: '[Page 1]\nx\n\n' });
+    await documentFileForReview(recent, makeBlob());
+    expect(vi.mocked(pdfjs.getDocument).mock.calls.length).toBe(callsAfterFill + 1);
+
+    restoreCanvas();
   });
 });
 

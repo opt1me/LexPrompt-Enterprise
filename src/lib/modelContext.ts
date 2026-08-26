@@ -1,5 +1,6 @@
 import type { DocumentFile } from '../types';
 import { SCAN_TEXT_THRESHOLD } from './documents';
+import { pageSegments } from './pageSegments';
 
 const PAGE_MARKER = /\[Page \d+\]/g;
 
@@ -13,18 +14,6 @@ const PAGE_MARKER = /\[Page \d+\]/g;
  */
 export function extractableText(doc: DocumentFile): string {
   return doc.text.replace(PAGE_MARKER, '').trim();
-}
-
-/**
- * Splits a PDF's page-marked text back into the per-page segments
- * `parsePdf` (lib/documents.ts) concatenated — each written as
- * `[Page N]\n<pageText>\n\n`. A document with no such markers (docx, txt,
- * or anything parsePdf never touched) is treated as a single "page" so the
- * threshold check below still applies to it.
- */
-function pageSegments(text: string): string[] {
-  if (!/\[Page \d+\]\n/.test(text)) return [text];
-  return text.split(/\[Page \d+\]\n/g).slice(1);
 }
 
 /**
