@@ -57,11 +57,18 @@ async function withRetry<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
   let lastError: any;
   for (let i = 0; i < retries; i++) {
     try {
+      if (process.env.DEBUG_AI === 'true') {
+        process.stdout.write(`   [withRetry] Attempt ${i + 1}...\n`);
+      }
       return await fn();
     } catch (e) {
       lastError = e;
-      console.warn(`AI Attempt ${i + 1} failed:`, e);
-      if (i < retries - 1) await new Promise(r => setTimeout(r, getRetryDelay(i)));
+      process.stdout.write(`   ⚠️ [withRetry] Attempt ${i + 1} failed: ${e.message}\n`);
+      if (i < retries - 1) {
+        const delay = getRetryDelay(i);
+        process.stdout.write(`   [withRetry] Retrying in ${delay}ms...\n`);
+        await new Promise(r => setTimeout(r, delay));
+      }
     }
   }
   throw lastError;
@@ -77,62 +84,161 @@ async function fileToBase64(file: File): Promise<{ mime: string, data: string }>
   };
 }
 
+// --- Model Selection Logic ---
+
+type AIUsageTask = 'Reasoning' | 'Extraction' | 'Drafting' | 'Chat';
+
+const getOptimalModelId = (task: AIUsageTask): string | undefined => {
+  const providerId = settings.activeProviderId;
+
+  const modelMap: Record<string, Record<AIUsageTask, string>> = {
+    gemini: {
+      Reasoning: 'gemini-3.0-pro',
+      Extraction: 'gemini-3.0-flash',
+      Drafting: 'gemini-3.0-flash',
+      Chat: 'gemini-3.0-pro'
+    },
+    openai: {
+      Reasoning: 'gpt-5-mini', // Mini is significantly faster for structured architectural tasks
+      Extraction: 'gpt-5-mini', // Fast and accurate for legal data
+      Drafting: 'gpt-5-mini',
+      Chat: 'gpt-5'
+    },
+    claude: {
+      Reasoning: 'claude-opus-4-6',
+      Extraction: 'claude-sonnet-4-5', // Better than Haiku for structured extraction
+      Drafting: 'claude-haiku-4-5',
+      Chat: 'claude-sonnet-4-5'
+    }
+  };
+
+  return modelMap[providerId]?.[task];
+};
+
 // --- Business Logic Functions ---
 
 export const generateTemplate = async (
   contractType: string,
   depth: 'Light-Touch' | 'Standard' | 'Detailed',
   verbosity: 'Concise' | 'Standard' | 'Lengthy',
-  context?: string
+  context?: string,
+  onStatusUpdate?: (status: string) => void
 ): Promise<Partial<Template>> => {
 
-  const systemPrompt = "You are an expert legal contract architect.";
+  const provider = getProvider();
 
-  const prompt = `
-    Create a contract review template for a "${contractType}".
-    Context: ${context || 'None'}
-    Depth: ${depth}. Verbosity: ${verbosity}.
+  // Phase 1: Intelligent Planning
+  const plannerSystemPrompt = `You are an expert legal contract architect. Your task is to plan a contract review template.
+    You must dynamically decide the optimal number of clauses based on the contract type and depth:
+    - Light-Touch: ~8-12 high-level commercial risks.
+    - Standard: ~15-22 balanced legal and commercial points.
+    - Detailed: ~25-35 deep-dive technical nuances (only where truly relevant).
     
-    Return a JSON object with: systemPrompt, formatPrompt, riskTolerance, and clauses array.
-    Each clause needs: title, prompt, riskCriteria.
+    Do not use a hard limit; use your legal judgment to ensure the template is comprehensive but efficient for the "${contractType}".`;
+
+  const plannerPrompt = `
+    Create a plan for a "${depth}" contract review template for a "${contractType}".
+    Context: ${context || 'None'}
+    Verbosity: ${verbosity}.
+    
+    Return a JSON object with: 
+    1. systemPrompt: General instructions for the AI reviewer.
+    2. formatPrompt: Technical formatting instructions.
+    3. riskTolerance: A description of what constitutes high/medium risk for this contract.
+    4. clausePlans: Array of { title, instructionSummary, riskCriteriaSummary } for each relevant clause.
   `;
 
-  // We define the schema for providers that support structured output
-  const jsonSchema = {
+  const plannerSchema = {
     type: "object",
     properties: {
       systemPrompt: { type: "string" },
       formatPrompt: { type: "string" },
       riskTolerance: { type: "string" },
-      clauses: {
+      clausePlans: {
         type: "array",
         items: {
           type: "object",
           properties: {
             title: { type: "string" },
-            prompt: { type: "string" },
-            riskCriteria: { type: "string" }
+            instructionSummary: { type: "string" },
+            riskCriteriaSummary: { type: "string" }
           },
-          required: ["title", "prompt", "riskCriteria"],
+          required: ["title", "instructionSummary", "riskCriteriaSummary"],
           additionalProperties: false
         }
       }
     },
-    required: ["systemPrompt", "formatPrompt", "riskTolerance", "clauses"],
+    required: ["systemPrompt", "formatPrompt", "riskTolerance", "clausePlans"],
     additionalProperties: false
   };
 
   try {
-    const provider = getProvider();
-    const result = await withRetry(() => provider.generate(prompt, {
-      systemPrompt,
-      jsonSchema,
-      temperature: 0.7
+    onStatusUpdate?.(`Architecting ${depth} template for ${contractType}...`);
+    const planResult = await withRetry(() => provider.generate(plannerPrompt, {
+      systemPrompt: plannerSystemPrompt,
+      jsonSchema: plannerSchema,
+      temperature: 0.7,
+      modelId: getOptimalModelId('Reasoning')
     }));
-    return JSON.parse(result);
-  } catch (error) {
+    const plan = JSON.parse(planResult);
+
+    // Phase 2: Simultaneous Parallel Generation
+    onStatusUpdate?.(`Template planned with ${plan.clausePlans.length} clauses. Generating prompts simultaneously...`);
+
+    const fastModelId = getOptimalModelId('Drafting');
+
+    // Process ALL clauses simultaneously using Promise.all
+    // We can use a simple limiter if needed, but modern APIs handle 20-30 concurrent fine.
+    const clauses = await Promise.all(plan.clausePlans.map(async (cp: any, index: number) => {
+      const generationPrompt = `
+        Generate a comprehensive legal prompt for the clause: "${cp.title}".
+        Context: ${cp.instructionSummary}
+        Risk Criteria: ${cp.riskCriteriaSummary}
+        Verbosity Level: ${verbosity}
+        
+        Return JSON: { prompt: "string", riskCriteria: "string" }
+      `;
+
+      const clauseSchema = {
+        type: "object",
+        properties: {
+          prompt: { type: "string" },
+          riskCriteria: { type: "string" }
+        },
+        required: ["prompt", "riskCriteria"],
+        additionalProperties: false
+      };
+
+      const result = await withRetry(() => provider.generate(generationPrompt, {
+        systemPrompt: "You are a legal prompt engineer.",
+        jsonSchema: clauseSchema,
+        temperature: 0.5,
+        modelId: fastModelId
+      }));
+
+      const generated = JSON.parse(result);
+      return {
+        title: cp.title,
+        prompt: generated.prompt,
+        riskCriteria: generated.riskCriteria
+      };
+    }));
+
+    onStatusUpdate?.("Finalizing template...");
+
+    return {
+      systemPrompt: plan.systemPrompt,
+      formatPrompt: plan.formatPrompt,
+      riskTolerance: plan.riskTolerance,
+      clauses
+    };
+
+  } catch (error: any) {
     console.error("Template Gen Error:", error);
-    throw error;
+    if (error.message.includes("API Key")) {
+      throw new Error("Missing API Key. Please configure it in Settings.");
+    }
+    throw new Error("Failed to generate template. Check your API key and try again.");
   }
 };
 
@@ -189,28 +295,44 @@ export const analyzeContract = async (
     
     DOCUMENT TEXT:
     ${fullText.substring(0, 500000)} 
+
+    INSTRUCTION: If the "DOCUMENT TEXT" above is empty or incomplete, it is likely a scanned document. 
+    In this case, use the attached images or PDF file providing the visual content for your analysis.
   `;
 
-  // Multimodal prep
-  const useMultimodal = documents.some(d => d.type === 'pdf' || d.type === 'docx');
+  // Multimodal prep & OCR Support
+  const provider = getProvider();
   let multimodalImages: { mime: string, data: string }[] = [];
+  let multimodalFiles: { mime: string, data: string, name: string }[] = [];
 
-  if (useMultimodal) {
-    // We need to convert fileObjs to base64
-    // Note: In real app, we might need to handle large files carefully.
-    // For now we assume the provider can handle the base64 chunks.
-    // Only generic provider support required here.
-    const images = await Promise.all(documents.map(d => fileToBase64(d.fileObj)));
-    multimodalImages = images;
+  for (const d of documents) {
+    if (d.images && d.images.length > 0) {
+      // Scanned PDF - use the pre-rendered images for native AI OCR
+      multimodalImages.push(...d.images);
+    } else if (d.type === 'pdf') {
+      const fileData = await fileToBase64(d.fileObj);
+      if (provider.id === 'gemini' || provider.id === 'openai') {
+        // Both Gemini and modern OpenAI (GPT-4o) handle PDFs directly
+        multimodalFiles.push({ mime: 'application/pdf', data: fileData.data, name: d.name });
+      }
+    } else if (d.type === 'docx') {
+      if (provider.id === 'gemini') {
+        const fileData = await fileToBase64(d.fileObj);
+        multimodalFiles.push({ mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', data: fileData.data, name: d.name });
+      }
+    }
   }
 
+  const useMultimodal = multimodalImages.length > 0 || multimodalFiles.length > 0;
+
   try {
-    const provider = getProvider();
     const result = await withRetry(() => provider.generate(prompt, {
       systemPrompt,
       jsonSchema,
       temperature: 0.1,
-      multimodalImages: useMultimodal ? multimodalImages : undefined
+      modelId: getOptimalModelId('Reasoning'),
+      multimodalImages: multimodalImages.length > 0 ? multimodalImages : undefined,
+      multimodalFiles: multimodalFiles.length > 0 ? multimodalFiles : undefined
     }));
     return JSON.parse(result);
   } catch (error) {
@@ -219,15 +341,24 @@ export const analyzeContract = async (
   }
 };
 
-export const chatWithDoc = async (history: string, query: string, context: string): Promise<string> => {
-  const systemPrompt = "You are a helpful legal assistant. OUTPUT FORMATTING RULES: 1) Use ## for main sections. 2) Use ### for subsections. 3) Use - for all lists (no numbered lists unless sequential). 4) Bold **key terms**. 5) Keep paragraphs short.";
+export const chatWithDoc = async (
+  history: string,
+  query: string,
+  context: string,
+  onStream?: (chunk: string) => void
+): Promise<string> => {
+  const systemPrompt = "You are a helpful legal assistant. OUTPUT FORMATTING RULES: 1) Use ## for main sections. 2) Use ### for subsections. 3) Use - for all lists (no numbered lists unless sequential). 4) Bold **key terms**. 5) Keep paragraphs short. ALWAYS provide detailed reasoning based on CONTEXT.";
   const prompt = `
       CONTEXT: ${context.substring(0, 50000)}
       HISTORY: ${history}
       QUERY: ${query}
     `;
   const provider = getProvider();
-  return await withRetry(() => provider.generate(prompt, { systemPrompt }));
+  return await withRetry(() => provider.generate(prompt, {
+    systemPrompt,
+    modelId: getOptimalModelId('Chat'),
+    onStream
+  }));
 };
 
 export const draftEmail = async (analysisJson: any): Promise<string> => {
@@ -238,7 +369,10 @@ export const draftEmail = async (analysisJson: any): Promise<string> => {
       Highlight high-risk items first.
     `;
   const provider = getProvider();
-  return await withRetry(() => provider.generate(prompt, { systemPrompt }));
+  return await withRetry(() => provider.generate(prompt, {
+    systemPrompt,
+    modelId: getOptimalModelId('Drafting')
+  }));
 };
 
 export const suggestRevision = async (clause: string, original: string, issue: string): Promise<string> => {
@@ -248,7 +382,10 @@ export const suggestRevision = async (clause: string, original: string, issue: s
       Rewrite this clause to mitigate the risk while maintaining commercial viability. Return ONLY the text.
     `;
   const provider = getProvider();
-  return await withRetry(() => provider.generate(prompt, { systemPrompt }));
+  return await withRetry(() => provider.generate(prompt, {
+    systemPrompt,
+    modelId: getOptimalModelId('Reasoning')
+  }));
 };
 
 export const extractTabularData = async (docContent: string, query: string, riskCriteria?: string) => {
@@ -287,7 +424,12 @@ export const extractTabularData = async (docContent: string, query: string, risk
 
   try {
     const provider = getProvider();
-    const result = await withRetry(() => provider.generate(prompt, { systemPrompt, jsonSchema, temperature: 0.1 }));
+    const result = await withRetry(() => provider.generate(prompt, {
+      systemPrompt,
+      jsonSchema,
+      temperature: 0.1,
+      modelId: getOptimalModelId('Extraction')
+    }));
     const parsed = JSON.parse(result);
     // Map to TabularCell format (value = summary)
     return {
@@ -318,5 +460,8 @@ export const analyzeTable = async (data: TabularData, columns: TabularColumn[], 
     `;
 
   const provider = getProvider();
-  return await withRetry(() => provider.generate(prompt, { systemPrompt }));
+  return await withRetry(() => provider.generate(prompt, {
+    systemPrompt,
+    modelId: getOptimalModelId('Reasoning')
+  }));
 };

@@ -25,6 +25,8 @@ export interface Template {
   riskTolerance?: string;
   clauses: Clause[];
   scope?: 'private' | 'team';
+  createdByEmail?: string;
+  createdById?: string;
   createdAt?: any;
   updatedAt?: any;
 }
@@ -35,6 +37,7 @@ export interface DocumentFile {
   content: string; // Extracted text
   fileObj: File;
   type: 'pdf' | 'docx' | 'txt';
+  images?: { mime: string, data: string }[];
 }
 
 export interface AnalysisFinding {
@@ -87,3 +90,13 @@ export interface TabularCell {
 
 // Map: DocID -> ColumnID -> Cell
 export type TabularData = Record<string, Record<string, TabularCell>>;
+
+// Token/Credit Costs
+export const COSTS = {
+  TEMPLATE_GEN: 25,
+  ANALYSIS_PER_DOC: 15,
+  CHAT: 1,
+  REVISION: 5,
+  EMAIL: 2,
+  MODIFY_TEMPLATE: 10
+};

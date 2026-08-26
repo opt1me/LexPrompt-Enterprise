@@ -20,8 +20,9 @@ export class ClaudeProvider implements AIProvider {
 
     getModels(): AIModel[] {
         return [
+            { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'claude' },
             { id: 'claude-sonnet-4-5', name: 'Claude Sonnet 4.5', provider: 'claude' },
-            { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'claude' }
+            { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', provider: 'claude' }
         ];
     }
 
@@ -49,7 +50,7 @@ export class ClaudeProvider implements AIProvider {
         messages.push({ role: 'user', content });
 
         const msg = await this.client.messages.create({
-            model: "claude-opus-4-6",
+            model: options?.modelId || "claude-opus-4-6",
             max_tokens: 4096, // Increased thinking budget might need more?
             temperature: options?.temperature ?? 0.7,
             system: options?.systemPrompt,

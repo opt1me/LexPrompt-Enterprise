@@ -71,11 +71,17 @@ export const TabularReview: React.FC<TabularReviewProps> = ({ documents, initial
 
                 try {
                     const result = await extractTabularData(doc.content, col.query, col.riskCriteria);
+                    // Explicitly cast to satisfy TS union types
+                    const safeResult = result as any;
                     setData(prev => ({
                         ...prev,
                         [doc.id]: {
                             ...prev[doc.id],
-                            [col.id]: { ...result, status: 'done', isEdited: false }
+                            [col.id]: {
+                                ...safeResult,
+                                status: 'done',
+                                isEdited: false
+                            }
                         }
                     }));
                 } catch (e) {
@@ -112,11 +118,13 @@ export const TabularReview: React.FC<TabularReviewProps> = ({ documents, initial
 
         try {
             const result = await extractTabularData(doc.content, col.query);
+            // Explicitly cast to satisfy TS union types
+            const safeResult = result as any;
             setData(prev => ({
                 ...prev,
                 [docId]: {
                     ...prev[docId],
-                    [colId]: { ...result, status: 'done', isEdited: false }
+                    [colId]: { ...safeResult, status: 'done', isEdited: false }
                 }
             }));
         } catch (e) {

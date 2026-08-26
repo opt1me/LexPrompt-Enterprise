@@ -27,3 +27,6 @@ dist-ssr
 .env
 .env.local
 test_docs/
+
+# Firebase deploy cache
+.firebase/

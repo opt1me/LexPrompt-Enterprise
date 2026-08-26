@@ -1,5 +1,6 @@
 
 import OpenAI from "openai";
+import fs from 'fs';
 import { AIProvider, AIModel, GenerationOptions } from "../types";
 
 export class OpenAIProvider implements AIProvider {
@@ -21,11 +22,15 @@ export class OpenAIProvider implements AIProvider {
     getModels(): AIModel[] {
         return [
             { id: 'gpt-5.2', name: 'GPT-5.2 (Reasoning)', provider: 'openai' },
-            { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex', provider: 'openai' }
+            { id: 'gpt-5', name: 'GPT-5 Flagship', provider: 'openai' },
+            { id: 'gpt-5-mini', name: 'GPT-5 Mini', provider: 'openai' }
         ];
     }
 
     async generate(prompt: string, options?: GenerationOptions): Promise<string> {
+        if (process.env.DEBUG_AI === 'true') {
+            fs.writeSync(1, `\n--- OPENAI RESPONSES START --- [${new Date().toLocaleTimeString()}]\n`);
+        }
         if (!this.client) throw new Error("OpenAI API Key missing.");
 
         const messages: any[] = [];
@@ -52,24 +57,78 @@ export class OpenAIProvider implements AIProvider {
                 ];
             }
         }
-        messages.push({ role: 'user', content });
-
-        const completion = await this.client.chat.completions.create({
-            model: "gpt-5.2", // Default Flagship
-            messages: messages,
-            temperature: options?.temperature ?? 0.7,
-            response_format: options?.jsonSchema ? {
-                type: "json_schema",
-                json_schema: {
-                    name: "output_schema",
-                    schema: options.jsonSchema,
-                    strict: true
+        if (options?.multimodalFiles && options.multimodalFiles.length > 0) {
+            if (!Array.isArray(content)) {
+                content = [{ type: "text", text: prompt }];
+            }
+            content.push(...options.multimodalFiles.map(file => ({
+                type: "file_url",
+                file_url: {
+                    url: `data:${file.mime};base64,${file.data}`
                 }
-            } : undefined
+            })));
+        }
+
+        const modelId = options?.modelId || "gpt-5.2";
+
+        if (process.env.DEBUG_AI === 'true') {
+            fs.writeSync(1, `[${new Date().toLocaleTimeString()}] 🚀 AI SEND | Model: ${modelId}\n`);
+            fs.writeSync(1, `   [PROMPT] ${prompt.substring(0, 200)}...\n`);
+            if (modelId.includes('5.2')) {
+                fs.writeSync(1, `   [NOTE] This is a reasoning model. It may take 30-90s to "think" before responding.\n`);
+            }
+        }
+
+        const isReasoningModel = modelId.startsWith('gpt-5');
+        const isStreaming = !!options?.onStream && !options?.jsonSchema;
+
+        // Structured Output Config
+        const textFormat = options?.jsonSchema ? {
+            type: "json_schema",
+            name: "output_schema",
+            schema: options.jsonSchema,
+            strict: true
+        } : undefined;
+
+        if (isStreaming) {
+            const stream = await (this.client as any).responses.create({
+                model: modelId,
+                instructions: options?.systemPrompt || "You are a helpful assistant.",
+                input: content,
+                stream: true,
+                ...(!isReasoningModel ? { temperature: options?.temperature ?? 0.7 } : {}),
+            });
+
+            let fullText = "";
+            for await (const part of stream) {
+                // The Responses API stream format differs slightly from Chat Completions
+                const delta = part.delta?.text || "";
+                fullText += delta;
+                if (delta) options?.onStream?.(delta);
+            }
+
+            if (process.env.DEBUG_AI === 'true') {
+                fs.writeSync(1, `[${new Date().toLocaleTimeString()}] ✅ AI STREAM DONE | Len: ${fullText.length} chars\n\n`);
+            }
+            return fullText;
+        }
+
+        const response = await (this.client as any).responses.create({
+            model: modelId,
+            instructions: options?.systemPrompt || "You are a helpful assistant.",
+            input: content,
+            ...(!isReasoningModel ? { temperature: options?.temperature ?? 0.7 } : {}),
+            text: textFormat ? { format: textFormat } : undefined
         });
 
-        const text = completion.choices[0].message.content;
-        if (!text) throw new Error("Empty response from OpenAI");
+        const text = response.output_text;
+        if (!text) throw new Error("Empty response from OpenAI Responses API");
+
+        if (process.env.DEBUG_AI === 'true') {
+            fs.writeSync(1, `[${new Date().toLocaleTimeString()}] ✅ AI RECV | Len: ${text.length} chars\n`);
+            fs.writeSync(1, `   [PREVIEW] ${text.substring(0, 200)}...\n\n`);
+        }
+
         return text;
     }
 }

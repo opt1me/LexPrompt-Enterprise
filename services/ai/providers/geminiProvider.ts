@@ -17,15 +17,16 @@ export class GeminiProvider implements AIProvider {
 
     getModels(): AIModel[] {
         return [
+            { id: 'gemini-3.0-pro', name: 'Gemini 3 Pro', provider: 'gemini' },
             { id: 'gemini-3.0-flash', name: 'Gemini 3 Flash', provider: 'gemini' },
-            { id: 'gemini-3.0-pro', name: 'Gemini 3 Pro', provider: 'gemini' }
+            { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', provider: 'gemini' }
         ];
     }
 
     async generate(prompt: string, options?: GenerationOptions): Promise<string> {
         if (!this.client) throw new Error("Gemini API Key missing.");
 
-        const modelName = "gemini-3.0-pro"; // Default to the powerful one
+        const modelName = options?.modelId || "gemini-3.0-pro"; // Optimized Default
         // Ideally options should include modelId, but for now we hardcode or add to options.
         // Let's stick to a safe default or allow overriding if I update interface later.
 
@@ -79,7 +80,34 @@ export class GeminiProvider implements AIProvider {
             });
         }
 
+        if (options?.multimodalFiles) {
+            options.multimodalFiles.forEach(file => {
+                contents.push({
+                    inlineData: {
+                        mimeType: file.mime,
+                        data: file.data
+                    }
+                });
+            });
+        }
+
         try {
+            if (options?.onStream) {
+                const streamResult = await model.generateContentStream({
+                    model: modelName,
+                    contents,
+                    config
+                });
+
+                let fullText = "";
+                for await (const chunk of streamResult) {
+                    const chunkText = chunk.text();
+                    fullText += chunkText;
+                    options.onStream(chunkText);
+                }
+                return fullText;
+            }
+
             const result = await model.generateContent({
                 model: modelName,
                 contents,

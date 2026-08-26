@@ -112,10 +112,52 @@ Define your own legal playbooks.
    npm run build
    ```
 
+## 🌍 Deployment (Firebase Hosting)
+
+Since this project uses Firebase Authentication and Firestore, **Firebase Hosting** is the easiest way to deploy. We use `npx firebase-tools@13` to run commands without needing a global installation (compatible with Node.js 18).
+
+1. **Login to Firebase**:
+
+    ```bash
+    npx firebase-tools@13 login
+    ```
+
+2. **Initialize Hosting**:
+
+    ```bash
+    npx firebase-tools@13 init hosting
+    ```
+
+    - Select **Use an existing project** -> `lexprompt-976ad` (or your project ID).
+    - **Public directory**: Type `dist`.
+    - **Configure as a single-page app**: Type `Yes`.
+    - **Overwrite index.html**: Type `No`.
+
+3. **Deploy**:
+
+    ```bash
+    npm run build
+    npx firebase-tools@13 deploy
+    ```
+
 ## 🔒 Security Note
 
 This application processes sensitive legal documents. API keys are stored securely in your browser's `localStorage` and are never sent to our servers. Document processing happens directly between your browser and the chosen AI provider's API.
 
----
+## 👥 User Management & Access Control
+
+Once deployed, user management is handled entirely through the **Firebase Console**.
+
+1. **View Users**: Go to **Authentication** > **Users** to see signed-up users.
+2. **Disable Access**: Click the "three dots" icon next to a user and select **Disable Account** or **Delete Account** to prevent them from logging in.
+3. **Reset Passwords**: You can trigger password reset emails directly from the console.
+
+### 🔒 Restricting Sign-Ups (Invite Only)
+
+To make the app "Invite Only":
+
+1. Go to `components/Login.tsx`.
+2. Set `const allowSignups = false;` (You can add this logic to hide the "Create Account" button).
+3. Manually create users in the Firebase Console (**Add User** button), and send them their credentials.
 
 <p align="center">Built with ❤️ by the LexPrompt Team</p>

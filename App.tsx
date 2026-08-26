@@ -1,24 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Template, DocumentFile, AnalysisResult } from './types';
+import { Template, DocumentFile, AnalysisResult, COSTS } from './types';
 import { generateTemplate, analyzeContract, draftEmail, suggestRevision, chatWithDoc, configureAI } from './services/aiService';
 import { parseFileContent } from './services/docService';
 import { ResultsView } from './components/ResultsView';
 import { CreateTemplateModal, MegaPromptModal, ModifyTemplateModal, RevisionModal, ConfirmationModal } from './components/Modals';
+import { Login } from './components/Login';
 import { TemplateEditor } from './components/TemplateEditor';
 import { TabularReview } from './components/TabularReview';
 import { FileText, Plus, Upload, Play, Loader, LogOut, Layout, Layers, Users, Trash2, Check, AlertCircle, Table, Coins, Zap, Settings } from 'lucide-react';
 
-import { User, signInWithEmailAndPassword, signOut, onAuthStateChanged, subscribeToTemplates, addTemplate, updateTemplate, deleteTemplate, serverTimestamp } from './services/dbService';
+import { User, signOut, onAuthStateChanged, subscribeToTemplates, addTemplate, updateTemplate, deleteTemplate, serverTimestamp } from './services/dbService';
 
-// Token/Credit Costs
-export const COSTS = {
-    TEMPLATE_GEN: 25,
-    ANALYSIS_PER_DOC: 15,
-    CHAT: 1,
-    REVISION: 5,
-    EMAIL: 2,
-    MODIFY_TEMPLATE: 10
-};
+
 
 export default function App() {
     const [user, setUser] = useState<User | null>(null);
@@ -27,7 +20,6 @@ export default function App() {
 
     // Data State
     const [templates, setTemplates] = useState<Template[]>([]);
-    const [teamTemplates, setTeamTemplates] = useState<Template[]>([]);
     const [activeTemplate, setActiveTemplate] = useState<Template | null>(null);
     const [documents, setDocuments] = useState<DocumentFile[]>([]);
     const [results, setResults] = useState<AnalysisResult[]>([]);
@@ -36,8 +28,7 @@ export default function App() {
 
     // UI State
     const [loading, setLoading] = useState(false);
-    const [email, setEmail] = useState("");
-    const [password, setPassword] = useState("");
+    const [generationStatus, setGenerationStatus] = useState('');
     const [notification, setNotification] = useState<{ msg: string, type: 'success' | 'error' } | null>(null);
 
     // Modals
@@ -74,15 +65,11 @@ export default function App() {
     useEffect(() => {
         if (!user) return;
 
-        const unsub1 = subscribeToTemplates(user.uid, 'private', (data) => {
+        const unsub = subscribeToTemplates((data) => {
             setTemplates(data);
         });
 
-        const unsub2 = subscribeToTemplates(user.uid, 'team', (data) => {
-            setTeamTemplates(data);
-        });
-
-        return () => { unsub1(); unsub2(); };
+        return () => unsub();
     }, [user]);
 
     const showNotify = (msg: string, type: 'success' | 'error' = 'success') => {
@@ -103,13 +90,6 @@ export default function App() {
     };
 
     // Actions
-    const handleLogin = async (e: React.FormEvent) => {
-        e.preventDefault();
-        setLoading(true);
-        try { await signInWithEmailAndPassword(email, password); }
-        catch (err) { alert("Login failed."); }
-        setLoading(false);
-    };
 
     const handleCreateTemplate = async (params: any) => {
         if (params.type === 'ai' && !checkCredits(COSTS.TEMPLATE_GEN)) return;
@@ -130,8 +110,14 @@ export default function App() {
                     createdAt: serverTimestamp()
                 };
             } else {
-                // @ts-ignore
-                const generated = await generateTemplate(params.contractType, params.templateDetail, params.outputDetail, params.context);
+                setGenerationStatus("Connecting to AI architect...");
+                const generated = await generateTemplate(
+                    params.contractType,
+                    params.templateDetail,
+                    params.outputDetail,
+                    params.context,
+                    (s) => setGenerationStatus(s)
+                );
                 deductCredits(COSTS.TEMPLATE_GEN);
                 newT = {
                     name: params.contractType,
@@ -146,12 +132,16 @@ export default function App() {
                 };
             }
 
-            const ref = await addTemplate(user!.uid, newT);
+            const ref = await addTemplate(user!.uid, user!.email || "Unknown", newT);
             setActiveTemplate({ ...newT, id: ref.id });
             setCreateModalOpen(false);
+            setGenerationStatus("");
             setView('editor');
             showNotify("Template created successfully");
-        } catch (e) { showNotify("Template creation failed", 'error'); }
+        } catch (e: any) {
+            setGenerationStatus("");
+            showNotify(e.message || "Template creation failed", 'error');
+        }
         setLoading(false);
     };
 
@@ -189,7 +179,7 @@ export default function App() {
                 const data = JSON.parse(event.target?.result as string);
                 if (!data.clauses) throw new Error("Invalid format");
                 const newT = { ...data, name: data.name + " (Import)", id: undefined, createdAt: serverTimestamp(), scope: 'private' };
-                await addTemplate(user!.uid, newT);
+                await addTemplate(user!.uid, user!.email || "Unknown", newT);
                 showNotify("Imported successfully");
             } catch (e) { showNotify("Import failed", 'error'); }
             finally { setLoading(false); }
@@ -263,18 +253,7 @@ export default function App() {
         }
     };
 
-    if (!user) return (
-        <div className="min-h-screen flex items-center justify-center bg-black">
-            <div className="w-full max-w-md p-8 bg-[#111] rounded-2xl border border-white/10">
-                <h1 className="text-2xl font-bold text-white mb-6 flex items-center gap-2"><Layout className="text-violet-500" /> LexPrompt Ent.</h1>
-                <form onSubmit={handleLogin} className="space-y-4">
-                    <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="Email (any)" className="w-full p-3 bg-black/50 border border-white/10 rounded text-white" />
-                    <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Password (any)" className="w-full p-3 bg-black/50 border border-white/10 rounded text-white" />
-                    <button disabled={loading} className="w-full p-3 bg-violet-600 rounded text-white font-bold">{loading ? <Loader className="animate-spin mx-auto" /> : "Sign In"}</button>
-                </form>
-            </div>
-        </div>
-    );
+    if (!user) return <Login />;
 
     return (
         <div className="min-h-screen flex flex-col bg-[#09090b]">
@@ -339,7 +318,7 @@ export default function App() {
 
                         <div className="space-y-10">
                             <section>
-                                <h3 className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-4">My Templates</h3>
+                                <h3 className="text-gray-500 text-xs font-bold uppercase tracking-wider mb-4">Template Library</h3>
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                                     {templates.map(t => (
                                         <div key={t.id} className="group relative bg-[#1a1a1a] border border-white/10 rounded-xl hover:border-violet-500/50 transition-colors shadow-lg flex flex-col">
@@ -349,7 +328,10 @@ export default function App() {
                                                 onClick={() => { setActiveTemplate(t); setView('editor'); }}
                                             >
                                                 <div className="flex justify-between items-start mb-2">
-                                                    <h3 className="font-bold text-white text-lg truncate pr-8">{t.name}</h3>
+                                                    <div className="flex flex-col">
+                                                        <h3 className="font-bold text-white text-lg truncate pr-8">{t.name}</h3>
+                                                        <span className="text-[10px] text-violet-400 font-bold uppercase tracking-widest">{t.createdByEmail || 'System'}</span>
+                                                    </div>
                                                 </div>
                                                 <p className="text-xs text-gray-500 mb-4 line-clamp-2 min-h-[32px]">{t.systemPrompt}</p>
 
@@ -364,33 +346,19 @@ export default function App() {
                                                 </div>
                                             </div>
 
-                                            {/* Delete Button - Positioned absolutely but outside the main click flow logic */}
-                                            <button
-                                                onClick={(e) => handleDeleteClick(t.id!, e)}
-                                                className="absolute top-3 right-3 p-2 bg-[#222] border border-white/10 text-gray-400 hover:text-red-400 hover:bg-red-900/20 hover:border-red-500/50 rounded-lg transition-all shadow-md z-30"
-                                                title="Delete Template"
-                                            >
-                                                <Trash2 className="w-4 h-4" />
-                                            </button>
+                                            {/* Delete Button */}
+                                            {user && (user.uid === t.createdById || user.email === 'andy@example.com') && (
+                                                <button
+                                                    onClick={(e) => handleDeleteClick(t.id!, e)}
+                                                    className="absolute top-3 right-3 p-2 bg-[#222] border border-white/10 text-gray-400 hover:text-red-400 hover:bg-red-900/20 hover:border-red-500/50 rounded-lg transition-all shadow-md z-30"
+                                                    title="Delete Template"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            )}
                                         </div>
                                     ))}
-                                    {templates.length === 0 && <div className="col-span-3 text-gray-500 border border-dashed border-white/10 p-8 rounded-xl text-center">You haven't created any templates yet.</div>}
-                                </div>
-                            </section>
-
-                            <section>
-                                <h3 className="text-violet-400 text-xs font-bold uppercase tracking-wider mb-4 flex items-center gap-2"><Users className="w-4 h-4" /> Team Shared</h3>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                    {teamTemplates.map(t => (
-                                        <div key={t.id} className="bg-[#1a1a1a] border border-violet-500/20 p-5 rounded-xl hover:border-violet-500 transition-colors relative shadow-lg">
-                                            <h3 className="font-bold text-white mb-2 text-lg truncate">{t.name}</h3>
-                                            <p className="text-xs text-gray-500 mb-4 line-clamp-2 min-h-[32px]">{t.systemPrompt}</p>
-                                            <div className="flex gap-2">
-                                                <button onClick={() => { setActiveTemplate(t); setView('editor'); }} className="flex-1 py-2 bg-white/5 rounded text-xs text-gray-300 hover:bg-white/10 font-medium">View</button>
-                                                <button onClick={() => { setActiveTemplate(t); setView('processor'); }} className="flex-1 py-2 bg-violet-600 rounded text-white hover:bg-violet-500 font-bold flex items-center justify-center gap-2"><Play className="w-3 h-3" /> Run</button>
-                                            </div>
-                                        </div>
-                                    ))}
+                                    {templates.length === 0 && <div className="col-span-3 text-gray-500 border border-dashed border-white/10 p-8 rounded-xl text-center">No templates available. Create one to get started!</div>}
                                 </div>
                             </section>
                         </div>
@@ -477,7 +445,7 @@ export default function App() {
                             alert(emailBody);
                         }}
                         onSuggestRevision={handleSuggestRevision}
-                        onChat={(q) => chatWithDoc("", q, documents.map(d => d.content).join("\n"))}
+                        onChat={(q, os) => chatWithDoc("", q, documents.map(d => d.content).join("\n"), os)}
                     />
                 )}
 
@@ -560,7 +528,13 @@ export default function App() {
             </main>
 
             {/* Global Modals */}
-            <CreateTemplateModal isOpen={createModalOpen} onClose={() => setCreateModalOpen(false)} onCreate={handleCreateTemplate} loading={loading} />
+            <CreateTemplateModal
+                isOpen={createModalOpen}
+                onClose={() => setCreateModalOpen(false)}
+                onCreate={handleCreateTemplate}
+                loading={loading}
+                status={generationStatus}
+            />
             <MegaPromptModal isOpen={megaPromptOpen} onClose={() => setMegaPromptOpen(false)} template={activeTemplate || undefined} />
             <ModifyTemplateModal isOpen={modifyModalOpen} onClose={() => setModifyModalOpen(false)} onModify={handleModifyTemplate} loading={loading} />
             <RevisionModal isOpen={!!revisionData} onClose={() => setRevisionData(null)} data={revisionData} />
