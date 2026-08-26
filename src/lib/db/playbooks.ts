@@ -1,0 +1,142 @@
+import { getDb } from './open';
+import { STORES } from './schema';
+import { TEMPLATE_SCHEMA_VERSION, type Clause, type Playbook } from '../../types';
+
+function uid(): string {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+/** A playbook record as it actually sits in IndexedDB: the public
+ *  `Playbook` shape plus a write sequence number. `_seq` exists to break
+ *  ties when two saves land in the same millisecond (`Date.now()`
+ *  resolution) — v1's localStorage array got the same determinism for free
+ *  from array position; IndexedDB's `getAll()` has no equivalent notion of
+ *  insertion order, so an explicit, persisted counter plays that role
+ *  instead. `_seq` never appears on a `Playbook` returned to callers. */
+interface StoredPlaybook extends Playbook {
+  _seq: number;
+}
+
+function seqOf(record: Partial<StoredPlaybook>): number {
+  return typeof record._seq === 'number' ? record._seq : 0;
+}
+
+/** Brings a playbook of any earlier (or malformed) shape up to the current
+ *  one. Anything missing gets a sane default rather than causing the
+ *  playbook to be dropped — mirrors v1's storage.ts `migrate()`, which took
+ *  three fix rounds to get right: a record that cannot be fully read is
+ *  repaired, never discarded. */
+function migrate(input: unknown): Playbook {
+  const t = (input ?? {}) as Partial<Playbook> & Record<string, unknown>;
+  const now = Date.now();
+  return {
+    id: typeof t.id === 'string' && t.id ? t.id : uid(),
+    name: typeof t.name === 'string' ? t.name : 'Untitled playbook',
+    contractType: typeof t.contractType === 'string' ? t.contractType : 'Custom',
+    mode: t.mode === 'risk' ? 'risk' : 'extraction',
+    systemPrompt: typeof t.systemPrompt === 'string' ? t.systemPrompt : '',
+    formatPrompt: typeof t.formatPrompt === 'string' ? t.formatPrompt : '',
+    riskTolerance: typeof t.riskTolerance === 'string' ? t.riskTolerance : undefined,
+    clauses: Array.isArray(t.clauses) ? t.clauses.map(migrateClause) : [],
+    createdAt: typeof t.createdAt === 'number' ? t.createdAt : now,
+    updatedAt: typeof t.updatedAt === 'number' ? t.updatedAt : now,
+    schemaVersion: TEMPLATE_SCHEMA_VERSION,
+  };
+}
+
+function migrateClause(input: unknown): Clause {
+  const c = (input ?? {}) as Partial<Clause>;
+  return {
+    id: typeof c.id === 'string' && c.id ? c.id : uid(),
+    title: typeof c.title === 'string' ? c.title : 'Untitled clause',
+    prompt: typeof c.prompt === 'string' ? c.prompt : '',
+    riskCriteria: typeof c.riskCriteria === 'string' ? c.riskCriteria : undefined,
+  };
+}
+
+const STORAGE_FULL_MESSAGE =
+  'Could not save — your browser storage is full. Try deleting an old playbook, or exporting and removing some data.';
+
+export function newPlaybook(name: string): Playbook {
+  const now = Date.now();
+  return {
+    id: uid(),
+    name,
+    contractType: 'Custom',
+    mode: 'extraction',
+    systemPrompt: 'You are an expert legal contract reviewer.',
+    formatPrompt: 'Answer strictly from the document text. Quote verbatim.',
+    clauses: [],
+    createdAt: now,
+    updatedAt: now,
+    schemaVersion: TEMPLATE_SCHEMA_VERSION,
+  };
+}
+
+export async function listPlaybooks(): Promise<Playbook[]> {
+  const db = await getDb();
+  // getAll() never throws on a per-record shape problem — only migrate()
+  // below has to deal with that, on read, without ever writing back (so a
+  // record we can't fully make sense of is repaired for display but left
+  // exactly as found in the store).
+  const raw = (await db.getAll(STORES.playbooks)) as StoredPlaybook[];
+  const entries = raw.map(r => ({ playbook: migrate(r), seq: seqOf(r) }));
+  // Sort by updatedAt descending; tiebreak on write sequence descending so
+  // the record saved most recently wins a same-millisecond collision.
+  entries.sort((a, b) => {
+    const diff = b.playbook.updatedAt - a.playbook.updatedAt;
+    return diff !== 0 ? diff : b.seq - a.seq;
+  });
+  return entries.map(e => e.playbook);
+}
+
+export async function getPlaybook(id: string): Promise<Playbook | null> {
+  const db = await getDb();
+  const raw = await db.get(STORES.playbooks, id);
+  return raw ? migrate(raw) : null;
+}
+
+async function nextSeq(db: Awaited<ReturnType<typeof getDb>>): Promise<number> {
+  const existing = (await db.getAll(STORES.playbooks)) as StoredPlaybook[];
+  return existing.reduce((max, r) => Math.max(max, seqOf(r)), 0) + 1;
+}
+
+export async function savePlaybook(playbook: Playbook): Promise<Playbook> {
+  const db = await getDb();
+  const saved: Playbook = { ...playbook, updatedAt: Date.now(), schemaVersion: TEMPLATE_SCHEMA_VERSION };
+  try {
+    const record: StoredPlaybook = { ...saved, _seq: await nextSeq(db) };
+    await db.put(STORES.playbooks, record);
+  } catch {
+    throw new Error(STORAGE_FULL_MESSAGE);
+  }
+  return saved;
+}
+
+export async function deletePlaybook(id: string): Promise<void> {
+  const db = await getDb();
+  try {
+    await db.delete(STORES.playbooks, id);
+  } catch {
+    throw new Error(STORAGE_FULL_MESSAGE);
+  }
+}
+
+export function exportPlaybook(playbook: Playbook): Blob {
+  return new Blob([JSON.stringify(playbook, null, 2)], { type: 'application/json' });
+}
+
+export async function importPlaybook(json: string): Promise<Playbook> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error('That file is not valid JSON.');
+  }
+  if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { clauses?: unknown }).clauses)) {
+    throw new Error('That file is not a template — it has no clauses.');
+  }
+  const migrated = migrate(parsed);
+  // Fresh id so importing a playbook you already have does not overwrite it.
+  return savePlaybook({ ...migrated, id: uid() });
+}

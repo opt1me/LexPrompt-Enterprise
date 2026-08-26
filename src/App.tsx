@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileText, Settings as SettingsIcon, ClipboardList } from 'lucide-react';
 import type { Template, DocumentFile, ReviewRun, Settings } from './types';
-import { loadSettings, saveSettings, listTemplates, saveTemplate, deleteTemplate, newTemplate, exportTemplate, importTemplate } from './lib/storage';
+import { loadSettings, saveSettings } from './lib/storage';
+import {
+  listPlaybooks as listTemplates, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
+  newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
+} from './lib/db/playbooks';
 import { generateTemplate } from './features/templates/generateTemplate';
 import { listModels, isAuthError } from './lib/openrouter';
 import { useToast, Toast } from './components/Toast';

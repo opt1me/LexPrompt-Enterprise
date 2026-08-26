@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildMegaPrompt } from './buildMegaPrompt';
-import { newTemplate } from '../../lib/storage';
+import { newPlaybook as newTemplate } from '../../lib/db/playbooks';
 import type { Template } from '../../types';
 
 function templateWithClauses(): Template {

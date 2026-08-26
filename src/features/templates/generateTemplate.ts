@@ -1,6 +1,6 @@
 import { chatJson } from '../../lib/openrouter';
 import { mapWithConcurrency } from '../../lib/concurrency';
-import { newTemplate } from '../../lib/storage';
+import { newPlaybook as newTemplate } from '../../lib/db/playbooks';
 import type { Clause, Settings, Template } from '../../types';
 
 export type Depth = 'Light-Touch' | 'Standard' | 'Detailed';

@@ -27,6 +27,10 @@ export interface Template {
  *  versioning and standard positions arrive in sub-project D. */
 export type Playbook = Template;
 
+/** The in-session working copy of a document as loaded into memory for a
+ *  run: a live `File` handle plus whatever rendering/parsing produced. Never
+ *  persisted as-is — see `DocumentRecord` for the shape actually written to
+ *  IndexedDB once a document belongs to a Matter. */
 export interface DocumentFile {
   id: string;
   name: string;
@@ -120,6 +124,10 @@ export interface Matter {
   updatedAt: number;
 }
 
+/** The persisted record for a document once it belongs to a Matter: durable
+ *  metadata plus extracted text, deliberately with neither a live `File`
+ *  handle nor rendered page images — both are session-only, see
+ *  `DocumentFile`. */
 export interface DocumentRecord {
   id: string;
   matterId: string;

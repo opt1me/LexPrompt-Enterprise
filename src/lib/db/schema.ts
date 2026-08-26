@@ -1,5 +1,5 @@
 import type { DBSchema } from 'idb';
-import type { Finding, Playbook, Settings } from '../../types';
+import type { Playbook } from '../../types';
 
 export const DB_NAME = 'lexprompt';
 export const DB_VERSION = 1;
@@ -36,4 +36,3 @@ export interface LexPromptDB extends DBSchema {
 // Settings deliberately absent — see ruling R6. They are a few hundred bytes,
 // read synchronously in render paths, and moving them would make every caller
 // async for no benefit.
-export type { Finding, Settings };
