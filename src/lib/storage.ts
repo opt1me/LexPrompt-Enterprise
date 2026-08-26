@@ -2,30 +2,13 @@ import {
   type Template, type Clause, type Settings,
   TEMPLATE_SCHEMA_VERSION, DEFAULT_SETTINGS,
 } from '../types';
+import { debug } from './debug';
 
 const TEMPLATES_KEY = 'lexprompt.templates.v2';
 const SETTINGS_KEY = 'lexprompt.settings';
-const LAST_TIMESTAMP_KEY = 'lexprompt.lastTimestamp';
 
 function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-function getLastTimestamp(): number {
-  try {
-    const stored = localStorage.getItem(LAST_TIMESTAMP_KEY);
-    return stored ? parseInt(stored, 10) : 0;
-  } catch {
-    return 0;
-  }
-}
-
-function setLastTimestamp(timestamp: number): void {
-  try {
-    localStorage.setItem(LAST_TIMESTAMP_KEY, timestamp.toString());
-  } catch {
-    // Ignore errors
-  }
 }
 
 function readAll(): Template[] {
@@ -33,8 +16,24 @@ function readAll(): Template[] {
     const raw = localStorage.getItem(TEMPLATES_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(migrate) : [];
+    if (!Array.isArray(parsed)) {
+      // Corrupt: not an array. Quarantine and clear the original.
+      const quarantineKey = `lexprompt.templates.v2.corrupt.${Date.now()}`;
+      localStorage.setItem(quarantineKey, raw);
+      localStorage.removeItem(TEMPLATES_KEY);
+      debug(`Corrupted template storage quarantined to ${quarantineKey}`);
+      return [];
+    }
+    return parsed.map(migrate);
   } catch {
+    // Parse error or other issue. Quarantine the raw value if it exists.
+    const raw = localStorage.getItem(TEMPLATES_KEY);
+    if (raw) {
+      const quarantineKey = `lexprompt.templates.v2.corrupt.${Date.now()}`;
+      localStorage.setItem(quarantineKey, raw);
+      localStorage.removeItem(TEMPLATES_KEY);
+      debug(`Corrupted template storage quarantined to ${quarantineKey}`);
+    }
     return [];
   }
 }
@@ -90,11 +89,16 @@ export function newTemplate(name: string): Template {
 }
 
 export async function listTemplates(): Promise<Template[]> {
-  return readAll().sort((a, b) => {
+  const all = readAll();
+  // Sort by updatedAt descending, tiebreaking on reverse array position
+  // (later in array = more recent when updatedAt is equal)
+  return all.sort((a, b) => {
     const diff = b.updatedAt - a.updatedAt;
     if (diff !== 0) return diff;
-    // Tiebreaker: if two templates have the same updatedAt, sort by id to ensure deterministic order
-    return b.id.localeCompare(a.id);
+    // Tiebreaker: find positions in the array
+    const aIdx = all.indexOf(a);
+    const bIdx = all.indexOf(b);
+    return bIdx - aIdx; // Later in array comes first
   });
 }
 
@@ -103,25 +107,15 @@ export async function getTemplate(id: string): Promise<Template | null> {
 }
 
 export async function saveTemplate(template: Template): Promise<Template> {
-  // Ensure monotonically increasing timestamps to prevent flakiness
-  const now = Date.now();
-  const lastTimestamp = getLastTimestamp();
-  let timestamp = now;
-
-  if (now <= lastTimestamp) {
-    // Same or earlier millisecond; increment from last timestamp
-    timestamp = lastTimestamp + 1;
-  } else {
-    timestamp = now;
-  }
-
-  setLastTimestamp(timestamp);
-
-  const saved: Template = { ...template, updatedAt: timestamp, schemaVersion: TEMPLATE_SCHEMA_VERSION };
+  const saved: Template = { ...template, updatedAt: Date.now(), schemaVersion: TEMPLATE_SCHEMA_VERSION };
   const all = readAll();
   const idx = all.findIndex(t => t.id === saved.id);
-  if (idx >= 0) all[idx] = saved;
-  else all.push(saved);
+  if (idx >= 0) {
+    // Update: remove from current position and push to end
+    all.splice(idx, 1);
+  }
+  // Push to end (new or previously removed)
+  all.push(saved);
   writeAll(all);
   return saved;
 }

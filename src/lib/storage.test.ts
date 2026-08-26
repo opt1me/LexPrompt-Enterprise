@@ -53,6 +53,26 @@ describe('template CRUD', () => {
   it('returns null for an unknown id', async () => {
     expect(await getTemplate('nope')).toBeNull();
   });
+
+  it('quarantines corrupt storage instead of destroying it', async () => {
+    // Seed localStorage with corrupt JSON
+    const corruptBlob = '{not valid json';
+    localStorage.setItem('lexprompt.templates.v2', corruptBlob);
+
+    // listTemplates should silently return empty without throwing
+    expect(await listTemplates()).toEqual([]);
+
+    // Save a new template
+    const t = newTemplate('Recovered');
+    await saveTemplate(t);
+
+    // The corrupt blob should have been quarantined under a key
+    const quarantineKeys = Object.keys(localStorage)
+      .filter(k => k.startsWith('lexprompt.templates.v2.corrupt.'));
+
+    expect(quarantineKeys.length).toBe(1);
+    expect(localStorage.getItem(quarantineKeys[0])).toBe(corruptBlob);
+  });
 });
 
 describe('import / export', () => {
