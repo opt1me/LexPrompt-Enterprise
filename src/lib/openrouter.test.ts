@@ -34,6 +34,26 @@ describe('parseJsonLoose', () => {
   it('throws a readable error when there is no JSON at all', () => {
     expect(() => parseJsonLoose('no json here')).toThrow(/could not parse/i);
   });
+
+  // Finding 2 (fix round 1): the first `{` candidate can fail to parse (it
+  // isn't really JSON) while a real JSON object sits later in the text.
+  // Must not give up after the first failed candidate.
+  it('skips a non-JSON first brace and finds a later valid object', () => {
+    expect(parseJsonLoose('Cost is {approx} then {"a":1}')).toEqual({ a: 1 });
+  });
+
+  // Finding 2 (fix round 1): when multiple balanced, independently-valid JSON
+  // objects are present, the LAST one is the model's real answer (an example
+  // shown before it is a decoy). Returning the first is a silent wrong-answer
+  // bug, not a crash — the dangerous kind for a contract review tool.
+  it('returns the LAST balanced object when multiple valid JSON objects are present', () => {
+    const text = 'Example: {"a":1} Real answer: {"a":2}';
+    expect(parseJsonLoose(text)).toEqual({ a: 2 });
+  });
+
+  it('throws on a truncated/unclosed-brace response rather than returning junk', () => {
+    expect(() => parseJsonLoose('Sure, {"a":1')).toThrow(/could not parse/i);
+  });
 });
 
 describe('chat', () => {
@@ -89,11 +109,40 @@ describe('chat', () => {
   });
 
   it('marks the error retryable only for transient statuses', async () => {
+    // Finding 3 (fix round 1): the previous version used .catch(e => {...})
+    // with no `rejects` guard, so if chat() ever resolved instead of
+    // rejecting, the assertions inside .catch simply never ran and the test
+    // passed green regardless. Using `.rejects.toMatchObject` forces a
+    // failure if chat() resolves.
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({}, 401)));
-    await chat(req).catch((e: OpenRouterError) => {
-      expect(e.status).toBe(401);
-      expect(e.retryable).toBe(false);
-    });
+    await expect(chat(req)).rejects.toMatchObject({ status: 401, retryable: false });
+  });
+
+  // Finding 1 (fix round 1): a network-level fetch rejection (offline, DNS
+  // failure, TypeError: Failed to fetch) must not bypass the retry policy or
+  // propagate as a raw TypeError — downstream callers read `.status` and
+  // `.retryable` on every error from this module.
+  it('wraps a network-level fetch rejection in a retryable OpenRouterError and retries the full budget', async () => {
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const p = chat(req);
+    const assertion = expect(p).rejects.toMatchObject({ name: 'OpenRouterError', status: 0, retryable: true });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('recovers from a transient network error on retry', async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(completion('recovered'));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const p = chat(req);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await p).toBe('recovered');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('includes a json_schema response format when a schema is supplied', async () => {
