@@ -335,3 +335,119 @@ describe('App — playbook editor route (Task 12)', () => {
     expect(window.location.pathname).toBe('/playbooks');
   });
 });
+
+describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const originalPath = window.location.pathname;
+
+  const playbook = {
+    id: 'pb1',
+    name: 'NDA Review',
+    contractType: 'NDA',
+    mode: 'extraction' as const,
+    systemPrompt: 'You are an expert.',
+    formatPrompt: 'Quote verbatim.',
+    clauses: [],
+    createdAt: 1,
+    updatedAt: 1,
+    schemaVersion: 1,
+  };
+
+  // Bypasses React's tracked-value shortcut (setting `.value` directly is a
+  // no-op from React's perspective) so the subsequent 'input' event is seen
+  // as a genuine change — the same trick @testing-library/react's fireEvent
+  // uses internally. This is what lets a test actually dirty the editor
+  // through its real onChange handler, rather than asserting on `isTemplateDirty`
+  // from outside the component.
+  function setInputValue(input: HTMLInputElement, value: string) {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  /** Simulates a browser Back press: the address bar has already moved
+   *  (exactly as a real Back does before `popstate` fires) — mirrors the
+   *  router-level test in router.test.ts, but here driving the real App
+   *  component so the guard exercised is the real confirmDiscardIfDirty,
+   *  not a synthetic stand-in. */
+  function simulateBrowserBack(toPath: string) {
+    window.history.pushState(null, '', toPath);
+    act(() => { window.dispatchEvent(new PopStateEvent('popstate')); });
+  }
+
+  let confirmSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    localStorage.clear();
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    listPlaybooksMock.mockReset().mockResolvedValue([playbook]);
+    getPlaybookMock.mockReset().mockResolvedValue(playbook);
+    confirmSpy = vi.spyOn(window, 'confirm');
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.replaceState(null, '', originalPath);
+    confirmSpy.mockRestore();
+  });
+
+  it('blocks Back and restores the URL when the editor is dirty and confirm() is declined', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    confirmSpy.mockReturnValue(false);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    const nameInput = container.querySelector('input') as HTMLInputElement;
+    act(() => { setInputValue(nameInput, 'NDA Review EDITED'); });
+
+    simulateBrowserBack('/playbooks');
+    await flush();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    // Vetoed: the address bar must be restored to the editor's own URL...
+    expect(window.location.pathname).toBe('/playbooks/pb1');
+    // ...and the unsaved edit must still be showing, not discarded.
+    const stillThere = container.querySelector('input') as HTMLInputElement | null;
+    expect(stillThere?.value).toBe('NDA Review EDITED');
+  });
+
+  it('allows Back and discards the unsaved edit when the editor is dirty and confirm() is accepted', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    confirmSpy.mockReturnValue(true);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    const nameInput = container.querySelector('input') as HTMLInputElement;
+    act(() => { setInputValue(nameInput, 'NDA Review EDITED'); });
+
+    simulateBrowserBack('/playbooks');
+    await flush();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe('/playbooks');
+    // Navigated away from the editor entirely — the edited input is gone,
+    // not merely reverted in place.
+    expect(container.textContent).toContain('NDA Review');
+    expect(container.textContent).not.toContain('NDA Review EDITED');
+  });
+
+  it('never prompts on Back when the editor has no unsaved changes', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+
+    // No edit made — the freshly-loaded playbook is clean by construction
+    // (savedTemplateSnapshot is set to match right after load).
+    simulateBrowserBack('/playbooks');
+    await flush();
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/playbooks');
+  });
+});
