@@ -39,9 +39,14 @@ describe('emptyRun', () => {
 
   it('snapshots the template so later edits do not rewrite history', () => {
     const run = emptyRun(template, [doc('d1')]);
-    template.clauses.push({ id: 'c3', title: 'New', prompt: 'p3' });
-    expect(run.templateSnapshot.clauses.length).toBe(2);
-    template.clauses.pop();
+    // Mutate a field nested inside an existing clause object, not the
+    // top-level clauses array — a shallow copy (`{...template, clauses:
+    // [...template.clauses]}`) would still share this inner clause object
+    // and would let this mutation leak through, incorrectly passing.
+    const originalPrompt = template.clauses[0].prompt;
+    template.clauses[0].prompt = 'MUTATED';
+    expect(run.templateSnapshot.clauses[0].prompt).toBe(originalPrompt);
+    template.clauses[0].prompt = originalPrompt;
   });
 });
 
@@ -123,12 +128,16 @@ describe('retryCell', () => {
     const docs = [doc('d1')];
     const failed = await runReview(emptyRun(template, docs), docs, settings, () => {});
 
+    vi.mocked(extractClause).mockClear();
     vi.mocked(extractClause).mockImplementation(async (_d, c) => ok(c.id));
     const retried = await retryCell(failed, docs[0], 'c1', settings, () => {});
 
     expect(retried.findings.d1.c1.status).toBe('done');
     expect(retried.findings.d1.c2.status).toBe('done');
-    expect(extractClause).toHaveBeenCalledTimes(3);
+    // Pin retryCell's own behaviour, isolated from runReview's earlier calls:
+    // exactly one call, for the specific clause it was asked to retry.
+    expect(extractClause).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(extractClause).mock.calls[0][1].id).toBe('c1');
   });
 
   it('is a no-op for an unknown clause id', async () => {

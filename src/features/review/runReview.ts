@@ -89,6 +89,10 @@ export async function retryCell(
   onUpdate: (run: ReviewRun) => void,
 ): Promise<ReviewRun> {
   const clause = run.templateSnapshot.clauses.find(c => c.id === clauseId);
+  // Deliberately return the identical `run` reference: an unknown clause id
+  // is a genuine no-op, and a caller memoising on identity (e.g. React)
+  // should see no change rather than being handed a fresh object that
+  // triggers a pointless re-render.
   if (!clause) return run;
 
   let current = withFinding(run, doc.id, { clauseId, status: 'running', citations: [] });
