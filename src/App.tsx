@@ -12,6 +12,7 @@ import { MegaPromptModal } from './features/templates/MegaPromptModal';
 import { RunPanel, RunProgressBar } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell } from './features/review/runReview';
+import { TabularReview } from './features/tabular/TabularReview';
 
 type View = 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings';
 
@@ -263,24 +264,32 @@ export default function App() {
             <div className="p-8 text-gray-500">No template selected.</div>
           )
         )}
-        {view === 'results' && (
+        {(view === 'results' || view === 'tabular') && (
           run ? (
             <div className="h-[calc(100vh-64px)] flex flex-col">
               {isRunning && <RunProgressBar run={run} onCancel={handleCancelRun} />}
               <div className="flex-1 min-h-0">
-                <ResultsView
-                  run={run}
-                  documents={documents}
-                  onRetryCell={handleRetryCell}
-                  onOpenTabular={() => setView('tabular')}
-                />
+                {view === 'results' ? (
+                  <ResultsView
+                    run={run}
+                    documents={documents}
+                    onRetryCell={handleRetryCell}
+                    onOpenTabular={() => setView('tabular')}
+                  />
+                ) : (
+                  <TabularReview
+                    run={run}
+                    documents={documents}
+                    onRetryCell={handleRetryCell}
+                    onOpenCards={() => setView('results')}
+                  />
+                )}
               </div>
             </div>
           ) : (
             <div className="p-8 text-gray-500">No run yet. Start one from a template.</div>
           )
         )}
-        {view === 'tabular' && <div className="p-8 text-gray-500">Tabular review — Task 17.</div>}
         {view === 'settings' && (
           <SettingsPanel settings={settings} onChange={setSettings} />
         )}
