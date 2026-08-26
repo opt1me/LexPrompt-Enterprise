@@ -95,7 +95,7 @@ export function findQuoteRects(pages: PdfPageText[], quotes: string[]): QuoteRec
               x: item.transform[4],
               y: item.transform[5],
               w: item.width,
-              h: item.height ?? 12,
+              h: item.height || 12,
             });
           }
         }

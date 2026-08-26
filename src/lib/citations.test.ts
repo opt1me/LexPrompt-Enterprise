@@ -84,4 +84,85 @@ describe('findQuoteRects', () => {
     expect(() => findQuoteRects(pages, ['', '   '])).not.toThrow();
     expect(findQuoteRects(pages, ['', '   '])).toEqual([]);
   });
+
+  it('defaults height to 12 when item.height is 0, matching the ported original (h || 12, not h ?? 12)', () => {
+    const zeroHeightPage: PdfPageText[] = [{
+      pageNum: 1,
+      items: [
+        { str: 'landlord ', transform: [1, 0, 0, 1, 10, 700], width: 38, height: 0 },
+        { str: 'shall ', transform: [1, 0, 0, 1, 50, 700], width: 30, height: 0 },
+        { str: 'maintain ', transform: [1, 0, 0, 1, 90, 700], width: 40, height: 0 },
+      ],
+    }];
+    const rects = findQuoteRects(zeroHeightPage, ['landlord shall maintain']);
+    expect(rects.length).toBeGreaterThan(0);
+    expect(rects.every(r => r.h === 12)).toBe(true);
+  });
+
+  it('counts overlapping occurrences, not just non-overlapping ones (cursor must advance by 1, not by match length)', () => {
+    // Item text concatenates (no separators) to the 9-char normalized
+    // string "ababababa". Searching it for "ababab" (6 chars) yields two
+    // *overlapping* matches: at index 0 (chars 0-5) and index 2 (chars 2-7)
+    // — they share chars 2-5. Advancing the cursor by the full match length
+    // (6) instead of by 1 after the first match would jump straight past
+    // the second match, since the string has only 9 characters.
+    const overlapPage: PdfPageText[] = [{
+      pageNum: 1,
+      items: [
+        { str: 'aba', transform: [1, 0, 0, 1, 10, 700], width: 30, height: 12 },
+        { str: 'bab', transform: [1, 0, 0, 1, 40, 700], width: 30, height: 12 },
+        { str: 'aba', transform: [1, 0, 0, 1, 70, 700], width: 30, height: 12 },
+      ],
+    }];
+    const rects = findQuoteRects(overlapPage, ['ababab']);
+    // Match 1 (index 0-5) covers items [0,1] -> 2 rects.
+    // Match 2 (index 2-7) covers items [0,1,2] -> 3 rects.
+    // Advance-by-length would only find match 1, producing 2 rects instead of 5.
+    expect(rects.length).toBe(5);
+  });
+
+  describe('MIN_QUOTE_LENGTH boundary (5 normalized characters)', () => {
+    const boundaryPage: PdfPageText[] = [{
+      pageNum: 1,
+      items: [{ str: 'abcde', transform: [1, 0, 0, 1, 10, 700], width: 50, height: 12 }],
+    }];
+
+    it('matches a quote at exactly the 5-character minimum', () => {
+      const rects = findQuoteRects(boundaryPage, ['abcde']);
+      expect(rects.length).toBeGreaterThan(0);
+    });
+
+    it('rejects a quote at 4 characters, one below the minimum', () => {
+      // 'abcd' is a substring of the page's own 'abcde' item, so this only
+      // returns [] if the length check itself excludes it, not because the
+      // text is absent.
+      expect(findQuoteRects(boundaryPage, ['abcd'])).toEqual([]);
+    });
+  });
+
+  describe('FUZZY_MIN_LENGTH boundary (30 normalized characters)', () => {
+    // Page text: 15 x's, then 3 filler z's (so the exact needle is never
+    // present verbatim), then 15 y's. A fuzzy match is only reachable if
+    // the affix-length guard lets a needle longer than 30 chars through.
+    const fuzzyBoundaryPage: PdfPageText[] = [{
+      pageNum: 1,
+      items: [{
+        str: 'x'.repeat(15) + 'z'.repeat(3) + 'y'.repeat(15),
+        transform: [1, 0, 0, 1, 10, 700],
+        width: 200,
+        height: 12,
+      }],
+    }];
+
+    it('does not engage the fuzzy fallback at exactly 30 characters', () => {
+      const quote30 = 'x'.repeat(15) + 'y'.repeat(15); // length 30, no exact match in page text
+      expect(findQuoteRects(fuzzyBoundaryPage, [quote30])).toEqual([]);
+    });
+
+    it('engages the fuzzy fallback at 31 characters', () => {
+      const quote31 = 'x'.repeat(15) + 'm' + 'y'.repeat(15); // length 31, same prefix/suffix as above
+      const rects = findQuoteRects(fuzzyBoundaryPage, [quote31]);
+      expect(rects.length).toBeGreaterThan(0);
+    });
+  });
 });
