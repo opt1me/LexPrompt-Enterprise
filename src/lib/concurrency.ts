@@ -9,17 +9,25 @@ export async function mapWithConcurrency<T, R>(
 ): Promise<R[]> {
   const results = new Array<R>(items.length);
   let cursor = 0;
+  let failed = false;
   const width = Math.max(1, Math.min(limit, items.length));
 
   async function worker(): Promise<void> {
     while (true) {
       if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (failed) throw new DOMException('Aborted', 'AbortError');
       const index = cursor++;
       if (index >= items.length) return;
-      results[index] = await fn(items[index], index);
+      try {
+        results[index] = await fn(items[index], index);
+      } catch (err) {
+        failed = true;
+        throw err;
+      }
     }
   }
 
   await Promise.all(Array.from({ length: width }, worker));
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
   return results;
 }
