@@ -196,6 +196,73 @@ export function toDocumentRecord(
   };
 }
 
+/** The message shown wherever a persisted document's original bytes cannot
+ *  be found — a missing `blobs` entry for a `DocumentRecord` that still
+ *  exists (spec §9: "renders as unavailable with its metadata intact",
+ *  never a blank viewer). Shared so the wording is identical whether the
+ *  cause is opening a matter's documents for review or reopening a past
+ *  review whose document blob has since gone missing. */
+export const BLOB_UNAVAILABLE_MESSAGE = 'The original file for this document is no longer available.';
+
+/** Rebuilds a `DocumentFile` for VIEWING a persisted document: wraps the
+ *  stored blob back into a `File` and reuses the text already extracted at
+ *  ingest time, without re-parsing. No re-parse is needed here because the
+ *  viewer (`DocumentViewer`/`PdfCanvas`) renders straight from `file` and
+ *  never touches `pageImages` — that field only matters when *running* a
+ *  new review over the document (see `documentFileForReview` below).
+ *
+ *  `blob === null` (the document's bytes could not be found — see
+ *  `getDocumentBlob`) degrades to a viewer-less placeholder rather than
+ *  throwing: the document's metadata (name, kind, extracted text) is still
+ *  real and still shown, only the original file is unavailable. */
+export function documentFileForViewing(record: DocumentRecord, blob: Blob | null): DocumentFile {
+  return {
+    id: record.id,
+    name: record.name,
+    text: record.text,
+    file: blob ? new File([blob], record.name, { type: blob.type }) : new File([], record.name),
+    kind: record.kind,
+    parseError: record.parseError ?? (blob ? undefined : BLOB_UNAVAILABLE_MESSAGE),
+  };
+}
+
+/** Rebuilds a `DocumentFile` for RUNNING a new review over a persisted
+ *  document. Unlike `documentFileForViewing`, this re-parses the restored
+ *  file through `parseFile` so a scanned PDF gets its `pageImages`
+ *  regenerated (per spec §5.2: page images are never persisted, only
+ *  regenerated on demand from the source bytes, "by the same code that
+ *  produced them at ingest").
+ *
+ *  A document already marked `parseError` at ingest is not re-parsed —
+ *  re-running a parse that failed once is unlikely to succeed differently
+ *  and would discard the original error message — its record is carried
+ *  through as-is instead. A missing blob (`blob === null`) degrades the
+ *  same way `documentFileForViewing` does, rather than throwing: the
+ *  document simply cannot be reviewed until its file is re-added, but the
+ *  rest of the run is not blocked by it. */
+export async function documentFileForReview(record: DocumentRecord, blob: Blob | null): Promise<DocumentFile> {
+  if (!blob) {
+    return {
+      id: record.id,
+      name: record.name,
+      text: record.text,
+      file: new File([], record.name),
+      kind: record.kind,
+      parseError: record.parseError ?? BLOB_UNAVAILABLE_MESSAGE,
+    };
+  }
+  const file = new File([blob], record.name, { type: blob.type });
+  if (record.parseError) {
+    return { id: record.id, name: record.name, text: record.text, file, kind: record.kind, parseError: record.parseError };
+  }
+  const reparsed = await parseFile(file);
+  // parseFile mints its own fresh id (it has no notion of a persisted
+  // document); overridden here so the returned DocumentFile keeps the
+  // DocumentRecord's real id — the id a review's `documentIds` and
+  // `findings` map must key against for this document.
+  return { ...reparsed, id: record.id, name: record.name };
+}
+
 /** Builds the per-page text-item index the citation matcher needs. */
 export async function extractPageText(pdf: {
   numPages: number;

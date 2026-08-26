@@ -9,6 +9,14 @@ export interface RunPanelProps {
   template: Template;
   onBack: () => void;
   onRun: (documents: DocumentFile[]) => void;
+  /** Pre-populates the document list (Task 11: "Run a review" from a
+   *  matter reuses this panel scoped to that matter's own documents,
+   *  already hydrated by the caller, rather than asking the user to
+   *  re-upload what they already added to the matter). Still fully
+   *  editable from here — more can be added, and any of these can be
+   *  removed for just this run. Defaults to empty, preserving the
+   *  Library's original standalone upload-from-scratch flow. */
+  initialDocuments?: DocumentFile[];
 }
 
 /**
@@ -16,8 +24,8 @@ export interface RunPanelProps {
  * document now, so there is nothing left to choose between "batch",
  * "collection" and "tabular" — just how many documents and how many clauses.
  */
-export function RunPanel({ template, onBack, onRun }: RunPanelProps) {
-  const [documents, setDocuments] = useState<DocumentFile[]>([]);
+export function RunPanel({ template, onBack, onRun, initialDocuments = [] }: RunPanelProps) {
+  const [documents, setDocuments] = useState<DocumentFile[]>(initialDocuments);
   const [parsing, setParsing] = useState(false);
 
   const handleFiles = async (fileList: FileList | null) => {

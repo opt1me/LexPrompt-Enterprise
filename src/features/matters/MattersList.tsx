@@ -23,6 +23,40 @@ export interface MattersListProps {
   matters: MattersListItem[];
   onCreate: (params: CreateMatterParams) => void;
   onDelete: (id: string) => void;
+  /** Opens the matter home screen for a row (Task 11). Optional so this
+   *  component still renders sensibly if a future caller genuinely has no
+   *  destination to send it to; the app itself always supplies one. */
+  onOpen?: (id: string) => void;
+}
+
+export interface DeleteMatterModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}
+
+/** Shared confirmation copy for permanently deleting a matter — used here
+ *  and by `MatterHome` (Task 11), so the cascade warning can't drift
+ *  between the two places a matter can be deleted from. */
+export function DeleteMatterModal({ isOpen, onClose, onConfirm }: DeleteMatterModalProps) {
+  return (
+    <Modal
+      isOpen={isOpen}
+      title="Delete Matter"
+      onClose={onClose}
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="danger" onClick={onConfirm}>Confirm</Button>
+        </>
+      }
+    >
+      <p className="text-sm text-gray-400 leading-relaxed">
+        Are you sure you want to permanently delete this matter? This will also delete all of
+        its documents and reviews. This action cannot be undone.
+      </p>
+    </Modal>
+  );
 }
 
 function formatLastActivity(updatedAt: number): string {
@@ -40,7 +74,7 @@ function formatLastActivity(updatedAt: number): string {
  *  matter's cascade (Task 6: deleting a matter deletes its documents and
  *  their stored bytes, not just the index entry — a user must learn that
  *  before confirming, not after). */
-export function MattersList({ matters, onCreate, onDelete }: MattersListProps) {
+export function MattersList({ matters, onCreate, onDelete, onOpen }: MattersListProps) {
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState('');
   const [client, setClient] = useState('');
@@ -81,7 +115,13 @@ export function MattersList({ matters, onCreate, onDelete }: MattersListProps) {
         {matters.map(({ matter, reviewCount }) => (
           <div
             key={matter.id}
-            className="group relative flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-5 py-4 hover:border-violet-500/50 transition-colors shadow-lg"
+            role={onOpen ? 'button' : undefined}
+            tabIndex={onOpen ? 0 : undefined}
+            onClick={() => onOpen?.(matter.id)}
+            onKeyDown={(e) => {
+              if (onOpen && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(matter.id); }
+            }}
+            className={`group relative flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-5 py-4 hover:border-violet-500/50 transition-colors shadow-lg ${onOpen ? 'cursor-pointer' : ''}`}
           >
             <div className="w-10 h-10 rounded-lg bg-violet-600/20 text-violet-300 flex items-center justify-center shrink-0">
               <Briefcase className="w-5 h-5" />
@@ -148,22 +188,11 @@ export function MattersList({ matters, onCreate, onDelete }: MattersListProps) {
         </div>
       </Modal>
 
-      <Modal
+      <DeleteMatterModal
         isOpen={deleteId !== null}
-        title="Delete Matter"
         onClose={() => setDeleteId(null)}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setDeleteId(null)}>Cancel</Button>
-            <Button variant="danger" onClick={confirmDelete}>Confirm</Button>
-          </>
-        }
-      >
-        <p className="text-sm text-gray-400 leading-relaxed">
-          Are you sure you want to permanently delete this matter? This will also delete all of
-          its documents and reviews. This action cannot be undone.
-        </p>
-      </Modal>
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }

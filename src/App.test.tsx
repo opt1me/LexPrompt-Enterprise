@@ -134,6 +134,12 @@ describe('App mount — matters list load failure', () => {
     expect(container.textContent).toContain('Acme v Bolt');
     expect(container.textContent).not.toContain('could not be loaded');
     expect(listReviewsMock).toHaveBeenCalledWith('m1');
+    // Pins the undefined-vs-0 distinction MattersListItem's own doc comment
+    // promises: a failed count must be omitted from the row entirely, never
+    // rendered as if the matter genuinely has zero reviews. Without this
+    // assertion, a regression that rendered "0 reviews" on failure would
+    // pass this test unchanged (Task 10 minor, closed here).
+    expect(container.textContent).not.toContain('0 review');
   });
 });
 
