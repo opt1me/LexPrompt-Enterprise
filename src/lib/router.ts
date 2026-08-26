@@ -1,0 +1,97 @@
+/**
+ * Hand-rolled History-API router for matters, reviews, playbooks and settings.
+ *
+ * Deliberately narrow: this is not a general-purpose router, it encodes
+ * exactly the seven routes the app needs. See
+ * docs/superpowers/specs/2026-08-26-redesign-a-persistence-and-matters.md
+ * for the route list this mirrors.
+ *
+ * `firebase.json` rewrites every path to index.html, so pushState-based
+ * navigation survives a refresh. A static host WITHOUT an SPA fallback will
+ * 404 on refresh into a deep link — see the README.
+ */
+import { useCallback, useEffect, useState } from 'react';
+
+export type Route =
+  | { name: 'matters' }
+  | { name: 'matter'; matterId: string }
+  | { name: 'review'; matterId: string; reviewId: string }
+  | { name: 'playbooks' }
+  | { name: 'playbook'; playbookId: string }
+  | { name: 'settings' }
+  | { name: 'not-found'; path: string };
+
+/** Parses a pathname into a Route. Never throws — an unparseable or unknown
+ * path (including a malformed percent-escape in an id segment) yields
+ * `not-found` rather than a silent fallback to the home route. */
+export function parseRoute(pathname: string): Route {
+  try {
+    return parsePath(pathname);
+  } catch {
+    return { name: 'not-found', path: pathname };
+  }
+}
+
+function parsePath(pathname: string): Route {
+  const trimmed = pathname.length > 1 && pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
+  const segments = trimmed.split('/').filter((s) => s.length > 0).map(decodeURIComponent);
+
+  if (segments.length === 0) return { name: 'matters' };
+
+  if (segments[0] === 'matters') {
+    if (segments.length === 2) return { name: 'matter', matterId: segments[1] };
+    if (segments.length === 4 && segments[2] === 'reviews') {
+      return { name: 'review', matterId: segments[1], reviewId: segments[3] };
+    }
+  } else if (segments[0] === 'playbooks') {
+    if (segments.length === 1) return { name: 'playbooks' };
+    if (segments.length === 2) return { name: 'playbook', playbookId: segments[1] };
+  } else if (segments[0] === 'settings' && segments.length === 1) {
+    return { name: 'settings' };
+  }
+
+  return { name: 'not-found', path: pathname };
+}
+
+/** Builds the canonical path for a Route. `buildPath(parseRoute(p)) === p`
+ * holds for every canonical path (see router.test.ts) — id segments are
+ * percent-encoded so a `/` or other reserved character in an id round-trips
+ * instead of being mistaken for a path separator. */
+export function buildPath(route: Route): string {
+  switch (route.name) {
+    case 'matters':
+      return '/';
+    case 'matter':
+      return `/matters/${encodeURIComponent(route.matterId)}`;
+    case 'review':
+      return `/matters/${encodeURIComponent(route.matterId)}/reviews/${encodeURIComponent(route.reviewId)}`;
+    case 'playbooks':
+      return '/playbooks';
+    case 'playbook':
+      return `/playbooks/${encodeURIComponent(route.playbookId)}`;
+    case 'settings':
+      return '/settings';
+    case 'not-found':
+      return route.path;
+  }
+}
+
+/** Current route plus a navigate function that pushes a new history entry
+ * (never replaces one, so back/forward keeps working) and updates state.
+ * Responds to browser back/forward via `popstate`. */
+export function useRoute(): [Route, (route: Route) => void] {
+  const [route, setRoute] = useState<Route>(() => parseRoute(window.location.pathname));
+
+  useEffect(() => {
+    const onPopState = () => setRoute(parseRoute(window.location.pathname));
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  const navigate = useCallback((next: Route) => {
+    window.history.pushState(null, '', buildPath(next));
+    setRoute(next);
+  }, []);
+
+  return [route, navigate];
+}
