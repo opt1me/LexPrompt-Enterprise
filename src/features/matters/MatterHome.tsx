@@ -320,6 +320,20 @@ export function MatterHome({
                 {startingReviewId === playbook.id && <Loader className="w-4 h-4 animate-spin shrink-0" />}
               </button>
             ))}
+            {/* A bare per-item spinner reads as "the click registered", not
+               "this is going to take a while" — not enough signal when
+               preparing this run means pdfjs re-rendering every page of a
+               multi-page scan to nothing but text (see
+               documentFileForReview/documentNeedsPageImages). This banner
+               only appears once a playbook has actually been picked, so it
+               never shows for a run that turns out to need no regeneration
+               at all — it just doesn't stick around long in that case. */}
+            {startingReviewId && (
+              <p className="text-xs text-gray-400 flex items-center gap-2 pt-1">
+                <Loader className="w-3.5 h-3.5 animate-spin shrink-0" />
+                Preparing documents for review — scanned pages can take a moment to render…
+              </p>
+            )}
           </div>
         )}
       </Modal>

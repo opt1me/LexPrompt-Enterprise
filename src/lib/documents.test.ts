@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseFile, parseFiles, toDocumentRecord } from './documents';
+import { parseFile, parseFiles, toDocumentRecord, documentFileForReview, BLOB_UNAVAILABLE_MESSAGE } from './documents';
+import type { DocumentRecord } from '../types';
 
 // pdf.js and mammoth are heavy and DOM-bound; the unit tests cover dispatch
 // and error isolation. Real PDF parsing is covered by manual verification
@@ -253,6 +254,155 @@ describe('toDocumentRecord', () => {
     expect('pageImages' in record).toBe(false);
 
     createElementSpy.mockRestore();
+  });
+});
+
+describe('documentFileForReview', () => {
+  function makeRecord(overrides: Partial<DocumentRecord> = {}): DocumentRecord {
+    return {
+      id: 'doc-1',
+      matterId: 'matter-1',
+      name: 'lease.pdf',
+      kind: 'pdf',
+      text: '',
+      byteSize: 100,
+      addedAt: Date.now(),
+      addedByUserId: 'user-1',
+      ...overrides,
+    };
+  }
+
+  function makeBlob(): Blob {
+    return new Blob(['%PDF-1.4 fake bytes'], { type: 'application/pdf' });
+  }
+
+  it('does not re-parse a document whose text layer is healthy on every page', async () => {
+    const record = makeRecord({
+      text: '[Page 1]\nThis page has plenty of real, readable text content.\n\n'
+        + '[Page 2]\nAnother page with plenty of readable text content too.\n\n',
+    });
+
+    const doc = await documentFileForReview(record, makeBlob());
+
+    const pdfjs = await import('pdfjs-dist');
+    expect(pdfjs.getDocument).not.toHaveBeenCalled();
+    expect(doc.text).toBe(record.text);
+    expect(doc.pageImages).toBeUndefined();
+    expect(doc.parseError).toBeUndefined();
+  });
+
+  it('regenerates page images, per page, for a document with at least one below-threshold page', async () => {
+    // Mixed document: page 1 is healthy text, page 2 is a scan -- a
+    // document-wide character count would let page 1 carry the whole
+    // document over SCAN_TEXT_THRESHOLD and skip page 2 entirely.
+    const record = makeRecord({
+      id: 'doc-mixed',
+      text: '[Page 1]\nThis page has plenty of real, readable text content.\n\n'
+        + '[Page 2]\nx\n\n',
+    });
+
+    const fakeCanvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => ({})),
+      toDataURL: vi.fn(() => 'data:image/jpeg;base64,cGFnZTI='),
+    };
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation((tag: string) =>
+        tag === 'canvas' ? (fakeCanvas as unknown as HTMLCanvasElement) : originalCreateElement(tag),
+      );
+
+    const pdfjs = await import('pdfjs-dist');
+    vi.mocked(pdfjs.getDocument).mockReturnValueOnce({
+      promise: Promise.resolve({
+        numPages: 2,
+        getPage: async (n: number) => ({
+          getTextContent: async () => ({
+            items: [{ str: n === 1 ? 'This page has plenty of real, readable text content.' : 'x' }],
+          }),
+          getViewport: () => ({ width: 10, height: 10 }),
+          render: vi.fn(() => ({ promise: Promise.resolve() })),
+        }),
+      }),
+    } as unknown as ReturnType<typeof pdfjs.getDocument>);
+
+    const doc = await documentFileForReview(record, makeBlob());
+
+    expect(pdfjs.getDocument).toHaveBeenCalledTimes(1);
+    expect(doc.pageImages?.length).toBe(1);
+    expect(doc.pageImages?.[0].data).toBe('cGFnZTI=');
+    expect(doc.parseError).toBeUndefined();
+
+    createElementSpy.mockRestore();
+  });
+
+  it('caches regenerated page images within the session, so a second review does not re-render', async () => {
+    const record = makeRecord({ id: 'doc-cache', text: '[Page 1]\nx\n\n' });
+    const fakeCanvas = {
+      width: 0,
+      height: 0,
+      getContext: vi.fn(() => ({})),
+      toDataURL: vi.fn(() => 'data:image/jpeg;base64,Y2FjaGVk'),
+    };
+    const originalCreateElement = document.createElement.bind(document);
+    const createElementSpy = vi
+      .spyOn(document, 'createElement')
+      .mockImplementation((tag: string) =>
+        tag === 'canvas' ? (fakeCanvas as unknown as HTMLCanvasElement) : originalCreateElement(tag),
+      );
+
+    const pdfjs = await import('pdfjs-dist');
+    vi.mocked(pdfjs.getDocument).mockReturnValueOnce({
+      promise: Promise.resolve({
+        numPages: 1,
+        getPage: async () => ({
+          getTextContent: async () => ({ items: [{ str: 'x' }] }),
+          getViewport: () => ({ width: 10, height: 10 }),
+          render: vi.fn(() => ({ promise: Promise.resolve() })),
+        }),
+      }),
+    } as unknown as ReturnType<typeof pdfjs.getDocument>);
+
+    const first = await documentFileForReview(record, makeBlob());
+    expect(first.pageImages?.length).toBe(1);
+    expect(pdfjs.getDocument).toHaveBeenCalledTimes(1);
+
+    // Second review of the same document, same session: no further
+    // getDocument() call (no re-render), and the persisted text is
+    // untouched rather than replaced by whatever the (unused) reparse
+    // would have produced.
+    const second = await documentFileForReview(record, makeBlob());
+    expect(pdfjs.getDocument).toHaveBeenCalledTimes(1);
+    expect(second.pageImages).toEqual(first.pageImages);
+    expect(second.text).toBe(record.text);
+
+    createElementSpy.mockRestore();
+  });
+
+  it('surfaces a failed regeneration as parseError, distinct from "no images needed"', async () => {
+    const record = makeRecord({ id: 'doc-broken', text: '[Page 1]\nx\n\n' });
+
+    const pdfjs = await import('pdfjs-dist');
+    vi.mocked(pdfjs.getDocument).mockImplementationOnce(() => {
+      throw new Error('stored bytes are not a valid PDF');
+    });
+
+    const doc = await documentFileForReview(record, makeBlob());
+
+    expect(doc.parseError).toMatch(/stored bytes are not a valid PDF/);
+    // A document that legitimately needed no images also comes back with
+    // pageImages undefined -- parseError is what tells the two apart, so a
+    // caller must not treat an empty pageImages array as "reviewable".
+    expect(doc.pageImages).toBeUndefined();
+  });
+
+  it('degrades to an explanatory parseError, never a throw, when the blob is missing', async () => {
+    const record = makeRecord({ id: 'doc-missing-blob', text: '[Page 1]\nx\n\n' });
+    const doc = await documentFileForReview(record, null);
+    expect(doc.parseError).toBe(BLOB_UNAVAILABLE_MESSAGE);
+    expect(doc.pageImages).toBeUndefined();
   });
 });
 

@@ -728,11 +728,15 @@ export default function App() {
   /**
    * "Run a review" from Matter Home: the existing run flow (RunPanel →
    * handleStartRun), pre-seeded with this matter's own documents rather
-   * than requiring them to be re-uploaded. Each is re-parsed from its
-   * stored bytes (`documentFileForReview`) rather than trusting the
-   * extracted text alone, so a scanned PDF gets its page images
-   * regenerated for this run (spec §5.2 — never persisted, always
-   * regenerable from the source bytes).
+   * than requiring them to be re-uploaded. Each is rebuilt from its stored
+   * bytes through `documentFileForReview` (spec §5.2 — page images are
+   * never persisted, only regenerated on demand from the source bytes).
+   * That function does the gating itself: a document with a healthy text
+   * layer is returned untouched (no re-parse at all), only a document with
+   * at least one below-threshold page gets pdfjs re-run over it to rebuild
+   * `pageImages` — and even then only once per session, since it caches the
+   * result by document id. So a scanned PDF's images are only ever
+   * regenerated the first time this session it's actually reviewed.
    */
   const handleRunReviewForMatter = async (matterId: string, template: Template) => {
     try {

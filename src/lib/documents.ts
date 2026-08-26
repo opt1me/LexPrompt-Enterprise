@@ -204,6 +204,64 @@ export function toDocumentRecord(
  *  review whose document blob has since gone missing. */
 export const BLOB_UNAVAILABLE_MESSAGE = 'The original file for this document is no longer available.';
 
+/**
+ * Splits `record.text` back into the per-page segments `parsePdf` wrote it
+ * as (`[Page N]\n<pageText>\n\n`, concatenated). A document with no such
+ * markers (docx, txt, or a pdf with zero pages) comes back as one segment
+ * so the threshold check below still applies to it.
+ *
+ * Deliberately duplicated from `modelContext.ts`'s private `pageSegments`
+ * rather than imported: `modelContext.ts` already imports
+ * `SCAN_TEXT_THRESHOLD` from this module, so importing the reverse
+ * direction would cycle. Both implementations parse the exact same marker
+ * convention `parsePdf` defines below, so keep them in sync if that ever
+ * changes.
+ */
+function pageSegments(text: string): string[] {
+  if (!/\[Page \d+\]\n/.test(text)) return [text];
+  return text.split(/\[Page \d+\]\n/g).slice(1);
+}
+
+/**
+ * Whether a persisted document needs its page images regenerated before a
+ * review can use them: a PDF with at least one page whose extracted text
+ * falls below `SCAN_TEXT_THRESHOLD`.
+ *
+ * Applied PER PAGE, not to the document's combined text length — the same
+ * granularity `parsePdf` itself uses when deciding which pages to render
+ * (and that `modelContext.ts`'s `usableText` uses for the identical reason
+ * on the chat/review-context side). A document-wide character count would
+ * let a single readable page carry an entire scanned document over the
+ * threshold: a typed cover page followed by fifteen scanned signature pages
+ * has plenty of text *in total*, but the body still needs page images for a
+ * vision-capable model to read it. Checking per page is what catches that
+ * mixed case; a whole-document check would silently skip regenerating
+ * images for it.
+ *
+ * Non-PDF documents (docx, txt) never have page images to regenerate.
+ */
+function documentNeedsPageImages(record: DocumentRecord): boolean {
+  if (record.kind !== 'pdf') return false;
+  return pageSegments(record.text).some(page => page.trim().length < SCAN_TEXT_THRESHOLD);
+}
+
+/**
+ * Session-only cache of regenerated page images, keyed by document id, so a
+ * second review of the same document in the same tab doesn't re-render a
+ * multi-page scan it already rendered once. Deliberately never persisted —
+ * that would reintroduce exactly the storage cost R2 (page images are
+ * derived data, not stored) exists to avoid. A plain module-level `Map` is
+ * enough: it lives only as long as this module instance (i.e. this page
+ * load), and a reload starts over with a fresh, empty one automatically.
+ *
+ * An empty array is a valid cached value — it means "this document needed
+ * images, regeneration ran, and every qualifying page's canvas render
+ * failed" (see `renderPageToJpeg`'s per-page tolerance) — and must still
+ * short-circuit a later review rather than retrying a render already known
+ * to fail.
+ */
+const pageImageCache = new Map<string, NonNullable<DocumentFile['pageImages']>>();
+
 /** Rebuilds a `DocumentFile` for VIEWING a persisted document: wraps the
  *  stored blob back into a `File` and reuses the text already extracted at
  *  ingest time, without re-parsing. No re-parse is needed here because the
@@ -227,11 +285,17 @@ export function documentFileForViewing(record: DocumentRecord, blob: Blob | null
 }
 
 /** Rebuilds a `DocumentFile` for RUNNING a new review over a persisted
- *  document. Unlike `documentFileForViewing`, this re-parses the restored
- *  file through `parseFile` so a scanned PDF gets its `pageImages`
- *  regenerated (per spec §5.2: page images are never persisted, only
- *  regenerated on demand from the source bytes, "by the same code that
- *  produced them at ingest").
+ *  document. Unlike `documentFileForViewing`, this re-derives `pageImages`
+ *  from the restored file through `parseFile` — but ONLY when the document
+ *  actually needs them (`documentNeedsPageImages`: a PDF with at least one
+ *  page below `SCAN_TEXT_THRESHOLD`) and doesn't already have a
+ *  session-cached copy (`pageImageCache`). A document with a healthy text
+ *  layer throughout is returned with its persisted text untouched — no
+ *  re-parse at all — exactly like `documentFileForViewing`, since
+ *  re-running pdfjs over the whole file to regenerate images nothing needs
+ *  would be the very cost this design (page images are never persisted,
+ *  only regenerated on demand "by the same code that produced them at
+ *  ingest") exists to cut.
  *
  *  A document already marked `parseError` at ingest is not re-parsed —
  *  re-running a parse that failed once is unlikely to succeed differently
@@ -239,7 +303,13 @@ export function documentFileForViewing(record: DocumentRecord, blob: Blob | null
  *  through as-is instead. A missing blob (`blob === null`) degrades the
  *  same way `documentFileForViewing` does, rather than throwing: the
  *  document simply cannot be reviewed until its file is re-added, but the
- *  rest of the run is not blocked by it. */
+ *  rest of the run is not blocked by it.
+ *
+ *  If regeneration *is* attempted and fails (`parseFile` catches internally
+ *  and reports it as `parseError`), that failure is returned as-is rather
+ *  than silently falling back to "no images needed" — a caller checking
+ *  `pageImages` alone cannot tell an unreadable scan from a document that
+ *  never needed images, so it must check `parseError` too. */
 export async function documentFileForReview(record: DocumentRecord, blob: Blob | null): Promise<DocumentFile> {
   if (!blob) {
     return {
@@ -255,7 +325,32 @@ export async function documentFileForReview(record: DocumentRecord, blob: Blob |
   if (record.parseError) {
     return { id: record.id, name: record.name, text: record.text, file, kind: record.kind, parseError: record.parseError };
   }
+
+  if (!documentNeedsPageImages(record)) {
+    return { id: record.id, name: record.name, text: record.text, file, kind: record.kind };
+  }
+
+  const cached = pageImageCache.get(record.id);
+  if (cached) {
+    return {
+      id: record.id,
+      name: record.name,
+      text: record.text,
+      file,
+      kind: record.kind,
+      pageImages: cached.length ? cached : undefined,
+    };
+  }
+
   const reparsed = await parseFile(file);
+  // Cache only a successful regeneration. A failed one (parseError set)
+  // is left uncached deliberately: it's surfaced to the caller below like
+  // any other unreadable document rather than remembered as a permanent
+  // "this document has no images" verdict, in case the failure was
+  // transient (e.g. a corrupt-looking read that succeeds on a retry).
+  if (!reparsed.parseError) {
+    pageImageCache.set(record.id, reparsed.pageImages ?? []);
+  }
   // parseFile mints its own fresh id (it has no notion of a persisted
   // document); overridden here so the returned DocumentFile keeps the
   // DocumentRecord's real id — the id a review's `documentIds` and
