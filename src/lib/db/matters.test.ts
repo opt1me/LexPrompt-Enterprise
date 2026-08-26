@@ -119,6 +119,32 @@ describe('matter CRUD', () => {
   it('returns null for an unknown id', async () => {
     expect(await getMatter('nope')).toBeNull();
   });
+
+  it('assigns distinct sequence numbers to concurrent saves and orders them deterministically', async () => {
+    // Both saves race to read the current max _seq and write theirs. If the
+    // read-then-write were not scoped to one shared transaction, both could
+    // read the same max and persist duplicate _seq values, which would make
+    // the same-millisecond tiebreak in listMatters non-deterministic.
+    const a = newMatter('A', 'owner-1');
+    const b = newMatter('B', 'owner-1');
+    await Promise.all([saveMatter(a), saveMatter(b)]);
+
+    const db = await getDb();
+    const [rawA, rawB] = await Promise.all([
+      db.get(STORES.matters, a.id) as Promise<(typeof a) & { _seq: number }>,
+      db.get(STORES.matters, b.id) as Promise<(typeof b) & { _seq: number }>,
+    ]);
+    expect(rawA._seq).not.toBe(rawB._seq);
+
+    // Force a same-millisecond tie on updatedAt so ordering can only come
+    // from the _seq tiebreak, then confirm it's stable and matches which
+    // save actually landed with the higher sequence number.
+    const tie = Date.now();
+    await db.put(STORES.matters, { ...rawA, updatedAt: tie });
+    await db.put(STORES.matters, { ...rawB, updatedAt: tie });
+    const winnerId = rawA._seq > rawB._seq ? a.id : b.id;
+    expect((await listMatters())[0].id).toBe(winnerId);
+  });
 });
 
 describe('deleteMatter cascade', () => {

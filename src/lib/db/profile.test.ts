@@ -36,4 +36,14 @@ describe('profile', () => {
     expect(reloaded.initials).toBe('AG');
     expect(reloaded.id).toBe(p.id);
   });
+
+  it('two concurrent first calls resolve to the same profile, and only one is persisted', async () => {
+    const [a, b] = await Promise.all([getProfile(), getProfile()]);
+    expect(a.id).toBe(b.id);
+    expect(a).toEqual(b);
+
+    const db = await getDb();
+    const stored = await db.get(STORES.profile, PROFILE_KEY);
+    expect(stored).toEqual(a);
+  });
 });

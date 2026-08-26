@@ -55,16 +55,22 @@ export async function getMatter(id: string): Promise<Matter | null> {
   return found ? stripSeq(found) : null;
 }
 
-async function nextSeq(db: Awaited<ReturnType<typeof getDb>>): Promise<number> {
-  const existing = (await db.getAll(STORES.matters)) as StoredMatter[];
-  return existing.reduce((max, r) => Math.max(max, seqOf(r)), 0) + 1;
-}
-
 export async function saveMatter(m: Matter): Promise<Matter> {
   const db = await getDb();
   const saved: Matter = { ...m, updatedAt: Date.now() };
-  const record: StoredMatter = { ...saved, _seq: await nextSeq(db) };
-  await db.put(STORES.matters, record);
+  // The read (current max _seq) and the write share ONE readwrite
+  // transaction, so two concurrent saveMatter calls can never both read the
+  // same max before either has written theirs — the race that would let
+  // concurrent saves mis-order a same-millisecond tie. Nothing non-IDB is
+  // awaited between the getAll and the put, which is what keeps IndexedDB
+  // from auto-committing the transaction early. Mirrors playbooks.ts's
+  // savePlaybook exactly.
+  const tx = db.transaction(STORES.matters, 'readwrite');
+  const existing = (await tx.store.getAll()) as StoredMatter[];
+  const seq = existing.reduce((max, r) => Math.max(max, seqOf(r)), 0) + 1;
+  const record: StoredMatter = { ...saved, _seq: seq };
+  await tx.store.put(record);
+  await tx.done;
   return saved;
 }
 
