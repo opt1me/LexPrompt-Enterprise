@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PageViewport } from 'pdfjs-dist';
-import { ZoomIn, ZoomOut } from 'lucide-react';
+import { ZoomIn, ZoomOut, ScanSearch } from 'lucide-react';
 import { extractPageText, loadPdfjs, readArrayBuffer } from '../../lib/documents';
-import { findQuoteRects, type PdfPageText, type QuoteRect } from '../../lib/citations';
+import { findQuoteRects, hasNoTextLayer, type PdfPageText, type QuoteRect } from '../../lib/citations';
 import { debug } from '../../lib/debug';
 
 interface PdfCanvasProps {
@@ -134,6 +134,13 @@ export function PdfCanvas({ file, highlights }: PdfCanvasProps) {
     [pageTexts, highlights],
   );
 
+  // A scan with no OCR text layer renders and extracts fine (the page image
+  // fallback elsewhere handles that), but `findQuoteRects` can never locate
+  // a citation in it — clicking a "Ref N" button would otherwise do nothing
+  // at all, with no way for the user to tell why. Computed once pageTexts
+  // has actually loaded, not before, so a normal PDF never flashes it.
+  const noTextLayer = pageTexts.length > 0 && hasNoTextLayer(pageTexts);
+
   if (error) {
     return (
       <div className="h-full flex items-center justify-center text-red-400 text-sm p-8 text-center">
@@ -167,6 +174,12 @@ export function PdfCanvas({ file, highlights }: PdfCanvasProps) {
           <ZoomIn className="w-4 h-4" />
         </button>
       </div>
+      {noTextLayer && (
+        <div className="sticky top-[4.5rem] z-40 flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 text-xs px-4 py-2 rounded-lg mb-6 max-w-md text-center shadow-lg">
+          <ScanSearch className="w-4 h-4 shrink-0" />
+          <span>This document is a scan with no searchable text, so citations can&apos;t be located in it.</span>
+        </div>
+      )}
       {pageNumbers.map(p => (
         <PdfPage
           key={p}

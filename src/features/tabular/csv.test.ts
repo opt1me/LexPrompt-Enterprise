@@ -41,6 +41,36 @@ describe('escapeCsvField', () => {
   it('handles an empty string', () => {
     expect(escapeCsvField('')).toBe('""');
   });
+
+  describe('formula injection guard', () => {
+    it('prefixes a field starting with "=" with an apostrophe', () => {
+      expect(escapeCsvField('=SUM(A1:A9)')).toBe('"\'=SUM(A1:A9)"');
+    });
+
+    it('prefixes a field starting with "+" with an apostrophe', () => {
+      expect(escapeCsvField('+1 555 0100')).toBe('"\'+1 555 0100"');
+    });
+
+    it('prefixes a field starting with "-" with an apostrophe (the rent-summary case)', () => {
+      expect(escapeCsvField('-1,000 per annum')).toBe('"\'-1,000 per annum"');
+    });
+
+    it('prefixes a field starting with "@" with an apostrophe', () => {
+      expect(escapeCsvField('@landlord terms')).toBe('"\'@landlord terms"');
+    });
+
+    it('does not touch a field where the lead character appears mid-string, not at the start', () => {
+      expect(escapeCsvField('rent is -1,000 per annum')).toBe('"rent is -1,000 per annum"');
+    });
+
+    it('leaves a normal field with no leading formula character untouched', () => {
+      expect(escapeCsvField('Auto-renews annually.')).toBe('"Auto-renews annually."');
+    });
+
+    it('still doubles internal quotes on a field that also needs the formula prefix', () => {
+      expect(escapeCsvField('=A1 says "hi"')).toBe('"\'=A1 says ""hi"""');
+    });
+  });
 });
 
 describe('buildTabularCsv', () => {

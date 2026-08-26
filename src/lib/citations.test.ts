@@ -1,6 +1,6 @@
 // src/lib/citations.test.ts
 import { describe, it, expect } from 'vitest';
-import { normalizeForMatch, findQuoteRects, type PdfPageText } from './citations';
+import { normalizeForMatch, findQuoteRects, hasNoTextLayer, type PdfPageText } from './citations';
 
 // Builds a page where each word is its own text item on one line,
 // mirroring how pdf.js splits a text layer.
@@ -164,5 +164,40 @@ describe('findQuoteRects', () => {
       const rects = findQuoteRects(fuzzyBoundaryPage, [quote31]);
       expect(rects.length).toBeGreaterThan(0);
     });
+  });
+});
+
+describe('hasNoTextLayer', () => {
+  it('is true for a document with zero extractable text (a genuine scan)', () => {
+    const scanned: PdfPageText[] = [
+      { pageNum: 1, items: [] },
+      { pageNum: 2, items: [{ str: '', transform: [1, 0, 0, 1, 0, 0], width: 0 }] },
+    ];
+    expect(hasNoTextLayer(scanned)).toBe(true);
+  });
+
+  it('is true for a document with only a handful of stray characters (e.g. a stamped page number)', () => {
+    const stamped: PdfPageText[] = [
+      { pageNum: 1, items: [{ str: '  12  ', transform: [1, 0, 0, 1, 0, 0], width: 10 }] },
+    ];
+    expect(hasNoTextLayer(stamped)).toBe(true);
+  });
+
+  it('is false for a document with a normal amount of extracted text', () => {
+    const normal = [page(1, ['The', 'landlord', 'shall', 'maintain', 'the', 'roof'])];
+    expect(hasNoTextLayer(normal)).toBe(false);
+  });
+
+  it('is false once total text reaches the threshold, split across many pages', () => {
+    const manyThinPages: PdfPageText[] = Array.from({ length: 5 }, (_, i) => ({
+      pageNum: i + 1,
+      items: [{ str: 'abcde', transform: [1, 0, 0, 1, 0, 0], width: 10 }],
+    }));
+    // 5 pages * 5 chars = 25 total, over the 20-character threshold.
+    expect(hasNoTextLayer(manyThinPages)).toBe(false);
+  });
+
+  it('is true for an empty pages array', () => {
+    expect(hasNoTextLayer([])).toBe(true);
   });
 });

@@ -23,6 +23,27 @@ const MIN_QUOTE_LENGTH = 5;
 const FUZZY_MIN_LENGTH = 30;
 const FUZZY_AFFIX = 15;
 
+// Below this many total extracted characters across the whole document, a
+// PDF is treated as having no usable text layer at all (a handful of stray
+// characters — a stamp, a page number — isn't a text layer `findQuoteRects`
+// could ever locate a real quote in).
+const NO_TEXT_LAYER_THRESHOLD = 20;
+
+/**
+ * True when a PDF's total extractable text is negligible — the signature of
+ * a scan with no OCR text layer, where `findQuoteRects` can never locate a
+ * citation no matter how the quote is phrased. Extraction itself may still
+ * work fine on such a document via a page-image fallback elsewhere; this is
+ * purely about whether a citation can ever be scrolled to in the viewer.
+ */
+export function hasNoTextLayer(pages: PdfPageText[]): boolean {
+  const totalLength = pages.reduce(
+    (sum, page) => sum + page.items.reduce((s, item) => s + item.str.trim().length, 0),
+    0,
+  );
+  return totalLength < NO_TEXT_LAYER_THRESHOLD;
+}
+
 /** Strips everything but letters and digits, lowercased, so a quote survives
  *  differences in punctuation, spacing and line breaking between the model's
  *  output and the PDF text layer. */
