@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { migrateIfNeeded } from './migrate';
 import { listPlaybooks } from './playbooks';
 import { getDb, closeDb } from './open';
+import * as openModule from './open';
 
 const V1_KEY = 'lexprompt.templates.v2';
 
@@ -88,5 +89,46 @@ describe('migrateIfNeeded', () => {
     expect(result.status).toBe('migrated');
     const found = (await listPlaybooks()).find(p => p.id === 't1');
     expect(found?.name).toBe('Lease (renamed by user)');
+  });
+
+  // `migrateIfNeeded` declares Promise<MigrationResult> — failure is meant
+  // to be reported by RETURNING { status: 'failed' }, never by rejecting.
+  // A `getDb()` failure (e.g. DbBlockedError, or IndexedDB unavailable) is
+  // the starkest case: it happens before anything else runs, so if it
+  // isn't caught, the whole promise rejects instead of resolving to a
+  // result object — an unhandled rejection at the exact moment a user's
+  // v1 playbooks are being moved.
+  it('a getDb failure yields a failed result, not a rejected promise', async () => {
+    seedV1([{ id: 't1', name: 'Lease', clauses: [] }]);
+    const spy = vi.spyOn(openModule, 'getDb').mockRejectedValueOnce(new Error('indexeddb unavailable'));
+    await expect(migrateIfNeeded()).resolves.toEqual({
+      status: 'failed',
+      count: 0,
+      error: expect.stringMatching(/indexeddb unavailable/i),
+    });
+    spy.mockRestore();
+    expect(localStorage.getItem(V1_KEY)).not.toBeNull();
+  });
+
+  it('a flag-write failure after successful record writes yields failed with the correct count', async () => {
+    seedV1([
+      { id: 't1', name: 'A', clauses: [] },
+      { id: 't2', name: 'B', clauses: [] },
+    ]);
+    const db = await getDb();
+    const realPut = db.put.bind(db);
+    // Both playbook record writes must succeed; only the completion-flag
+    // write (into the `profile` store) fails.
+    vi.spyOn(db, 'put').mockImplementation(((storeName: string, ...args: unknown[]) => {
+      if (storeName === 'profile') {
+        return Promise.reject(new Error('flag quota exceeded'));
+      }
+      return (realPut as (...a: unknown[]) => Promise<unknown>)(storeName, ...args);
+    }) as typeof db.put);
+    const result = await migrateIfNeeded();
+    expect(result.status).toBe('failed');
+    expect(result.count).toBe(2);
+    expect(result.error).toMatch(/flag quota/i);
+    expect(localStorage.getItem(V1_KEY)).not.toBeNull();
   });
 });

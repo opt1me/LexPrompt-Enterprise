@@ -76,45 +76,56 @@ function uid(): string {
  *     folded into `not-needed`.
  */
 export async function migrateIfNeeded(): Promise<MigrationResult> {
-  const db = await getDb();
-
-  // Fast path — the whole point of the durable flag: a returning user who
-  // has already been migrated (or who never had v1 data) never causes
-  // localStorage to be touched again.
-  if (await readFlag(db)) {
-    return { status: 'not-needed', count: 0 };
-  }
-
-  const raw = localStorage.getItem(V1_TEMPLATES_KEY);
-  if (raw === null) {
-    await writeFlag(db, 0);
-    return { status: 'not-needed', count: 0 };
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    // Rule 3. An unparseable source is not "nothing to migrate" — it is a
-    // migration that cannot proceed. No flag is written, so a fixed or
-    // recovered source gets another chance on the next call.
-    return { status: 'failed', count: 0, error: `v1 template storage could not be parsed: ${errorMessage(e)}` };
-  }
-
-  if (!Array.isArray(parsed)) {
-    return { status: 'failed', count: 0, error: 'v1 template storage was not an array.' };
-  }
-
-  if (parsed.length === 0) {
-    await writeFlag(db, 0);
-    return { status: 'not-needed', count: 0 };
-  }
-
+  // Contract: this function reports failure by RETURNING
+  // `{ status: 'failed', ... }`, never by rejecting. Everything below —
+  // including `getDb()` itself and the final flag write — runs inside this
+  // one try/catch so that a `DbBlockedError`, a quota failure while writing
+  // the completion flag, or anything else unanticipated cannot surface as
+  // an unhandled rejection. A caller written against `Promise<MigrationResult>`
+  // has no reason to `.catch()`; letting this reject at startup — the exact
+  // moment a user's v1 playbooks are being moved — would be the worst
+  // possible time for that gap to show up. `count` lives outside the try so
+  // the catch can still report an accurate partial count from a mid-loop
+  // failure, per Rule 3.
   let count = 0;
-  for (const entry of parsed) {
-    const src = (entry ?? {}) as Partial<Playbook> & Record<string, unknown>;
-    const id = typeof src.id === 'string' && src.id ? src.id : uid();
+  try {
+    const db = await getDb();
+
+    // Fast path — the whole point of the durable flag: a returning user who
+    // has already been migrated (or who never had v1 data) never causes
+    // localStorage to be touched again.
+    if (await readFlag(db)) {
+      return { status: 'not-needed', count: 0 };
+    }
+
+    const raw = localStorage.getItem(V1_TEMPLATES_KEY);
+    if (raw === null) {
+      await writeFlag(db, 0);
+      return { status: 'not-needed', count: 0 };
+    }
+
+    let parsed: unknown;
     try {
+      parsed = JSON.parse(raw);
+    } catch (e) {
+      // Rule 3. An unparseable source is not "nothing to migrate" — it is a
+      // migration that cannot proceed. No flag is written, so a fixed or
+      // recovered source gets another chance on the next call.
+      return { status: 'failed', count: 0, error: `v1 template storage could not be parsed: ${errorMessage(e)}` };
+    }
+
+    if (!Array.isArray(parsed)) {
+      return { status: 'failed', count: 0, error: 'v1 template storage was not an array.' };
+    }
+
+    if (parsed.length === 0) {
+      await writeFlag(db, 0);
+      return { status: 'not-needed', count: 0 };
+    }
+
+    for (const entry of parsed) {
+      const src = (entry ?? {}) as Partial<Playbook> & Record<string, unknown>;
+      const id = typeof src.id === 'string' && src.id ? src.id : uid();
       // Rule 2 (the check that matters). A record already present — from a
       // prior, possibly-interrupted run, or because the user has since
       // edited it in the app — is left exactly as it is. Never
@@ -127,17 +138,19 @@ export async function migrateIfNeeded(): Promise<MigrationResult> {
       const record = { ...src, id } as Playbook;
       await db.put(STORES.playbooks, record);
       count++;
-    } catch (e) {
-      // Rule 3, record-by-record: a failure partway through still reports
-      // exactly how many records were successfully accounted for before
-      // it, and stops rather than pressing on past a write that failed.
-      // No flag is written — the successfully-written records are
-      // recognized as already-present on the next attempt, so a retry
-      // resumes rather than reprocessing them.
-      return { status: 'failed', count, error: errorMessage(e) };
     }
-  }
 
-  await writeFlag(db, count);
-  return { status: 'migrated', count };
+    await writeFlag(db, count);
+    return { status: 'migrated', count };
+  } catch (e) {
+    // Rule 3, for every failure this function can hit — a bad `getDb()`
+    // open, a per-record write failure (count reflects successes strictly
+    // before the failing record, since `count++` only happens after a
+    // successful get/skip or put), or a failure writing the completion
+    // flag itself after every record succeeded. No flag is written on any
+    // of these paths — the successfully-written records are recognized as
+    // already-present on the next attempt, so a retry resumes rather than
+    // reprocessing them.
+    return { status: 'failed', count, error: errorMessage(e) };
+  }
 }
