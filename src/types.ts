@@ -23,6 +23,10 @@ export interface Template {
   schemaVersion: number;
 }
 
+/** The redesign's name for a Template. Structurally identical in sub-project A;
+ *  versioning and standard positions arrive in sub-project D. */
+export type Playbook = Template;
+
 export interface DocumentFile {
   id: string;
   name: string;
@@ -96,3 +100,47 @@ export const DEFAULT_SETTINGS: Settings = {
   modelId: '',
   concurrency: 5,
 };
+
+/** Bumped from TEMPLATE_SCHEMA_VERSION (2) — see src/lib/db/migrate.ts. */
+export const SCHEMA_VERSION = 3;
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  initials: string;
+}
+
+export interface Matter {
+  id: string;
+  name: string;
+  client?: string;
+  reference?: string;
+  ownerId: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface DocumentRecord {
+  id: string;
+  matterId: string;
+  name: string;
+  kind: 'pdf' | 'docx' | 'txt';
+  text: string;
+  parseError?: string;
+  byteSize: number;
+  addedAt: number;
+  addedByUserId: string;
+}
+
+export interface Review {
+  id: string;
+  matterId: string;
+  playbookSnapshot: Playbook;
+  documentIds: string[];
+  findings: Record<string, Record<string, Finding>>;
+  modelId: string;
+  startedAt: number;
+  completedAt?: number;
+  cancelledAt?: number;
+  createdByUserId: string;
+}

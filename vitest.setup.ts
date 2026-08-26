@@ -1,3 +1,5 @@
+import 'fake-indexeddb/auto';
+
 // Polyfill Blob.text() for jsdom if not available
 if (typeof Blob !== 'undefined' && !Blob.prototype.text) {
   Blob.prototype.text = async function() {
