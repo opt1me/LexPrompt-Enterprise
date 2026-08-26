@@ -1,5 +1,6 @@
 import { getDb } from './open';
 import { STORES } from './schema';
+import { nextSeq, seqOf } from './seq';
 import type { Matter } from '../../types';
 
 function uid(): string {
@@ -13,10 +14,6 @@ function uid(): string {
  *  to callers. */
 interface StoredMatter extends Matter {
   _seq: number;
-}
-
-function seqOf(record: Partial<StoredMatter>): number {
-  return typeof record._seq === 'number' ? record._seq : 0;
 }
 
 export function newMatter(name: string, ownerId: string): Matter {
@@ -66,8 +63,7 @@ export async function saveMatter(m: Matter): Promise<Matter> {
   // from auto-committing the transaction early. Mirrors playbooks.ts's
   // savePlaybook exactly.
   const tx = db.transaction(STORES.matters, 'readwrite');
-  const existing = (await tx.store.getAll()) as StoredMatter[];
-  const seq = existing.reduce((max, r) => Math.max(max, seqOf(r)), 0) + 1;
+  const seq = await nextSeq(tx.store);
   const record: StoredMatter = { ...saved, _seq: seq };
   await tx.store.put(record);
   await tx.done;

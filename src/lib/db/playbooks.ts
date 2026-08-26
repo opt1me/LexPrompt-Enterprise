@@ -1,5 +1,6 @@
 import { getDb } from './open';
 import { STORES } from './schema';
+import { nextSeq, seqOf } from './seq';
 import { TEMPLATE_SCHEMA_VERSION, type Clause, type Playbook } from '../../types';
 
 function uid(): string {
@@ -15,10 +16,6 @@ function uid(): string {
  *  instead. `_seq` never appears on a `Playbook` returned to callers. */
 interface StoredPlaybook extends Playbook {
   _seq: number;
-}
-
-function seqOf(record: Partial<StoredPlaybook>): number {
-  return typeof record._seq === 'number' ? record._seq : 0;
 }
 
 /** Brings a playbook of any earlier (or malformed) shape up to the current
@@ -107,8 +104,7 @@ export async function savePlaybook(playbook: Playbook): Promise<Playbook> {
     // non-IDB is awaited between the getAll and the put, which is what
     // keeps IndexedDB from auto-committing the transaction early.
     const tx = db.transaction(STORES.playbooks, 'readwrite');
-    const existing = (await tx.store.getAll()) as StoredPlaybook[];
-    const seq = existing.reduce((max, r) => Math.max(max, seqOf(r)), 0) + 1;
+    const seq = await nextSeq(tx.store);
     const record: StoredPlaybook = { ...saved, _seq: seq };
     await tx.store.put(record);
     await tx.done;

@@ -1,0 +1,284 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import {
+  listReviews, getReview, saveReview, deleteReview, createDebouncedReviewSaver,
+} from './reviews';
+import { getDb, closeDb } from './open';
+import { STORES } from './schema';
+import type { Review, Playbook } from '../../types';
+
+beforeEach(async () => {
+  const db = await getDb();
+  await db.clear(STORES.reviews);
+});
+
+afterEach(() => closeDb());
+
+function uid(): string {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
+function makePlaybook(): Playbook {
+  return {
+    id: uid(),
+    name: 'NDA',
+    contractType: 'NDA',
+    mode: 'extraction',
+    systemPrompt: 'Be careful.',
+    formatPrompt: 'Quote verbatim.',
+    clauses: [{ id: 'c1', title: 'Term', prompt: 'What is the term?' }],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    schemaVersion: 2,
+  };
+}
+
+function makeReview(overrides: Partial<Review> = {}): Review {
+  return {
+    id: uid(),
+    matterId: 'matter-1',
+    playbookSnapshot: makePlaybook(),
+    documentIds: ['doc-1'],
+    findings: {},
+    modelId: 'test-model',
+    startedAt: Date.now(),
+    createdByUserId: 'owner-1',
+    ...overrides,
+  };
+}
+
+describe('review CRUD', () => {
+  it('starts empty', async () => {
+    expect(await listReviews('matter-1')).toEqual([]);
+  });
+
+  it('saves and reads back a review', async () => {
+    const r = makeReview();
+    await saveReview(r);
+    expect((await getReview(r.id))?.modelId).toBe('test-model');
+    expect((await listReviews(r.matterId)).map(x => x.id)).toEqual([r.id]);
+  });
+
+  it('updates in place rather than duplicating', async () => {
+    const r = makeReview();
+    await saveReview(r);
+    await saveReview({ ...r, completedAt: Date.now() });
+    const all = await listReviews(r.matterId);
+    expect(all.length).toBe(1);
+    expect(all[0].completedAt).toBeDefined();
+  });
+
+  it('returns null for an unknown id', async () => {
+    expect(await getReview('nope')).toBeNull();
+  });
+
+  it('deletes', async () => {
+    const r = makeReview();
+    await saveReview(r);
+    await deleteReview(r.id);
+    expect(await getReview(r.id)).toBeNull();
+    expect(await listReviews(r.matterId)).toEqual([]);
+  });
+
+  it('only lists reviews for the requested matter', async () => {
+    const a = makeReview({ matterId: 'matter-a' });
+    const b = makeReview({ matterId: 'matter-b' });
+    await Promise.all([saveReview(a), saveReview(b)]);
+    expect((await listReviews('matter-a')).map(x => x.id)).toEqual([a.id]);
+  });
+
+  it('lists most-recently-started first, deterministically on a same-millisecond tie', async () => {
+    const a = await saveReview(makeReview({ startedAt: 1 }));
+    await saveReview(makeReview({ startedAt: 2 }));
+    await saveReview({ ...a, startedAt: 3 });
+    expect((await listReviews('matter-1'))[0].id).toBe(a.id);
+  });
+
+  it('assigns distinct sequence numbers to concurrent saves and orders them deterministically', async () => {
+    const a = makeReview();
+    const b = makeReview();
+    await Promise.all([saveReview(a), saveReview(b)]);
+
+    const db = await getDb();
+    const [rawA, rawB] = await Promise.all([
+      db.get(STORES.reviews, a.id) as Promise<Review & { _seq: number }>,
+      db.get(STORES.reviews, b.id) as Promise<Review & { _seq: number }>,
+    ]);
+    expect(rawA._seq).not.toBe(rawB._seq);
+
+    const tie = Date.now();
+    await db.put(STORES.reviews, { ...rawA, startedAt: tie });
+    await db.put(STORES.reviews, { ...rawB, startedAt: tie });
+    const winnerId = rawA._seq > rawB._seq ? a.id : b.id;
+    expect((await listReviews('matter-1'))[0].id).toBe(winnerId);
+  });
+
+  it('rejects rather than resolving to [] when the database fails, so "no reviews" can be told apart from "db failed"', async () => {
+    const db = await getDb();
+    const spy = vi.spyOn(db, 'getAllFromIndex').mockRejectedValue(new Error('boom'));
+    try {
+      await expect(listReviews('matter-1')).rejects.toThrow('boom');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('saveReview allocates seq and put in one transaction, not two', async () => {
+    const db = await getDb();
+    const txSpy = vi.spyOn(db, 'transaction');
+    await saveReview(makeReview());
+    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(txSpy).toHaveBeenCalledWith(STORES.reviews, 'readwrite');
+    txSpy.mockRestore();
+  });
+});
+
+describe('playbookSnapshot isolation', () => {
+  it('is unaffected by mutating a field nested inside a clause object after saving', async () => {
+    // The load-bearing case: mutating something NESTED inside the snapshot
+    // (not just pushing onto the top-level `clauses` array) after save must
+    // not retroactively change what the review claims to have checked. A
+    // test that only pushes a new top-level clause would pass against a
+    // shallow copy of `playbookSnapshot` and prove nothing.
+    const playbook = makePlaybook();
+    const originalPrompt = playbook.clauses[0].prompt;
+    const r = makeReview({ playbookSnapshot: playbook });
+
+    const saved = await saveReview(r);
+    playbook.clauses[0].prompt = 'MUTATED';
+
+    // The value returned from saveReview in this same tick must not have
+    // leaked a reference to the caller's clause object.
+    expect(saved.playbookSnapshot.clauses[0].prompt).toBe(originalPrompt);
+
+    // And the persisted copy, read back fresh from the store, must also be
+    // unaffected.
+    const reread = await getReview(r.id);
+    expect(reread?.playbookSnapshot.clauses[0].prompt).toBe(originalPrompt);
+  });
+
+  it('is unaffected by pushing a new clause onto the original playbook after saving', async () => {
+    const playbook = makePlaybook();
+    const r = makeReview({ playbookSnapshot: playbook });
+    await saveReview(r);
+
+    playbook.clauses.push({ id: 'c2', title: 'New', prompt: 'New?' });
+
+    const reread = await getReview(r.id);
+    expect(reread?.playbookSnapshot.clauses.length).toBe(1);
+  });
+});
+
+// Real timers throughout: fake-indexeddb schedules every request completion
+// via a real setImmediate/setTimeout(fn, 0) internally (see
+// `fake-indexeddb`'s `lib/scheduling.js`), so `vi.useFakeTimers()` would
+// freeze the database itself, not just this helper's debounce timer — any
+// `getDb()`/store call made while fake timers are active hangs until the
+// fake clock is advanced past every nested internal timer, which is
+// exactly the kind of coupling these tests should not depend on. Using a
+// short real `debounceMs` and a real `wait()` exercises the same logic
+// without that trap.
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+describe('createDebouncedReviewSaver', () => {
+  it('does not persist immediately on scheduleSave', async () => {
+    const saver = createDebouncedReviewSaver(200);
+    const r = makeReview();
+    saver.scheduleSave(r);
+    try {
+      expect(await getReview(r.id)).toBeNull();
+    } finally {
+      // Dispose so this test's real, still-armed 200ms timer cannot fire
+      // during a later test and pollute that test's own save-count spy.
+      saver.dispose();
+    }
+  });
+
+  it('persists the latest scheduled state once the debounce interval elapses', async () => {
+    const saver = createDebouncedReviewSaver(30);
+    const r = makeReview();
+    try {
+      saver.scheduleSave(r);
+      saver.scheduleSave({ ...r, findings: { 'doc-1': {} } });
+
+      await wait(80);
+
+      const found = await getReview(r.id);
+      expect(found).not.toBeNull();
+      expect(found?.findings).toEqual({ 'doc-1': {} });
+    } finally {
+      saver.dispose();
+    }
+  });
+
+  it('does not fire more than once per debounce interval even under continuous updates', async () => {
+    const db = await getDb();
+    const txSpy = vi.spyOn(db, 'transaction');
+    try {
+      const saver = createDebouncedReviewSaver(60);
+      const r = makeReview();
+
+      // Simulate onUpdate firing every 15ms for ~150ms straight — well
+      // inside "continuous", the pattern a naive reset-on-every-call
+      // debounce would starve on (the timer would never go quiet enough to
+      // fire until updates stop).
+      for (let i = 0; i < 10; i++) {
+        saver.scheduleSave({ ...r, findings: { tick: {} } });
+        await wait(15);
+      }
+      await wait(80); // let the last-armed timer fire
+      saver.dispose(); // belt-and-braces: guarantee nothing is left armed for a later test
+
+      // Count only actual writes: `getReview`/`getDb` internally open their
+      // own incidental 'readonly' transactions on this store via the `idb`
+      // library's convenience wrappers, which this filter must not conflate
+      // with a real save.
+      const reviewSaveCalls = txSpy.mock.calls.filter(c => c[0] === STORES.reviews && c[1] === 'readwrite').length;
+      // By ~230ms of continuous updates into a 60ms interval, at least one
+      // save must have landed — a crash here costs seconds, not the whole
+      // run — but nowhere near one per update (10 updates).
+      expect(reviewSaveCalls).toBeGreaterThanOrEqual(1);
+      expect(reviewSaveCalls).toBeLessThan(10);
+      expect(await getReview(r.id)).not.toBeNull();
+    } finally {
+      txSpy.mockRestore();
+    }
+  });
+
+  it('saveNow persists immediately and cancels a pending debounced save', async () => {
+    const db = await getDb();
+    const txSpy = vi.spyOn(db, 'transaction');
+    const writeCount = () => txSpy.mock.calls.filter(c => c[0] === STORES.reviews && c[1] === 'readwrite').length;
+    try {
+      const saver = createDebouncedReviewSaver(60);
+      const r = makeReview();
+      saver.scheduleSave(r);
+      const completed = { ...r, completedAt: Date.now() };
+      await saver.saveNow(completed);
+
+      expect((await getReview(r.id))?.completedAt).toBe(completed.completedAt);
+      const savesAfterSaveNow = writeCount();
+      expect(savesAfterSaveNow).toBe(1);
+
+      // Let the (cancelled) pending timer's window pass; it must not fire
+      // and overwrite the completed save with stale in-progress state.
+      await wait(100);
+      expect(writeCount()).toBe(savesAfterSaveNow);
+      expect((await getReview(r.id))?.completedAt).toBe(completed.completedAt);
+      saver.dispose();
+    } finally {
+      txSpy.mockRestore();
+    }
+  });
+
+  it('dispose cancels a pending save without persisting it', async () => {
+    const saver = createDebouncedReviewSaver(30);
+    const r = makeReview();
+    saver.scheduleSave(r);
+    saver.dispose();
+
+    await wait(80);
+    expect(await getReview(r.id)).toBeNull();
+  });
+});
