@@ -230,6 +230,87 @@ export async function chatJson<T>(req: ChatRequest, signal?: AbortSignal): Promi
 }
 
 /**
+ * Streams a completion over SSE, invoking `onDelta` for each content
+ * fragment as it arrives, and resolves with the full joined text once the
+ * stream ends.
+ *
+ * Deliberately NOT retried, unlike `chat()`: a half-delivered stream can't be
+ * resumed from the middle, and the caller (the interactive chat panel) can
+ * simply be asked again. Because there is no retry loop, `fetch` and the
+ * reader are never wrapped in a catch that could turn a cancellation into a
+ * retried/wrapped error — a cancellation (AbortController.abort()) always
+ * propagates as-is, immediately. This mirrors the fix applied to `chat()`
+ * after a real bug: `chat()`'s network-error catch was unconditional and
+ * retried an AbortError 3 times over ~3s before finally failing, so a
+ * cancel-clicking user saw no immediate effect. chatStream never introduces
+ * that catch in the first place, on either the initial fetch or the
+ * `reader.read()` loop, so an abort surfaces immediately as itself.
+ */
+export async function chatStream(
+  req: ChatRequest,
+  onDelta: (chunk: string) => void,
+  signal?: AbortSignal,
+): Promise<string> {
+  if (!req.apiKey) throw new Error('No OpenRouter API key is set. Add one in Settings.');
+  if (!req.modelId) throw new Error('No model is selected. Choose one in Settings.');
+
+  const response = await fetch(`${BASE}/chat/completions`, {
+    method: 'POST',
+    signal,
+    headers: {
+      Authorization: `Bearer ${req.apiKey}`,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': typeof location !== 'undefined' ? location.origin : 'https://lexprompt.app',
+      'X-Title': 'LexPrompt',
+    },
+    body: JSON.stringify({ ...buildBody(req), stream: true }),
+  });
+
+  if (!response.ok) throw await toError(response);
+  if (!response.body) throw new Error('OpenRouter returned no response body to stream.');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let full = '';
+
+  while (true) {
+    // No try/catch here: if the signal aborts mid-stream, `reader.read()`
+    // rejects (an AbortError, per the fetch spec) and that rejection
+    // propagates straight out of this function as the caller's promise
+    // rejection — not swallowed into a normal `done` completion and not
+    // retried.
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // Events are separated by a blank line; a partial event stays in the buffer.
+    const events = buffer.split('\n\n');
+    buffer = events.pop() ?? '';
+
+    for (const event of events) {
+      for (const line of event.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        try {
+          const parsed = JSON.parse(payload);
+          const delta = parsed?.choices?.[0]?.delta?.content;
+          if (typeof delta === 'string' && delta) {
+            full += delta;
+            onDelta(delta);
+          }
+        } catch {
+          // A malformed event is skipped rather than failing the stream.
+        }
+      }
+    }
+  }
+
+  return full;
+}
+
+/**
  * Maps a raw `pricing.prompt`/`pricing.completion` string (USD per single
  * token) to `number | null`. `null` covers both "field absent" and
  * OpenRouter's documented `-1` "variable price" sentinel (used by a handful

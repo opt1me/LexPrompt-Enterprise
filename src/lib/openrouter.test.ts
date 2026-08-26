@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { chat, chatJson, listModels, parseJsonLoose, OpenRouterError } from './openrouter';
+import { chat, chatJson, chatStream, listModels, parseJsonLoose, OpenRouterError } from './openrouter';
 
 const KEY = 'test-key';
 const req = { apiKey: KEY, modelId: 'test/model', user: 'hello' };
@@ -278,5 +278,130 @@ describe('listModels', () => {
     const models = await listModels();
     expect(models[0].promptPrice).toBeNull();
     expect(models[0].completionPrice).toBeNull();
+  });
+});
+
+function sseResponse(lines: string[]) {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      for (const line of lines) controller.enqueue(encoder.encode(line));
+      controller.close();
+    },
+  });
+  return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+describe('chatStream', () => {
+  it('emits deltas in order and resolves with the joined text', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ])));
+
+    const chunks: string[] = [];
+    const full = await chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, c => chunks.push(c));
+
+    expect(chunks).toEqual(['Hel', 'lo']);
+    expect(full).toBe('Hello');
+  });
+
+  it('handles a delta split across two network chunks', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      'data: {"choices":[{"delta":{"con',
+      'tent":"split"}}]}\n\ndata: [DONE]\n\n',
+    ])));
+
+    const full = await chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, () => {});
+    expect(full).toBe('split');
+  });
+
+  it('ignores SSE comment/keepalive lines', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(sseResponse([
+      ': keepalive\n\n',
+      'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ])));
+
+    expect(await chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, () => {})).toBe('ok');
+  });
+
+  it('sets stream:true in the request body', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(sseResponse(['data: [DONE]\n\n']));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, () => {});
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).stream).toBe(true);
+  });
+
+  it('throws on an error status without attempting to read a stream', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'bad key' } }), { status: 401 }),
+    ));
+
+    await expect(chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, () => {}))
+      .rejects.toThrow(/rejected/i);
+  });
+
+  // Regression guard for the bug fixed in chat(): a cancellation must
+  // propagate immediately, unwrapped, and chatStream must NEVER retry it
+  // (chatStream isn't retried at all, but the risk is the same shape of bug —
+  // some catch-and-wrap logic swallowing or retrying an AbortError). The
+  // call-count assertion is the part that actually catches a regression:
+  // without it, a version that retried three times before finally rejecting
+  // with the same abortError object would still pass.
+  it('propagates an abort from the initial fetch immediately, without wrapping or retrying', async () => {
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    const fetchMock = vi.fn().mockRejectedValue(abortError);
+    vi.stubGlobal('fetch', fetchMock);
+    const controller = new AbortController();
+
+    await expect(chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, () => {}, controller.signal))
+      .rejects.toBe(abortError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  // The stream reader must also respect an abort that fires mid-stream rather
+  // than hanging forever or silently completing as if the stream finished
+  // normally. This simulates the real fetch/ReadableStream behaviour: when a
+  // request is aborted, a reader's in-flight read() promise rejects with an
+  // AbortError. chatStream must let that rejection propagate as the abort it
+  // is, not swallow it into a resolved value.
+  it('stops reading and propagates the abort when the signal fires mid-stream', async () => {
+    const controller = new AbortController();
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    let pullCount = 0;
+    let rejectPending: ((err: unknown) => void) | undefined;
+    const encoder = new TextEncoder();
+
+    const stream = new ReadableStream({
+      pull(ctrl) {
+        pullCount++;
+        if (pullCount === 1) {
+          ctrl.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"a"}}]}\n\n'));
+          return;
+        }
+        // Second and subsequent reads hang until the signal aborts them,
+        // mimicking a live stream that the abort must interrupt.
+        return new Promise((_resolve, reject) => {
+          rejectPending = reject;
+        });
+      },
+    });
+    controller.signal.addEventListener('abort', () => rejectPending?.(abortError));
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    ));
+
+    const promise = chatStream({ apiKey: 'k', modelId: 'm', user: 'hi' }, () => {}, controller.signal);
+    // Let the first pull/read resolve and the second read() start pending.
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    controller.abort();
+
+    await expect(promise).rejects.toBe(abortError);
   });
 });
