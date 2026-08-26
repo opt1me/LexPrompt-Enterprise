@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, Check } from 'lucide-react';
 
 export type ToastVariant = 'success' | 'error';
@@ -12,13 +12,29 @@ export interface ToastState {
  * A single toast that auto-dismisses after 3 seconds. `notify` replaces
  * whatever toast is currently showing (matching the old app's single-slot
  * behaviour) and resets the dismiss timer.
+ *
+ * The dismiss timer is tracked in a ref so a second `notify` call within the
+ * 3-second window cancels the first toast's pending timeout before starting
+ * its own — otherwise the earlier timer fires on schedule and clears
+ * whatever toast is showing *then*, not the one it was set for.
  */
 export function useToast() {
   const [toast, setToast] = useState<ToastState | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const notify = useCallback((message: string, variant: ToastVariant = 'success') => {
+    if (timerRef.current !== null) clearTimeout(timerRef.current);
     setToast({ message, variant });
-    setTimeout(() => setToast(null), 3000);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      setToast(null);
+    }, 3000);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current !== null) clearTimeout(timerRef.current);
+    };
   }, []);
 
   return { notify, toast };
