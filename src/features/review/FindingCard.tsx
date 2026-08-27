@@ -7,6 +7,7 @@ import { StateChip } from '../../components/StateChip';
 import { Button } from '../../components/Button';
 import { EvidenceList } from './EvidenceList';
 import { VerificationControls } from './VerificationControls';
+import { NotesPanel } from './NotesPanel';
 
 export interface FindingCardProps {
   clause: Clause;
@@ -44,6 +45,15 @@ export interface FindingCardProps {
   onVerify?: (change: VerificationChange) => void;
   /** True while this card's verification write is in flight. */
   verifyBusy?: boolean;
+  /** Reports a new note's text. Optional, same reasoning as `onVerify`: a
+   *  card with no way to persist simply omits the notes panel. */
+  onAddNote?: (text: string) => void;
+  /** True while this card's note write is in flight. */
+  noteBusy?: boolean;
+  /** The local profile's initials, shown against a note the user is about to
+   *  write. Defaults to 'ME' when omitted (ruling R1: attribution is real
+   *  but local — there is one user). */
+  authorInitials?: string;
 }
 
 // Written fresh, not ported: the corresponding classes in the deleted
@@ -62,7 +72,7 @@ const CARD_SHELL = 'bg-[#1a1a1a] rounded-xl border';
  * for a review reopened after an abandoned run rather than one actually
  * in flight.
  */
-export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames, onVerify, verifyBusy }: FindingCardProps) {
+export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames, onVerify, verifyBusy, onAddNote, noteBusy, authorInitials }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
 
   if (status === 'pending') {
@@ -202,6 +212,15 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
             verification={finding.verification}
             busy={verifyBusy}
             onChange={onVerify}
+          />
+        )}
+
+        {finding && onAddNote && (
+          <NotesPanel
+            notes={finding.notes}
+            authorInitials={authorInitials ?? 'ME'}
+            busy={noteBusy}
+            onAddNote={onAddNote}
           />
         )}
       </div>
