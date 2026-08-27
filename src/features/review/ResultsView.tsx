@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Mail, FileDown, Loader } from 'lucide-react';
 import type { Clause, DocumentFile, Finding, ReviewRun, Settings } from '../../types';
 import { isAuthError } from '../../lib/openrouter';
@@ -7,6 +7,8 @@ import type { VerificationChange } from '../../lib/verification';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { FindingCard } from './FindingCard';
 import { DocumentViewer } from './DocumentViewer';
+import { RejectReasonModal } from './RejectReasonModal';
+import { useVerifyKeys } from './useVerifyKeys';
 import { exportDocx } from './exportDocx';
 import { draftEmail } from '../assistant/draftEmail';
 import { suggestRevision } from '../assistant/suggestRevision';
@@ -76,6 +78,8 @@ export function ResultsView({
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>('findings');
+  const [focusIndex, setFocusIndex] = useState(0);
+  const [rejectClauseId, setRejectClauseId] = useState<string | null>(null);
 
   const [emailLoading, setEmailLoading] = useState(false);
   const [emailContent, setEmailContent] = useState<string | null>(null);
@@ -93,6 +97,7 @@ export function ResultsView({
       setActiveDocId(run.documentIds[0] ?? '');
       setHighlights([]);
     }
+    setFocusIndex(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run.id]);
 
@@ -104,6 +109,7 @@ export function ResultsView({
   const handleSwitchDoc = (id: string) => {
     setActiveDocId(id);
     setHighlights([]);
+    setFocusIndex(0);
   };
 
   const findings = run.findings[activeDocId] ?? {};
@@ -168,6 +174,31 @@ export function ResultsView({
     }
   };
 
+  const clauses = run.templateSnapshot.clauses;
+  const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  // Keyboard nav for the verify loop (Task 13): j/k move, v/f act immediately,
+  // r opens the reason dialog rather than rejecting directly — a keyboard
+  // shortcut must never be able to reject something silently.
+  useVerifyKeys({
+    enabled: tab === 'findings' && Boolean(onVerify),
+    count: clauses.length,
+    index: focusIndex,
+    onIndexChange: setFocusIndex,
+    onVerify: (i, change) => {
+      const clause = clauses[i];
+      if (!clause || !onVerify) return;
+      if (change.state === 'rejected') { setRejectClauseId(clause.id); return; }
+      void onVerify(activeDocId, clause.id, change);
+    },
+  });
+
+  // A keyboard cursor that never scrolls into view is unusable once the list
+  // outgrows the visible pane.
+  useEffect(() => {
+    cardRefs.current[focusIndex]?.scrollIntoView({ block: 'nearest' });
+  }, [focusIndex]);
+
   return (
     <div className="h-full flex flex-col lg:flex-row bg-[#09090b]">
       <div className="w-full lg:w-1/3 border-r border-white/10 flex flex-col bg-[#111] min-h-0">
@@ -218,6 +249,12 @@ export function ResultsView({
           </button>
         </div>
 
+        {tab === 'findings' && onVerify && (
+          <div className="px-4 py-1.5 text-[11px] text-gray-500 border-b border-white/10 shrink-0">
+            j/k move · v verify · f flag · r reject
+          </div>
+        )}
+
         <div className="h-1 bg-white/5 shrink-0" role="progressbar" aria-valuenow={progressPercent(run.findings)} aria-valuemin={0} aria-valuemax={100}>
           <div className="h-full bg-emerald-500/60 transition-all" style={{ width: `${progressPercent(run.findings)}%` }} />
         </div>
@@ -246,23 +283,28 @@ export function ResultsView({
               </div>
             </div>
 
-            {run.templateSnapshot.clauses.map(clause => (
-              <FindingCard
+            {clauses.map((clause, i) => (
+              <div
                 key={clause.id}
-                clause={clause}
-                finding={findings[clause.id]}
-                onCiteClick={setHighlights}
-                onRetry={(clauseId) => onRetryCell(activeDocId, clauseId)}
-                onSuggestFix={handleSuggestFix}
-                suggestFixLoading={revisionLoadingClauseId === clause.id}
-                interrupted={interrupted}
-                onVerify={onVerify ? (change) => onVerify(activeDocId, clause.id, change) : undefined}
-                onAddNote={onAddNote ? (text) => onAddNote(activeDocId, clause.id, text) : undefined}
-                verifyBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
-                noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
-                documentNames={documentNames}
-                authorInitials={authorInitials}
-              />
+                ref={(el) => { cardRefs.current[i] = el; }}
+                className={`rounded-lg transition-shadow ${focusIndex === i ? 'ring-1 ring-violet-500/40' : ''}`}
+              >
+                <FindingCard
+                  clause={clause}
+                  finding={findings[clause.id]}
+                  onCiteClick={setHighlights}
+                  onRetry={(clauseId) => onRetryCell(activeDocId, clauseId)}
+                  onSuggestFix={handleSuggestFix}
+                  suggestFixLoading={revisionLoadingClauseId === clause.id}
+                  interrupted={interrupted}
+                  onVerify={onVerify ? (change) => onVerify(activeDocId, clause.id, change) : undefined}
+                  onAddNote={onAddNote ? (text) => onAddNote(activeDocId, clause.id, text) : undefined}
+                  verifyBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                  noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                  documentNames={documentNames}
+                  authorInitials={authorInitials}
+                />
+              </div>
             ))}
           </div>
         ) : (
@@ -283,6 +325,16 @@ export function ResultsView({
       )}
 
       <RevisionModal isOpen={revisionOpen} onClose={() => setRevisionOpen(false)} data={revisionData} />
+
+      <RejectReasonModal
+        open={rejectClauseId !== null}
+        onCancel={() => setRejectClauseId(null)}
+        onConfirm={(reason) => {
+          const clauseId = rejectClauseId;
+          setRejectClauseId(null);
+          if (clauseId && onVerify) void onVerify(activeDocId, clauseId, { state: 'rejected', reason });
+        }}
+      />
     </div>
   );
 }
