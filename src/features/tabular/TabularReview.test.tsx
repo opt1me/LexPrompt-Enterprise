@@ -214,3 +214,35 @@ describe('TabularReview — an errored cell still shows its error and its retry 
     expect(onRetryCell).toHaveBeenCalledWith('d1', 'c1');
   });
 });
+
+describe('TabularReview — the clause index counts deviations (Task 12)', () => {
+  it('counts the deviations across the run', () => {
+    const run = makeRun({ d1: {
+      c1: doneFinding({ positionOutcome: 'deviates', positionRationale: 'Nine months.' }),
+      c2: doneFinding({ positionOutcome: 'deviates', positionRationale: 'Uncapped.' }),
+      c3: doneFinding({ positionOutcome: 'meets' }),
+    } });
+    expect(mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />).textContent)
+      .toMatch(/2[^0-9]{0,3}deviat/i);
+  });
+
+  it('shows no deviation count when no clause carries a position', () => {
+    // Absent is not zero. A run where nobody set a house rule has not
+    // "0 deviations" — it has no comparison at all, and a 0 chip would
+    // report a clean result against a standard that was never applied.
+    const run = makeRun({ d1: { c1: doneFinding({ summary: 'x' }) } });
+    expect(mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />).textContent)
+      .not.toMatch(/deviat/i);
+  });
+
+  it('does not count an unclear outcome as a deviation', () => {
+    // `unclear` means the model could not tell. Counting it as a deviation
+    // would report a conflict with the house position that nobody found.
+    const run = makeRun({ d1: {
+      c1: doneFinding({ positionOutcome: 'deviates', positionRationale: 'x' }),
+      c2: doneFinding({ positionOutcome: 'unclear' }),
+    } });
+    expect(mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />).textContent)
+      .toMatch(/1[^0-9]{0,3}deviat/i);
+  });
+});

@@ -49,6 +49,32 @@ const RISK_CELL_CLASSES: Record<RiskLevel, string> = {
 };
 
 /**
+ * Task 12: how many clauses across this run's findings deviate from a
+ * standard position, and whether any clause carries one at all. Derived the
+ * same flat walk `verificationCounts` uses — every document's every
+ * clause's finding — because "absent is not zero": a run where nothing was
+ * ever compared to a house position must show no count at all, not a
+ * "0 deviating" chip implying a comparison that never happened.
+ *
+ * `unclear` is deliberately excluded from the tally. It means the model
+ * could not tell, not that it found a conflict — counting it here would
+ * report a deviation nobody actually found, the same distinction
+ * `positionOutcomeLabel` (`findingOutcome.ts`) draws for the exports.
+ */
+function positionOutcomeCounts(findings: Review['findings']): { deviating: number; hasPosition: boolean } {
+  let deviating = 0;
+  let hasPosition = false;
+  for (const byClause of Object.values(findings ?? {})) {
+    for (const finding of Object.values(byClause ?? {})) {
+      if (finding?.positionOutcome === undefined) continue;
+      hasPosition = true;
+      if (finding.positionOutcome === 'deviates') deviating++;
+    }
+  }
+  return { deviating, hasPosition };
+}
+
+/**
  * Rows are documents, columns are `run.templateSnapshot.clauses`. This is a
  * pure renderer over `run.findings` — the same map `ResultsView` reads — so
  * switching between card and tabular view never re-runs anything and never
@@ -88,6 +114,11 @@ export function TabularReview({
     ? run.findings[findingsKeyFor(run.target, selected.docId)]?.[selected.clauseId]
     : undefined;
 
+  // Task 12: the clause index counts deviations. `hasPosition` gates the
+  // chip's very presence — see `positionOutcomeCounts`'s own doc comment for
+  // why a run with no standard positions gets no chip at all, not "0".
+  const positionCounts = positionOutcomeCounts(run.findings);
+
   return (
     <div className="h-full flex flex-col bg-[#09090b]">
       <div className="h-14 border-b border-white/10 flex items-center justify-between px-6 bg-[#111] shrink-0">
@@ -96,6 +127,11 @@ export function TabularReview({
           <span className="text-xs text-gray-500 bg-white/5 px-2 py-1 rounded border border-white/5 shrink-0">
             {run.documentIds.length} docs &middot; {clauses.length} clauses
           </span>
+          {positionCounts.hasPosition && (
+            <span className="text-xs text-rose-300 bg-rose-500/10 px-2 py-1 rounded border border-rose-500/20 shrink-0">
+              {positionCounts.deviating} deviating
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <button
