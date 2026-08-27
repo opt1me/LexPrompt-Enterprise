@@ -1684,23 +1684,51 @@ There is deliberately no `onEdit`. A published version is immutable, so offering
 
 - [ ] **Step 1: Write the failing tests**
 
+**Two harness notes, checked at plan time.** `src/test/mount.tsx` exports `mount`, `mountOnce`, `buttons`, `buttonNamed`, `textbox`, `click`, `type`, `keyDown`, `keyDownOn` — there is no `text()` or `html()`; read `container.textContent` and `container.innerHTML`. And this is a NEW test file, so it uses the shared harness rather than hand-rolling one.
+
+**R-D15 — the header must distinguish THREE cases, not two.** The id can be absent (the review predates versioning, or its playbook never existed), present-and-resolvable, or **present but dangling** (Task 3 made deleting a playbook cascade to its versions, so a review that ran against a deleted playbook's v3 keeps an id that now resolves to nothing). Rendering "Ran against v3" from the id's presence alone is exactly what R-D15 forbids: the version must be fetched and a miss stated honestly.
+
+```ts
+it('says which version a review ran against when it can still be read', () => {
+  expect(mount(<ReviewVersionLine versionId={v2.id} version={v2} … />).textContent)
+    .toMatch(/ran against v2/i);
+});
+
+it('says the version is no longer recorded when the review never had one', () => {
+  expect(mount(<ReviewVersionLine versionId={undefined} version={null} … />).textContent)
+    .toMatch(/no longer recorded|not recorded/i);
+});
+
+it('says the version was DELETED when the id is present but resolves to nothing (R-D15)', () => {
+  // Distinct from the case above, and the distinction is the point: "we
+  // never recorded which version this ran against" and "the version it ran
+  // against has been deleted" are different facts about the same review,
+  // and only the second one tells the reader why the trail went cold.
+  const out = mount(<ReviewVersionLine versionId="v-gone" version={null} … />).textContent!;
+  expect(out).toMatch(/deleted|no longer exists/i);
+  expect(out).not.toMatch(/ran against v/i);   // never rendered from the id alone
+});
+```
+
+`ReviewVersionLine` is this task's own small component (or an inline block in `ResultsView`'s header — either is fine, but the three cases must be testable). It takes the id AND the resolved version, so a caller cannot render a claim without having tried to resolve it.
+
 ```ts
 it('lists every version with its number, date, author and change summary', () => {
-  const out = text(mount(<VersionHistory versions={[v2, v1]} matterNamesByVersion={{}} … />));
+  const out = mount(<VersionHistory versions={[v2, v1]} matterNamesByVersion={{}} … />).textContent!;
   expect(out).toContain('v2');
   expect(out).toContain('Added a break-notice position');
   expect(out).toContain('v1');
 });
 
 it('names the matters that used each version', () => {
-  const out = text(mount(<VersionHistory versions={[v1]} matterNamesByVersion={{ [v1.id]: ['Acme HQ lease'] }} … />));
+  const out = mount(<VersionHistory versions={[v1]} matterNamesByVersion={{ [v1.id]: ['Acme HQ lease'] }} … />).textContent!;
   expect(out).toContain('Acme HQ lease');
 });
 
 it('says plainly when no matter has used a version yet', () => {
   // A blank cell reads as a rendering failure; "not used by any review yet"
   // reads as the fact it is.
-  expect(text(mount(<VersionHistory versions={[v1]} matterNamesByVersion={{}} … />)))
+  expect(mount(<VersionHistory versions={[v1]} matterNamesByVersion={{}} … />).textContent)
     .toMatch(/not used|no reviews/i);
 });
 
@@ -1708,7 +1736,7 @@ it('offers no way to edit a published version', () => {
   // Editing a published version is not offered (spec §2). Editing produces
   // a new version, because a review that says "ran against v4" must be able
   // to prove what v4 was.
-  expect(html(mount(<VersionHistory versions={[v1, v2]} … />))).not.toMatch(/edit this version/i);
+  expect(mount(<VersionHistory versions={[v1, v2]} … />).innerHTML).not.toMatch(/edit this version/i);
 });
 
 it('renders an error branch instead of the list when loading failed', () => {
@@ -1716,8 +1744,8 @@ it('renders an error branch instead of the list when loading failed', () => {
   // "broken" and offers a retry (CLAUDE.md). Use `describeLoadError` /
   // `LoadErrorPanel`; do not hand-roll one.
   const el = mount(<VersionHistory error={new Error('boom')} versions={[]} … />);
-  expect(text(el)).not.toMatch(/no versions yet/i);
-  expect(text(el)).toMatch(/try again|retry/i);
+  expect(el.textContent).not.toMatch(/no versions yet/i);
+  expect(el.textContent).toMatch(/try again|retry/i);
 });
 ```
 
