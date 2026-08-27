@@ -49,6 +49,12 @@ function draftOf(v: PlaybookVersion): PlaybookDraft {
   };
 }
 
+/** A draft that genuinely DIFFERS from its version. `draftOf(v)` is
+ *  byte-identical to `v`, which is now the "nothing to publish" case. */
+function editedDraftOf(v: PlaybookVersion): PlaybookDraft {
+  return { ...draftOf(v), name: `${v.name} (edited)` };
+}
+
 const noop = () => {};
 const wiring = {
   onPublish: noop,
@@ -162,12 +168,26 @@ describe('TemplateEditor — a published version is never edited in place', () =
 });
 
 describe('TemplateEditor — publish state', () => {
-  it('shows an unpublished-changes state when a draft exists', () => {
+  it('shows an unpublished-changes state when the draft differs from the version', () => {
     const published = version();
+    const c = mount(
+      <TemplateEditor version={published} draft={editedDraftOf(published)} onSaveDraft={noop} {...wiring} />,
+    );
+    expect(c.textContent).toMatch(/unpublished changes/i);
+  });
+
+  // m2. The guard used to be `draft !== undefined`, so typing a character
+  // into the name and deleting it again left Publish enabled over content
+  // byte-identical to v1 — while the comment beside it claimed the guard
+  // was what stopped two identical versions a millisecond apart. It stops
+  // the UNEDITED case now as well as the untouched one.
+  it('offers no publish for a draft byte-identical to the published version', () => {
+    const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
       <TemplateEditor version={published} draft={draftOf(published)} onSaveDraft={noop} {...wiring} />,
     );
-    expect(c.textContent).toMatch(/unpublished changes/i);
+    expect(buttonNamed(c, /publish/i)?.disabled).toBe(true);
+    expect(c.textContent).not.toMatch(/unpublished changes/i);
   });
 
   it('shows no unpublished-changes state when the version is what is on screen', () => {
@@ -201,7 +221,7 @@ describe('TemplateEditor — publish state', () => {
     const c = mount(
       <TemplateEditor
         version={published}
-        draft={draftOf(published)}
+        draft={editedDraftOf(published)}
         onSaveDraft={noop}
         {...wiring}
         onPublish={onPublish}
@@ -219,10 +239,45 @@ describe('TemplateEditor — publish state', () => {
   it('no longer asks what changed in the header', () => {
     const published = version();
     const c = mount(
-      <TemplateEditor version={published} draft={draftOf(published)} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={published} draft={editedDraftOf(published)} onSaveDraft={noop} {...wiring} />,
     );
     expect(c.querySelector('[aria-label="What changed?"]')).toBeNull();
     expect(c.textContent).not.toMatch(/required after v1/i);
+  });
+});
+
+// m3. `Date.now().toString()` gave two clauses added inside one
+// millisecond the SAME id — and `run.findings[key][clauseId]` and the
+// health map are both keyed by it, so one finding would answer for two
+// clauses. CLAUDE.md names this exact pattern as `uid()`'s cautionary tale.
+describe('TemplateEditor — added clauses get distinct ids', () => {
+  it('mints a distinct id for each added clause, even two added in the same millisecond', async () => {
+    const published = version();
+    const seen: PlaybookDraft[] = [];
+    function Harness() {
+      const [draft, setDraft] = React.useState<PlaybookDraft | undefined>(undefined);
+      return (
+        <TemplateEditor
+          version={published}
+          draft={draft}
+          onSaveDraft={(d) => { seen.push(d); setDraft(d); }}
+          {...wiring}
+        />
+      );
+    }
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_730_000_000_000);
+    try {
+      const c = mount(<Harness />);
+      click(buttonNamed(c, /add clause/i));
+      await flush();
+      click(buttonNamed(c, /add clause/i));
+      await flush();
+      const ids = seen.at(-1)!.clauses.map(cl => cl.id);
+      expect(ids).toHaveLength(2);
+      expect(new Set(ids).size).toBe(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
 

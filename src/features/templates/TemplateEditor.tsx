@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   Cpu, FileOutput, ShieldAlert, Plus, ChevronUp, ChevronDown, X, UploadCloud, Download, Copy,
   Settings, GripVertical,
@@ -8,6 +8,7 @@ import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
 import { draftFromVersion, newPlaybookDraft } from '../../lib/db/playbooks';
 import { positionHealthLabel, type PositionHealth } from '../../lib/positionHealth';
 import { StandardPositionField } from './StandardPositionField';
+import { uid } from '../../lib/uid';
 
 export interface TemplateEditorProps {
   /** The current published version, or `undefined` for a playbook that has
@@ -45,11 +46,34 @@ export function workingContent(version?: PlaybookVersion, draft?: PlaybookDraft)
   return newPlaybookDraft('');
 }
 
+/**
+ * Whether `draft` says anything the published version does not.
+ *
+ * Compared as SERIALISED CONTENT rather than field by field, deliberately.
+ * A field-by-field comparison that forgets a field added later would report
+ * "no changes" over a real edit and leave Publish disabled with no
+ * explanation — the user could not publish at all. Any difference at all,
+ * including one this function does not understand, has to fall on the
+ * "changed" side, and stringifying both through `draftFromVersion` (the one
+ * function that produces an editable copy) does exactly that: two drafts
+ * that came from the same producer share key order, and anything else
+ * differs and so counts as an edit.
+ */
+export function hasUnpublishedContent(version?: PlaybookVersion, draft?: PlaybookDraft): boolean {
+  if (draft === undefined) return false;
+  // Never published: everything in the draft is unpublished by definition.
+  if (version === undefined) return true;
+  return JSON.stringify(draft) !== JSON.stringify(draftFromVersion(version));
+}
+
 export function TemplateEditor({
   version, draft, onSaveDraft, onPublish, onExport, onShowMegaPrompt, onClose, health,
 }: TemplateEditorProps) {
-  const working = workingContent(version, draft);
-  const hasUnpublishedChanges = draft !== undefined;
+  // Memoised: without it this re-CLONES the published version on every
+  // render for as long as there is no draft, and the editor's copy drifts
+  // from `App`'s `editorContent` as a second, structurally-equal object.
+  const working = useMemo(() => workingContent(version, draft), [version, draft]);
+  const hasUnpublishedChanges = hasUnpublishedContent(version, draft);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
 
   /**
@@ -83,7 +107,11 @@ export function TemplateEditor({
     updateDraft({
       clauses: [
         ...working.clauses,
-        { id: Date.now().toString(), title: 'New Clause', extractPrompt: 'Instruction...', riskCriteria: '' },
+        // `uid()`, not `Date.now().toString()`: two clauses added inside one
+        // millisecond would otherwise share an id, and both
+        // `run.findings[key][clauseId]` and the position-health map are
+        // keyed by it — one finding would answer for two clauses.
+        { id: uid(), title: 'New Clause', extractPrompt: 'Instruction...', riskCriteria: '' },
       ],
     });
   };
@@ -150,10 +178,12 @@ export function TemplateEditor({
         <div className="flex flex-wrap gap-2 md:gap-3 w-full md:w-auto justify-end items-center">
           <button onClick={onShowMegaPrompt} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors border border-blue-500/30 text-xs md:text-sm"><Copy className="h-4 w-4" /> DIY Mode</button>
           <button onClick={onExport} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm"><Download className="h-4 w-4" /> Export</button>
-          {/* Disabled with nothing unpublished: republishing an unchanged
-             draft produces two byte-identical versions minutes apart, which
-             a version history cannot explain — a real library already
-             carries one such pair. */}
+          {/* Disabled unless the draft actually SAYS something the published
+             version does not: republishing unchanged content produces two
+             byte-identical versions minutes apart, which a version history
+             cannot explain — a real library already carries one such pair.
+             Gating on the draft merely existing left this enabled after an
+             edit that was typed and undone (m2). */}
           <button
             onClick={onPublish}
             disabled={!hasUnpublishedChanges}
