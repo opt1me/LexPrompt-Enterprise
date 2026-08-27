@@ -1538,43 +1538,79 @@ Update `buildMegaPrompt`'s `includeRisk` default to `Boolean(version.riskToleran
 
 - [ ] **Step 2: Write the failing editor tests**
 
+**Against the real harness, checked at plan time.** `src/test/mount.tsx` exports exactly: `mount`, `mountOnce`, `buttons`, `buttonNamed`, `textbox`, `click`, `type`, `keyDown`, `keyDownOn`. There is **no** `text()`, `flush()`, `buttonMatching()`, `titleInput()`, `publishButton()`, `fieldMatching()` or `moveDownButton()` — read `container.textContent` directly, use `buttonNamed(container, /re/)`, and await an async handler with this project's own idiom, `await act(async () => { await Promise.resolve(); })` (see `src/App.interrupted.test.tsx:98` and six sibling files). There is no existing `TemplateEditor` test file; this task creates the first, so it uses the shared harness rather than hand-rolling one.
+
+Write small local selectors where the harness has none, rather than inventing harness functions:
+
 ```ts
+import { act } from 'react';
+import { mount, buttonNamed, click, type } from '../../test/mount';
+
+const flush = () => act(async () => { await Promise.resolve(); });
+const nameInput = (c: HTMLElement) => c.querySelector('input') as HTMLInputElement;
+const fieldFor = (c: HTMLElement, label: RegExp) =>
+  [...c.querySelectorAll('textarea')].find(t =>
+    label.test(t.closest('div')?.textContent ?? '')) as HTMLTextAreaElement | undefined;
+
 it('edits into the draft, never into the published version', async () => {
   const onSaveDraft = vi.fn();
-  const el = mount(<TemplateEditor version={publishedV1} draft={undefined} onSaveDraft={onSaveDraft} … />);
-  type(titleInput(el), 'Renamed');
+  const published: PlaybookVersion = { ...publishedV1 };   // a copy we can compare against
+  const c = mount(<TemplateEditor version={published} draft={undefined} onSaveDraft={onSaveDraft} … />);
+  type(nameInput(c), 'Renamed');
   await flush();
   expect(onSaveDraft).toHaveBeenCalled();
-  // the published version object handed in is untouched
-  expect(publishedV1.name).toBe('Commercial Lease');
+  // The published version object handed in is untouched — this is the
+  // assertion the whole immutability rule rests on.
+  expect(published.name).toBe(publishedV1.name);
 });
 
 it('shows an unpublished-changes state when a draft exists', () => {
-  expect(text(mount(<TemplateEditor version={publishedV1} draft={someDraft} … />)))
+  expect(mount(<TemplateEditor version={publishedV1} draft={someDraft} … />).textContent)
     .toMatch(/unpublished changes/i);
 });
 
 it('refuses to publish without a change summary after v1', async () => {
   const onPublish = vi.fn();
-  const el = mount(<PublishDialog nextVersion={2} onPublish={onPublish} … />);
-  click(publishButton(el));
+  const c = mount(<PublishDialog nextVersion={2} onPublish={onPublish} … />);
+  click(buttonNamed(c, /publish/i));
   await flush();
   expect(onPublish).not.toHaveBeenCalled();
-  expect(text(el)).toMatch(/change summary/i);
+  expect(c.textContent).toMatch(/change summary/i);
 });
 
 it('marks an AI-drafted position no human has read as a suggestion', () => {
-  const el = mount(<StandardPositionField position={{ text: 'x', origin: 'ai-drafted', reviewedByHuman: false }} … />);
-  expect(text(el)).toMatch(/drafted by AI/i);
-  expect(text(el)).not.toMatch(/reviewed by you/i);
+  const c = mount(<StandardPositionField
+    position={{ text: 'x', origin: 'ai-drafted', reviewedByHuman: false }} onChange={() => {}} />);
+  expect(c.textContent).toMatch(/drafted by AI/i);
+  expect(c.textContent).not.toMatch(/reviewed by you/i);
 });
 
 it('says the field is optional and what it enables when empty', () => {
-  const el = mount(<StandardPositionField position={undefined} … />);
-  expect(text(el)).toMatch(/optional/i);
-  expect(text(el)).toMatch(/deviation/i);
+  const c = mount(<StandardPositionField position={undefined} onChange={() => {}} />);
+  expect(c.textContent).toMatch(/optional/i);
+  expect(c.textContent).toMatch(/deviation/i);
 });
 ```
+
+- [ ] **Step 3: Clause reordering saves into the draft**
+
+The editor already reorders with the `moveClause` up/down chevrons. Spec §8 asks for drag-based reordering. Keep the chevrons — they are keyboard-reachable and a drag handle is not — and add drag as a second affordance on the same `moveClause` path, so both write through one function into the **draft**.
+
+```ts
+it('reordering clauses writes into the draft, not the published version', async () => {
+  const onSaveDraft = vi.fn();
+  const published: PlaybookVersion = { ...twoClauseV1 };
+  const c = mount(<TemplateEditor version={published} draft={undefined} onSaveDraft={onSaveDraft} … />);
+  // The chevrons are icon-only; find them by their accessible name, and if
+  // they have none, that is itself a defect worth fixing while you are here.
+  click(buttonNamed(c, /move .*down|down/i));
+  await flush();
+  expect(onSaveDraft.mock.calls.at(-1)![0].clauses.map((cl: PlaybookClause) => cl.id)).toEqual(['c2', 'c1']);
+  expect(published.clauses.map(cl => cl.id)).toEqual(['c1', 'c2']);
+});
+```
+
+If drag proves to need a dependency, **do not add one** — ship the chevrons and report it as a concern. A drag library is not worth a new runtime dependency in a static-hostable app, and the reordering works either way.
 
 `StandardPositionField`'s provenance line, per spec §8:
 - `origin: 'authored'` → "Written by you"
