@@ -402,6 +402,9 @@ describe('the startup conversion (R-D7)', () => {
     const result = await migrateIfNeeded();
     expect(result.status).toBe('failed');
     expect(result.error).toMatch(/quota/i);
+    // Step 2, not step 1 — the blocking screen reassures the user about a
+    // different store for each (Minor 5), so this has to be carried out.
+    expect(result.phase).toBe('versions');
     // Atomic: the conversion is one transaction over both stores, so a
     // failure leaves neither a published version nor a pointer to one.
     expect(await listVersions('pb1')).toEqual([]);

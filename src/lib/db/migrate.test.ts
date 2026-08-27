@@ -94,6 +94,10 @@ describe('migrateIfNeeded', () => {
     const result = await migrateIfNeeded();
     expect(result.status).toBe('failed');
     expect(result.error).toMatch(/quota/i);
+    // The blocking screen tells the user where their data still is, and the
+    // two steps have different answers (Minor 5) — so which step failed has
+    // to reach it rather than being assumed.
+    expect(result.phase).toBe('v1');
     expect(localStorage.getItem(V1_KEY)).not.toBeNull();
   });
 
@@ -136,6 +140,7 @@ describe('migrateIfNeeded', () => {
     await expect(migrateIfNeeded()).resolves.toEqual({
       status: 'failed',
       count: 0,
+      phase: 'v1',
       error: expect.stringMatching(/indexeddb unavailable/i),
     });
     spy.mockRestore();

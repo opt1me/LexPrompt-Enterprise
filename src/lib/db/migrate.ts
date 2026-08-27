@@ -25,10 +25,24 @@ const MIGRATION_FLAG_KEY = 'migration:v1-templates';
  *  convention already anticipated more than one. */
 const PLAYBOOK_VERSIONS_FLAG_KEY = 'migration:d-playbook-versions';
 
+/** Which of `migrateIfNeeded`'s two steps a failure came from. Present on
+ *  a `failed` result only, and absent when the failure happened before
+ *  either step could be identified.
+ *
+ *  It exists because the blocking screen has to tell the user where their
+ *  data still is, and the two steps have DIFFERENT answers: step 1 reads
+ *  v1's localStorage and is safe because that source is never deleted;
+ *  step 2 reads and writes IndexedDB and is safe because each playbook's
+ *  conversion is one all-or-nothing transaction. Naming the wrong one is
+ *  reassurance that happens to be true pointing at the wrong place, which
+ *  misdirects anyone who acts on it. */
+export type MigrationPhase = 'v1' | 'versions';
+
 export interface MigrationResult {
   status: 'not-needed' | 'migrated' | 'failed';
   count: number;
   error?: string;
+  phase?: MigrationPhase;
 }
 
 /** The value stored at `MIGRATION_FLAG_KEY`. Its presence is what makes
@@ -108,7 +122,7 @@ export async function migrateIfNeeded(): Promise<MigrationResult> {
   // failure in one step never reports the other step's progress.
   let importedCount = 0;
   const converted = { count: 0 };
-  let phase: 'v1' | 'versions' = 'v1';
+  let phase: MigrationPhase = 'v1';
   try {
     const db = await getDb();
 
@@ -136,11 +150,11 @@ export async function migrateIfNeeded(): Promise<MigrationResult> {
           // screen on this result and nothing reads a playbook until the user
           // retries, so there is nothing to be gained by converting first and
           // everything to be gained by leaving the store exactly as found.
-          return { status: 'failed', count: 0, error: `v1 template storage could not be parsed: ${errorMessage(e)}` };
+          return { status: 'failed', count: 0, phase, error: `v1 template storage could not be parsed: ${errorMessage(e)}` };
         }
 
         if (!Array.isArray(parsed)) {
-          return { status: 'failed', count: 0, error: 'v1 template storage was not an array.' };
+          return { status: 'failed', count: 0, phase, error: 'v1 template storage was not an array.' };
         }
 
         if (parsed.length === 0) {
@@ -192,7 +206,7 @@ export async function migrateIfNeeded(): Promise<MigrationResult> {
     // of these paths, so a retry resumes: Step 1 recognises its
     // already-written records as present, and Step 2 adopts an already-
     // published version instead of publishing a second one.
-    return { status: 'failed', count: phase === 'v1' ? importedCount : converted.count, error: errorMessage(e) };
+    return { status: 'failed', count: phase === 'v1' ? importedCount : converted.count, phase, error: errorMessage(e) };
   }
 }
 

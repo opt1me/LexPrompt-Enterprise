@@ -21,7 +21,7 @@ import {
   listReviews, getReview, saveReview, createDebouncedReviewSaver, type DebouncedReviewSaver,
 } from './lib/db/reviews';
 import { getProfile } from './lib/db/profile';
-import { migrateIfNeeded } from './lib/db/migrate';
+import { migrateIfNeeded, type MigrationPhase } from './lib/db/migrate';
 import { describeLoadError } from './lib/loadError';
 import {
   listCollections, getCollection, saveCollection, deleteCollection, newCollection,
@@ -144,22 +144,45 @@ function withUpdatedFinding(
 
 const AUTH_ERROR_MESSAGE = 'Your OpenRouter API key was rejected. Update it in Settings and try again.';
 
-/** Rendered INSTEAD OF the entire app when the one-time v1→IndexedDB
- *  playbook migration fails (see `App`'s gate below) — never alongside a
- *  library that would otherwise render empty and be mistaken for a fresh
- *  install with nothing in it. `migrateIfNeeded()` never deletes the v1
- *  localStorage source on any failure path, so the reassurance here is a
- *  fact about the implementation, not a guess. */
-function MigrationBlockedScreen({ error, onRetry }: { error: string; onRetry: () => void }) {
+/** Where the user's playbooks still are, per failed step.
+ *
+ *  The reassurance was always true; before this it named the wrong place.
+ *  Step 1 moves v1's localStorage templates into IndexedDB and is safe
+ *  because that localStorage source is never deleted on any path. Step 2
+ *  converts records that are ALREADY in IndexedDB and is safe for a
+ *  different reason — each playbook's conversion is one all-or-nothing
+ *  transaction — so telling that user to look in "the browser's older
+ *  storage" points them at a place their playbooks may not be. With no
+ *  phase (the defensive catch around a rejecting `migrateIfNeeded`) neither
+ *  claim can be made, so the wording names no store at all. */
+function reassuranceFor(phase: MigrationPhase | undefined): string {
+  if (phase === 'v1') {
+    return "Nothing has been lost. Your existing playbooks are still safely stored in the browser's " +
+      'older storage and were not deleted — moving them to the new storage just didn’t succeed ' +
+      'this time.';
+  }
+  if (phase === 'versions') {
+    return 'Nothing has been lost. Your playbooks are still in the browser’s storage exactly as ' +
+      'they were — each one is upgraded in a single all-or-nothing step, so a failure part-way ' +
+      'through changes none of them.';
+  }
+  return 'Nothing has been lost. Your playbooks are still stored exactly as they were, and nothing ' +
+    'was deleted — the upgrade simply did not finish.';
+}
+
+/** Rendered INSTEAD OF the entire app when the one-time playbook migration
+ *  fails (see `App`'s gate below) — never alongside a library that would
+ *  otherwise render empty and be mistaken for a fresh install with nothing
+ *  in it. The reassurance is a fact about the implementation, not a guess:
+ *  see `reassuranceFor` for why it depends on which step failed. */
+function MigrationBlockedScreen(
+  { error, phase, onRetry }: { error: string; phase?: MigrationPhase; onRetry: () => void },
+) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-surface p-8">
       <div className="max-w-md text-center space-y-4">
         <h1 className="text-lg font-semibold text-white">Your playbook library couldn't be set up</h1>
-        <p className="text-gray-300">
-          Nothing has been lost. Your existing playbooks are still safely stored in the browser's
-          older storage and were <strong>not</strong> deleted — moving them to the new storage just
-          didn't succeed this time.
-        </p>
+        <p className="text-gray-300">{reassuranceFor(phase)}</p>
         <p className="text-red-400 text-sm break-words">{error}</p>
         <button
           onClick={onRetry}
@@ -175,7 +198,7 @@ function MigrationBlockedScreen({ error, onRetry }: { error: string; onRetry: ()
 type MigrationState =
   | { kind: 'pending' }
   | { kind: 'ok'; migratedCount: number | null }
-  | { kind: 'failed'; error: string };
+  | { kind: 'failed'; error: string; phase?: MigrationPhase };
 
 /** Maps a URL route to the `view` it corresponds to today. `matter` now has
  * its own screen (Task 11): `MatterHome`. `review` also renders — reusing
@@ -2335,6 +2358,7 @@ export default function App() {
           setMigration({
             kind: 'failed',
             error: result.error || 'The playbook migration failed for an unknown reason.',
+            phase: result.phase,
           });
         } else {
           setMigration({
@@ -2361,7 +2385,7 @@ export default function App() {
   }
 
   if (migration.kind === 'failed') {
-    return <MigrationBlockedScreen error={migration.error} onRetry={runMigration} />;
+    return <MigrationBlockedScreen error={migration.error} phase={migration.phase} onRetry={runMigration} />;
   }
 
   return <AppShell migratedCount={migration.migratedCount} />;

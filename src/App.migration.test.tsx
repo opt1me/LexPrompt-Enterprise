@@ -111,15 +111,17 @@ describe('App — startup playbook migration gate (Task 14)', () => {
     expect(container.textContent).not.toContain('Migrated 1 playbooks');
   });
 
-  it('failed: blocks with an explanatory screen instead of rendering the library', async () => {
-    migrateIfNeededMock.mockResolvedValue({ status: 'failed', count: 0, error: 'v1 template storage could not be parsed: boom' });
+  it('failed in step 1: blocks with an explanatory screen instead of rendering the library', async () => {
+    migrateIfNeededMock.mockResolvedValue({ status: 'failed', count: 0, phase: 'v1', error: 'v1 template storage could not be parsed: boom' });
     act(() => { root.render(<App />); });
     await flush();
 
-    // Plain-language reassurance that nothing was lost.
+    // Plain-language reassurance that nothing was lost, naming the store
+    // this step actually reads from: v1's localStorage, never deleted.
+    expect(container.textContent).toMatch(/nothing has been lost/i);
     expect(container.textContent).toMatch(/safe/i);
     expect(container.textContent).toMatch(/older storage/i);
-    expect(container.textContent).toMatch(/not.*deleted/i);
+    expect(container.textContent).toMatch(/not deleted/i);
     // The actual error, surfaced rather than swallowed.
     expect(container.textContent).toContain('v1 template storage could not be parsed: boom');
     // A working retry affordance.
@@ -136,6 +138,25 @@ describe('App — startup playbook migration gate (Task 14)', () => {
     expect(container.textContent).not.toContain('Library');
     expect(listMattersMock).not.toHaveBeenCalled();
     expect(listPlaybooksMock).not.toHaveBeenCalled();
+  });
+
+  // Minor 5 (fix round 1). Step 2 converts records that are ALREADY in
+  // IndexedDB; nothing about it involves localStorage. Telling that user
+  // their playbooks are "still safely stored in the browser's older
+  // storage" is reassurance that happens to be true pointing at the wrong
+  // place, which misdirects anyone who acts on it.
+  it('failed in step 2: reassures about the right store, and does not mention the older one', async () => {
+    migrateIfNeededMock.mockResolvedValue({
+      status: 'failed', count: 0, phase: 'versions', error: 'conversion quota exceeded',
+    });
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect(container.textContent).toMatch(/nothing has been lost/i);
+    expect(container.textContent).toMatch(/all-or-nothing/i);
+    expect(container.textContent).not.toMatch(/older storage/i);
+    expect(container.textContent).toContain('conversion quota exceeded');
+    expect(container.textContent).not.toContain('No matters yet');
   });
 
   it('failed: retry re-invokes the migration and, on success, mounts the app', async () => {
@@ -164,7 +185,11 @@ describe('App — startup playbook migration gate (Task 14)', () => {
     act(() => { root.render(<App />); });
     await flush();
 
-    expect(container.textContent).toMatch(/safe/i);
+    expect(container.textContent).toMatch(/nothing has been lost/i);
+    // No step got far enough to be identified, so the wording names no
+    // store at all rather than guessing at one.
+    expect(container.textContent).not.toMatch(/older storage/i);
+    expect(container.textContent).not.toMatch(/all-or-nothing/i);
     expect(container.textContent).toContain('unexpected rejection');
     const retryButton = Array.from(container.querySelectorAll('button'))
       .find(b => /retry/i.test(b.textContent || ''));
