@@ -2395,8 +2395,8 @@ Notes are **not** cleared. A note is a human's own commentary — "check this ag
 ```tsx
               onVerify={onVerify ? (change) => onVerify(activeDocId, clause.id, change) : undefined}
               onAddNote={onAddNote ? (text) => onAddNote(activeDocId, clause.id, text) : undefined}
-              verifyBusy={verifyBusyKey === `${activeDocId}::${clause.id}`}
-              noteBusy={verifyBusyKey === `${activeDocId}::${clause.id}`}
+              verifyBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+              noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
               documentNames={documentNames}
               authorInitials={authorInitials}
 ```
@@ -2409,6 +2409,8 @@ Build `documentNames` in `ResultsView` from its `documents` prop with a `useMemo
     [documents],
   );
 ```
+
+`ResultsView` imports `findingKey` from `../../lib/verification` for the two busy comparisons above. It must NOT re-template `` `${docId}::${clauseId}` `` inline: that is a second copy of the key format, and a second copy of a shape is how six of this project's findings started.
 
 `CellDetail` takes and forwards the same handlers for its single document. `TabularReview` passes them down to `CellDetail`. `App.tsx` supplies `onVerify={handleVerify}`, `onAddNote={handleAddNote}`, `verifyBusyKey`, and `authorInitials={profile.initials}` to both `ResultsView` and `TabularReview`.
 
