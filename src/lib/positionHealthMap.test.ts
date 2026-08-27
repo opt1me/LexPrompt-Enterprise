@@ -108,6 +108,18 @@ describe('positionPublishedAt — R-D17', () => {
     expect(positionPublishedAt(versions, 'a', 'Six months.')).toBe(3000);
   });
 
+  // A clause introduced after v1 dates from the version that introduced it,
+  // not from v1 — the walk has to stop at the version where the clause is
+  // absent rather than treating "no such clause" as "same wording".
+  it('dates a clause added in a later version from the version that added it', () => {
+    const versions = [
+      version(3, 3000, [clause('a', 'Six months.'), clause('b', 'Capped.')]),
+      version(2, 2000, [clause('a', 'Six months.'), clause('b', 'Capped.')]),
+      version(1, 1000, [clause('a', 'Six months.')]),
+    ];
+    expect(positionPublishedAt(versions, 'b', 'Capped.')).toBe(2000);
+  });
+
   it('has no date for wording that has never been published', () => {
     const versions = [version(1, 1000, [clause('a', 'Six months.')])];
     expect(positionPublishedAt(versions, 'a', 'Six months, no conditions.')).toBeUndefined();
@@ -156,12 +168,40 @@ describe('buildPositionHealthMap', () => {
     expect(positionHealthLabel(map.a!)).not.toBe('UNTESTED');
   });
 
+  // The fixture verifies AFTER the republish deliberately. A verification
+  // dated before it is discarded by the date filter alone, which is what
+  // this test used to assert and why it could not fail: it never reached
+  // the question it names. The dangerous case is a reviewer opening an old
+  // review TODAY and verifying a finding that measured a document against
+  // "Uncapped." — the run happened under v1's wording, but the human act is
+  // dated after v2 published "Capped.", so the date filter waves it
+  // through. Counting it would report HELD 1 of 1 for a sentence no
+  // document has ever been measured against.
   it('does discard a verification made against wording the position no longer has', () => {
-    // Clause b's text DID change in v2, so a verification from v1's era
-    // tested a sentence that is no longer the firm's position.
-    const reviews = [review('r1', 'm1', 'v1', { d1: { b: finding('b', 'meets', 1500) } })];
+    const reviews = [review('r1', 'm1', 'v1', { d1: { b: finding('b', 'meets', 2500) } })];
     const map = buildPositionHealthMap({ clauses, versions, reviews });
     expect(positionHealthLabel(map.b!)).toBe('UNTESTED');
+  });
+
+  // The other half of the same rule, and the reason the date filter stays:
+  // v1 and v3 both say "Six months.", so the version a review ran against
+  // carries the CURRENT wording and the version filter admits it — but v2
+  // said something else in between, so a verification made while v2 was
+  // current judged a position the firm had already changed. Only the date
+  // catches that one.
+  it('discards a verification made while a since-reverted wording was current', () => {
+    const reverted = [
+      version(3, 3000, [clause('a', 'Six months.')]),
+      version(2, 2000, [clause('a', 'Nine months.')]),
+      version(1, 1000, [clause('a', 'Six months.')]),
+    ];
+    const reviews = [review('r1', 'm1', 'v1', { d1: { a: finding('a', 'meets', 1500) } })];
+    const map = buildPositionHealthMap({
+      clauses: [clause('a', 'Six months.')],
+      versions: reverted,
+      reviews,
+    });
+    expect(positionHealthLabel(map.a!)).toBe('UNTESTED');
   });
 
   it('ignores reviews that ran against a version of some other playbook', () => {

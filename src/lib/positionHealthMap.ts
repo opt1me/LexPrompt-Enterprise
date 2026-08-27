@@ -63,18 +63,28 @@ export interface PositionHealthMapInput {
  * gets NO ENTRY, not a `no-position` one: the editor renders a chip for
  * every entry, and "we have no house rule here" is the absence of the
  * question rather than an answer to it.
+ *
+ * A finding counts towards a position only if BOTH hold: the version the
+ * review ran against carried this exact wording, and the verification is
+ * dated at or after the wording was published. Spec §7 states the second
+ * half; the first is what stops a verification made today against a
+ * superseded sentence from being reported as evidence for the sentence
+ * that replaced it. See the filter below for why neither implies the other.
  */
 export function buildPositionHealthMap(
   { clauses, versions, reviews }: PositionHealthMapInput,
 ): Record<string, PositionHealth> {
-  const versionIds = new Set(versions.map(v => v.id));
+  const versionById = new Map(versions.map(v => [v.id, v]));
   // A review counts only if it ran against a version of this playbook. An
   // id that resolves to nothing (R-D15: deleting a playbook cascades to its
   // versions, so a review can keep a stale pointer) is not this playbook's,
   // and an absent one names no version at all.
-  const relevant = reviews.filter(
-    r => r.playbookVersionId !== undefined && versionIds.has(r.playbookVersionId),
-  );
+  const relevant = reviews.flatMap(review => {
+    const ranAgainst = review.playbookVersionId === undefined
+      ? undefined
+      : versionById.get(review.playbookVersionId);
+    return ranAgainst ? [{ review, ranAgainst }] : [];
+  });
 
   const map: Record<string, PositionHealth> = {};
   for (const clause of clauses) {
@@ -90,11 +100,28 @@ export function buildPositionHealthMap(
       continue;
     }
 
+    // A review only tested THIS wording if the version it actually ran
+    // against carried it. The date filter below cannot answer that on its
+    // own: a reviewer who opens an old review today and verifies a finding
+    // stamps it with today's date, so a finding produced under "Six
+    // months." sails past a `publishedAt` of "Nine months." and the editor
+    // reports HELD for a sentence no document was ever measured against.
+    // That is the app stating a confident falsehood about the firm's own
+    // standard — worse than the false UNTESTED R-D17 closed, because a
+    // reader acts on it. Neither filter subsumes the other: this one
+    // catches a verification made late against superseded wording, and the
+    // date catches one made early against wording since reverted to.
+    const measuredAgainst = relevant.filter(
+      ({ ranAgainst }) =>
+        ranAgainst.clauses.find(c => c.id === clause.id)?.standardPosition?.text
+          === position.text,
+    );
+
     // Every finding for this clause, under whatever key: a collection review
     // keys its findings by the collection id and a document review by the
     // document id (R-C5), and health asks what the position has been tested
     // against, not which document owns the answer.
-    const findings: Finding[] = relevant.flatMap(review =>
+    const findings: Finding[] = measuredAgainst.flatMap(({ review }) =>
       Object.values(review.findings).flatMap(byClause => {
         const finding = byClause[clause.id];
         return finding ? [finding] : [];
