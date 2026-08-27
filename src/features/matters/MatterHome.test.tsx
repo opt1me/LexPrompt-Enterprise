@@ -343,3 +343,54 @@ describe('MatterHome — collection membership is authoritative over document ro
     expect(occurrences('Loose.pdf')).toBe(1);
   });
 });
+
+describe('MatterHome — a collections load failure does not mis-describe documents', () => {
+  it('does not present grouped documents as loose when collections failed to load', () => {
+    // The loose list is derived from the collection records. Without them,
+    // membership is UNKNOWN — not empty. Listing every document as loose
+    // would show a grouped document as ungrouped, and a reader would
+    // believe it and might regroup something already in a collection.
+    // That is worse than saying nothing, so the grouping affordance goes
+    // away and the error explains why.
+    const documents = [
+      makeDoc({ id: 'lease', name: 'Lease.pdf', role: 'base', collectionId: 'c1' }),
+      makeDoc({ id: 'dov', name: 'DoV.pdf', role: 'varies', collectionId: 'c1' }),
+    ];
+    const container = mount(
+      <MatterHome
+        {...baseProps}
+        documents={documents}
+        collections={[]}
+        collectionsError="The collections in this matter could not be loaded. Try again."
+      />,
+    );
+    const text = container.textContent ?? '';
+
+    // The failure is stated, and the documents are still visible.
+    expect(text).toContain('could not be loaded');
+    expect(text).toContain('Lease.pdf');
+    expect(text).toContain('DoV.pdf');
+    // But nothing offers to group them, because we cannot know what is loose.
+    expect(container.querySelectorAll('input[type="checkbox"]').length).toBe(0);
+    expect(text).toContain('grouping unavailable');
+  });
+
+  it('still shows collection cards when the DOCUMENTS load failed', () => {
+    // The two loads are independent. A documents failure used to hide
+    // collection cards that had loaded perfectly well.
+    const collections = [
+      makeCollection({ id: 'c1', name: 'Lease as varied', baseDocumentId: 'lease', variesDocumentIds: ['dov'] }),
+    ];
+    const container = mount(
+      <MatterHome
+        {...baseProps}
+        documents={[]}
+        collections={collections}
+        documentsError="The documents in this matter could not be loaded. Try again."
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('Lease as varied');
+    expect(text).toContain('could not be loaded');
+  });
+});

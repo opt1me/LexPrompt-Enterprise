@@ -354,30 +354,61 @@ export function MatterHome({
           </div>
         ))}
 
+        {/* The two loads are independent and their failures are reported
+            independently. A documents failure used to hide collection cards
+            that had loaded perfectly well; a collections failure is handled
+            below, where it matters most. */}
+        {collectionsError && (
+          <div className="mb-3">
+            <LoadErrorPanel compact message={collectionsError} onRetry={onRetryCollections} />
+          </div>
+        )}
+        {!collectionsError && collections.length > 0 && (
+          <div className="flex flex-col gap-3 mb-3">
+            {collections.map(c => (
+              <CollectionCard
+                key={c.id}
+                collection={c}
+                documents={documents}
+                onUngroup={onUngroupCollection}
+                onRepair={onRepairCollection}
+                onRunReview={openRunPicker}
+              />
+            ))}
+          </div>
+        )}
+
         {documentsError ? (
           <LoadErrorPanel compact message={documentsError} onRetry={onRetryDocuments} />
+        ) : collectionsError ? (
+          /* Membership is UNKNOWN, not empty. The loose-documents list is
+             derived from the collection records, so without them this
+             component cannot say which documents are loose — and saying
+             "all of them" would show grouped documents as ungrouped, which
+             is worse than saying nothing: a reader would believe it and
+             might regroup a document that is already in a collection.
+             So the documents are listed plainly, with no selection and no
+             grouping affordance, and the error above says why. Distinguish
+             "empty" from "broken" — never present a broken read as a
+             confident answer. */
+          <div className="flex flex-col gap-2">
+            {documents.map(doc => (
+              <div
+                key={doc.id}
+                className="flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3"
+              >
+                <FileText className="w-4 h-4 text-gray-500 shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <div className="text-sm text-white truncate">{doc.name}</div>
+                  <div className="text-[11px] text-gray-500">
+                    {doc.kind.toUpperCase()} · grouping unavailable until collections load
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
         ) : (
           <>
-            {collectionsError && (
-              <div className="mb-3">
-                <LoadErrorPanel compact message={collectionsError} onRetry={onRetryCollections} />
-              </div>
-            )}
-            {!collectionsError && collections.length > 0 && (
-              <div className="flex flex-col gap-3 mb-3">
-                {collections.map(c => (
-                  <CollectionCard
-                    key={c.id}
-                    collection={c}
-                    documents={documents}
-                    onUngroup={onUngroupCollection}
-                    onRepair={onRepairCollection}
-                    onRunReview={openRunPicker}
-                  />
-                ))}
-              </div>
-            )}
-
             {documents.length === 0 ? (
               <div className="text-gray-500 border border-dashed border-white/10 p-6 rounded-xl text-center text-sm">
                 No documents yet. Add one to get started.
