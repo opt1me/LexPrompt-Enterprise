@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { escapeCsvField, buildTabularCsv } from './csv';
-import type { DocumentFile, ReviewRun, Template } from '../../types';
+import { buildReportRows } from '../review/exportDocx';
+import type { DocumentFile, Finding, ReviewRun, Template } from '../../types';
 
 function template(clauses: Template['clauses']): Template {
   return {
@@ -93,7 +94,9 @@ describe('buildTabularCsv', () => {
 
   it('writes a header row of clause titles prefixed by "Document"', () => {
     const csv = buildTabularCsv(run(['d1', 'd2'], { d1: {}, d2: {} }), docs);
-    const [header] = csv.split('\r\n');
+    // Row 0 is the verification summary line (Ruling R-B4); the header
+    // follows at row 1.
+    const [, header] = csv.split('\r\n');
     expect(header).toBe('"Document","Termination","Liability, Cap"');
   });
 
@@ -101,36 +104,36 @@ describe('buildTabularCsv', () => {
     const csv = buildTabularCsv(
       run(['d1', 'd2'], {
         d1: {
-          c1: { clauseId: 'c1', status: 'done', summary: 'Auto-renews annually.', citations: [] },
-          c2: { clauseId: 'c2', status: 'done', summary: 'Capped at fees paid.', citations: [] },
+          c1: { clauseId: 'c1', status: 'done', summary: 'Auto-renews annually.', citations: [], verification: { state: 'unchecked' }, notes: [] },
+          c2: { clauseId: 'c2', status: 'done', summary: 'Capped at fees paid.', citations: [], verification: { state: 'unchecked' }, notes: [] },
         },
         d2: {
-          c1: { clauseId: 'c1', status: 'pending', citations: [] },
-          c2: { clauseId: 'c2', status: 'error', error: 'boom', citations: [] },
+          c1: { clauseId: 'c1', status: 'pending', citations: [], verification: { state: 'unchecked' }, notes: [] },
+          c2: { clauseId: 'c2', status: 'error', error: 'boom', citations: [], verification: { state: 'unchecked' }, notes: [] },
         },
       }),
       docs,
     );
     const lines = csv.split('\r\n');
-    expect(lines[1]).toBe('"Agreement One.pdf","Auto-renews annually.","Capped at fees paid."');
+    expect(lines[2]).toBe('"Agreement One.pdf","[UNVERIFIED AI OUTPUT] Auto-renews annually.","[UNVERIFIED AI OUTPUT] Capped at fees paid."');
     // Critical 3: pending/error findings must NEVER become an empty field —
     // in a spreadsheet an empty cell reads as "checked, nothing found."
-    expect(lines[2]).not.toBe('"Agreement, Two.pdf","",""');
-    expect(lines[2]).toContain('This clause could not be reviewed: not yet reviewed');
-    expect(lines[2]).toContain('This clause could not be reviewed: boom');
+    expect(lines[3]).not.toBe('"Agreement, Two.pdf","",""');
+    expect(lines[3]).toContain('This clause could not be reviewed: not yet reviewed');
+    expect(lines[3]).toContain('This clause could not be reviewed: boom');
   });
 
   it('never exports a pending, cancelled or errored cell as a blank field (Critical 3)', () => {
     const csv = buildTabularCsv(
       run(['d1'], {
         d1: {
-          c1: { clauseId: 'c1', status: 'pending', citations: [] },
-          c2: { clauseId: 'c2', status: 'cancelled', citations: [] },
+          c1: { clauseId: 'c1', status: 'pending', citations: [], verification: { state: 'unchecked' }, notes: [] },
+          c2: { clauseId: 'c2', status: 'cancelled', citations: [], verification: { state: 'unchecked' }, notes: [] },
         },
       }),
       docs,
     );
-    const dataLine = csv.split('\r\n')[1];
+    const dataLine = csv.split('\r\n')[2];
     expect(dataLine).not.toContain('""');
     expect(dataLine).toContain('This clause could not be reviewed: not yet reviewed');
     expect(dataLine).toContain('This clause could not be reviewed: the run was cancelled before this clause was reviewed');
@@ -138,16 +141,21 @@ describe('buildTabularCsv', () => {
 
   it('reports an error with no message as "unknown error" rather than a blank field', () => {
     const csv = buildTabularCsv(
-      run(['d1'], { d1: { c1: { clauseId: 'c1', status: 'error', citations: [] }, c2: { clauseId: 'c2', status: 'done', summary: 'ok', citations: [] } } }),
+      run(['d1'], {
+        d1: {
+          c1: { clauseId: 'c1', status: 'error', citations: [], verification: { state: 'unchecked' }, notes: [] },
+          c2: { clauseId: 'c2', status: 'done', summary: 'ok', citations: [], verification: { state: 'unchecked' }, notes: [] },
+        },
+      }),
       docs,
     );
-    const dataLine = csv.split('\r\n')[1];
+    const dataLine = csv.split('\r\n')[2];
     expect(dataLine).toContain('This clause could not be reviewed: unknown error');
   });
 
   it('exports a missing finding (no entry at all for that clause) as "not yet reviewed", not blank', () => {
     const csv = buildTabularCsv(run(['d1'], { d1: {} }), docs);
-    const dataLine = csv.split('\r\n')[1];
+    const dataLine = csv.split('\r\n')[2];
     expect(dataLine).not.toContain('""');
     expect(dataLine).toContain('This clause could not be reviewed: not yet reviewed');
   });
@@ -156,41 +164,107 @@ describe('buildTabularCsv', () => {
     const csv = buildTabularCsv(
       run(['d1'], {
         d1: {
-          c1: { clauseId: 'c1', status: 'done', summary: 'Terminates on notice, 30 days.', citations: [] },
-          c2: { clauseId: 'c2', status: 'done', summary: 'None.', citations: [] },
+          c1: { clauseId: 'c1', status: 'done', summary: 'Terminates on notice, 30 days.', citations: [], verification: { state: 'unchecked' }, notes: [] },
+          c2: { clauseId: 'c2', status: 'done', summary: 'None.', citations: [], verification: { state: 'unchecked' }, notes: [] },
         },
       }),
       docs,
     );
-    const dataLine = csv.split('\r\n')[1];
+    const dataLine = csv.split('\r\n')[2];
     // Splitting naively on comma would yield more than 3 fields; the quoted
     // field must keep the comma inside a single field.
-    expect(dataLine).toBe('"Agreement One.pdf","Terminates on notice, 30 days.","None."');
+    expect(dataLine).toBe('"Agreement One.pdf","[UNVERIFIED AI OUTPUT] Terminates on notice, 30 days.","[UNVERIFIED AI OUTPUT] None."');
   });
 
   it('escapes a summary containing double quotes', () => {
     const csv = buildTabularCsv(
       run(['d1'], {
         d1: {
-          c1: { clauseId: 'c1', status: 'done', summary: 'The "Term" is 5 years.', citations: [] },
-          c2: { clauseId: 'c2', status: 'done', summary: '', citations: [] },
+          c1: { clauseId: 'c1', status: 'done', summary: 'The "Term" is 5 years.', citations: [], verification: { state: 'unchecked' }, notes: [] },
+          c2: { clauseId: 'c2', status: 'done', summary: '', citations: [], verification: { state: 'unchecked' }, notes: [] },
         },
       }),
       docs,
     );
-    const dataLine = csv.split('\r\n')[1];
-    expect(dataLine).toBe('"Agreement One.pdf","The ""Term"" is 5 years.",""');
+    const dataLine = csv.split('\r\n')[2];
+    expect(dataLine).toBe('"Agreement One.pdf","[UNVERIFIED AI OUTPUT] The ""Term"" is 5 years.","[UNVERIFIED AI OUTPUT] "');
   });
 
   it('falls back to the document id when the document is not found in the documents array', () => {
     const csv = buildTabularCsv(run(['missing'], { missing: {} }), []);
     const lines = csv.split('\r\n');
-    expect(lines[1]).toContain('"missing"');
-    expect(lines[1]).toContain('This clause could not be reviewed: not yet reviewed');
+    expect(lines[2]).toContain('"missing"');
+    expect(lines[2]).toContain('This clause could not be reviewed: not yet reviewed');
   });
 
   it('joins rows with CRLF', () => {
     const csv = buildTabularCsv(run(['d1'], { d1: {} }), docs);
     expect(csv).toContain('\r\n');
+  });
+
+  function doneFinding(overrides: Partial<Finding> = {}): Finding {
+    return {
+      clauseId: 'clause-1',
+      status: 'done',
+      summary: 'Capped at the Charges.',
+      citations: [],
+      verification: { state: 'unchecked' },
+      notes: [],
+      ...overrides,
+    };
+  }
+
+  function runWith(findings: Record<string, Finding>): ReviewRun {
+    return {
+      id: 'run-1',
+      templateSnapshot: template([{ id: 'clause-1', title: 'Clause', prompt: 'p' }]),
+      documentIds: ['doc-1'],
+      findings: { 'doc-1': findings },
+      startedAt: 1,
+    };
+  }
+
+  it('opens with a one-field summary row naming how many findings were verified', () => {
+    const csv = buildTabularCsv(runWith({ 'clause-1': doneFinding({ verification: { state: 'verified' } }) }), docs);
+    const [first] = csv.split('\r\n');
+    expect(first).toBe('"1 findings: 1 verified, 0 unverified, 0 flagged, 0 rejected."');
+  });
+
+  it('prefixes an unverified cell so a spreadsheet cannot read it as checked', () => {
+    const csv = buildTabularCsv(runWith({ 'clause-1': doneFinding({ verification: { state: 'unchecked' } }) }), docs);
+    expect(csv).toContain('[UNVERIFIED AI OUTPUT]');
+  });
+
+  it('carries a rejection reason into the cell', () => {
+    const csv = buildTabularCsv(
+      runWith({ 'clause-1': doneFinding({ verification: { state: 'rejected', reason: 'Wrong clause' } }) }),
+      docs,
+    );
+    expect(csv).toContain('[REJECTED: Wrong clause]');
+  });
+
+  it('leaves a verified cell unprefixed', () => {
+    const csv = buildTabularCsv(runWith({ 'clause-1': doneFinding({ verification: { state: 'verified' } }) }), docs);
+    expect(csv).not.toContain('[UNVERIFIED');
+    expect(csv).not.toContain('[FLAGGED]');
+  });
+
+  it('still escapes a prefixed cell that would otherwise start a formula', () => {
+    const csv = buildTabularCsv(
+      runWith({ 'clause-1': doneFinding({ summary: '=1+1', verification: { state: 'verified' } }) }),
+      docs,
+    );
+    expect(csv).toContain('"\'=1+1"');
+  });
+
+  it('agrees with the DOCX exporter on every label', () => {
+    for (const state of ['unchecked', 'flagged', 'rejected', 'verified'] as const) {
+      const verification = state === 'rejected' ? { state, reason: 'r' } : { state };
+      const run = runWith({ 'clause-1': doneFinding({ verification }) });
+      const label = buildReportRows(run, 'doc-1')[0].verificationLabel;
+      const csv = buildTabularCsv(run, docs);
+      if (label === null) continue;
+      expect(csv).toContain(`[${label}]`);
+    }
   });
 });
