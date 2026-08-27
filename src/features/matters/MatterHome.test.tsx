@@ -2,13 +2,51 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Matter } from '../../types';
+import type { Finding, Matter, Review } from '../../types';
 import { MatterHome } from './MatterHome';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 function makeMatter(): Matter {
   return { id: 'm1', name: 'Acme v Bolt', ownerId: 'u1', createdAt: 1, updatedAt: 1 };
+}
+
+function f(status: Finding['status'], state: Finding['verification']['state']): Finding {
+  return { clauseId: 'c', status, citations: [], notes: [], verification: { state } };
+}
+
+/** A completed review with 4 findings, 2 of them verified — the mix each
+ *  progress test below needs. */
+function makeReview(overrides: Partial<Review> = {}): Review {
+  return {
+    id: 'r1',
+    matterId: 'm1',
+    playbookSnapshot: {
+      id: 't1',
+      name: 'Basic Contract Review',
+      contractType: 'NDA',
+      mode: 'extraction',
+      systemPrompt: '',
+      formatPrompt: '',
+      clauses: [],
+      createdAt: 1,
+      updatedAt: 1,
+      schemaVersion: 2,
+    },
+    documentIds: ['d1'],
+    findings: {
+      d1: {
+        c1: f('done', 'verified'),
+        c2: f('done', 'verified'),
+        c3: f('done', 'unchecked'),
+        c4: f('done', 'unchecked'),
+      },
+    },
+    modelId: 'm',
+    startedAt: 1,
+    createdByUserId: 'u1',
+    ...overrides,
+  };
 }
 
 let cleanup: (() => void) | null = null;
@@ -78,5 +116,25 @@ describe('MatterHome — converged load-error panels (Important 4)', () => {
     expect(retryButton).toBeTruthy();
     act(() => { (retryButton as HTMLButtonElement).click(); });
     expect(onRetryPlaybooks).toHaveBeenCalled();
+  });
+});
+
+describe('MatterHome — verification progress (Task 12)', () => {
+  it('shows how many findings in a review a human has verified', () => {
+    const container = mount(
+      <MatterHome {...baseProps} reviews={[makeReview()]} />,
+    );
+    expect(container.textContent).toContain('2 of 4 verified');
+  });
+
+  it('shows verification progress separately from run progress', () => {
+    const container = mount(
+      <MatterHome {...baseProps} reviews={[makeReview()]} />,
+    );
+    // All 4 findings are `status: 'done'`, so reviewStatusLabel (untouched
+    // by this task) reports 4/4 clauses reviewed — a different question
+    // from how many a human has verified, and a reader needs both.
+    expect(container.textContent).toContain('4/4 clauses reviewed');
+    expect(container.textContent).toContain('2 of 4 verified');
   });
 });

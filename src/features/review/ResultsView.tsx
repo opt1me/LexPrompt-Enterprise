@@ -4,6 +4,7 @@ import type { Clause, DocumentFile, Finding, ReviewRun, Settings } from '../../t
 import { isAuthError } from '../../lib/openrouter';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
+import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { FindingCard } from './FindingCard';
 import { DocumentViewer } from './DocumentViewer';
 import { exportDocx } from './exportDocx';
@@ -156,7 +157,7 @@ export function ResultsView({
   const handleSuggestFix = async (clause: Clause, finding: Finding) => {
     setRevisionLoadingClauseId(clause.id);
     try {
-      const original = finding.citations[0] ?? finding.summary ?? '';
+      const original = finding.citations[0]?.quote ?? finding.summary ?? '';
       const revised = await suggestRevision(clause.title, original, finding.riskAnalysis ?? '', settings);
       setRevisionData({ title: clause.title, original, revised });
       setRevisionOpen(true);
@@ -188,6 +189,10 @@ export function ResultsView({
             <span className="text-sm font-medium text-white truncate">{activeDoc?.name ?? 'Document'}</span>
           )}
 
+          <span className="shrink-0 text-[11px] text-gray-400" title="Findings a human has verified">
+            {progressLabel(run.findings)}
+          </span>
+
           {onOpenTabular && (
             <button
               onClick={onOpenTabular}
@@ -211,6 +216,10 @@ export function ResultsView({
           >
             Assistant
           </button>
+        </div>
+
+        <div className="h-1 bg-white/5 shrink-0" role="progressbar" aria-valuenow={progressPercent(run.findings)} aria-valuemin={0} aria-valuemax={100}>
+          <div className="h-full bg-emerald-500/60 transition-all" style={{ width: `${progressPercent(run.findings)}%` }} />
         </div>
 
         {tab === 'findings' ? (

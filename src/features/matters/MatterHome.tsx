@@ -5,6 +5,7 @@ import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { DeleteMatterModal } from './MattersList';
+import { progressLabel } from '../../lib/reviewProgress';
 
 export interface MatterHomeProps {
   matter: Matter;
@@ -268,6 +269,7 @@ export function MatterHome({
                   <p className="text-xs text-gray-500">
                     Started {formatDate(review.startedAt)} · {reviewStatusLabel(review)}
                   </p>
+                  <span className="text-[11px] text-gray-500">{progressLabel(review.findings)}</span>
                 </div>
               </button>
             ))}
