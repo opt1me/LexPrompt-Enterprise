@@ -7,6 +7,7 @@ import {
 import { publishVersion } from './playbookVersions';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
+import { UnconvertedPlaybookError } from './playbookMigration';
 import { SCHEMA_VERSION, type PlaybookDraft } from '../../types';
 
 beforeEach(async () => {
@@ -170,6 +171,42 @@ describe('content and drafts', () => {
     // found nothing.
     const p = await savePlaybook(newPlaybook('Unpublished'));
     expect(await getPlaybookContent(p.id)).toBeNull();
+  });
+
+  // M3 (fix round 1). The startup conversion is atomic and loud, and
+  // `migrateIfNeeded` failing blocks the app, so a record left carrying
+  // pre-D content keys with no version pointer is not reachable today. It
+  // is one mis-ordered statement away, though, and the consequence is not
+  // an error — it is silent content loss: `getPlaybookContent` returning
+  // `null` sends the editor to `newPlaybookDraft`, which presents a BLANK
+  // editor over a playbook that still has clauses, and the next Save
+  // publishes an empty v1 and `put`s the clauses away. The editor cannot
+  // tell "never published" from "has content that was never converted", so
+  // the store has to.
+  it('refuses to report an unconverted pre-D record as having no content', async () => {
+    const db = await getDb();
+    await db.put(STORES.playbooks, {
+      id: 'pre-d', name: 'Lease', mode: 'risk', systemPrompt: 'sys', formatPrompt: 'fmt',
+      clauses: [{ id: 'c1', title: 'Rent', prompt: 'What is the rent?' }],
+      createdAt: 1, updatedAt: 2, schemaVersion: 2,
+    } as never);
+    await expect(getPlaybookContent('pre-d')).rejects.toBeInstanceOf(UnconvertedPlaybookError);
+  });
+
+  it('still reports a genuinely never-published playbook as having no content', async () => {
+    // The guard must not fire on a playbook that simply has not been saved
+    // yet — "no published content" is a real, honest state and the only
+    // thing that distinguishes it is the absence of pre-D content keys.
+    const p = await savePlaybook(newPlaybook('Never published'));
+    expect(await getPlaybookContent(p.id)).toBeNull();
+  });
+
+  it('does not fire the guard on a converted playbook that has an unpublished draft', async () => {
+    const { playbook } = await published('Lease', {
+      clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }],
+    });
+    await saveDraft(playbook.id, { ...newPlaybookDraft('Lease'), changeSummary: 'wip' });
+    expect((await getPlaybookContent(playbook.id))!.version).toBe(1);
   });
 
   it('returns null when the version pointer names a version that is gone', async () => {

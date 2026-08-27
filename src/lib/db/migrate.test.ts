@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { migrateIfNeeded } from './migrate';
-import { listPlaybooks } from './playbooks';
+import { listPlaybooks, getPlaybook, getPlaybookContent } from './playbooks';
+import { listVersions } from './playbookVersions';
 import { getDb, closeDb } from './open';
 import * as openModule from './open';
 
@@ -27,6 +28,37 @@ describe('migrateIfNeeded', () => {
     expect(result.status).toBe('migrated');
     expect(result.count).toBe(1);
     expect((await listPlaybooks()).map(p => p.name)).toEqual(['Lease']);
+  });
+
+  // The load-bearing claim in this module's own docstring: "a v1 template
+  // imported by step 1 is converted by step 2 before anything can read it."
+  // Nothing tested it. `playbookMigration.test.ts` seeds the playbooks store
+  // directly, so it never exercises the ORDER of the two steps; the tests
+  // here seeded localStorage but never looked at a `currentVersionId`.
+  //
+  // It matters more than an ordinary gap. If step 2 ran first, D's flag
+  // would be written with nothing converted and the imported records would
+  // stay pre-D permanently, because the flag guard means the conversion
+  // never runs again. From there `getPlaybookContent` finds no version, the
+  // editor would open a blank draft over a playbook that still has clauses,
+  // and Save would publish an empty v1 and `put` the clauses away.
+  it('converts a template imported by step 1 in the SAME call — step 2 runs after step 1', async () => {
+    seedV1([{
+      id: 't1', name: 'Lease', mode: 'risk', contractType: 'Lease',
+      systemPrompt: 'sys', formatPrompt: 'fmt', riskTolerance: 'Averse',
+      clauses: [{ id: 'c1', title: 'Rent', prompt: 'What is the rent?' }],
+    }]);
+    const result = await migrateIfNeeded();
+    expect(result.status).toBe('migrated');
+
+    // Imported AND converted, in one call: a version pointer exists...
+    expect((await getPlaybook('t1'))!.currentVersionId).toBeTruthy();
+    // ...exactly one version was published...
+    expect((await listVersions('t1')).map(v => v.version)).toEqual([1]);
+    // ...and it carries the imported content, read the way the app reads it.
+    const content = await getPlaybookContent('t1');
+    expect(content!.clauses[0].extractPrompt).toBe('What is the rent?');
+    expect(content!.riskTolerance).toBe('Averse');
   });
 
   it('LEAVES the localStorage source intact after migrating', async () => {

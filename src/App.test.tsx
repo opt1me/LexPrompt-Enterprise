@@ -11,6 +11,7 @@ import { DbBlockedError } from './lib/db/open';
 
 const listPlaybooksMock = vi.fn();
 const getPlaybookMock = vi.fn();
+const getPlaybookContentMock = vi.fn();
 const listMattersMock = vi.fn();
 const listReviewsMock = vi.fn();
 const migrateIfNeededMock = vi.fn();
@@ -36,7 +37,10 @@ vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
   listPlaybooks: (...args: unknown[]) => listPlaybooksMock(...args),
   getPlaybook: (...args: unknown[]) => getPlaybookMock(...args),
-  getPlaybookContent: async (id: string) => (await listPlaybooksMock()).find((p: { id: string }) => p.id === id) ?? null,
+  // Defaults to the library's own record, so every existing test keeps the
+  // behaviour it was written against; the `mockImplementationOnce` in the
+  // unconverted-playbook test below is the only thing that overrides it.
+  getPlaybookContent: (...args: unknown[]) => getPlaybookContentMock(...args),
   savePlaybook: vi.fn(),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),
@@ -57,6 +61,15 @@ vi.mock('./lib/db/reviews', () => ({
 }));
 
 import App from './App';
+import { UnconvertedPlaybookError } from './lib/db/playbookMigration';
+
+// The default `getPlaybookContent`: the library's own record, which is what
+// every test in this file was written against. Set once here rather than in
+// each `beforeEach` — nothing calls `mockReset()` on it, so a
+// `mockImplementationOnce` in a single test is the only override.
+getPlaybookContentMock.mockImplementation(
+  async (id: string) => (await listPlaybooksMock()).find((p: { id: string }) => p.id === id) ?? null,
+);
 
 async function flush() {
   // App now runs a startup migration gate ahead of everything else (Task
@@ -325,6 +338,29 @@ describe('App — playbook editor route (Task 12)', () => {
     expect(getPlaybookMock).toHaveBeenCalledWith('gone');
     expect(container.textContent).toContain('could not be found');
     expect(container.querySelector('input')).toBeNull();
+  });
+
+  // M3 (fix round 1), the App half. A record whose clauses the startup
+  // conversion never reached reads as "never published", and the editor
+  // answers that with `newPlaybookDraft` — a blank editor over a playbook
+  // that still has clauses, whose next Save publishes an empty v1 and
+  // destroys them. The store now refuses to answer, and this is what the
+  // reviewer sees instead: the honest error, its own message, a retry, and
+  // NO editor.
+  it('a playbook whose content was never converted shows an error, never a blank editor', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    getPlaybookMock.mockResolvedValue(playbook);
+    getPlaybookContentMock.mockRejectedValueOnce(new UnconvertedPlaybookError());
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect(container.textContent).toMatch(/finished upgrading/i);
+    expect(container.textContent).toMatch(/reload the page/i);
+    // The blank editor is the whole defect: no name field, no Save.
+    expect(container.querySelector('input')).toBeNull();
+    expect(Array.from(container.querySelectorAll('button')).some(b => /^save$/i.test(b.textContent || ''))).toBe(false);
+    // Recoverable, like every other load failure on this screen.
+    expect(Array.from(container.querySelectorAll('button')).some(b => /retry/i.test(b.textContent || ''))).toBe(true);
   });
 
   it('a DbBlockedError on a cold load of /playbooks/:id surfaces its own message with a working retry', async () => {

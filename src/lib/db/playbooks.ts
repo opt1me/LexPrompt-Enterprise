@@ -1,7 +1,10 @@
 import { getDb } from './open';
 import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
-import { migrateDraft, migratePlaybookRecord, migrateVersionRecord } from './playbookMigration';
+import {
+  carriesUnconvertedContent, migrateDraft, migratePlaybookRecord, migrateVersionRecord,
+  UnconvertedPlaybookError,
+} from './playbookMigration';
 import { getVersion, publishVersion } from './playbookVersions';
 import { SCHEMA_VERSION, type Playbook, type PlaybookDraft, type PlaybookVersion } from '../../types';
 import { uid } from '../uid';
@@ -108,8 +111,18 @@ export async function getPlaybook(id: string): Promise<Playbook | null> {
  * published content" from "its content is a playbook with no clauses".
  */
 export async function getPlaybookContent(playbookId: string): Promise<PlaybookVersion | null> {
-  const playbook = await getPlaybook(playbookId);
-  if (!playbook?.currentVersionId) return null;
+  const db = await getDb();
+  // The RAW record, not `getPlaybook`'s migrated one: the guard below has to
+  // see the pre-D content keys, which `migratePlaybookRecord` strips.
+  const raw = await db.get(STORES.playbooks, playbookId);
+  if (!raw) return null;
+  // M3. `null` here means "never published", and the editor answers that
+  // with a blank draft. A record whose clauses were never converted would
+  // get the same answer and the same blank editor, and its next Save would
+  // publish an empty v1 over real content. Fail loudly instead.
+  if (carriesUnconvertedContent(raw)) throw new UnconvertedPlaybookError();
+  const { playbook } = migratePlaybookRecord(raw);
+  if (!playbook.currentVersionId) return null;
   const version = await getVersion(playbook.currentVersionId);
   return version ? migrateVersionRecord(version) : null;
 }

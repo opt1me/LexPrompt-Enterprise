@@ -17,6 +17,59 @@ import { uid } from '../uid';
 export const IMPORTED_SUMMARY = 'Imported from before versioning.';
 
 /**
+ * Thrown when a stored playbook record still carries pre-D content keys
+ * with no version pointing at them — i.e. the startup conversion has not
+ * run over it. Carries its own user-facing message, which is why
+ * `describeLoadError` passes it through rather than replacing it with a
+ * generic one.
+ */
+export class UnconvertedPlaybookError extends Error {
+  constructor() {
+    super(
+      "This playbook's clauses haven't finished upgrading to the new versioned " +
+        'format, so it cannot be opened yet. Reload the page to finish the upgrade.',
+    );
+    this.name = 'UnconvertedPlaybookError';
+  }
+}
+
+/**
+ * True when a stored record has content that the startup conversion has not
+ * turned into a `PlaybookVersion` yet.
+ *
+ * The distinction the editor cannot make on its own. `getPlaybookContent`
+ * returns `null` both for a playbook that has never been published and for
+ * one whose clauses are sitting right there un-converted, and the editor
+ * answers `null` with `newPlaybookDraft` — a BLANK editor, presented as the
+ * playbook's content, whose next Save publishes an empty v1 and `put`s the
+ * real clauses away. The conversion is atomic and `migrateIfNeeded` failing
+ * blocks the app, so this is not reachable today; it is one mis-ordered
+ * statement away, and this is what turns that from silent content loss into
+ * a loud, recoverable failure.
+ *
+ * Reads the RAW record, not a migrated one: `migratePlaybookRecord` strips
+ * the pre-D keys on the way out, so by the time a `Playbook` exists the
+ * evidence is gone.
+ */
+export function carriesUnconvertedContent(input: unknown): boolean {
+  const t = (input ?? {}) as Record<string, unknown>;
+  // A version pointer means the conversion ran. `draft` is a POST-D key and
+  // is deliberately not consulted: a draft on a converted playbook is
+  // normal, and a draft is not content the conversion owes anyone.
+  if (typeof t.currentVersionId === 'string' && t.currentVersionId) return false;
+  const nonEmptyString = (v: unknown) => typeof v === 'string' && v !== '';
+  return (
+    (Array.isArray(t.clauses) && t.clauses.length > 0) ||
+    nonEmptyString(t.systemPrompt) ||
+    nonEmptyString(t.formatPrompt) ||
+    nonEmptyString(t.riskTolerance) ||
+    nonEmptyString(t.contractType) ||
+    t.mode === 'risk' ||
+    t.mode === 'extraction'
+  );
+}
+
+/**
  * Brings a playbook record of any earlier shape up to D's identity+versions
  * split. Returns the identity record and, when the input was a pre-D
  * content-carrying record, the draft that should be published as its v1.
