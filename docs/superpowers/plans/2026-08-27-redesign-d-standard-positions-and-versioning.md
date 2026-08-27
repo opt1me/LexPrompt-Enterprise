@@ -1599,37 +1599,17 @@ The editor already reorders with the `moveClause` up/down chevrons. Spec §8 ask
 ```ts
 it('reordering clauses writes into the draft, not the published version', async () => {
   const onSaveDraft = vi.fn();
-  const published: PlaybookVersion = { ...twoClauseV1 };
+  // Compare against a COPY taken before the edit, so "the version was not
+  // mutated" is checked against a known-good value rather than against the
+  // object the component may have mutated in place.
+  const published: PlaybookVersion = { ...twoClauseV1, clauses: [...twoClauseV1.clauses] };
   const c = mount(<TemplateEditor version={published} draft={undefined} onSaveDraft={onSaveDraft} … />);
-  // The chevrons are icon-only; find them by their accessible name, and if
-  // they have none, that is itself a defect worth fixing while you are here.
+  // The chevrons are icon-only; find them by accessible name. If they have
+  // none, that is itself a defect worth fixing while you are here.
   click(buttonNamed(c, /move .*down|down/i));
   await flush();
   expect(onSaveDraft.mock.calls.at(-1)![0].clauses.map((cl: PlaybookClause) => cl.id)).toEqual(['c2', 'c1']);
   expect(published.clauses.map(cl => cl.id)).toEqual(['c1', 'c2']);
-});
-```
-
-If drag proves to need a dependency, **do not add one** — ship the chevrons and report it as a concern. A drag library is not worth a new runtime dependency in a static-hostable app, and the reordering works either way.
-
-`StandardPositionField`'s provenance line, per spec §8:
-- `origin: 'authored'` → "Written by you"
-- `origin: 'ai-drafted'`, `reviewedByHuman: false` → "Drafted by AI — not yet reviewed"
-- `origin: 'ai-drafted'`, `reviewedByHuman: true` → "Drafted by AI, reviewed by you"
-- `origin: 'learned'` → "Learned from redlines", plus `provenance` when present
-
-- [ ] **Step 3: Clause reordering saves into the draft**
-
-The editor already reorders with the `moveClause` up/down chevrons. Spec §8 asks for drag-based reordering. Keep the chevrons — they are keyboard-reachable and a drag handle is not — and add drag as a second affordance on the same `moveClause` path, so both write through one function into the **draft**.
-
-```ts
-it('reordering clauses writes into the draft, not the published version', async () => {
-  const onSaveDraft = vi.fn();
-  const el = mount(<TemplateEditor version={twoClauseV1} draft={undefined} onSaveDraft={onSaveDraft} … />);
-  click(moveDownButton(el, 0));
-  await flush();
-  expect(onSaveDraft.mock.calls.at(-1)![0].clauses.map((c: PlaybookClause) => c.id)).toEqual(['c2', 'c1']);
-  expect(twoClauseV1.clauses.map(c => c.id)).toEqual(['c1', 'c2']); // untouched
 });
 ```
 
