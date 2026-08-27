@@ -255,12 +255,24 @@ export async function saveDraft(playbook: Playbook, draft: PlaybookDraft): Promi
  * draft on it: this runs as the user LEAVES the editor, and there is
  * nothing they could do about the news. A genuine storage failure still
  * rejects, through `savePlaybook`.
+ *
+ * Reads the RAW record, not `getPlaybook`'s migrated one (R-D7: repair-on-
+ * read stays off write paths). `migratePlaybookRecord` builds a whitelist,
+ * so writing its output back would delete every key it does not know about
+ * — a record carrying both a draft and unconverted pre-D content would lose
+ * the content to an operation the user invoked to discard something else.
+ * That is "never delete what you cannot read", broken by a repair nobody
+ * asked for. Deleting one key from the record as found leaves the rest
+ * exactly as found.
  */
 export async function discardDraft(playbookId: string): Promise<void> {
-  const playbook = await getPlaybook(playbookId);
-  if (!playbook || !('draft' in playbook)) return;
-  const cleared: Playbook = { ...playbook };
+  const db = await getDb();
+  const raw = (await db.get(STORES.playbooks, playbookId)) as StoredPlaybook | undefined;
+  if (!raw || !('draft' in raw)) return;
+  const cleared: StoredPlaybook = { ...raw };
   delete cleared.draft;
+  // `savePlaybook` re-allocates `_seq` inside its own transaction, so the
+  // stale one carried by the spread is overwritten rather than persisted.
   await savePlaybook(cleared);
 }
 

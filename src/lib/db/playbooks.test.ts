@@ -409,6 +409,32 @@ describe('drafts are persisted on explicit intent, and discardable', () => {
     expect((await getPlaybookContent(playbook.id))!.clauses.map(c => c.id)).toEqual(['c1']);
   });
 
+  // R-D7: repair-on-read stays OFF write paths. `discardDraft` used to read
+  // through `getPlaybook`, which returns `migratePlaybookRecord`'s output —
+  // a whitelist that drops every pre-D content key — and wrote that object
+  // back. A record carrying both a draft and unconverted content would have
+  // had the content silently deleted by an operation the user asked to
+  // discard something else entirely, which is "never delete what you cannot
+  // read" broken by a repair nobody requested. The app cannot reach this
+  // shape today; the invariant is what the test is for, not the shape.
+  it('does not persist a repair-on-read, or drop content it did not come for', async () => {
+    const db = await getDb();
+    await db.put(STORES.playbooks, {
+      id: 'half-converted',
+      name: 'Half converted',
+      createdAt: 1,
+      updatedAt: 1,
+      clauses: [{ title: 'Rent' }],
+      draft: { ...newPlaybookDraft('Half converted'), name: 'Rejected' },
+    } as never);
+
+    await discardDraft('half-converted');
+
+    const raw = (await db.get(STORES.playbooks, 'half-converted'))! as unknown as Record<string, unknown>;
+    expect('draft' in raw).toBe(false);
+    expect(raw.clauses).toEqual([{ title: 'Rent' }]);
+  });
+
   it('discarding a draft that is not there is a no-op, not a failure', async () => {
     const { playbook } = await published('Lease');
     await expect(discardDraft(playbook.id)).resolves.toBeUndefined();
