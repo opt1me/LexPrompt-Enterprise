@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { mount, keyDown, click } from '../../test/mount';
+import { mount, keyDown, click, buttonNamed } from '../../test/mount';
 import { ResultsView } from './ResultsView';
 import { TRACKED_CHANGES_NOTICE } from '../../lib/docxMarkup';
 import type { DocumentFile, Finding, ReviewRun, Settings, PlaybookVersion } from '../../types';
@@ -519,5 +519,82 @@ describe('ResultsView — a marked-up document says so beside its findings', () 
       />,
     );
     expect(container.textContent).not.toContain('tracked changes');
+  });
+});
+
+// Task 10 / R-D15: the results header's "ran against vN" line must
+// distinguish never-recorded, resolved and DELETED — never render a version
+// claim from `run.playbookVersionId`'s presence alone.
+describe('ResultsView — the header names the version this run ran against (R-D15)', () => {
+  function runWithVersionId(id: string | undefined): ReviewRun {
+    const run = makeRun();
+    return id === undefined ? run : { ...run, playbookVersionId: id };
+  }
+
+  it('says the version is not recorded when the run never had one', () => {
+    const container = mount(
+      <ResultsView run={runWithVersionId(undefined)} documents={[]} settings={settings} onRetryCell={() => {}} />,
+    );
+    expect(container.textContent).toMatch(/no longer recorded|not recorded/i);
+  });
+
+  it('says which version once the caller has resolved it', () => {
+    const version = makeTemplate();
+    const container = mount(
+      <ResultsView
+        run={runWithVersionId('v1')}
+        documents={[]}
+        settings={settings}
+        onRetryCell={() => {}}
+        playbookVersion={version}
+      />,
+    );
+    expect(container.textContent).toMatch(new RegExp(`ran against v${version.version}`, 'i'));
+  });
+
+  // Distinct from "not recorded" above, and the distinction is the point:
+  // the trail went cold because the version was DELETED, not because it was
+  // never written down.
+  it('says the version was deleted when the id resolves to nothing', () => {
+    const container = mount(
+      <ResultsView
+        run={runWithVersionId('v-gone')}
+        documents={[]}
+        settings={settings}
+        onRetryCell={() => {}}
+        playbookVersion={null}
+      />,
+    );
+    expect(container.textContent).toMatch(/deleted|no longer exists/i);
+    expect(container.textContent).not.toMatch(/ran against v/i);
+  });
+
+  // The id is present but the caller's lookup has not settled yet
+  // (`playbookVersion` omitted, not `null`) — the header must stay silent
+  // rather than guess "deleted" ahead of the real answer.
+  it('says nothing yet while the caller has not resolved the id', () => {
+    const container = mount(
+      <ResultsView run={runWithVersionId('v1')} documents={[]} settings={settings} onRetryCell={() => {}} />,
+    );
+    expect(container.textContent).not.toMatch(/ran against v/i);
+    expect(container.textContent).not.toMatch(/deleted|no longer exists/i);
+    expect(container.textContent).not.toMatch(/no longer recorded|not recorded/i);
+  });
+
+  it('opens version history when the resolved line is clicked', () => {
+    const onShowVersionHistory = vi.fn();
+    const version = makeTemplate();
+    const container = mount(
+      <ResultsView
+        run={runWithVersionId('v1')}
+        documents={[]}
+        settings={settings}
+        onRetryCell={() => {}}
+        playbookVersion={version}
+        onShowVersionHistory={onShowVersionHistory}
+      />,
+    );
+    click(buttonNamed(container, new RegExp(`ran against v${version.version}`, 'i')));
+    expect(onShowVersionHistory).toHaveBeenCalled();
   });
 });

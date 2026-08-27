@@ -23,7 +23,7 @@ import {
 import { getProfile } from './lib/db/profile';
 import { migrateIfNeeded, type MigrationPhase } from './lib/db/migrate';
 import { describeLoadError } from './lib/loadError';
-import { listVersions } from './lib/db/playbookVersions';
+import { listVersions, getVersion } from './lib/db/playbookVersions';
 import { buildPositionHealthMap } from './lib/positionHealthMap';
 import {
   listCollections, getCollection, saveCollection, deleteCollection, newCollection,
@@ -62,19 +62,24 @@ type View = 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | '
  *  exact sibling-drift failure this project's own review history keeps
  *  flagging when the same shape gets rebuilt by hand more than once.
  *
- *  Task 4: `playbookVersionId` is the id of the exact `PlaybookVersion` this
- *  run snapshotted — `run.templateSnapshot` is always a real, already-
- *  published version (`handleStartRun` reads it from `activeTemplate` /
- *  `options.template`, both sourced from `getPlaybookContent`), so its `id`
- *  is a live version id, not invented here. Omitted rather than set to an
- *  empty string on the defensive path where it somehow is not (never set to
- *  `undefined` — `structuredClone` preserves that key, per R-D4/R-D15). */
+ *  Task 4: `playbookVersionId` is read straight off `run.playbookVersionId`
+ *  (Task 10 added the field to `ReviewRun` itself — `emptyRun` sets it from
+ *  the live `PlaybookVersion` a fresh run reads, and `openReview` carries a
+ *  reopened review's own stored id through unchanged). Reading it from
+ *  `run.templateSnapshot.id` instead, as this used to, would silently
+ *  overwrite a reopened LEGACY review's back-filled (or dangling, R-D15)
+ *  `playbookVersionId` with whatever id its migrated snapshot happens to
+ *  carry on every re-save (e.g. a retried cell) — two derivations of one
+ *  fact, exactly the sibling drift this project keeps paying for. Omitted
+ *  rather than set to an empty string on the defensive path where it
+ *  somehow is not (never set to `undefined` — `structuredClone` preserves
+ *  that key, per R-D4/R-D15). */
 function reviewFromRun(run: ReviewRun, matterId: string, modelId: string, userId: string): Review {
   return {
     id: run.id,
     matterId,
     playbookSnapshot: run.templateSnapshot,
-    ...(run.templateSnapshot.id ? { playbookVersionId: run.templateSnapshot.id } : {}),
+    ...(run.playbookVersionId ? { playbookVersionId: run.playbookVersionId } : {}),
     documentIds: run.documentIds,
     target: run.target,
     findings: run.findings,
@@ -293,6 +298,18 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [activeDraft, setActiveDraft] = useState<PlaybookDraft | null>(null);
   const [documents, setDocuments] = useState<DocumentFile[]>([]);
   const [run, setRun] = useState<ReviewRun | null>(null);
+  // Task 10 / R-D15: `run.playbookVersionId` resolved against the LIVE
+  // playbookVersions store, for the results header's "ran against vN" line.
+  // Three states, not two: `undefined` means "no lookup has settled for the
+  // CURRENT run yet" (rendered as nothing by `ResultsView` — never guessed
+  // at), `null` means the lookup ran and found nothing (the version was
+  // deleted), and a `PlaybookVersion` is the ordinary resolved case. Kept
+  // out of `run` itself — this is a read of a DIFFERENT store than anything
+  // else `run` carries, and re-deriving it from `run.templateSnapshot`
+  // would silently mask a live deletion the snapshot has no way to know
+  // about (the snapshot's own `id` doesn't stop existing just because the
+  // live version record does).
+  const [runPlaybookVersion, setRunPlaybookVersion] = useState<PlaybookVersion | null | undefined>(undefined);
   const [isRunning, setIsRunning] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   // Tracks the latest `run` state during an in-flight run, for the one path
@@ -597,6 +614,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const openReview = async (matterId: string, reviewId: string) => {
     setReviewLoadError(null);
     setReviewLoading(true);
+    // Task 10 / R-D15: reset to "not resolved yet" for the run about to load
+    // — carrying the PREVIOUS review's resolved version across would let a
+    // stale "Ran against v2" (or "deleted") flash for this one before its
+    // own lookup below settles.
+    setRunPlaybookVersion(undefined);
     try {
       const review = await getReview(reviewId);
       if (!review) {
@@ -661,7 +683,34 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         startedAt: review.startedAt,
         completedAt: review.completedAt,
         cancelledAt: review.cancelledAt,
+        // Task 10: carried through UNCHANGED from the stored review — dangle
+        // and all (R-D15). Never derived from `review.playbookSnapshot.id`:
+        // that would restate the migration's own back-fill by a different,
+        // untested route the moment this run gets re-saved.
+        ...(review.playbookVersionId ? { playbookVersionId: review.playbookVersionId } : {}),
       };
+      // Task 10 / R-D15: resolve against the LIVE playbookVersions store, not
+      // the review's own frozen `playbookSnapshot` — a snapshot's content
+      // survives its playbook being deleted, but the live version record
+      // does not (Task 3's cascade), and this is what tells the header
+      // whether Version History still has anywhere to send the reader. No
+      // id at all resolves to `null` without a lookup (there is nothing to
+      // look up); a lookup that itself fails leaves this `undefined` (never
+      // a false "deleted") — a `describeLoadError`-grade screen failure
+      // would already be visible elsewhere in this same load if the store
+      // were genuinely unreadable, so this small header detail degrades to
+      // silence rather than duplicating that error state.
+      let resolvedVersion: PlaybookVersion | null | undefined = review.playbookVersionId
+        ? undefined
+        : null;
+      if (review.playbookVersionId) {
+        try {
+          resolvedVersion = await getVersion(review.playbookVersionId);
+        } catch {
+          resolvedVersion = undefined;
+        }
+      }
+      setRunPlaybookVersion(resolvedVersion);
       setActiveTemplate(review.playbookSnapshot);
       setActiveMatterId(matterId);
       setDocuments(hydratedDocs);
@@ -726,16 +775,50 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [historyVersions, setHistoryVersions] = useState<PlaybookVersion[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  // Spec §8 / DoD #6: "the matters that used each" version. Cross-matter,
+  // exactly like `loadPositionHealth` below (`listReviews` is matter-scoped)
+  // — gathered here rather than shared with that scan's state so a reviews
+  // failure here still reports through THIS screen's own error branch
+  // rather than borrowing one that renders a different message.
+  const [historyMatterNames, setHistoryMatterNames] = useState<Record<string, string[]>>({});
 
   const loadVersionHistory = (playbookId: string) => {
     setHistoryError(null);
     setHistoryLoading(true);
-    return listVersions(playbookId)
-      .then(setHistoryVersions)
+    return Promise.all([listVersions(playbookId), listMatters()])
+      .then(async ([versions, allMatters]) => {
+        const perMatter = await Promise.all(allMatters.map(m => listReviews(m.id)));
+        const versionIds = new Set(versions.map(v => v.id));
+        const names: Record<string, string[]> = {};
+        for (const review of perMatter.flat()) {
+          const versionId = review.playbookVersionId;
+          if (versionId === undefined || !versionIds.has(versionId)) continue;
+          const matterName = allMatters.find(m => m.id === review.matterId)?.name;
+          if (!matterName) continue;
+          const forVersion = (names[versionId] ??= []);
+          if (!forVersion.includes(matterName)) forVersion.push(matterName);
+        }
+        setHistoryVersions(versions);
+        setHistoryMatterNames(names);
+      })
       .catch((e) => {
         setHistoryError(describeLoadError(e, "This playbook's versions could not be read. Try again."));
       })
       .finally(() => setHistoryLoading(false));
+  };
+
+  // Task 10: the review header's "ran against vN" link into this same
+  // screen. Reuses the editor's `versionHistoryOpen` modal and
+  // `loadVersionHistory` rather than a second implementation — navigating to
+  // the playbook's own route first so `playbookRouteId` (which `onRetry`
+  // above reads) is correct for this playbook, exactly as if the reader had
+  // opened the editor and clicked "Version history" themselves.
+  const handleShowVersionHistoryForRun = () => {
+    const playbookId = run?.templateSnapshot.playbookId;
+    if (!playbookId) return;
+    navigate({ name: 'playbook', playbookId });
+    setVersionHistoryOpen(true);
+    loadVersionHistory(playbookId);
   };
 
   const loadPositionHealth = (playbookId: string) => {
@@ -1211,6 +1294,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     activeCollectionRef.current = collectionInput ?? null;
     setDocuments(docs);
     setRun(newRun);
+    // Task 10 / R-D15: `template` IS the live `PlaybookVersion` this run
+    // just read (`emptyRun` mints `newRun.playbookVersionId` from its own
+    // `id`), so the resolved version is already in hand — no store round
+    // trip needed for a run that only just started.
+    setRunPlaybookVersion(template);
     setIsRunning(true);
     setView('results');
 
@@ -2511,6 +2599,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     onConfirmNetPosition={handleConfirmNetPosition}
                     onAmendNetPosition={handleAmendNetPosition}
                     documentDates={documentDates}
+                    playbookVersion={runPlaybookVersion}
+                    onShowVersionHistory={handleShowVersionHistoryForRun}
                   />
                 ) : (
                   <TabularReview
@@ -2561,6 +2651,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           versions={historyVersions}
           loading={historyLoading}
           error={historyError ?? undefined}
+          matterNamesByVersion={historyMatterNames}
           onRetry={() => { if (playbookRouteId) loadVersionHistory(playbookRouteId); }}
           onClose={() => setVersionHistoryOpen(false)}
         />

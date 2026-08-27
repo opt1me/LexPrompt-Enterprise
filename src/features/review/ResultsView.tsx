@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Mail, FileDown, Loader } from 'lucide-react';
-import type { PlaybookClause, DocumentFile, Finding, ReviewRun, Settings } from '../../types';
+import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun, Settings } from '../../types';
 import { isAuthError } from '../../lib/openrouter';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
@@ -8,6 +8,7 @@ import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { isVerifiable } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 import { FindingCard } from './FindingCard';
+import { ReviewVersionLine } from './ReviewVersionLine';
 import type { TrailDocumentInfo } from './VariationTrailModal';
 import { DocumentViewer } from './DocumentViewer';
 import { RejectReasonModal } from './RejectReasonModal';
@@ -85,6 +86,19 @@ export interface ResultsViewProps {
    *  all). Optional: omitted, a trail step simply shows no date rather than
    *  guessing one. */
   documentDates?: Record<string, number>;
+  /** The result of the caller resolving `run.playbookVersionId` against the
+   *  LIVE playbookVersions store (R-D15) — `null` once that lookup has run
+   *  and found nothing (the version was deleted), a `PlaybookVersion` once
+   *  it succeeds. `undefined` means "not resolved yet" and is NOT the same
+   *  as `null`: while `run.playbookVersionId` is present but this is still
+   *  `undefined`, the header renders nothing rather than guessing "deleted"
+   *  before the lookup has actually run. Irrelevant (and ignored) when
+   *  `run.playbookVersionId` itself is absent. */
+  playbookVersion?: PlaybookVersion | null;
+  /** Opens Version History for the playbook this run ran against. Optional:
+   *  omitted, a resolved "Ran against vN" line renders as plain text with
+   *  nothing to click. */
+  onShowVersionHistory?: () => void;
 }
 
 type Tab = 'findings' | 'chat';
@@ -104,6 +118,7 @@ export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, authorInitials,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
+  playbookVersion, onShowVersionHistory,
 }: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
@@ -373,6 +388,20 @@ export function ResultsView({
             </button>
           )}
         </div>
+
+        {/* R-D15: only render once the caller has actually tried to resolve
+           `run.playbookVersionId` — while it is present but `playbookVersion`
+           is still `undefined` (the lookup hasn't settled yet), this stays
+           silent rather than guessing "deleted" ahead of the real answer. */}
+        {(run.playbookVersionId === undefined || playbookVersion !== undefined) && (
+          <div className="px-4 py-1.5 border-b border-white/10 shrink-0">
+            <ReviewVersionLine
+              versionId={run.playbookVersionId}
+              version={run.playbookVersionId === undefined ? null : (playbookVersion ?? null)}
+              onOpenHistory={onShowVersionHistory}
+            />
+          </div>
+        )}
 
         <div className="flex border-b border-white/10 shrink-0">
           <button

@@ -241,6 +241,17 @@ export interface ReviewRun {
    *  tell a finished run apart from a cancelled one, which nothing did
    *  before (`completedAt` was written and never read). */
   cancelledAt?: number;
+  /** Mirrors `Review.playbookVersionId` (Task 4/D) onto the in-session run,
+   *  so the results header can render the same "ran against vN" claim live
+   *  that a saved `Review` carries at rest — `emptyRun` sets it from the
+   *  live `PlaybookVersion` a fresh run reads, and reopening a saved review
+   *  carries the stored id through unchanged, dangle and all (R-D15).
+   *  Omitted, never `undefined`, on the defensive path where a run has no
+   *  version to point at — `structuredClone` (how a snapshot is taken, and
+   *  how IndexedDB writes every record) preserves an `undefined`-valued key,
+   *  which this app's `'x' in obj` / `=== undefined` checks would read as
+   *  "there is a version" rather than "there is none". */
+  playbookVersionId?: string;
 }
 
 export interface Settings {

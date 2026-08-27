@@ -1009,4 +1009,35 @@ describe('App — position health in the playbook editor (Task 9A)', () => {
     expect(container.textContent).toMatch(/versions could not be read/i);
     expect(container.textContent).not.toMatch(/nothing published yet/i);
   });
+
+  // Task 10 / spec §8 / DoD #6: "the matters that used each" version. Reuses
+  // the exact `reviewAgainst` fixture the position-health tests above use —
+  // same cross-matter shape, different question (which matters, not how
+  // many verified findings).
+  it('names the matters that used each version from Version History', async () => {
+    listVersionsMock.mockResolvedValue([v1]);
+    listReviewsMock.mockImplementation(async (matterId: string) =>
+      matterId === 'm1' ? [reviewAgainst('v1', matterId)] : []);
+    await openEditor();
+    const link = Array.from(container.querySelectorAll('button'))
+      .find(b => /version history/i.test(b.textContent || '')) as HTMLButtonElement;
+    act(() => { link.click(); });
+    await flush();
+
+    expect(container.textContent).toContain('Acme HQ lease');
+    // The OTHER matter never ran against v1, so it must not be credited.
+    expect(container.textContent).not.toContain('Beta sublease');
+  });
+
+  it('says plainly when a version has not been used by any review yet', async () => {
+    listVersionsMock.mockResolvedValue([v1]);
+    listReviewsMock.mockResolvedValue([]);
+    await openEditor();
+    const link = Array.from(container.querySelectorAll('button'))
+      .find(b => /version history/i.test(b.textContent || '')) as HTMLButtonElement;
+    act(() => { link.click(); });
+    await flush();
+
+    expect(container.textContent).toMatch(/not used|no reviews/i);
+  });
 });

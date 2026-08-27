@@ -55,6 +55,13 @@ export function emptyRun(template: PlaybookVersion, docs: DocumentFile[], target
     target: resolvedTarget,
     findings,
     startedAt: Date.now(),
+    // `template` is always a real, already-published `PlaybookVersion` by
+    // the time it reaches here (App.tsx's callers source it from
+    // `getPlaybookContent`/`activeTemplate`), so its `id` IS the version
+    // this run is running against — not invented here. Conditional, never
+    // set to `undefined`, for the same `structuredClone`-preserves-the-key
+    // reason `reviewFromRun` guards the mirrored field in `App.tsx`.
+    ...(template.id ? { playbookVersionId: template.id } : {}),
   };
 }
 

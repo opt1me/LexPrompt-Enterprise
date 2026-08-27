@@ -94,4 +94,40 @@ describe('VersionHistory', () => {
     click(buttonNamed(el, /close/i));
     expect(onClose).toHaveBeenCalled();
   });
+
+  // Task 10: spec §8 / DoD #6 — "a timeline of published versions ... and
+  // the matters that used each".
+  it('names the matters that used each version', () => {
+    const out = mount(
+      <VersionHistory versions={[v1]} matterNamesByVersion={{ [v1.id]: ['Acme HQ lease'] }} onClose={noop} />,
+    ).textContent!;
+    expect(out).toContain('Acme HQ lease');
+  });
+
+  // A blank cell reads as a rendering failure; "not used by any review yet"
+  // reads as the fact it is. Also proven with the map entirely absent — the
+  // fallback for "no caller has gathered reviews" must read the same as
+  // "gathered, and it's genuinely empty".
+  it('says plainly when no matter has used a version yet', () => {
+    expect(mount(<VersionHistory versions={[v1]} matterNamesByVersion={{}} onClose={noop} />).textContent)
+      .toMatch(/not used|no reviews/i);
+    expect(mount(<VersionHistory versions={[v1]} onClose={noop} />).textContent)
+      .toMatch(/not used|no reviews/i);
+  });
+
+  // R1: this app is single-user, so a recorded `publishedByUserId` can only
+  // ever be the one local profile — printing the raw id at a reader is the
+  // defect commit cd89c27 fixed for `NetPositionPanel`; this is the same
+  // defect shape one screen over.
+  it('says a version was published by you, never by its raw user id', () => {
+    const out = mount(<VersionHistory versions={[v1]} onClose={noop} />).textContent!;
+    expect(out).toContain('you');
+    expect(out).not.toContain('u1');
+  });
+
+  it('says nothing about authorship when none was recorded', () => {
+    const noAuthor = { ...v1, publishedByUserId: '' };
+    const out = mount(<VersionHistory versions={[noAuthor]} onClose={noop} />).textContent!;
+    expect(out).not.toMatch(/published by/i);
+  });
 });
