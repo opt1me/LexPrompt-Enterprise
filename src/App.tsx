@@ -29,7 +29,6 @@ import {
 import { orderedMembers } from './lib/collectionOrder';
 import { findingsKeyFor, isCollectionTarget } from './lib/reviewTarget';
 import { useRoute, type Route } from './lib/router';
-import { generateTemplate } from './features/templates/generateTemplate';
 import { listModels, isAuthError } from './lib/openrouter';
 import { useToast, Toast } from './components/Toast';
 import { LoadErrorPanel } from './components/LoadErrorPanel';
@@ -39,15 +38,45 @@ import { MatterHome } from './features/matters/MatterHome';
 import { MatterPickerModal } from './features/matters/MatterPickerModal';
 import { TemplateLibrary } from './features/templates/TemplateLibrary';
 import { TemplateEditor } from './features/templates/TemplateEditor';
-import { CreateTemplateDialog, type CreateTemplateParams } from './features/templates/CreateTemplateDialog';
 import { MegaPromptModal } from './features/templates/MegaPromptModal';
+import { RouteChooser } from './features/authoring/RouteChooser';
+import { DraftForm } from './features/authoring/DraftForm';
+import { DraftReview } from './features/authoring/DraftReview';
+import { generateDraft, type DraftFormValues } from './features/authoring/generateDraft';
+import { buildFewShot, type FewShotSource } from './features/authoring/fewShot';
+import { saveDraftAsV1 } from './features/authoring/saveDraftAsV1';
+import { useUnsavedDraftGuard } from './features/authoring/useUnsavedDraftGuard';
+import type { AuthoringDraft } from './lib/authoringDraft';
 import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, RunInterruptedBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell, type CollectionRunInput } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
 import { parseFiles, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
 
-type View = 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter' | 'not-found';
+/** `authoring-form` and `authoring-review` are sub-project E's two
+ *  session-only screens. They deliberately have **no `Route`**: a draft
+ *  must not survive a reload, and a URL that reopened one would be a URL
+ *  that promised a draft it cannot produce — see `AUTHORING_VIEWS` below
+ *  and R-E1. */
+type View =
+  | 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter' | 'not-found'
+  | 'authoring-form' | 'authoring-review';
+
+/** The two views that hold a session-only `AuthoringDraft`. Leaving either
+ *  of them, by any path, destroys it (see the effect that clears the
+ *  authoring state). */
+const AUTHORING_VIEWS: readonly View[] = ['authoring-form', 'authoring-review'];
+
+function isAuthoringView(view: View): boolean {
+  return AUTHORING_VIEWS.includes(view);
+}
+
+/** Wording for the two unsaved-work guards. Both are consulted by
+ *  `confirmDiscardIfDirty`, which every exit from a screen goes through. */
+const TEMPLATE_DIRTY_MESSAGE = 'This template has unsaved changes. Discard them?';
+const AUTHORING_DRAFT_DIRTY_MESSAGE =
+  'This drafted playbook has not been saved. It exists only in this tab, ' +
+  'so leaving loses every clause you have reviewed. Leave anyway?';
 
 /** Builds the persisted `Review` shape from an in-session `ReviewRun`, for
  *  a run scoped to a matter (`matterId` — see `activeMatterId`). Shared by
@@ -379,9 +408,21 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const [createOpen, setCreateOpen] = useState(false);
-  const [createLoading, setCreateLoading] = useState(false);
-  const [generationStatus, setGenerationStatus] = useState('');
+  // --- Sub-project E: authoring a new playbook ---------------------------
+  //
+  // `Create Template` opens the ROUTE CHOOSER (spec §6), which is the only
+  // way into any of these screens. Everything below is session state and
+  // nothing here is ever written to IndexedDB or localStorage: the draft
+  // becomes durable at exactly one moment, when `saveDraftAsV1` publishes
+  // it as v1 through D's atomic path. R-E1 is the reason — a half-reviewed
+  // model draft that survived a reload would be a playbook nobody agreed
+  // to, presented as one they did.
+  const [chooserOpen, setChooserOpen] = useState(false);
+  const [authoringDraft, setAuthoringDraft] = useState<AuthoringDraft | null>(null);
+  const [authoringBusy, setAuthoringBusy] = useState(false);
+  const [authoringError, setAuthoringError] = useState<string | undefined>(undefined);
+  const [authoringAuthFailed, setAuthoringAuthFailed] = useState(false);
+  const [savingDraft, setSavingDraft] = useState(false);
   const [megaPromptOpen, setMegaPromptOpen] = useState(false);
   const [importing, setImporting] = useState(false);
 
@@ -749,6 +790,26 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setView(viewForRoute(route));
   }, [route]);
 
+  // Sub-project E: the authoring draft dies with its screen.
+  //
+  // Keyed on the view rather than repeated at each exit because there are
+  // four of them — a nav click, Back/Forward, `Discard`, and a successful
+  // save — and a fifth added later would otherwise leave a stale draft
+  // behind, which the guard above would then insist on warning about from
+  // a screen that no longer shows it. Guarded on the view, not on where
+  // this sits in the file: no other effect writes authoring state, and the
+  // handlers that enter these screens set the draft and the view in one
+  // batch, so this sees `authoring-*` and returns (CLAUDE.md's
+  // effect-ordering hazard).
+  useEffect(() => {
+    if (isAuthoringView(view)) return;
+    setAuthoringDraft(null);
+    setAuthoringError(undefined);
+    setAuthoringAuthFailed(false);
+    setAuthoringBusy(false);
+    setSavingDraft(false);
+  }, [view]);
+
   // Best-effort: keeps `settings.model*` capability fields in step with the
   // OpenRouter model list for whichever model is currently selected, even
   // when the user never opens Settings this session (e.g. a model chosen
@@ -820,16 +881,34 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     return false;
   };
 
-  /** Important 7: leaving the editor with unsaved changes needs a chance to
-   *  back out, rather than silently discarding a paid AI generation or a
-   *  half-finished edit. */
-  const confirmDiscardIfDirty = () => {
-    if (!isTemplateDirty) return true;
-    return window.confirm('This template has unsaved changes. Discard them?');
-  };
+  // Two pieces of unsaved work, one guard each, both through the same hook
+  // so neither can drift into covering only half the ways out of a screen
+  // (R-E4). `useUnsavedDraftGuard` registers the `beforeunload` half — a
+  // reload or a tab close — and returns the in-app half, which every exit
+  // below has to consult because `beforeunload` does not fire on a route
+  // change. Each flag is already false outside its own screen
+  // (`isTemplateDirty` requires `view === 'editor'`; `authoringDraft` is
+  // cleared the moment an authoring view is left), so calling both here is
+  // safe from anywhere.
+  //
+  // Important 7 (the template half): leaving the editor with unsaved
+  // changes needs a chance to back out, rather than silently discarding a
+  // paid AI generation or a half-finished edit.
+  const confirmLeaveTemplate = useUnsavedDraftGuard(isTemplateDirty, TEMPLATE_DIRTY_MESSAGE);
+  const confirmLeaveAuthoringDraft = useUnsavedDraftGuard(
+    authoringDraft !== null,
+    AUTHORING_DRAFT_DIRTY_MESSAGE,
+  );
+
+  /** The single question every exit from the current screen asks — a nav
+   *  click (`requestView`), a Back/Forward press (`useRoute`'s
+   *  `canLeaveCurrentView`), and the editor's own close button. `&&`
+   *  short-circuits, so the impossible case of both being dirty at once
+   *  still asks only one question and still refuses on the first "cancel". */
+  const confirmDiscardIfDirty = () => confirmLeaveTemplate() && confirmLeaveAuthoringDraft();
 
   const requestView = (next: View) => {
-    if (view === 'editor' && next !== 'editor' && !confirmDiscardIfDirty()) return;
+    if (next !== view && !confirmDiscardIfDirty()) return;
     if (next === 'run' && !ensureConfigured()) return;
     setView(next);
     // Keeps the URL in sync for the views that own a route, so a refresh or
@@ -1861,46 +1940,125 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     if (ok) requestView('matters');
   };
 
-  const handleCreateTemplate = async (params: CreateTemplateParams) => {
-    if (params.type === 'ai' && !ensureConfigured('Add your OpenRouter key to generate a template.')) {
-      setCreateOpen(false);
-      return;
-    }
+  // --- Sub-project E: the three authoring routes -------------------------
+  //
+  // `Create Template` opens the chooser; the chooser is the only entrance
+  // to any of them. Every one of these screens existed and was unit-tested
+  // before this wiring, and none of them was reachable from the running
+  // app — the "correct mechanism with no path to it" shape, which is why
+  // `App.authoring.test.tsx` drives the whole route from the library card
+  // to the published playbook rather than testing the pieces again.
 
-    setCreateLoading(true);
-    setGenerationStatus('');
+  /** Build by hand: D's editor on a brand-new, empty, unsaved playbook.
+   *  The identity is minted here and written only by the editor's Save,
+   *  exactly as it was before — nothing is persisted by opening. */
+  const handleBuildByHand = () => {
+    const draft = newPlaybookDraft('Untitled playbook');
+    const identity = newTemplate(draft.name);
+    setActivePlaybook(identity);
+    setActiveDraft(draft);
+    // Never-saved: any further edit (or none at all) counts as unsaved, so
+    // closing the editor immediately still asks before discarding
+    // (Important 7).
+    setSavedTemplateSnapshot(null);
+    setChooserOpen(false);
+    navigate({ name: 'playbook', playbookId: identity.id });
+  };
+
+  const handleDraftWithAI = () => {
+    setChooserOpen(false);
+    if (!ensureConfigured('Add your OpenRouter key to draft a playbook.')) return;
+    setAuthoringError(undefined);
+    setAuthoringAuthFailed(false);
+    setView('authoring-form');
+  };
+
+  /**
+   * Generation. On failure the form STAYS MOUNTED with everything the user
+   * typed (spec §7) — this sets an error and nothing else, and never
+   * unmounts `DraftForm`, which is what keeps its `useState`-seeded fields
+   * intact. A 401/403 is handed to the form as `authFailed` so it can route
+   * to Settings; an ordinary failure is not, or every 502 would send
+   * someone off to fix a key that was never the problem.
+   *
+   * The few-shot material is assembled here rather than inside
+   * `generateDraft` because it is the only part that reads the stores: the
+   * selected playbooks' current versions, and the selected matters'
+   * reviews. `buildFewShot` then applies the rule that matters — a matter
+   * contributes its VERIFIED findings only.
+   */
+  const handleGenerateDraft = async (form: DraftFormValues, sources: FewShotSource[]) => {
+    setAuthoringBusy(true);
+    setAuthoringError(undefined);
+    setAuthoringAuthFailed(false);
     try {
-      const draft = params.type === 'manual'
-        ? newPlaybookDraft(params.name)
-        : await generateTemplate({
-            contractType: params.contractType,
-            depth: params.depth,
-            verbosity: params.verbosity,
-            context: params.context,
-            settings,
-            onStatus: setGenerationStatus,
-          });
-      // The identity is minted here and written only by Save, exactly as the
-      // whole template used to be — nothing is persisted until then.
-      const identity = newTemplate(draft.name);
-      setActivePlaybook(identity);
-      setActiveDraft(draft);
-      // Never-saved: any further edit (or none at all) counts as unsaved —
-      // this is what makes closing right after a paid AI generation trigger
-      // the discard warning (Important 7).
-      setSavedTemplateSnapshot(null);
-      setCreateOpen(false);
-      navigate({ name: 'playbook', playbookId: identity.id });
+      const versions = (await Promise.all(
+        sources.filter(s => s.kind === 'playbook').map(s => getPlaybookContent(s.id)),
+      )).filter((v): v is PlaybookVersion => v !== null && v !== undefined);
+      const reviews = (await Promise.all(
+        sources.filter(s => s.kind === 'matter').map(s => listReviews(s.id)),
+      )).flat();
+      const fewShot = buildFewShot(templates, versions, reviews, sources);
+
+      const draft = await generateDraft(form, fewShot, sources, settings);
+      setAuthoringDraft(draft);
+      setView('authoring-review');
     } catch (e) {
       if (isAuthError(e)) {
-        setCreateOpen(false);
-        handleAuthError();
+        setAuthoringAuthFailed(true);
       } else {
-        notify(e instanceof Error ? e.message : 'Template creation failed.', 'error');
+        setAuthoringError(
+          e instanceof Error ? e.message : 'The playbook could not be drafted. Try again.',
+        );
       }
     } finally {
-      setCreateLoading(false);
-      setGenerationStatus('');
+      setAuthoringBusy(false);
+    }
+  };
+
+  /** `DraftReview` has already confirmed (spec §7). This leaves by
+   *  `navigate` rather than `requestView` deliberately: `setAuthoringDraft`
+   *  does not update the value `confirmDiscardIfDirty` closes over until
+   *  the next render, so routing the discard through the guard would ask a
+   *  second time about a draft the user has just agreed to throw away. */
+  const handleDiscardDraft = () => {
+    setAuthoringDraft(null);
+    navigate({ name: 'playbooks' });
+  };
+
+  /**
+   * The one moment an authoring draft becomes durable. `saveDraftAsV1`
+   * re-checks the save gate itself and publishes through D's atomic
+   * `publishAndPoint`; on success we open the published playbook in D's
+   * editor, which is the whole point of the route — a playbook you can
+   * immediately edit and run, not a dead end.
+   *
+   * A failure leaves the draft exactly as it was, on this screen, so the
+   * reviewer can retry without losing the reviewing they have done.
+   */
+  const handleSaveDraftAsV1 = async () => {
+    if (!authoringDraft) return;
+    setSavingDraft(true);
+    try {
+      const profile = await getProfile();
+      const { playbook, version } = await saveDraftAsV1(
+        authoringDraft,
+        authoringDraft.contractType,
+        profile.id,
+      );
+      setAuthoringDraft(null);
+      await refreshTemplates();
+      navigate({ name: 'playbook', playbookId: playbook.id });
+      // The number comes from what was actually published, not from the
+      // "v1" in this function's name — R-D15's rule that a version claim is
+      // read from the record rather than asserted by the code that hoped
+      // to write it.
+      notify(`Published v${version.version}.`);
+    } catch (e) {
+      if (isAuthError(e)) handleAuthError();
+      else notify(e instanceof Error ? e.message : 'The playbook could not be saved.', 'error');
+    } finally {
+      setSavingDraft(false);
     }
   };
 
@@ -2135,10 +2293,44 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onOpen={handleOpenTemplate}
               onRun={handleRunTemplate}
               onDelete={handleDeleteTemplate}
-              onCreate={() => setCreateOpen(true)}
+              onCreate={() => setChooserOpen(true)}
               onImport={handleImportTemplate}
               importing={importing}
             />
+          )
+        )}
+        {/* Sub-project E's two session-only screens. Neither has a URL: a
+            deep link would promise a draft that cannot be restored. */}
+        {view === 'authoring-form' && (
+          <div className="p-6 max-w-3xl mx-auto">
+            <h2 className="text-xl font-bold text-white mb-1">Draft a playbook with AI</h2>
+            <p className="text-xs text-gray-500 mb-6">
+              Describe the contract and the model proposes a clause list. You review every clause
+              before any of it becomes a playbook.
+            </p>
+            <DraftForm
+              playbooks={templates.map(t => ({ id: t.id, name: t.name }))}
+              matters={matters.map(m => ({ id: m.matter.id, name: m.matter.name }))}
+              busy={authoringBusy}
+              error={authoringError}
+              authFailed={authoringAuthFailed}
+              onAuthError={handleAuthError}
+              onSubmit={handleGenerateDraft}
+              onCancel={() => navigate({ name: 'playbooks' })}
+            />
+          </div>
+        )}
+        {view === 'authoring-review' && (
+          authoringDraft ? (
+            <DraftReview
+              draft={authoringDraft}
+              onChange={setAuthoringDraft}
+              onSave={handleSaveDraftAsV1}
+              onDiscard={handleDiscardDraft}
+              saving={savingDraft}
+            />
+          ) : (
+            <div className="p-8 text-gray-500">No draft in progress.</div>
           )
         )}
         {view === 'matter' && (
@@ -2306,14 +2498,19 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         )}
       </main>
 
-      <CreateTemplateDialog
-        isOpen={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onCreate={handleCreateTemplate}
-        loading={createLoading}
-        status={generationStatus}
-        canGenerate={isConfigured}
-      />
+      {/* The route chooser, and the only way into any authoring route
+          (spec §6). `learnFromRedlinesAvailable` stays false until
+          sub-project F lands: R-E6 keeps the card rendered and honestly
+          inert rather than hidden, because hiding it misrepresents what
+          the product is. */}
+      {chooserOpen && (
+        <RouteChooser
+          onDraftWithAI={handleDraftWithAI}
+          onBuildByHand={handleBuildByHand}
+          learnFromRedlinesAvailable={false}
+          onClose={() => setChooserOpen(false)}
+        />
+      )}
       <MegaPromptModal
         isOpen={megaPromptOpen}
         onClose={() => setMegaPromptOpen(false)}

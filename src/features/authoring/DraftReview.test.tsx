@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { mount, mountOnce, buttonNamed, click, keyDown, type } from '../../test/mount';
 import { DraftReview } from './DraftReview';
 import type { AuthoringDraft, ClauseDisposition, DraftClause } from '../../lib/authoringDraft';
@@ -75,6 +75,8 @@ const oneUnreviewed = draftOf([
 
 function noop() {}
 
+afterEach(() => { vi.restoreAllMocks(); });
+
 describe('DraftReview', () => {
   it('says UNSAVED DRAFT the whole time', () => {
     const el = mount(<DraftReview draft={twoUnreviewed} onChange={noop} onSave={noop} onDiscard={noop} />);
@@ -148,11 +150,28 @@ describe('DraftReview', () => {
     expect(onChange.mock.calls.at(-1)![0].clauses[0].disposition).toBe('cut');
   });
 
-  it('calls onDiscard from the discard control', () => {
+  it('calls onDiscard from the discard control once the confirm is accepted', () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     const onDiscard = vi.fn();
     const el = mount(<DraftReview draft={twoUnreviewed} onChange={noop} onSave={noop} onDiscard={onDiscard} />);
     click(buttonNamed(el, /discard/i));
     expect(onDiscard).toHaveBeenCalledTimes(1);
+  });
+
+  // Spec §7: "Discard confirms first — it destroys work the user has partly
+  // reviewed." The confirm lives HERE rather than in the caller because the
+  // button is here: a gate one screen away from the control it guards is
+  // the shape that lets a second caller wire the control up without it.
+  // CLAUDE.md notes `window.confirm` cannot be driven by browser
+  // automation but mocks cleanly in jsdom, which is why this is a jsdom
+  // test and why the same behaviour is re-checked by hand in a browser.
+  it('confirms before discarding, and discards nothing when the confirm is refused', () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    const onDiscard = vi.fn();
+    const el = mount(<DraftReview draft={twoUnreviewed} onChange={noop} onSave={noop} onDiscard={onDiscard} />);
+    click(buttonNamed(el, /discard/i));
+    expect(confirmSpy).toHaveBeenCalled();
+    expect(onDiscard).not.toHaveBeenCalled();
   });
 
   it('calls onSave from the save control once the gate is clear', () => {

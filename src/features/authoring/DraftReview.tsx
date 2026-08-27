@@ -105,6 +105,21 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
     });
   };
 
+  /** Spec §7: `Discard` confirms first, because it destroys work the user
+   *  has partly reviewed and nothing about it is recoverable — the draft
+   *  lives only in this tab's memory (R-E1). The confirm sits here rather
+   *  than in the caller because the button sits here: a gate one screen
+   *  away from the control it guards is how a second caller ends up wiring
+   *  the control without it. */
+  const handleDiscard = () => {
+    const reviewed = draft.clauses.filter((c) => c.disposition !== 'unreviewed').length;
+    const detail = reviewed > 0
+      ? ` The ${reviewed} clause${reviewed === 1 ? '' : 's'} you have already reviewed will be lost.`
+      : '';
+    if (!window.confirm(`Discard this draft? Nothing has been saved.${detail}`)) return;
+    onDiscard();
+  };
+
   const handleDismissSuggestion = (text: string) => {
     if (!activeClause) return;
     onChange({
@@ -129,7 +144,7 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
           </p>
         </div>
         <div className="flex gap-3 shrink-0">
-          <Button variant="ghost" onClick={onDiscard} disabled={saving}>Discard</Button>
+          <Button variant="ghost" onClick={handleDiscard} disabled={saving}>Discard</Button>
           <Button onClick={onSave} disabled={!canSave || saving} loading={saving}>
             {saveLabel}
           </Button>
