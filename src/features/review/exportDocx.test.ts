@@ -487,6 +487,45 @@ describe('buildReportRows / exportDocx / buildReportDocument — net positions',
     expect(xml).not.toContain('model draft');
     expect(xml).toMatch(/amend.*person|person.*amend/i);
   });
+
+  // Task 11: the standard-position comparison, distinct from every caveat
+  // above. Absent is not zero, and `unclear` is not a deviation.
+  it('carries a deviation label and its rationale onto the row', () => {
+    const run = runWithNetPosition(doneCollectionFinding({
+      positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+    }));
+    const [row] = buildReportRows(run, 'lease');
+    expect(row.positionOutcomeLabel).toBe('DEVIATES FROM OUR STANDARD POSITION');
+    expect(row.positionRationale).toEqual(['Standard position rationale: Nine months, not six.']);
+  });
+
+  it('labels an unclear outcome distinctly from a deviation', () => {
+    const run = runWithNetPosition(doneCollectionFinding({ positionOutcome: 'unclear' }));
+    const [row] = buildReportRows(run, 'lease');
+    expect(row.positionOutcomeLabel).toBe('UNCLEAR AGAINST OUR STANDARD POSITION');
+  });
+
+  it('raises no position caveat for a met position — a label there would be a caveat where there is none', () => {
+    const run = runWithNetPosition(doneCollectionFinding({ positionOutcome: 'meets' }));
+    const [row] = buildReportRows(run, 'lease');
+    expect(row.positionOutcomeLabel).toBeNull();
+  });
+
+  it('raises no position caveat for a clause that never carried a standard position', () => {
+    const run = runWithNetPosition(doneCollectionFinding());
+    const [row] = buildReportRows(run, 'lease');
+    expect(row.positionOutcomeLabel).toBeNull();
+    expect(row.positionRationale).toEqual([]);
+  });
+
+  it('carries the deviation label and rationale into the generated DOCX XML', async () => {
+    const run = runWithNetPosition(doneCollectionFinding({
+      positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+    }));
+    const xml = await docXml(run, 'lease');
+    expect(xml).toContain('DEVIATES FROM OUR STANDARD POSITION');
+    expect(xml).toContain('Nine months, not six.');
+  });
 });
 
 // Found by the fix agent for C's final review, outside its own round: a

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { escapeCsvField, buildTabularCsv } from './csv';
 import { buildReportRows } from '../review/exportDocx';
+import { positionOutcomeLabel } from '../../lib/findingOutcome';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
 import type { DocumentFile, Finding, ReviewRun, PlaybookVersion, TrailStep } from '../../types';
 
@@ -351,6 +352,41 @@ describe('buildTabularCsv', () => {
     for (const noteLine of docxNotes) {
       expect(csv).toContain(noteLine);
     }
+  });
+
+  // Task 11: exports carry the standard-position outcome and its rationale.
+  // Absent is not zero — a clause that never carried a standard position
+  // gets no caveat at all, not a "meets" or "0 deviations" reading.
+  it('carries the deviation label and its rationale into the cell', () => {
+    const csv = buildTabularCsv(
+      runWith({ 'clause-1': doneFinding({
+        summary: 'The lease gives 9 months.',
+        positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+      }) }),
+      [doc('doc-1', 'Lease.pdf')],
+    );
+    expect(csv).toContain('DEVIATES FROM OUR STANDARD POSITION');
+    expect(csv).toContain('Nine months, not six.');
+  });
+
+  it('adds no position caveat to a clause that never had a position', () => {
+    const csv = buildTabularCsv(runWith({ 'clause-1': doneFinding({ summary: 'x' }) }), [doc('doc-1', 'Lease.pdf')]);
+    expect(csv).not.toMatch(/STANDARD POSITION/);
+  });
+
+  // The drift guard: the DOCX and the CSV have silently disagreed on export
+  // wording before, which is why `positionOutcomeLabel` lives in
+  // `findingOutcome.ts` rather than being composed separately in each.
+  it('the DOCX and the CSV use the same wording for the same finding', () => {
+    const finding = doneFinding({
+      summary: 'The lease gives 9 months.',
+      positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+    });
+    const label = positionOutcomeLabel(finding)!;
+    const r = runWith({ 'clause-1': finding });
+    expect(buildTabularCsv(r, [doc('doc-1', 'Lease.pdf')])).toContain(label);
+    expect(buildReportRows(r, 'doc-1', { 'doc-1': 'Lease.pdf' }).flatMap(row => Object.values(row)).join(' '))
+      .toContain(label);
   });
 
   // M1 (final review). Two defects, one test each way round:

@@ -3,6 +3,7 @@ import {
   describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
+  positionOutcomeLabel, positionRationaleLines,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
@@ -40,6 +41,16 @@ export interface ReportRow {
    *  can express "the source was incomplete". `null` when the whole text
    *  fit, or when the row has no settled answer to qualify. */
   truncationLabel: string | null;
+  /** Task 11: the standard-position comparison, distinct from every caveat
+   *  above — `meets` and a clause with no standard position both return
+   *  `null` here (see `positionOutcomeLabel`'s own doc comment), so this
+   *  never manufactures a caveat where the document simply agreed with the
+   *  firm's position, or where no position was ever set. */
+  positionOutcomeLabel: string | null;
+  /** The model's stated reason for `positionOutcomeLabel`, one line when
+   *  present. Shared with the CSV exporter via `findingOutcome.ts` so the
+   *  two cannot disagree about what a rationale reads as. */
+  positionRationale: string[];
 }
 
 /**
@@ -86,6 +97,8 @@ export function buildReportRows(
         netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
         trail: trailLines(finding, documentNames),
         truncationLabel: truncationLabel(finding),
+        positionOutcomeLabel: positionOutcomeLabel(finding),
+        positionRationale: positionRationaleLines(finding),
       };
     }
 
@@ -101,6 +114,8 @@ export function buildReportRows(
       netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
       trail: trailLines(finding, documentNames),
       truncationLabel: truncationLabel(finding),
+      positionOutcomeLabel: positionOutcomeLabel(finding),
+      positionRationale: positionRationaleLines(finding),
     };
   });
 }
@@ -239,6 +254,41 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
             children: [new Paragraph({ children: [new TextRun({ text: row.netPositionAmendmentLabel, italics: true })] })],
             columnSpan: 2,
             shading: { fill: 'EEF2FF' },
+            margins: cellMargins,
+          }),
+        ],
+      }));
+    }
+
+    // Task 11: the standard-position comparison. `null` for `meets` and for
+    // a clause with no standard position at all — see `positionOutcomeLabel`'s
+    // own doc comment for why both return the same `null` for different
+    // reasons. Its own row, distinct colour from every caveat above, because
+    // it is the substantive comparison result, not a confirmation-state
+    // caveat.
+    if (row.positionOutcomeLabel) {
+      tableRows.push(new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: row.positionOutcomeLabel, bold: true })] })],
+            columnSpan: 2,
+            shading: { fill: 'FFD9E8' },
+            margins: cellMargins,
+          }),
+        ],
+      }));
+    }
+
+    // The model's stated reason for the outcome above, one row per line —
+    // present whenever a rationale exists, independent of which outcome it
+    // explains (see `positionRationaleLines`'s own doc comment).
+    for (const rationale of row.positionRationale) {
+      tableRows.push(new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: rationale, italics: true })] })],
+            columnSpan: 2,
+            shading: { fill: 'FFD9E8' },
             margins: cellMargins,
           }),
         ],

@@ -3,6 +3,7 @@ import {
   describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
+  positionOutcomeLabel, positionRationaleLines,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
@@ -55,11 +56,15 @@ function cellText(
   // outcome text.
   // mn6: truncation is a fourth, independent caveat — it says the model
   // did not see all of the text, which no verification or confirmation
-  // state can express. Last in the bracket list so the human-judgement
-  // labels a reader is used to meeting first keep their place.
+  // state can express.
+  // Task 11: the standard-position outcome is a fifth, independent label —
+  // `meets` and an absent position both stay unlabelled (`positionOutcomeLabel`
+  // returns null for either), so this never manufactures a caveat where
+  // there is none. Last in the bracket list so the human-judgement labels a
+  // reader is used to meeting first keep their place.
   const labels = [
     verificationLabel(finding), netPositionLabel(finding), netPositionAmendmentLabel(finding),
-    truncationLabel(finding),
+    truncationLabel(finding), positionOutcomeLabel(finding),
   ]
     .filter((label): label is string => label !== null);
   const base = labels.length > 0 ? `[${labels.join('] [')}] ${outcome}` : outcome;
@@ -69,10 +74,14 @@ function cellText(
   // supplementary detail a reader who opens the full cell should still find.
   // The derivation trail (Task 9) is exported the same way, for the same
   // reason: a net position without it is an assertion, not a derivation.
-  // `noteLines`/`verificationLabel`/`trailLines` are all shared with
-  // exportDocx.ts via `findingOutcome.ts` so the two exporters cannot
-  // disagree about any of them.
-  const extras = [...noteLines(finding), ...trailLines(finding, documentNames)];
+  // The standard-position rationale (Task 11) explains the label above, so
+  // it goes first among the extras.
+  // `noteLines`/`verificationLabel`/`trailLines`/`positionRationaleLines` are
+  // all shared with exportDocx.ts via `findingOutcome.ts` so the two
+  // exporters cannot disagree about any of them.
+  const extras = [
+    ...positionRationaleLines(finding), ...noteLines(finding), ...trailLines(finding, documentNames),
+  ];
   return extras.length > 0 ? `${base} | ${extras.join(' | ')}` : base;
 }
 

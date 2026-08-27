@@ -3,6 +3,7 @@ import {
   describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines, isVerifiable,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
+  positionOutcomeLabel,
 } from './findingOutcome';
 import { unconfirmedPosition, confirmPosition, amendPosition } from './netPosition';
 import type { Finding, TrailStep, Verification } from '../types';
@@ -449,5 +450,42 @@ describe('truncationLabel', () => {
   it('says nothing for a finding with no settled output, exactly as the card does', () => {
     expect(truncationLabel(done({ status: 'error', truncated: true }))).toBeNull();
     expect(truncationLabel(undefined)).toBeNull();
+  });
+});
+
+/**
+ * Task 11. `positionOutcomeLabel` is the export-side counterpart to
+ * `PositionChip`/`PositionComparison` on the card. Absent is not zero, and
+ * `unclear` is not a deviation: a clause that never carried a standard
+ * position gets no caveat at all, and a model that could not tell must not
+ * be reported as though it found a conflict.
+ */
+describe('positionOutcomeLabel', () => {
+  const deviating: Finding = {
+    clauseId: 'c1', status: 'done', summary: 'The lease gives 9 months.',
+    citations: [], verification: { state: 'unchecked' }, notes: [],
+    positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+  };
+
+  it('labels a deviation', () => {
+    expect(positionOutcomeLabel(deviating)).toBe('DEVIATES FROM OUR STANDARD POSITION');
+  });
+
+  it('labels an unclear outcome as unclear, never as met', () => {
+    expect(positionOutcomeLabel({ ...deviating, positionOutcome: 'unclear' }))
+      .toBe('UNCLEAR AGAINST OUR STANDARD POSITION');
+  });
+
+  it('returns null for meets — a label there would be a caveat where there is none', () => {
+    expect(positionOutcomeLabel({ ...deviating, positionOutcome: 'meets' })).toBeNull();
+  });
+
+  it('returns null when there was no position to compare against', () => {
+    const { positionOutcome: _o, positionRationale: _r, ...noPosition } = deviating;
+    expect(positionOutcomeLabel(noPosition as Finding)).toBeNull();
+  });
+
+  it('returns null for a missing finding, rather than throwing', () => {
+    expect(positionOutcomeLabel(undefined)).toBeNull();
   });
 });

@@ -381,6 +381,63 @@ export function safeFileName(name: string, fallback: string): string {
  * already the loud failure. It is also what the card does, and screen and
  * export disagreeing about a caveat is the drift this module exists to stop.
  */
+/**
+ * How an export names a clause's comparison against the firm's standard
+ * position — the export-side counterpart to `PositionChip`/`PositionComparison`
+ * on the card. Sub-project D's whole distinction turns on getting this
+ * `switch` right:
+ *
+ *  - `meets` returns `null`, deliberately. A clause that satisfies the
+ *    house position raises no caveat; a label there would manufacture a
+ *    caveat the document does not actually carry.
+ *  - `unclear` is its OWN label, never folded into `deviates`. `unclear`
+ *    means the model could not tell whether the document conflicts with the
+ *    position — reporting it as a deviation would tell a reader the two
+ *    disagree when nobody has established that they do.
+ *  - A clause that never carried a standard position at all also returns
+ *    `null`: `normalisePositionOutcome` never writes the `positionOutcome`
+ *    key when there is no position to compare against, so `finding
+ *    ?.positionOutcome` is `undefined` and the `switch` falls to its
+ *    default — the same `null` as `meets`, but for a different reason
+ *    (there was no comparison to raise a caveat about, rather than a
+ *    comparison that came back clean). Both are "no caveat" to a caller
+ *    checking whether to show one, which is all this function is for.
+ *
+ * Gated on `hasStandingPosition`, the same guard `netPositionLabel` uses and
+ * for the same reason: a finding that is not `done` has no settled
+ * comparison to report, and the card itself (`FindingCard`'s error branch)
+ * shows nothing past the failure message once a retry fails to even reach
+ * the extractor.
+ */
+export function positionOutcomeLabel(finding: Finding | undefined): string | null {
+  if (!hasStandingPosition(finding)) return null;
+  switch (finding?.positionOutcome) {
+    case 'deviates': return 'DEVIATES FROM OUR STANDARD POSITION';
+    case 'unclear': return 'UNCLEAR AGAINST OUR STANDARD POSITION';
+    default: return null;
+  }
+}
+
+/**
+ * The model's stated reason for a `positionOutcome`, formatted for export —
+ * the export-side counterpart of the italic line `PositionComparison` shows
+ * beneath the comparison on the card. Returned whenever a rationale is
+ * actually present, independent of which outcome it explains: a `meets`
+ * outcome can carry a rationale too (`normalisePositionOutcome` does not
+ * strip one), and a reader is entitled to the model's reasoning either way
+ * — this is supplementary detail, like `noteLines`, not a caveat gated on
+ * `positionOutcomeLabel` returning non-null.
+ *
+ * Gated on `hasStandingPosition` for the same reason `positionOutcomeLabel`
+ * is: a rationale explaining an attempt that no longer stands (a failed
+ * retry) must not outlive the comparison it was reasoning about.
+ */
+export function positionRationaleLines(finding: Finding | undefined): string[] {
+  if (!hasStandingPosition(finding)) return [];
+  const rationale = finding?.positionRationale;
+  return rationale ? [`Standard position rationale: ${rationale}`] : [];
+}
+
 export function truncationLabel(finding: Finding | undefined): string | null {
   if (!isVerifiable(finding) || !finding.truncated) return null;
 
