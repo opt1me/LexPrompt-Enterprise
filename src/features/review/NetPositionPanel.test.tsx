@@ -39,13 +39,15 @@ describe('NetPositionPanel — states', () => {
     expect(container.textContent).toMatch(/unconfirmed/i);
   });
 
-  it('a confirmed position shows who confirmed it and when', () => {
+  it('a confirmed position shows that a person confirmed it, and when', () => {
     const confirmed = confirmPosition(unconfirmedPosition('Rent is fixed at £10,000 p.a.', TRAIL), 'u1', 1_700_000_000_000);
     const container = mount(
       <NetPositionPanel netPosition={confirmed} onConfirm={() => {}} onAmend={() => {}} />,
     );
     expect(container.textContent).toMatch(/confirmed/i);
-    expect(container.textContent).toContain('u1');
+    // "by you", never the stored id — see the attribution describe below.
+    expect(container.textContent).toContain('Confirmed by you');
+    expect(container.textContent).not.toContain('u1');
     expect(container.textContent).toContain(new Date(1_700_000_000_000).toLocaleDateString());
   });
 
@@ -172,5 +174,44 @@ describe('NetPositionPanel — optional handlers (preview contexts)', () => {
     );
     expect(container.textContent).toMatch(/unconfirmed/i);
     expect(buttons(container)).toHaveLength(0);
+  });
+});
+
+// Found by driving the real app in sub-project C's browser verification:
+// the panel printed "Confirmed by vzcsj71fs7mtalycwr on ..." at the reader.
+// It was the last place in the product showing a raw user id — the same
+// defect `noteLines` had already been fixed for on the export side, and for
+// the same two reasons: an opaque id communicates nothing, and a per-person
+// id implies the multi-user collaboration ruling R1 says this app must not
+// pretend to offer.
+describe('NetPositionPanel — attribution never shows a raw user id', () => {
+  const confirmed = {
+    proposed: 'Six months notice.',
+    state: 'confirmed' as const,
+    byUserId: 'vzcsj71fs7mtalycwr',
+    at: 1756300205000,
+    trail: [],
+  };
+
+  it('says "Confirmed by you", not the stored user id', () => {
+    const c = mount(<NetPositionPanel netPosition={confirmed} onOpenTrail={() => {}} />);
+    expect(c.textContent).toContain('Confirmed by you');
+    expect(c.textContent).not.toContain('vzcsj71fs7mtalycwr');
+  });
+
+  it('says "Amended by you" for a position a person rewrote', () => {
+    const c = mount(<NetPositionPanel netPosition={{ ...confirmed, amended: 'My wording.' }} onOpenTrail={() => {}} />);
+    expect(c.textContent).toContain('Amended by you');
+    expect(c.textContent).not.toContain('vzcsj71fs7mtalycwr');
+  });
+
+  it('drops the actor entirely when none was recorded, rather than saying "an unknown user"', () => {
+    // "an unknown user" reads as "somebody else" — the exact implication R1
+    // forbids when there is only ever one local person.
+    const { byUserId: _omit, ...noAuthor } = confirmed;
+    const c = mount(<NetPositionPanel netPosition={noAuthor} onOpenTrail={() => {}} />);
+    expect(c.textContent).toContain('Confirmed on');
+    expect(c.textContent).not.toMatch(/unknown user/i);
+    expect(c.textContent).not.toContain('by you');
   });
 });

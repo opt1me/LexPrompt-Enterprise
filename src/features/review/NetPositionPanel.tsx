@@ -145,10 +145,22 @@ export function NetPositionPanel({ netPosition, busy = false, onConfirm, onAmend
 
       <p className="text-xs text-gray-200 leading-relaxed whitespace-pre-wrap">{text}</p>
 
+      {/* "Confirmed by you", never "Confirmed by vzcsj71fs7mtalycwr".
+          Found by driving the real app: this was the last place in the
+          product printing a raw user id at a reader. It is the same defect
+          `noteLines` already fixed on the export side, for the same two
+          reasons — an opaque id communicates nothing, and a per-person id
+          *implies* the multi-user collaboration ruling R1 says this app must
+          not pretend to offer. `NotesPanel` never printed one; this was the
+          outlier.
+
+          A position confirmed with no recorded author says when, and drops
+          the actor rather than inventing "an unknown user" — which reads as
+          "somebody else", the very implication R1 forbids. */}
       {netPosition.state === 'confirmed' && (
         <p className="text-[10px] text-gray-500">
-          {netPosition.amended ? 'Amended' : 'Confirmed'} by {netPosition.byUserId ?? 'an unknown user'} on{' '}
-          {formatWhen(netPosition.at)}
+          {netPosition.amended ? 'Amended' : 'Confirmed'}
+          {netPosition.byUserId ? ' by you' : ''} on {formatWhen(netPosition.at)}
         </p>
       )}
 
