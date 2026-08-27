@@ -21,12 +21,16 @@ function doc(id: string): DocumentFile {
   return { id, name: `${id}.pdf`, kind: 'pdf', text: 'body', file: new File([''], `${id}.pdf`) };
 }
 
-const ok = (clauseId: string): Finding =>
-  ({ clauseId, status: 'done', summary: 'ok', citations: ['q'] });
+const ok = (documentId: string, clauseId: string): Finding =>
+  ({
+    clauseId, status: 'done', summary: 'ok',
+    citations: [{ quote: 'q', documentId }],
+    verification: { state: 'unchecked' }, notes: [],
+  });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(extractClause).mockImplementation(async (_d, c) => ok(c.id));
+  vi.mocked(extractClause).mockImplementation(async (d, c) => ok(d.id, c.id));
 });
 
 describe('emptyRun', () => {
@@ -67,10 +71,10 @@ describe('runReview', () => {
   });
 
   it('completes the run when one clause fails', async () => {
-    vi.mocked(extractClause).mockImplementation(async (_d, c) =>
+    vi.mocked(extractClause).mockImplementation(async (d, c) =>
       c.id === 'c1'
-        ? { clauseId: c.id, status: 'error', citations: [], error: 'boom' }
-        : ok(c.id));
+        ? { clauseId: c.id, status: 'error', citations: [], error: 'boom', verification: { state: 'unchecked' }, notes: [] }
+        : ok(d.id, c.id));
 
     const docs = [doc('d1')];
     const run = await runReview(emptyRun(template, docs), docs, settings, () => {});
@@ -83,12 +87,12 @@ describe('runReview', () => {
   it('respects the concurrency ceiling', async () => {
     let inFlight = 0;
     let peak = 0;
-    vi.mocked(extractClause).mockImplementation(async (_d, c) => {
+    vi.mocked(extractClause).mockImplementation(async (d, c) => {
       inFlight++;
       peak = Math.max(peak, inFlight);
       await new Promise(r => setTimeout(r, 5));
       inFlight--;
-      return ok(c.id);
+      return ok(d.id, c.id);
     });
 
     const docs = [doc('d1'), doc('d2'), doc('d3')];
@@ -98,9 +102,9 @@ describe('runReview', () => {
 
   it('stops on abort', async () => {
     const controller = new AbortController();
-    vi.mocked(extractClause).mockImplementation(async (_d, c) => {
+    vi.mocked(extractClause).mockImplementation(async (d, c) => {
       await new Promise(r => setTimeout(r, 10));
-      return ok(c.id);
+      return ok(d.id, c.id);
     });
 
     const docs = [doc('d1'), doc('d2'), doc('d3')];
@@ -117,10 +121,10 @@ describe('runReview', () => {
   it('marks cells still pending at the moment of cancellation as cancelled, not left pending forever', async () => {
     const controller = new AbortController();
     let calls = 0;
-    vi.mocked(extractClause).mockImplementation(async (_d, c) => {
+    vi.mocked(extractClause).mockImplementation(async (d, c) => {
       calls++;
       await new Promise(r => setTimeout(r, 20));
-      return ok(c.id);
+      return ok(d.id, c.id);
     });
 
     // concurrency 2 over 3 documents x 2 clauses = 6 cells: two start
@@ -148,9 +152,9 @@ describe('runReview', () => {
 
   it('resolves an in-flight cell to cancelled (not error) when its own extraction rejects with AbortError', async () => {
     const controller = new AbortController();
-    vi.mocked(extractClause).mockImplementation(async (_d, c) => {
-      if (c.id === 'c1') return { clauseId: c.id, status: 'cancelled' as const, citations: [] };
-      return ok(c.id);
+    vi.mocked(extractClause).mockImplementation(async (d, c) => {
+      if (c.id === 'c1') return { clauseId: c.id, status: 'cancelled' as const, citations: [], verification: { state: 'unchecked' }, notes: [] };
+      return ok(d.id, c.id);
     });
 
     const docs = [doc('d1')];
@@ -167,10 +171,10 @@ describe('runReview', () => {
   // pattern (see empty-review-investigation.md) has to reflect exactly the
   // findings extractClause flagged as no-content, across every document.
   it('counts no-content findings across the whole run via countNoContent', async () => {
-    vi.mocked(extractClause).mockImplementation(async (_d, c) =>
+    vi.mocked(extractClause).mockImplementation(async (d, c) =>
       c.id === 'c1'
-        ? { clauseId: c.id, status: 'error', citations: [], error: 'no content', noContent: true }
-        : ok(c.id));
+        ? { clauseId: c.id, status: 'error', citations: [], error: 'no content', noContent: true, verification: { state: 'unchecked' }, notes: [] }
+        : ok(d.id, c.id));
 
     const docs = [doc('d1'), doc('d2')];
     const run = await runReview(emptyRun(template, docs), docs, settings, () => {});
@@ -195,16 +199,16 @@ describe('runReview', () => {
 
 describe('retryCell', () => {
   it('re-runs one cell and leaves its neighbours untouched', async () => {
-    vi.mocked(extractClause).mockImplementation(async (_d, c) =>
+    vi.mocked(extractClause).mockImplementation(async (d, c) =>
       c.id === 'c1'
-        ? { clauseId: c.id, status: 'error', citations: [], error: 'boom' }
-        : ok(c.id));
+        ? { clauseId: c.id, status: 'error', citations: [], error: 'boom', verification: { state: 'unchecked' }, notes: [] }
+        : ok(d.id, c.id));
 
     const docs = [doc('d1')];
     const failed = await runReview(emptyRun(template, docs), docs, settings, () => {});
 
     vi.mocked(extractClause).mockClear();
-    vi.mocked(extractClause).mockImplementation(async (_d, c) => ok(c.id));
+    vi.mocked(extractClause).mockImplementation(async (d, c) => ok(d.id, c.id));
     const retried = await retryCell(failed, docs[0], 'c1', settings, () => {});
 
     expect(retried.findings.d1.c1.status).toBe('done');

@@ -61,7 +61,7 @@ describe('FindingCard — interrupted prop (Important 1)', () => {
   });
 
   it('a running cell offers no Retry when the run is live (default/not interrupted)', () => {
-    const finding: Finding = { clauseId: 'c1', status: 'running', citations: [] };
+    const finding: Finding = { clauseId: 'c1', status: 'running', citations: [], verification: { state: 'unchecked' }, notes: [] };
     const container = mount(
       <FindingCard clause={CLAUSE} finding={finding} onCiteClick={() => {}} onRetry={() => {}} />,
     );
@@ -81,7 +81,7 @@ describe('FindingCard — interrupted prop (Important 1)', () => {
 
   it('a running cell offers Retry when interrupted, and it calls onRetry with the clause id', () => {
     const onRetry = vi.fn();
-    const finding: Finding = { clauseId: 'c1', status: 'running', citations: [] };
+    const finding: Finding = { clauseId: 'c1', status: 'running', citations: [], verification: { state: 'unchecked' }, notes: [] };
     const container = mount(
       <FindingCard clause={CLAUSE} finding={finding} onCiteClick={() => {}} onRetry={onRetry} interrupted />,
     );
@@ -92,14 +92,14 @@ describe('FindingCard — interrupted prop (Important 1)', () => {
   });
 
   it('error and cancelled cells keep offering Retry regardless of interrupted (unchanged behaviour)', () => {
-    const errorFinding: Finding = { clauseId: 'c1', status: 'error', citations: [], error: 'boom' };
+    const errorFinding: Finding = { clauseId: 'c1', status: 'error', citations: [], error: 'boom', verification: { state: 'unchecked' }, notes: [] };
     const containerA = mount(
       <FindingCard clause={CLAUSE} finding={errorFinding} onCiteClick={() => {}} onRetry={() => {}} />,
     );
     expect(hasRetryButton(containerA)).toBe(true);
     cleanup?.();
 
-    const cancelledFinding: Finding = { clauseId: 'c1', status: 'cancelled', citations: [] };
+    const cancelledFinding: Finding = { clauseId: 'c1', status: 'cancelled', citations: [], verification: { state: 'unchecked' }, notes: [] };
     const containerB = mount(
       <FindingCard clause={CLAUSE} finding={cancelledFinding} onCiteClick={() => {}} onRetry={() => {}} />,
     );

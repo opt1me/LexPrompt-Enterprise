@@ -192,7 +192,7 @@ function makeStaleReview(): Review {
     documentIds: ['d1'],
     findings: {
       d1: {
-        c1: { clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR, authError: true },
+        c1: { clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR, authError: true, verification: { state: 'unchecked' }, notes: [] },
       },
     },
     modelId: 'test/model',

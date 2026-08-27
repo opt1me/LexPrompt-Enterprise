@@ -147,7 +147,7 @@ function makeAbandonedReview(): Review {
           verification: { state: 'unchecked' },
           notes: [],
         },
-        c2: { clauseId: 'c2', status: 'pending', citations: [] },
+        c2: { clauseId: 'c2', status: 'pending', citations: [], verification: { state: 'unchecked' }, notes: [] },
       },
     },
     modelId: 'test/model',
