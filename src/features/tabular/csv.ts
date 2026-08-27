@@ -133,7 +133,14 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
     // A reader's whole reason to filter or sort this sheet by document is
     // to attribute an answer to a document; a synthesis attributes to none
     // of them individually, so the row says so.
-    ? [[collectionLabel(run, documents), ...clauseCells(run.target.collectionId)]]
+    // mn3: through `findingsKeyFor`, never `run.target.collectionId` in the
+    // hand. It returns exactly that for a collection and needs no document
+    // id to do it, so reaching past it bought nothing and coupled this
+    // branch to the shape of the target union. CLAUDE.md names this precise
+    // bypass as the origin of six separate defects in this sub-project —
+    // "if you are reading `run.findings[...]`, go through `findingsKeyFor`"
+    // — and the sibling branch two lines below already does.
+    ? [[collectionLabel(run, documents), ...clauseCells(findingsKeyFor(run.target))]]
     : run.documentIds.map(docId => {
       const doc = documents.find(d => d.id === docId);
       // Same bug `buildReportRows` had (Step 0 of Task 9): resolve the key
