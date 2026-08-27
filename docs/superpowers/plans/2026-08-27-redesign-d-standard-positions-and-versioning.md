@@ -1111,58 +1111,78 @@ Evaluation happens **in the extraction call**, not a second pass (spec §6): the
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `src/features/review/extractClause.test.ts`, using the file's existing `chatJson` mock and fixtures — **read it first**.
+Append to `src/features/review/extractClause.test.ts`. **Written against that file's real fixtures, checked at plan time — do not assume:** it mocks `chatJson` with `vi.mock` and drives it with `vi.mocked(chatJson).mockResolvedValue(...)`; **there is no `mockChatJson` helper**. Its playbook fixture is called **`template`** (a `PlaybookVersion`), not `version`. Both `clause.riskCriteria` (`'Must be England and Wales.'`) and `template.riskTolerance` (`'Conservative.'`) are already populated, so the R-D1 cases need explicit variants rather than the bare fixtures.
 
 ```ts
+const pos: StandardPosition = {
+  text: 'We ask for a 6-month break notice.', origin: 'authored', reviewedByHuman: true,
+};
+const withPos = { ...clause, standardPosition: pos };
+
 it('asks for a position outcome only when the clause has a standard position', () => {
-  const withPos = buildClausePrompt(doc, { ...clause, standardPosition: pos }, version);
-  const without = buildClausePrompt(doc, clause, version);
-  expect(withPos).toContain('OUR STANDARD POSITION');
-  expect(withPos).toContain('We ask for a 6-month break notice');
+  expect(buildClausePrompt(doc, withPos, template)).toContain('OUR STANDARD POSITION');
+  expect(buildClausePrompt(doc, withPos, template)).toContain('We ask for a 6-month break notice.');
+  const without = buildClausePrompt(doc, clause, template);
   expect(without).not.toContain('OUR STANDARD POSITION');
   expect(without).not.toContain('position_outcome');
 });
 
 it('records a deviation with its rationale', async () => {
-  mockChatJson({ summary: 'The lease gives 9 months.', citations: [], risk_level: 'Medium',
-    risk_analysis: 'x', position_outcome: 'deviates', position_rationale: 'Nine months, not six.' });
-  const f = await extractClause(doc, { ...clause, standardPosition: pos }, version, settings);
+  vi.mocked(chatJson).mockResolvedValue({
+    summary: 'The lease gives 9 months.', citations: [], risk_level: 'Medium', risk_analysis: 'x',
+    position_outcome: 'deviates', position_rationale: 'Nine months, not six.',
+  });
+  const f = await extractClause(doc, withPos, template, settings);
   expect(f.positionOutcome).toBe('deviates');
   expect(f.positionRationale).toBe('Nine months, not six.');
 });
 
 it('leaves the outcome absent for a clause with no position', async () => {
-  mockChatJson({ summary: 'x', citations: [], risk_level: 'Low', risk_analysis: 'y',
-    position_outcome: 'meets', position_rationale: 'z' });
-  const f = await extractClause(doc, clause, version, settings);
   // The model volunteered an outcome for a clause with no house rule. It is
   // dropped, not recorded: there was nothing to compare against.
+  vi.mocked(chatJson).mockResolvedValue({
+    summary: 'x', citations: [], risk_level: 'Low', risk_analysis: 'y',
+    position_outcome: 'meets', position_rationale: 'z',
+  });
+  const f = await extractClause(doc, clause, template, settings);
   expect('positionOutcome' in f).toBe(false);
 });
 
 it('records unclear when the model omits the outcome', async () => {
-  mockChatJson({ summary: 'x', citations: [], risk_level: 'Low', risk_analysis: 'y' });
-  const f = await extractClause(doc, { ...clause, standardPosition: pos }, version, settings);
-  expect(f.positionOutcome).toBe('unclear');
+  vi.mocked(chatJson).mockResolvedValue({ summary: 'x', citations: [], risk_level: 'Low', risk_analysis: 'y' });
+  expect((await extractClause(doc, withPos, template, settings)).positionOutcome).toBe('unclear');
 });
 
 it('keeps the outcome on a no-content finding', async () => {
-  // A model that gave an outcome and an empty summary still gave an
-  // outcome; dropping it would lose the one thing it did say.
-  mockChatJson({ summary: '  ', citations: [], risk_level: 'Low', risk_analysis: 'y',
-    position_outcome: 'deviates', position_rationale: 'Nine months.' });
-  const f = await extractClause(doc, { ...clause, standardPosition: pos }, version, settings);
+  // A model that gave an outcome and an empty summary still gave an outcome;
+  // dropping it would lose the one thing it did say.
+  vi.mocked(chatJson).mockResolvedValue({
+    summary: '  ', citations: [], risk_level: 'Low', risk_analysis: 'y',
+    position_outcome: 'deviates', position_rationale: 'Nine months.',
+  });
+  const f = await extractClause(doc, withPos, template, settings);
   expect(f.status).toBe('error');
   expect(f.noContent).toBe(true);
   expect(f.positionOutcome).toBe('deviates');
 });
 
 it('emits the risk block from riskCriteria or riskTolerance now that mode is gone (R-D1)', () => {
-  expect(buildClausePrompt(doc, { ...clause, riskCriteria: 'Must be unconditional' }, versionNoTolerance))
+  // Both fixtures carry a risk string already, so each case needs the OTHER
+  // one cleared or the test cannot tell which source fed the block.
+  const noTolerance: PlaybookVersion = { ...template, riskTolerance: undefined };
+  const noCriteria = { ...clause, riskCriteria: undefined };
+
+  expect(buildClausePrompt(doc, { ...clause, riskCriteria: 'Must be unconditional' }, noTolerance))
     .toContain('RISK CRITERIA: Must be unconditional');
-  expect(buildClausePrompt(doc, clause, { ...version, riskTolerance: 'Risk-averse' }))
+  expect(buildClausePrompt(doc, noCriteria, { ...template, riskTolerance: 'Risk-averse' }))
     .toContain('RISK CRITERIA: Risk-averse');
-  expect(buildClausePrompt(doc, clause, versionNoTolerance)).not.toContain('RISK CRITERIA');
+  expect(buildClausePrompt(doc, noCriteria, noTolerance)).not.toContain('RISK CRITERIA');
+});
+
+it('prefers the clause criterion over the playbook tolerance', () => {
+  // Pins the precedence, which the `||` makes easy to invert by accident.
+  expect(buildClausePrompt(doc, { ...clause, riskCriteria: 'Clause rule' }, { ...template, riskTolerance: 'Playbook rule' }))
+    .toContain('RISK CRITERIA: Clause rule');
 });
 ```
 
