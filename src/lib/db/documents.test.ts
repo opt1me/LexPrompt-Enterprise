@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Blob as NodeBlob } from 'node:buffer';
-import { listDocuments, getDocument, addDocument, deleteDocument } from './documents';
+import { listDocuments, getDocument, addDocument, deleteDocument, setDocumentRole } from './documents';
 import { getDocumentBlob } from './blobs';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
@@ -186,6 +186,48 @@ describe('a document whose blob is missing is still readable (spec §9)', () => 
 
     await expect(getDocument(rec.id)).resolves.toEqual(rec);
     await expect(getDocumentBlob(rec.id)).resolves.toBeNull();
+  });
+});
+
+describe('setDocumentRole (Task 7: grouping/ungrouping)', () => {
+  it('sets role and collectionId, leaving every other field untouched', async () => {
+    const rec = makeRecord({ name: 'lease.pdf', text: 'Some extracted text.' });
+    await addDocument(rec, makeBlob(['x'], 'application/pdf'));
+
+    await setDocumentRole(rec.id, 'base', 'coll-1');
+
+    const found = await getDocument(rec.id);
+    expect(found).toEqual({ ...rec, role: 'base', collectionId: 'coll-1' });
+  });
+
+  it('clears collectionId entirely on ungroup — the key is absent, not undefined', async () => {
+    const rec = makeRecord({ role: 'varies', collectionId: 'coll-1' });
+    await addDocument(rec, makeBlob(['x'], 'application/pdf'));
+
+    await setDocumentRole(rec.id, 'standalone');
+
+    const found = await getDocument(rec.id);
+    expect(found!.role).toBe('standalone');
+    // toEqual would treat { collectionId: undefined } as equal to an
+    // absent key (CLAUDE.md's own warning) — the real risk here is
+    // structuredClone PRESERVING an undefined-valued key, so the
+    // assertion that actually matters checks presence, not equality.
+    expect('collectionId' in found!).toBe(false);
+  });
+
+  it('rejects rather than silently no-op-ing when the document does not exist', async () => {
+    await expect(setDocumentRole('does-not-exist', 'base', 'coll-1')).rejects.toThrow();
+  });
+
+  it('does not touch another document\'s record', async () => {
+    const keep = makeRecord({ name: 'keep.pdf' });
+    const grouped = makeRecord({ name: 'grouped.pdf' });
+    await addDocument(keep, makeBlob(['k'], 'application/pdf'));
+    await addDocument(grouped, makeBlob(['g'], 'application/pdf'));
+
+    await setDocumentRole(grouped.id, 'base', 'coll-1');
+
+    expect(await getDocument(keep.id)).toEqual(keep);
   });
 });
 

@@ -1,10 +1,13 @@
 import React, { useRef, useState } from 'react';
-import { Upload, Trash2, Play, FileWarning, FileText, ClipboardList, Loader } from 'lucide-react';
-import type { DocumentRecord, Matter, Review, Template } from '../../types';
+import { Upload, Trash2, Play, FileWarning, FileText, ClipboardList, Loader, Layers, Lightbulb, X } from 'lucide-react';
+import type { Collection, DocumentRecord, Matter, Review, ReviewTarget, Template } from '../../types';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { DeleteMatterModal } from './MattersList';
+import { CollectionCard } from './CollectionCard';
+import { GroupDocumentsDialog } from './GroupDocumentsDialog';
+import { suggestCollections, type CollectionSuggestion } from '../../lib/collectionSuggest';
 import { progressLabel } from '../../lib/reviewProgress';
 
 export interface MatterHomeProps {
@@ -19,6 +22,21 @@ export interface MatterHomeProps {
   onRetryDocuments: () => void;
   onAddDocuments: (files: File[]) => Promise<void>;
   onRemoveDocument: (documentId: string) => Promise<void>;
+
+  /** This matter's collections (Task 7) — loaded and errored independently
+   *  of `documents`/`reviews`, for the same reason those two are already
+   *  independent of each other: one failing must never hide the other two
+   *  succeeding. */
+  collections: Collection[];
+  collectionsError: string | null;
+  onRetryCollections: () => void;
+  onCreateCollection: (params: { name: string; baseDocumentId: string; variesDocumentIds: string[] }) => Promise<void>;
+  /** Deletes the collection record and returns every member to
+   *  `standalone` — never deletes a document. */
+  onUngroupCollection: (collectionId: string) => Promise<void>;
+  /** Promotes a surviving member to base on a collection whose base
+   *  document was deleted out from under it. */
+  onRepairCollection: (collectionId: string, newBaseDocumentId: string) => Promise<void>;
 
   reviews: Review[];
   reviewsError: string | null;
@@ -35,7 +53,11 @@ export interface MatterHomeProps {
    *  to go to the Library and come back — the third of three drifted load-
    *  error idioms this component and App.tsx had grown between them). */
   onRetryPlaybooks: () => void;
-  onRunReview: (playbook: Template) => Promise<void>;
+  /** An omitted `target` runs today's standalone review over the matter's
+   *  own documents, byte for byte unchanged (Task 7 widened this from
+   *  `(playbook) => Promise<void>` without adding a second entry point).
+   *  A collection's own `Run a review` action supplies one. */
+  onRunReview: (playbook: Template, target?: ReviewTarget) => Promise<void>;
 
   onDeleteMatter: (matterId: string) => Promise<void>;
 }
@@ -67,11 +89,29 @@ function reviewStatusLabel(review: Review): string {
   return `In progress — ${done}/${total} clauses reviewed`;
 }
 
+/** Stable identity for a suggestion across re-renders, so dismissing one
+ *  survives the next render's fresh `suggestCollections` call — a plain
+ *  array index would misattribute a dismissal if an earlier suggestion
+ *  disappeared (e.g. its base got grouped some other way) and shifted the
+ *  rest up. */
+function suggestionKey(s: CollectionSuggestion): string {
+  return `${s.baseDocumentId}:${s.variesDocumentIds.slice().sort().join(',')}`;
+}
+
 /**
  * The matter home screen (Task 11): one matter's documents and reviews, and
  * the entry point to running a new review over them. Replaces v1's run
  * panel as the place a review starts from — the run panel itself becomes
  * "add documents and run" *within* a matter (`onRunReview` below).
+ *
+ * Task 7 adds grouping documents into collections here: collection cards
+ * render above the standalone document rows (never mixed into the same
+ * list — a collection member is never ALSO shown as if it were a loose
+ * document), a dismissible suggestion appears above both when
+ * `suggestCollections` finds a plausible one (ruling R-C4: it only ever
+ * proposes; nothing here creates a collection without this screen's own
+ * confirm dialog), and each collection card carries its own `Run a
+ * review` alongside the matter-wide one.
  *
  * Three states this screen must never paper over (spec §9):
  *  - a document that failed to parse still appears, marked unreadable with
@@ -89,6 +129,12 @@ export function MatterHome({
   onRetryDocuments,
   onAddDocuments,
   onRemoveDocument,
+  collections,
+  collectionsError,
+  onRetryCollections,
+  onCreateCollection,
+  onUngroupCollection,
+  onRepairCollection,
   reviews,
   reviewsError,
   onRetryReviews,
@@ -106,6 +152,60 @@ export function MatterHome({
   const [deletingMatter, setDeletingMatter] = useState(false);
   const [runPickerOpen, setRunPickerOpen] = useState(false);
   const [startingReviewId, setStartingReviewId] = useState<string | null>(null);
+  // The target the run picker is currently choosing a playbook FOR —
+  // `undefined` for the matter-wide button (today's behaviour, unchanged),
+  // set to a specific collection's target when opened from its card.
+  const [runTarget, setRunTarget] = useState<ReviewTarget | undefined>(undefined);
+
+  // Documents not already claimed by a collection — the only rows that can
+  // be selected for a NEW one, and the only ones `suggestCollections`
+  // should ever propose grouping (a document already in a collection isn't
+  // "loose" for the heuristic to notice).
+  const standaloneDocuments = documents.filter(d => d.role === 'standalone');
+  // Preserves the order the user actually clicked in — `GroupDocumentsDialog`
+  // relies on that order for "the base defaults to the first selected" and
+  // "amendments keep the order the user put them in".
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [dismissedSuggestions, setDismissedSuggestions] = useState<Set<string>>(new Set());
+
+  // Not `useMemo`: `standaloneDocuments` above is a fresh array every
+  // render (a `.filter()` result), so memoizing on it would never actually
+  // hit — and `suggestCollections` is cheap enough over a matter's
+  // document count that recomputing plainly is simpler than a memo that
+  // buys nothing.
+  const suggestions = suggestCollections(standaloneDocuments).filter(s => !dismissedSuggestions.has(suggestionKey(s)));
+
+  const selectedDocuments = selectedIds
+    .map(id => standaloneDocuments.find(d => d.id === id))
+    .filter((d): d is DocumentRecord => !!d);
+
+  const toggleSelected = (id: string) => {
+    setSelectedIds(prev => (prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]));
+  };
+
+  const openGroupDialogFromSuggestion = (s: CollectionSuggestion) => {
+    setSelectedIds([s.baseDocumentId, ...s.variesDocumentIds]);
+    setGroupDialogOpen(true);
+  };
+
+  const dismissSuggestion = (s: CollectionSuggestion) => {
+    setDismissedSuggestions(prev => new Set(prev).add(suggestionKey(s)));
+  };
+
+  const handleConfirmGroup = async (params: { name: string; baseDocumentId: string; variesDocumentIds: string[] }) => {
+    // Await-then-apply: the dialog itself only clears its own submitting
+    // state, so closing it and dropping the selection here happens only
+    // once the store write this represents has actually been attempted.
+    // `onCreateCollection` (App.tsx) reports a failure via toast rather
+    // than throwing, so this always reaches the same place either way —
+    // exactly `DeleteMatterModal`'s own precedent: close and let the user
+    // retry from a clean state rather than leaving a dialog stuck open on
+    // a write that already failed once.
+    await onCreateCollection(params);
+    setGroupDialogOpen(false);
+    setSelectedIds([]);
+  };
 
   const handleAddClick = () => fileInputRef.current?.click();
 
@@ -144,15 +244,24 @@ export function MatterHome({
     }
   };
 
+  const openRunPicker = (target?: ReviewTarget) => {
+    setRunTarget(target);
+    setRunPickerOpen(true);
+  };
+
   const handlePickPlaybook = async (playbook: Template) => {
     setStartingReviewId(playbook.id);
     try {
-      await onRunReview(playbook);
+      await onRunReview(playbook, runTarget);
       setRunPickerOpen(false);
     } finally {
       setStartingReviewId(null);
     }
   };
+
+  const runTargetCollectionName = runTarget?.kind === 'collection'
+    ? collections.find(c => c.id === runTarget.collectionId)?.name
+    : undefined;
 
   return (
     <div className="p-8 max-w-5xl mx-auto h-full overflow-y-auto">
@@ -181,7 +290,12 @@ export function MatterHome({
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <FileText className="w-4 h-4 text-gray-500" /> Documents
           </h3>
-          <div>
+          <div className="flex items-center gap-2">
+            <span title={selectedIds.length < 2 ? 'Select at least two documents to group them into a collection.' : undefined}>
+              <Button variant="ghost" onClick={() => setGroupDialogOpen(true)} disabled={selectedIds.length < 2}>
+                <Layers className="w-4 h-4" /> Group as a collection
+              </Button>
+            </span>
             <input
               ref={fileInputRef}
               type="file"
@@ -197,42 +311,96 @@ export function MatterHome({
           </div>
         </div>
 
+        {!documentsError && suggestions.map(s => (
+          <div
+            key={suggestionKey(s)}
+            className="mb-3 flex items-start gap-3 bg-violet-950/20 border border-violet-500/20 rounded-xl px-4 py-3"
+          >
+            <Lightbulb className="w-4 h-4 text-violet-300 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm text-white">Group "{s.name}"?</p>
+              <p className="text-xs text-gray-400 mt-0.5">{s.reason}</p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button variant="ghost" onClick={() => openGroupDialogFromSuggestion(s)}>Review</Button>
+              <button
+                onClick={() => dismissSuggestion(s)}
+                aria-label="Dismiss suggestion"
+                className="p-1.5 text-gray-500 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ))}
+
         {documentsError ? (
           <LoadErrorPanel compact message={documentsError} onRetry={onRetryDocuments} />
-        ) : documents.length === 0 ? (
-          <div className="text-gray-500 border border-dashed border-white/10 p-6 rounded-xl text-center text-sm">
-            No documents yet. Add one to get started.
-          </div>
         ) : (
-          <div className="flex flex-col gap-2">
-            {documents.map(doc => (
-              <div
-                key={doc.id}
-                className="flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3"
-              >
-                {doc.parseError
-                  ? <FileWarning className="w-4 h-4 text-red-400 shrink-0" />
-                  : <FileText className="w-4 h-4 text-gray-500 shrink-0" />}
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-white truncate">{doc.name}</p>
-                  <p className="text-xs text-gray-500">
-                    {doc.kind.toUpperCase()} · Added {formatDate(doc.addedAt)}
-                  </p>
-                  {doc.parseError && (
-                    <p className="text-xs text-red-400 mt-0.5">Unreadable: {doc.parseError}</p>
-                  )}
-                </div>
-                <button
-                  onClick={() => handleRemove(doc)}
-                  disabled={removingId === doc.id}
-                  className="p-1.5 text-gray-500 hover:text-red-400 disabled:opacity-50 shrink-0"
-                  aria-label={`Remove ${doc.name}`}
-                >
-                  {removingId === doc.id ? <Loader className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                </button>
+          <>
+            {collectionsError && (
+              <div className="mb-3">
+                <LoadErrorPanel compact message={collectionsError} onRetry={onRetryCollections} />
               </div>
-            ))}
-          </div>
+            )}
+            {!collectionsError && collections.length > 0 && (
+              <div className="flex flex-col gap-3 mb-3">
+                {collections.map(c => (
+                  <CollectionCard
+                    key={c.id}
+                    collection={c}
+                    documents={documents}
+                    onUngroup={onUngroupCollection}
+                    onRepair={onRepairCollection}
+                    onRunReview={openRunPicker}
+                  />
+                ))}
+              </div>
+            )}
+
+            {documents.length === 0 ? (
+              <div className="text-gray-500 border border-dashed border-white/10 p-6 rounded-xl text-center text-sm">
+                No documents yet. Add one to get started.
+              </div>
+            ) : standaloneDocuments.length > 0 ? (
+              <div className="flex flex-col gap-2">
+                {standaloneDocuments.map(doc => (
+                  <div
+                    key={doc.id}
+                    className="flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.includes(doc.id)}
+                      onChange={() => toggleSelected(doc.id)}
+                      aria-label={`Select ${doc.name}`}
+                      className="shrink-0"
+                    />
+                    {doc.parseError
+                      ? <FileWarning className="w-4 h-4 text-red-400 shrink-0" />
+                      : <FileText className="w-4 h-4 text-gray-500 shrink-0" />}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-white truncate">{doc.name}</p>
+                      <p className="text-xs text-gray-500">
+                        {doc.kind.toUpperCase()} · Added {formatDate(doc.addedAt)}
+                      </p>
+                      {doc.parseError && (
+                        <p className="text-xs text-red-400 mt-0.5">Unreadable: {doc.parseError}</p>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleRemove(doc)}
+                      disabled={removingId === doc.id}
+                      className="p-1.5 text-gray-500 hover:text-red-400 disabled:opacity-50 shrink-0"
+                      aria-label={`Remove ${doc.name}`}
+                    >
+                      {removingId === doc.id ? <Loader className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </>
         )}
       </section>
 
@@ -242,7 +410,7 @@ export function MatterHome({
           <h3 className="text-lg font-bold text-white flex items-center gap-2">
             <ClipboardList className="w-4 h-4 text-gray-500" /> Reviews
           </h3>
-          <Button onClick={() => setRunPickerOpen(true)}>
+          <Button onClick={() => openRunPicker(undefined)}>
             <Play className="w-4 h-4" /> Run a review
           </Button>
         </div>
@@ -283,12 +451,24 @@ export function MatterHome({
         onConfirm={handleConfirmDeleteMatter}
       />
 
+      <GroupDocumentsDialog
+        isOpen={groupDialogOpen}
+        documents={selectedDocuments}
+        onClose={() => setGroupDialogOpen(false)}
+        onConfirm={handleConfirmGroup}
+      />
+
       <Modal
         isOpen={runPickerOpen}
         title="Run a review"
         onClose={() => { if (!startingReviewId) setRunPickerOpen(false); }}
         footer={<Button variant="ghost" onClick={() => setRunPickerOpen(false)} disabled={!!startingReviewId}>Cancel</Button>}
       >
+        {runTargetCollectionName && (
+          <p className="text-xs text-gray-500">
+            Reviewing the <span className="text-white">{runTargetCollectionName}</span> collection.
+          </p>
+        )}
         {playbooksError ? (
           <LoadErrorPanel compact message={playbooksError} onRetry={onRetryPlaybooks} />
         ) : playbooks.length === 0 ? (

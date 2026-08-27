@@ -72,6 +72,51 @@ export async function addDocument(rec: DocumentRecord, bytes: Blob): Promise<voi
   await tx.done;
 }
 
+/**
+ * Updates a document's collection membership only — its `role` and
+ * `collectionId` — leaving its text, its blob and every other field
+ * untouched. Grouping and ungrouping (Task 7) are the only callers: a
+ * group writes `'base'`/`'varies'` with the new collection's id, an
+ * ungroup writes `'standalone'` with no id at all.
+ *
+ * Reads the current record inside the same transaction it writes back
+ * into and spreads over it, so a field this function doesn't know about
+ * (added by some later change) survives a role update untouched rather
+ * than being dropped because this function's own shape went stale.
+ *
+ * `collectionId` is left off the written record entirely when omitted —
+ * never set to `undefined` — because `structuredClone` (how IndexedDB
+ * writes every record) PRESERVES an `undefined`-valued key rather than
+ * dropping it. A document ungrouped through this function must read back
+ * with no `collectionId` key at all, not one holding `undefined`; only
+ * destructuring it away, rather than assigning `undefined` to it,
+ * guarantees that (see CLAUDE.md's note on `toEqual`/`structuredClone`
+ * and absent-vs-undefined keys).
+ *
+ * Rejects (never resolves silently) when the document doesn't exist — a
+ * caller asking to move a document into or out of a collection has a
+ * stale id, and swallowing that would leave the collection's own record
+ * pointing at a member this write silently never happened for.
+ */
+export async function setDocumentRole(
+  id: string,
+  role: DocumentRecord['role'],
+  collectionId?: string,
+): Promise<void> {
+  const db = await getDb();
+  const tx = db.transaction(STORES.documents, 'readwrite');
+  const existing = await tx.store.get(id);
+  if (!existing) {
+    await tx.done;
+    throw new Error(`Document ${id} could not be found.`);
+  }
+  const { collectionId: _drop, ...rest } = migrateDocumentRecord(existing);
+  void _drop;
+  const updated: DocumentRecord = collectionId ? { ...rest, role, collectionId } : { ...rest, role };
+  await tx.store.put(updated);
+  await tx.done;
+}
+
 /** Removes a document's metadata record and its blob together, in one
  *  transaction, for the same reason `addDocument` writes them together: an
  *  orphaned blob is invisible to the UI (nothing references it once its

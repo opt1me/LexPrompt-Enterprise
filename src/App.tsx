@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
-import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, Settings, Matter, Finding, UserProfile, Verification } from './types';
+import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
 import { applyVerification, findingKey, makeNote, resetVerification } from './lib/verification';
 import type { VerificationChange } from './lib/verification';
@@ -13,7 +13,7 @@ import {
 import {
   listMatters, getMatter, saveMatter, newMatter, deleteMatter,
 } from './lib/db/matters';
-import { listDocuments, getDocument, addDocument, deleteDocument } from './lib/db/documents';
+import { listDocuments, getDocument, addDocument, deleteDocument, setDocumentRole } from './lib/db/documents';
 import { getDocumentBlob } from './lib/db/blobs';
 import {
   listReviews, getReview, saveReview, createDebouncedReviewSaver, type DebouncedReviewSaver,
@@ -21,6 +21,11 @@ import {
 import { getProfile } from './lib/db/profile';
 import { migrateIfNeeded } from './lib/db/migrate';
 import { describeLoadError } from './lib/loadError';
+import {
+  listCollections, getCollection, saveCollection, deleteCollection, newCollection,
+} from './lib/db/collections';
+import { orderedMembers } from './lib/collectionOrder';
+import { isCollectionTarget } from './lib/reviewTarget';
 import { useRoute, type Route } from './lib/router';
 import { generateTemplate } from './features/templates/generateTemplate';
 import { listModels, isAuthError } from './lib/openrouter';
@@ -36,7 +41,7 @@ import { CreateTemplateDialog, type CreateTemplateParams } from './features/temp
 import { MegaPromptModal } from './features/templates/MegaPromptModal';
 import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, RunInterruptedBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
-import { emptyRun, runReview, retryCell } from './features/review/runReview';
+import { emptyRun, runReview, retryCell, type CollectionRunInput } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
 import { parseFiles, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
 
@@ -381,6 +386,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [matterDocuments, setMatterDocuments] = useState<DocumentRecord[]>([]);
   const [matterDocumentsError, setMatterDocumentsError] = useState<string | null>(null);
 
+  // Task 7: this matter's collections, loaded and errored independently of
+  // documents/reviews — the same reasoning `loadMatterHome`'s own comment
+  // gives for those two: one failing must never hide either of the others
+  // having loaded fine.
+  const [matterCollections, setMatterCollections] = useState<Collection[]>([]);
+  const [matterCollectionsError, setMatterCollectionsError] = useState<string | null>(null);
+
   const [matterReviews, setMatterReviews] = useState<Review[]>([]);
   const [matterReviewsError, setMatterReviewsError] = useState<string | null>(null);
 
@@ -388,6 +400,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setMatterDocumentsError(null);
     return listDocuments(matterId).then(setMatterDocuments).catch((e) => {
       setMatterDocumentsError(describeLoadError(e, 'The documents in this matter could not be loaded. Try again.'));
+    });
+  };
+
+  const loadMatterCollections = (matterId: string) => {
+    setMatterCollectionsError(null);
+    return listCollections(matterId).then(setMatterCollections).catch((e) => {
+      setMatterCollectionsError(describeLoadError(e, 'The collections in this matter could not be loaded. Try again.'));
     });
   };
 
@@ -411,6 +430,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       }
       setMatter(m);
       loadMatterDocuments(matterId);
+      loadMatterCollections(matterId);
       loadMatterReviews(matterId);
     }).catch((e) => {
       setMatterError(describeLoadError(e, 'This matter could not be loaded. Try again.'));
@@ -718,10 +738,37 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    *    on completion or cancellation, so the run survives a reload (spec
    *    definition-of-done #3) instead of vanishing the moment the tab
    *    closes, exactly like every completed v1 run used to.
+   *
+   * `options` (Task 7) is how a collection review reaches this same,
+   * single run-starting function rather than a second copy of it:
+   *  - `template`/`matterId` default to `activeTemplate`/`activeMatterId`
+   *    state, exactly what this function always read before — needed as
+   *    explicit overrides ONLY because a collection's own "Run a review"
+   *    calls this in the same tick as `setActiveTemplate`/
+   *    `setActiveMatterId`, before either state update has taken effect on
+   *    this render's closures (the standard React stale-closure gap;
+   *    `RunPanel`'s call always lands on a LATER render, so it never
+   *    needed this).
+   *  - `collection`, when present, is threaded straight into `emptyRun`
+   *    (as its `target`) and `runReview` (as its sixth argument) — every
+   *    other line in this function is unchanged and still runs, since a
+   *    collection's documents are already-persisted matter documents
+   *    (`existingIds` below always contains them, so the "persist a
+   *    newly-uploaded document" branch is naturally a no-op for them).
+   *
+   * When `options` is omitted entirely (`RunPanel`'s
+   * `onRun={handleStartRun}`), every one of these resolves to exactly what
+   * it always did — the standalone path this function implements is
+   * unchanged, byte for byte.
    */
-  const handleStartRun = async (docs: DocumentFile[]) => {
-    if (!activeTemplate || docs.length === 0) return;
-    const matterId = activeMatterId;
+  const handleStartRun = async (
+    docs: DocumentFile[],
+    options: { template?: Template; matterId?: string | null; collection?: CollectionRunInput } = {},
+  ) => {
+    const template = options.template ?? activeTemplate;
+    if (!template || docs.length === 0) return;
+    const matterId = options.matterId !== undefined ? options.matterId : activeMatterId;
+    const collectionInput = options.collection;
 
     let userId = '';
     if (matterId) {
@@ -759,7 +806,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       }
     }
 
-    const newRun = emptyRun(activeTemplate, docs);
+    const newRun = emptyRun(template, docs, collectionInput?.target);
     authErrorHandledRef.current = false;
     latestRunRef.current = newRun;
     setDocuments(docs);
@@ -849,7 +896,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       loadMatterReviews(matterId);
     };
 
-    runReview(newRun, docs, settings, handleUpdate, controller.signal)
+    runReview(newRun, docs, settings, handleUpdate, controller.signal, collectionInput)
       .then(async () => {
         setIsRunning(false);
         await persistFinal();
@@ -1170,6 +1217,100 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   };
 
   /**
+   * Groups the chosen standalone documents into a new collection (Task 7).
+   * Two separate writes, not one transaction — `saveCollection`'s `_seq`
+   * allocation is scoped to a single-store transaction on `collections`
+   * (`nextSeq`'s own type pins it there, see `seq.ts`), so it cannot share
+   * a transaction with the `documents` store's role updates. The order
+   * matters for the failure case: the collection is saved FIRST, so if a
+   * member's role update then fails partway, retrying this action (or
+   * ungrouping) still has a real collection record to work from rather
+   * than orphaned document roles pointing at nothing.
+   *
+   * Document role updates run in parallel via `setDocumentRole` — never a
+   * hand-rolled write here, so grouping and ungrouping can't drift on how
+   * a document's collection membership is actually persisted.
+   */
+  const handleCreateCollection = async (
+    matterId: string,
+    params: { name: string; baseDocumentId: string; variesDocumentIds: string[] },
+  ) => {
+    try {
+      const profile = await getProfile();
+      const collection = newCollection(matterId, params.name, params.baseDocumentId, profile.id);
+      collection.variesDocumentIds = params.variesDocumentIds;
+      await saveCollection(collection);
+      await Promise.all([
+        setDocumentRole(params.baseDocumentId, 'base', collection.id),
+        ...params.variesDocumentIds.map(id => setDocumentRole(id, 'varies', collection.id)),
+      ]);
+      await Promise.all([loadMatterDocuments(matterId), loadMatterCollections(matterId)]);
+      notify('Collection created.');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not create this collection.', 'error');
+    }
+  };
+
+  /**
+   * Ungroups a collection: every member document reverts to `standalone`
+   * FIRST, and only once that has actually succeeded is the collection
+   * record itself deleted. That order means a failure partway through
+   * still leaves every already-reverted document visible in the
+   * standalone list (never omitted — it just isn't lost track of even on
+   * a partial failure), rather than deleting the collection first and
+   * risking documents stuck claiming a `collectionId` that resolves to
+   * nothing. Documents are never deleted, in either order (spec §8).
+   */
+  const handleUngroupCollection = async (matterId: string, collectionId: string) => {
+    try {
+      const collection = matterCollections.find(c => c.id === collectionId) ?? await getCollection(collectionId);
+      if (!collection) {
+        notify('This collection could not be found.', 'error');
+        return;
+      }
+      const memberIds = [collection.baseDocumentId, ...collection.variesDocumentIds];
+      const presentIds = new Set(matterDocuments.map(d => d.id));
+      await Promise.all(
+        memberIds.filter(id => presentIds.has(id)).map(id => setDocumentRole(id, 'standalone')),
+      );
+      await deleteCollection(collectionId);
+      await Promise.all([loadMatterDocuments(matterId), loadMatterCollections(matterId)]);
+      notify('Collection ungrouped. Its documents are unaffected.');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not ungroup this collection.', 'error');
+    }
+  };
+
+  /**
+   * Repairs a collection whose base document was deleted, by promoting one
+   * of its surviving members to base (spec §8's "choose a new base"; the
+   * card's own "or ungroup" is just `handleUngroupCollection` above). Never
+   * inferred — `newBaseDocumentId` is always a document the user clicked by
+   * name on `CollectionCard`, never the "first surviving member" chosen
+   * for them.
+   */
+  const handleRepairCollection = async (matterId: string, collectionId: string, newBaseDocumentId: string) => {
+    try {
+      const collection = matterCollections.find(c => c.id === collectionId) ?? await getCollection(collectionId);
+      if (!collection) {
+        notify('This collection could not be found.', 'error');
+        return;
+      }
+      const updated: Collection = {
+        ...collection,
+        baseDocumentId: newBaseDocumentId,
+        variesDocumentIds: collection.variesDocumentIds.filter(id => id !== newBaseDocumentId),
+      };
+      await saveCollection(updated);
+      await setDocumentRole(newBaseDocumentId, 'base', collectionId);
+      await Promise.all([loadMatterDocuments(matterId), loadMatterCollections(matterId)]);
+      notify('Collection repaired.');
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not repair this collection.', 'error');
+    }
+  };
+
+  /**
    * "Run a review" from Matter Home: the existing run flow (RunPanel →
    * handleStartRun), pre-seeded with this matter's own documents rather
    * than requiring them to be re-uploaded. Each is rebuilt from its stored
@@ -1181,8 +1322,54 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * `pageImages` — and even then only once per session, since it caches the
    * result by document id. So a scanned PDF's images are only ever
    * regenerated the first time this session it's actually reviewed.
+   *
+   * Task 7 widens this with an optional `target`. Omitted, this is
+   * UNCHANGED — every line below runs exactly as it always did, over
+   * every one of the matter's documents, into the RunPanel preview screen.
+   * A collection target instead hydrates only that collection's present
+   * members (through the SAME `documentFileForReview` the standalone path
+   * uses, so a scanned amendment keeps its page images) and calls
+   * `handleStartRun` directly with the built `CollectionRunInput` — there
+   * is no RunPanel step for a collection: its document set is the
+   * collection's own ordered members, not something to preview or add
+   * loose uploads to.
    */
-  const handleRunReviewForMatter = async (matterId: string, template: Template) => {
+  const handleRunReviewForMatter = async (matterId: string, template: Template, target?: ReviewTarget) => {
+    if (target && isCollectionTarget(target)) {
+      try {
+        const collection = matterCollections.find(c => c.id === target.collectionId) ?? await getCollection(target.collectionId);
+        if (!collection) {
+          notify('This collection could not be found.', 'error');
+          return;
+        }
+        const recordById = new Map(matterDocuments.map(d => [d.id, d]));
+        const presentRecords = [collection.baseDocumentId, ...collection.variesDocumentIds]
+          .map(id => recordById.get(id))
+          .filter((r): r is DocumentRecord => !!r);
+        const hydrated = await Promise.all(presentRecords.map(async (record) => {
+          const blob = await getDocumentBlob(record.id);
+          return documentFileForReview(record, blob);
+        }));
+        const members = orderedMembers(collection, hydrated);
+        if (!members[0]?.document) {
+          // The base is missing — `CollectionCard` already offers this
+          // action disabled for exactly this reason, but `matterDocuments`
+          // could have gone stale (another tab, another tick) between that
+          // render and this click, and starting a review that will fail
+          // every clause is worse than refusing it here too.
+          notify('This collection is missing its base document, so it cannot be reviewed. Repair it first.', 'error');
+          return;
+        }
+        setActiveTemplate(template);
+        setActiveMatterId(matterId);
+        setRun(null);
+        await handleStartRun(hydrated, { template, matterId, collection: { target, members } });
+      } catch (e) {
+        notify(e instanceof Error ? e.message : 'Could not prepare this collection for review.', 'error');
+      }
+      return;
+    }
+
     try {
       const docs = await Promise.all(matterDocuments.map(async (record) => {
         const blob = await getDocumentBlob(record.id);
@@ -1479,6 +1666,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onRetryDocuments={() => loadMatterDocuments(matter.id)}
               onAddDocuments={(files) => handleAddMatterDocuments(matter.id, files)}
               onRemoveDocument={(documentId) => handleRemoveMatterDocument(matter.id, documentId)}
+              collections={matterCollections}
+              collectionsError={matterCollectionsError}
+              onRetryCollections={() => loadMatterCollections(matter.id)}
+              onCreateCollection={(params) => handleCreateCollection(matter.id, params)}
+              onUngroupCollection={(collectionId) => handleUngroupCollection(matter.id, collectionId)}
+              onRepairCollection={(collectionId, newBaseDocumentId) => handleRepairCollection(matter.id, collectionId, newBaseDocumentId)}
               reviews={matterReviews}
               reviewsError={matterReviewsError}
               onRetryReviews={() => loadMatterReviews(matter.id)}
@@ -1486,7 +1679,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               playbooks={templates}
               playbooksError={libraryLoadError}
               onRetryPlaybooks={() => loadLibrary()}
-              onRunReview={(playbook) => handleRunReviewForMatter(matter.id, playbook)}
+              onRunReview={(playbook, target) => handleRunReviewForMatter(matter.id, playbook, target)}
               onDeleteMatter={handleDeleteMatterFromHome}
             />
           ) : null

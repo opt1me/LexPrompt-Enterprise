@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Finding, Matter, Review } from '../../types';
+import type { Collection, DocumentRecord, Finding, Matter, Review, ReviewTarget } from '../../types';
 import { MatterHome } from './MatterHome';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -50,6 +50,34 @@ function makeReview(overrides: Partial<Review> = {}): Review {
   };
 }
 
+function makeDoc(overrides: Partial<DocumentRecord> = {}): DocumentRecord {
+  return {
+    id: 'd1',
+    matterId: 'm1',
+    name: 'Lease.pdf',
+    kind: 'pdf',
+    text: '',
+    byteSize: 1,
+    addedAt: 1,
+    addedByUserId: 'u1',
+    role: 'standalone',
+    ...overrides,
+  };
+}
+
+function makeCollection(overrides: Partial<Collection> = {}): Collection {
+  return {
+    id: 'c1',
+    matterId: 'm1',
+    name: 'Lease as varied',
+    baseDocumentId: 'base',
+    variesDocumentIds: ['dov'],
+    createdAt: 1,
+    createdByUserId: 'u1',
+    ...overrides,
+  };
+}
+
 let cleanup: (() => void) | null = null;
 afterEach(() => { cleanup?.(); cleanup = null; });
 
@@ -69,6 +97,12 @@ const baseProps = {
   onRetryDocuments: () => {},
   onAddDocuments: async () => {},
   onRemoveDocument: async () => {},
+  collections: [],
+  collectionsError: null,
+  onRetryCollections: () => {},
+  onCreateCollection: async () => {},
+  onUngroupCollection: async () => {},
+  onRepairCollection: async () => {},
   reviews: [],
   reviewsError: null,
   onRetryReviews: () => {},
@@ -137,5 +171,139 @@ describe('MatterHome — verification progress (Task 12)', () => {
     // from how many a human has verified, and a reader needs both.
     expect(container.textContent).toContain('4/4 clauses reviewed');
     expect(container.textContent).toContain('2 of 4 verified');
+  });
+});
+
+describe('MatterHome — collections (Task 7)', () => {
+  it('renders a collection card above the standalone documents, and only lists non-member documents as standalone rows', () => {
+    const base = makeDoc({ id: 'base', name: 'Lease.pdf', role: 'base', collectionId: 'c1' });
+    const dov = makeDoc({ id: 'dov', name: 'DoV.pdf', role: 'varies', collectionId: 'c1' });
+    const loose = makeDoc({ id: 'loose', name: 'NDA.pdf', role: 'standalone' });
+    const container = mount(
+      <MatterHome {...baseProps} documents={[base, dov, loose]} collections={[makeCollection()]} />,
+    );
+    // The collection's own name appears (from CollectionCard), and the
+    // grouped documents' names appear only inside it, not as loose rows.
+    expect(container.textContent).toContain('Lease as varied');
+    expect(container.textContent).toContain('NDA.pdf');
+  });
+
+  it('a collections load failure renders its own compact panel with a working retry, independent of documents', () => {
+    const onRetryCollections = vi.fn();
+    const container = mount(
+      <MatterHome
+        {...baseProps}
+        documents={[makeDoc({ id: 'loose', name: 'NDA.pdf' })]}
+        collectionsError="The collections in this matter could not be loaded. Try again."
+        onRetryCollections={onRetryCollections}
+      />,
+    );
+    expect(container.textContent).toContain('could not be loaded');
+    // The standalone list still rendered — a collections failure must not
+    // hide documents that loaded fine.
+    expect(container.textContent).toContain('NDA.pdf');
+    const button = Array.from(container.querySelectorAll('button')).find(b => /retry/i.test(b.textContent || ''));
+    act(() => { (button as HTMLButtonElement).click(); });
+    expect(onRetryCollections).toHaveBeenCalled();
+  });
+
+  it('"Group as a collection" is disabled until two standalone documents are selected, then calls onCreateCollection', async () => {
+    const onCreateCollection = vi.fn().mockResolvedValue(undefined);
+    const docs = [makeDoc({ id: 'a', name: 'A.pdf' }), makeDoc({ id: 'b', name: 'B.pdf' })];
+    const container = mount(
+      <MatterHome {...baseProps} documents={docs} onCreateCollection={onCreateCollection} />,
+    );
+    const groupButton = () => Array.from(container.querySelectorAll('button')).find(b => /group as a collection/i.test(b.textContent || '')) as HTMLButtonElement;
+    expect(groupButton().disabled).toBe(true);
+
+    const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+    expect(checkboxes).toHaveLength(2);
+    act(() => { checkboxes[0].click(); });
+    expect(groupButton().disabled).toBe(true); // only one selected so far
+    act(() => { checkboxes[1].click(); });
+    expect(groupButton().disabled).toBe(false);
+
+    act(() => { groupButton().click(); });
+    // The GroupDocumentsDialog is now open — fill its name and confirm.
+    const nameInput = container.querySelector('#collection-name') as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+    act(() => {
+      setter.call(nameInput, 'A as varied');
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const confirmButton = Array.from(container.querySelectorAll('button')).find(b => /create collection/i.test(b.textContent || '')) as HTMLButtonElement;
+    await act(async () => {
+      confirmButton.click();
+      await Promise.resolve();
+    });
+    expect(onCreateCollection).toHaveBeenCalledWith({ name: 'A as varied', baseDocumentId: 'a', variesDocumentIds: ['b'] });
+  });
+
+  it('shows a dismissible suggestion when suggestCollections proposes one, and dismissing removes it without grouping anything', () => {
+    const base = makeDoc({ id: 'lease', name: 'Lease.pdf' });
+    const amendment = makeDoc({ id: 'dov', name: 'Lease Deed of Variation.pdf' });
+    const onCreateCollection = vi.fn();
+    const container = mount(
+      <MatterHome {...baseProps} documents={[base, amendment]} onCreateCollection={onCreateCollection} />,
+    );
+    expect(container.textContent).toMatch(/deed of variation/i);
+    const dismiss = container.querySelector('button[aria-label="Dismiss suggestion"]') as HTMLButtonElement;
+    expect(dismiss).toBeTruthy();
+    act(() => { dismiss.click(); });
+    expect(container.textContent).not.toMatch(/shares.*name and is named as a/i);
+    expect(onCreateCollection).not.toHaveBeenCalled();
+  });
+
+  it('the matter-wide "Run a review" still passes no target — the standalone path is unchanged', async () => {
+    const onRunReview = vi.fn().mockResolvedValue(undefined);
+    const playbook = { id: 'p1', name: 'NDA Review' } as unknown as Parameters<typeof onRunReview>[0];
+    const container = mount(
+      <MatterHome {...baseProps} playbooks={[playbook]} onRunReview={onRunReview} />,
+    );
+    const runButton = Array.from(container.querySelectorAll('button')).find(b => /^run a review$/i.test((b.textContent || '').trim())) as HTMLButtonElement;
+    act(() => { runButton.click(); });
+    const playbookButton = Array.from(container.querySelectorAll('button')).find(b => /nda review/i.test(b.textContent || '')) as HTMLButtonElement;
+    await act(async () => {
+      playbookButton.click();
+      await Promise.resolve();
+    });
+    expect(onRunReview).toHaveBeenCalledWith(playbook, undefined);
+  });
+
+  it('a collection card\'s own "Run a review" opens the same picker scoped to that collection\'s target', async () => {
+    const onRunReview = vi.fn().mockResolvedValue(undefined);
+    const playbook = { id: 'p1', name: 'NDA Review' } as unknown as Parameters<typeof onRunReview>[0];
+    const base = makeDoc({ id: 'base', name: 'Lease.pdf', role: 'base', collectionId: 'c1' });
+    const dov = makeDoc({ id: 'dov', name: 'DoV.pdf', role: 'varies', collectionId: 'c1' });
+    const container = mount(
+      <MatterHome
+        {...baseProps}
+        documents={[base, dov]}
+        collections={[makeCollection()]}
+        playbooks={[playbook]}
+        onRunReview={onRunReview}
+      />,
+    );
+    const collectionRunButton = Array.from(container.querySelectorAll('button')).find(b => /run a review/i.test(b.textContent || '')) as HTMLButtonElement;
+    act(() => { collectionRunButton.click(); });
+    const playbookButton = Array.from(container.querySelectorAll('button')).find(b => /nda review/i.test(b.textContent || '')) as HTMLButtonElement;
+    await act(async () => {
+      playbookButton.click();
+      await Promise.resolve();
+    });
+    const expectedTarget: ReviewTarget = { kind: 'collection', collectionId: 'c1', documentIds: ['base', 'dov'] };
+    expect(onRunReview).toHaveBeenCalledWith(playbook, expectedTarget);
+  });
+
+  it('a broken collection (missing base) offers no runnable "Run a review" of its own', () => {
+    const dov = makeDoc({ id: 'dov', name: 'DoV.pdf', role: 'varies', collectionId: 'c1' });
+    const container = mount(
+      <MatterHome {...baseProps} documents={[dov]} collections={[makeCollection()]} />,
+    );
+    const runButtons = Array.from(container.querySelectorAll('button')).filter(b => /run a review/i.test(b.textContent || ''));
+    // One is the matter-wide button (always runnable); the collection's own
+    // must be present and disabled, never simply omitted.
+    const collectionRunButton = runButtons.find(b => b.disabled);
+    expect(collectionRunButton).toBeTruthy();
   });
 });
