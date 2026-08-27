@@ -598,6 +598,76 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
     expect(finding.netPosition!.trail[1].effect).not.toContain('ten years');
   });
 
+  /**
+   * mn2. `claimedDocumentNumber` is shared by the trail path and the
+   * citation path precisely so the two cannot disagree about what counts as
+   * a claim — and it required `typeof field === 'number'`, which a model
+   * without structured output (whose JSON comes back through
+   * `parseJsonLoose`) routinely fails by stringifying its integers. The
+   * asymmetry was the sharp end: an unreadable number costs a CITATION one
+   * quote, and cost a STEP the entire clause, with a message saying the
+   * model named no document when it plainly had.
+   */
+  it('reads a stringified document number on a step, exactly as it reads one on a citation', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: '1', effect: 'The lease sets a 5-year review.', citations: [] },
+        { document: '2', effect: 'The deed makes rent review annual.', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('done');
+    expect(finding.netPosition!.trail[0]).toMatchObject({
+      documentId: 'lease', effect: 'The lease sets a 5-year review.',
+    });
+    expect(finding.netPosition!.trail[1]).toMatchObject({
+      documentId: 'dov', effect: 'The deed makes rent review annual.',
+    });
+  });
+
+  it('still fails the clause loudly when a step names something that is not a number at all', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 1, effect: 'Base effect.', citations: [] },
+        { document: 'the deed of variation', effect: 'Amendment effect.', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/step 2/i);
+    expect(finding.error).toMatch(/which document/i);
+    expect(finding.netPosition).toBeUndefined();
+  });
+
+  it('treats a stringified out-of-range citation number as the explicit wrong claim it is, not as an unreadable one', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered(
+        { effect: 'Base effect.', citations: [] },
+        {
+          effect: 'Amendment effect.',
+          // A real quote from DOCUMENT 2, attributed to a document that does
+          // not exist. Read as a number this is an explicit, specific claim
+          // that is wrong, so it is dropped rather than quote-matched back
+          // to a document the model did not name — the same rule the
+          // numeric form has always followed.
+          citations: [{ quote: 'Rent review is now annual, capped at RPI.', document: '9' }],
+        },
+      ),
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('done');
+    expect(finding.netPosition!.trail[1].citations).toEqual([]);
+  });
+
   it('names the schema field the model must number its steps with', () => {
     const step = COLLECTION_CLAUSE_SCHEMA.properties.trail.items;
     expect(step.properties.document).toBeDefined();

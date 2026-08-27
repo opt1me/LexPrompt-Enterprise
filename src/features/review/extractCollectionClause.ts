@@ -94,12 +94,36 @@ interface AssessedMember {
  * the same claim, against the same `DOCUMENT N` labels `buildCollectionPrompt`
  * writes, and this project's most repeated defect is two copies of one rule
  * drifting apart.
+ *
+ * mn2: a bare integer STRING is read as the number it plainly is. Only a
+ * model honouring `COLLECTION_CLAUSE_SCHEMA` is held to JSON types; without
+ * structured output the response arrives through `parseJsonLoose`, and
+ * `"document": "2"` is an ordinary shape there. Refusing it made the two
+ * paths asymmetric in the worst direction — an unreadable number costs a
+ * citation one quote, and cost a step the WHOLE CLAUSE, under a message
+ * saying the model named no document when it had. By this module's own
+ * stated principle, reading an explicit, unambiguous claim is not guessing,
+ * and `"2"` is a claim.
+ *
+ * Nothing looser is accepted: no `"DOCUMENT 2"`, no `"2nd"`, no
+ * `parseInt`-style prefix matching, because recovering a number from text
+ * that merely contains one IS guessing, and the whole point of this
+ * function's caller is to refuse that. A genuinely unparseable value still
+ * returns `undefined` and still fails loudly.
  */
+const INTEGER_STRING = /^[+-]?\d+$/;
+
 function claimedDocumentNumber(entry: unknown): number | undefined {
   const field = typeof entry === 'object' && entry !== null
     ? (entry as { document?: unknown }).document
     : undefined;
-  return typeof field === 'number' && Number.isFinite(field) ? field : undefined;
+
+  if (typeof field === 'number') return Number.isFinite(field) ? field : undefined;
+  if (typeof field === 'string' && INTEGER_STRING.test(field.trim())) {
+    const parsed = Number(field.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
 /**
