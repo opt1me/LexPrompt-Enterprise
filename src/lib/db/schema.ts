@@ -2,7 +2,7 @@ import type { DBSchema } from 'idb';
 import type { Playbook } from '../../types';
 
 export const DB_NAME = 'lexprompt';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 
 export const STORES = {
   matters: 'matters',
@@ -12,6 +12,7 @@ export const STORES = {
   playbooks: 'playbooks',
   profile: 'profile',
   collections: 'collections',
+  playbookVersions: 'playbookVersions',
 } as const;
 
 /** The single key under which the one local profile is stored. */
@@ -36,6 +37,11 @@ export interface LexPromptDB extends DBSchema {
     key: string;
     value: import('../../types').Collection;
     indexes: { byMatter: string };
+  };
+  playbookVersions: {
+    key: string;
+    value: import('../../types').PlaybookVersion;
+    indexes: { byPlaybook: string };
   };
 }
 

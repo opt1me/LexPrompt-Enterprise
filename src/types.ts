@@ -47,6 +47,34 @@ export interface Template {
  *  versioning and standard positions arrive in sub-project D. */
 export type Playbook = Template;
 
+/** The content of a playbook at one published moment. Immutable: nothing
+ *  overwrites a version once published, because a review that says "ran
+ *  against v4" has to be able to prove what v4 was. */
+export interface PlaybookVersion {
+  id: string;
+  playbookId: string;
+  /** 1, 2, 3 … Monotonic per playbook. */
+  version: number;
+  name: string;
+  contractType: string;
+  systemPrompt: string;
+  formatPrompt: string;
+  riskTolerance?: string;
+  clauses: PlaybookClause[];
+  /** One line saying what changed from the previous version. Required on
+   *  every version after the first: a version history whose entries do not
+   *  say what changed is a list of dates. */
+  changeSummary: string;
+  publishedAt: number;
+  publishedByUserId: string;
+  schemaVersion: number;
+}
+
+/** The mutable working copy: a version's content minus everything only a
+ *  publish can assign. */
+export type PlaybookDraft =
+  Omit<PlaybookVersion, 'id' | 'playbookId' | 'version' | 'publishedAt' | 'publishedByUserId' | 'schemaVersion'>;
+
 /** The in-session working copy of a document as loaded into memory for a
  *  run: a live `File` handle plus whatever rendering/parsing produced. Never
  *  persisted as-is — see `DocumentRecord` for the shape actually written to
