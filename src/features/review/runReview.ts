@@ -1,8 +1,11 @@
 import { mapWithConcurrency } from '../../lib/concurrency';
-import type { DocumentFile, Finding, ReviewRun, Settings, Template } from '../../types';
+import type { DocumentFile, Finding, ReviewRun, ReviewTarget, Settings, Template } from '../../types';
 import { extractClause } from './extractClause';
+import { extractCollectionClause } from './extractCollectionClause';
 import { unchecked } from '../../lib/verification';
 import { uid } from '../../lib/uid';
+import type { CollectionMember } from '../../lib/collectionOrder';
+import { findingsKeyFor } from '../../lib/reviewTarget';
 
 export function emptyRun(template: Template, docs: DocumentFile[]): ReviewRun {
   const findings: ReviewRun['findings'] = {};
@@ -96,34 +99,76 @@ function cancelPendingCells(run: ReviewRun): ReviewRun {
   return next;
 }
 
+/**
+ * What a collection run needs beyond the ordinary per-document fan-out: the
+ * target that names the collection (so results key by it — `findingsKeyFor`
+ * — rather than by any one document) and the ordered, hydrated members every
+ * clause is read across in a single call (`orderedMembers`' output; the
+ * caller hydrates via `documentFileForReview` before building it, exactly as
+ * it already hydrates `docs` for the standalone path).
+ *
+ * Kept as its own optional parameter rather than folded into `ReviewRun`
+ * itself, so the existing per-document path — and every test that calls
+ * `runReview` without it — is untouched by this addition.
+ */
+export interface CollectionRunInput {
+  target: Extract<ReviewTarget, { kind: 'collection' }>;
+  members: CollectionMember<DocumentFile>[];
+}
+
 export async function runReview(
   initial: ReviewRun,
   docs: DocumentFile[],
   settings: Settings,
   onUpdate: (run: ReviewRun) => void,
   signal?: AbortSignal,
+  collection?: CollectionRunInput,
 ): Promise<ReviewRun> {
   const template = initial.templateSnapshot;
-  const cells = docs.flatMap(doc => template.clauses.map(clause => ({ doc, clause })));
 
   let current = initial;
 
   try {
-    await mapWithConcurrency(
-      cells,
-      settings.concurrency,
-      async ({ doc, clause }) => {
-        current = withFinding(current, doc.id, {
-          clauseId: clause.id, status: 'running', citations: [], verification: unchecked(), notes: [],
-        });
-        onUpdate(current);
+    if (collection) {
+      // A collection review makes ONE model call per clause over every
+      // member together, not one call per document per clause — a different
+      // *shape* of work list, not a different engine: same concurrency
+      // limiter, same abort handling, same progressive onUpdate emission.
+      const key = findingsKeyFor(collection.target);
+      await mapWithConcurrency(
+        template.clauses,
+        settings.concurrency,
+        async clause => {
+          current = withFinding(current, key, {
+            clauseId: clause.id, status: 'running', citations: [], verification: unchecked(), notes: [],
+          });
+          onUpdate(current);
 
-        const finding = await extractClause(doc, clause, template, settings, signal);
-        current = withFinding(current, doc.id, finding);
-        onUpdate(current);
-      },
-      signal,
-    );
+          const finding = await extractCollectionClause(collection.members, clause, template, settings, signal);
+          current = withFinding(current, key, finding);
+          onUpdate(current);
+        },
+        signal,
+      );
+    } else {
+      // The standalone path, unchanged: every document x every clause.
+      const cells = docs.flatMap(doc => template.clauses.map(clause => ({ doc, clause })));
+      await mapWithConcurrency(
+        cells,
+        settings.concurrency,
+        async ({ doc, clause }) => {
+          current = withFinding(current, doc.id, {
+            clauseId: clause.id, status: 'running', citations: [], verification: unchecked(), notes: [],
+          });
+          onUpdate(current);
+
+          const finding = await extractClause(doc, clause, template, settings, signal);
+          current = withFinding(current, doc.id, finding);
+          onUpdate(current);
+        },
+        signal,
+      );
+    }
   } catch (error) {
     if (isAbort(error)) {
       current = { ...cancelPendingCells(current), cancelledAt: Date.now() };
