@@ -3729,7 +3729,9 @@ All three must be clean. Fix anything they surface before continuing — a task 
 
 - [ ] **Step 2: Update the README**
 
-Add a section describing, in the user's terms:
+**Two edits, not one — checked against the file.** The README's `## What it does` section describes the core loop in four numbered steps, and **step 4 ("Read the findings") is now wrong by omission**: it describes risk badges and citations as the whole of what a finding carries. Amend that step to say a finding also carries a verification state a human sets, and that citations are now shown inline with their document and page rather than needing a hover. Do not bolt the new behaviour on as a section at the bottom while the description of the core loop still describes the old one — a reader takes the numbered steps as the product.
+
+Then add a section describing, in the user's terms:
 
 - Every finding starts unverified, and says so on screen and in every export.
 - A reviewer can verify, flag, or reject a finding; a rejection requires a reason and is exported with it.
