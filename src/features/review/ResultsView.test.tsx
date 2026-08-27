@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { mount, keyDown, click } from '../../test/mount';
 import { ResultsView } from './ResultsView';
+import { TRACKED_CHANGES_NOTICE } from '../../lib/docxMarkup';
 import type { DocumentFile, Finding, ReviewRun, Settings, Template } from '../../types';
 
 // Critical 2 (final whole-branch review, redesign sub-project B): the
@@ -469,5 +470,52 @@ describe('ResultsView — the comparison grid\'s "Open in review" handoff', () =
     );
     keyDown({ key: 'v' });
     expect(onVerify).not.toHaveBeenCalled();
+  });
+});
+
+describe('ResultsView — a marked-up document says so beside its findings', () => {
+  // Spike 1: mammoth reads a .docx with every tracked change accepted and
+  // says nothing. The disclosure has to reach THIS screen — the one where
+  // someone reads what the contract supposedly says and acts on it — not
+  // just the upload screen the reader may never have seen.
+  it('renders the document’s markup notice in the review', () => {
+    const marked: DocumentFile = {
+      id: 'd1',
+      name: 'lease.docx',
+      text: 'Consent may be withheld only where it is reasonable to do so.',
+      file: new File([], 'lease.docx'),
+      kind: 'docx',
+      markupNotice: TRACKED_CHANGES_NOTICE,
+    };
+    const container = mount(
+      <ResultsView
+        run={makeRun()}
+        documents={[marked]}
+        settings={settings}
+        onRetryCell={() => {}}
+        onVerify={vi.fn()}
+      />,
+    );
+    expect(container.textContent).toContain(TRACKED_CHANGES_NOTICE);
+  });
+
+  it('says nothing about markup for a document that carries no notice', () => {
+    const clean: DocumentFile = {
+      id: 'd1',
+      name: 'lease.docx',
+      text: 'Consent may be withheld only where it is reasonable to do so.',
+      file: new File([], 'lease.docx'),
+      kind: 'docx',
+    };
+    const container = mount(
+      <ResultsView
+        run={makeRun()}
+        documents={[clean]}
+        settings={settings}
+        onRetryCell={() => {}}
+        onVerify={vi.fn()}
+      />,
+    );
+    expect(container.textContent).not.toContain('tracked changes');
   });
 });

@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  parseFile, parseFiles, toDocumentRecord, documentFileForReview, evictPageImages,
-  BLOB_UNAVAILABLE_MESSAGE, PAGE_IMAGE_CACHE_MAX_DOCUMENTS,
+  parseFile, parseFiles, toDocumentRecord, documentFileForReview, documentFileForViewing,
+  evictPageImages, BLOB_UNAVAILABLE_MESSAGE, PAGE_IMAGE_CACHE_MAX_DOCUMENTS,
 } from './documents';
+import { TRACKED_CHANGES_NOTICE, COMMENTS_NOTICE, MARKUP_UNCHECKED_NOTICE } from './docxMarkup';
+import { buildDocx, CLEAN_BODY, TRACKED_BODY, COMMENTED_BODY, TABLE_BODY } from '../test/docxFixture';
 import type { DocumentRecord } from '../types';
 
 // pdf.js and mammoth are heavy and DOM-bound; the unit tests cover dispatch
@@ -546,5 +548,116 @@ describe('loadPdfjs retry after a failed import', () => {
     expect(recovered.text).toContain('Hello world from the PDF');
 
     vi.resetModules();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tracked changes and margin comments (spike 1)
+//
+// mammoth reads a `<w:ins>` straight through and drops `<w:del>` without a
+// message, so a marked-up draft arrives as fluent accepted-changes prose
+// that nothing downstream can tell apart from the real thing. `parseFile`
+// checks the package itself and attaches a notice saying what it actually
+// did. The notice is deliberately NOT a `parseError`: the document parsed,
+// it is reviewable, and blocking the review over a caveat would be wrong.
+// ---------------------------------------------------------------------------
+
+function docxFile(bytes: ArrayBuffer, name = 'lease.docx'): File {
+  return new File([new Uint8Array(bytes)], name, {
+    type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  });
+}
+
+describe('parseFile: DOCX markup disclosure', () => {
+  it('flags a redlined document with a notice, not a parse error, and still returns its text', async () => {
+    const doc = await parseFile(docxFile(await buildDocx(TRACKED_BODY)));
+
+    expect(doc.markupNotice).toBe(TRACKED_CHANGES_NOTICE);
+    // The distinction the whole fix rests on: readable-with-a-caveat is not
+    // unreadable. A `parseError` would make `extractClause` refuse the
+    // document and `DocumentViewer` render an error instead of the text.
+    expect(doc.parseError).toBeUndefined();
+    expect(doc.text).toBe('docx text');
+  });
+
+  it('flags margin comments as excluded from the reviewed text', async () => {
+    const doc = await parseFile(docxFile(await buildDocx(COMMENTED_BODY)));
+    expect(doc.markupNotice).toBe(COMMENTS_NOTICE);
+    expect(doc.parseError).toBeUndefined();
+  });
+
+  it('leaves the field off entirely for a clean document', async () => {
+    const doc = await parseFile(docxFile(await buildDocx(CLEAN_BODY)));
+    // `in`, not `toBeUndefined`: an absent key and an undefined one are the
+    // same to `toEqual` but not to `structuredClone`, which is how every
+    // record reaches IndexedDB.
+    expect('markupNotice' in doc).toBe(false);
+  });
+
+  it('does not flag a clean document that merely contains a table', async () => {
+    const doc = await parseFile(docxFile(await buildDocx(TABLE_BODY)));
+    expect('markupNotice' in doc).toBe(false);
+  });
+
+  it('says it could not check, rather than nothing, when the package cannot be opened', async () => {
+    // mammoth is mocked here, so this stands for the real case where the
+    // text extractor succeeds but the package cannot be inspected. Silence
+    // would be indistinguishable from "checked, clean".
+    const doc = await parseFile(docxFile(new TextEncoder().encode('not a zip').buffer));
+
+    expect(doc.markupNotice).toBe(MARKUP_UNCHECKED_NOTICE);
+    expect(doc.parseError).toBeUndefined();
+    expect(doc.text).toBe('docx text');
+  });
+
+  it('does not check a PDF or a text file for DOCX markup', async () => {
+    expect('markupNotice' in (await parseFile(makeFile('a.pdf', 'application/pdf')))).toBe(false);
+    expect('markupNotice' in (await parseFile(makeFile('a.txt', 'text/plain')))).toBe(false);
+  });
+});
+
+describe('toDocumentRecord: markup notice', () => {
+  it('carries the notice onto the persisted record', async () => {
+    const doc = await parseFile(docxFile(await buildDocx(TRACKED_BODY)));
+    const { record } = toDocumentRecord(doc, 'matter-1', 'user-1');
+    expect(record.markupNotice).toBe(TRACKED_CHANGES_NOTICE);
+    expect(record.parseError).toBeUndefined();
+  });
+
+  it('leaves the key off a clean document rather than writing undefined', async () => {
+    const doc = await parseFile(docxFile(await buildDocx(CLEAN_BODY)));
+    const { record } = toDocumentRecord(doc, 'matter-1', 'user-1');
+    expect('markupNotice' in record).toBe(false);
+  });
+});
+
+describe('hydration carries the markup notice', () => {
+  const noticed: DocumentRecord = {
+    id: 'd1',
+    matterId: 'm1',
+    name: 'lease.docx',
+    kind: 'docx',
+    text: 'Consent may be withheld only where it is reasonable to do so.',
+    markupNotice: TRACKED_CHANGES_NOTICE,
+    byteSize: 10,
+    addedAt: 1,
+    addedByUserId: 'u1',
+    role: 'standalone',
+  };
+
+  it('reaches the viewer', () => {
+    expect(documentFileForViewing(noticed, new Blob(['x'])).markupNotice).toBe(TRACKED_CHANGES_NOTICE);
+  });
+
+  it('reaches a run over a persisted document', async () => {
+    const doc = await documentFileForReview(noticed, new Blob(['x']));
+    expect(doc.markupNotice).toBe(TRACKED_CHANGES_NOTICE);
+  });
+
+  it('is absent, not undefined, on a document that carries no notice', async () => {
+    const clean: DocumentRecord = { ...noticed };
+    delete clean.markupNotice;
+    expect('markupNotice' in documentFileForViewing(clean, new Blob(['x']))).toBe(false);
+    expect('markupNotice' in (await documentFileForReview(clean, new Blob(['x'])))).toBe(false);
   });
 });
