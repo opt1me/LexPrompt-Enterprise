@@ -668,6 +668,84 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
     expect(finding.netPosition!.trail[1].citations).toEqual([]);
   });
 
+  /**
+   * mn1. One appended sentence was emitted for all four refusals, and it was
+   * untrue for two of them. "An effect attributed to the wrong document
+   * reads as that document's own legal position" describes the duplicate and
+   * out-of-range cases; on a count mismatch nothing was attributed to
+   * anything. "Choose a model that supports structured output" was offered
+   * even when structured output was already on, and could not help in any
+   * case for a count: `COLLECTION_CLAUSE_SCHEMA.trail` has no `minItems`, so
+   * a schema cannot express "exactly N entries" — C1's own argument. And
+   * "re-run it" is not a remedy for a model that will deviate the same way
+   * every time.
+   *
+   * The rule this is held to is CLAUDE.md's: loud, SPECIFIC and RECOVERABLE.
+   * Where nothing would recover it, the message says so rather than
+   * inventing advice.
+   */
+  it('does not blame misattribution, or offer structured output, for a count mismatch', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [{ document: 1, effect: 'Base effect.', citations: [] }],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/1 derivation step/i);
+    expect(finding.error).toMatch(/2 document/i);
+    // Nothing was attributed to anything here.
+    expect(finding.error).not.toMatch(/attributed to the wrong document/i);
+    // The schema has no minItems; structured output cannot enforce a count.
+    expect(finding.error).not.toMatch(/structured output would|choose a model that supports structured output/i);
+    expect(finding.error).toMatch(/cannot require a particular number of steps/i);
+  });
+
+  it('offers structured output for an unnumbered step only when it is not already on', async () => {
+    const unnumbered = {
+      trail: [
+        { document: 1, effect: 'Base effect.', citations: [] },
+        { effect: 'Amendment effect.', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    };
+
+    vi.mocked(chatJson).mockResolvedValue(unnumbered);
+    const without = await extractCollectionClause(
+      members(), clause, template, { ...settings, modelSupportsStructuredOutput: false },
+    );
+    expect(without.error).toMatch(/structured output/i);
+    expect(without.error).toMatch(/mandatory|required/i);
+
+    vi.mocked(chatJson).mockResolvedValue(unnumbered);
+    const with_ = await extractCollectionClause(
+      members(), clause, template, { ...settings, modelSupportsStructuredOutput: true },
+    );
+    // Already on and the model omitted the field anyway — telling the
+    // reviewer to turn it on is advice they have already taken.
+    expect(with_.error).not.toMatch(/choose a model that supports structured output/i);
+    expect(with_.error).toMatch(/left it out anyway|omitted it anyway/i);
+  });
+
+  it('does say an effect landed on the wrong document when a step names one that was not sent', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 1, effect: 'Base effect.', citations: [] },
+        { document: 7, effect: 'Amendment effect.', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.error).toMatch(/DOCUMENT 7/);
+    expect(finding.error).toMatch(/attributed to the wrong document/i);
+    // A wrong number is a per-response mistake, so re-running genuinely can
+    // fix it — unlike a count, where the same deviation recurs.
+    expect(finding.error).toMatch(/re-run/i);
+  });
+
   it('names the schema field the model must number its steps with', () => {
     const step = COLLECTION_CLAUSE_SCHEMA.properties.trail.items;
     expect(step.properties.document).toBeDefined();

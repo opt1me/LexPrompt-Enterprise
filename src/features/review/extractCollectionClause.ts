@@ -183,9 +183,71 @@ function resolveStepCitations(rawCitations: unknown, present: AssessedMember[]):
   return out;
 }
 
+/**
+ * Which way an alignment failed. Carried alongside the message because the
+ * three cases are not the same failure and do not have the same remedy —
+ * see `misalignmentMessage`.
+ */
+type TrailMisalignmentKind =
+  /** The trail does not carry one step per document that was sent. Nothing
+   *  has been attributed to anything, and no schema can express a count. */
+  | 'count'
+  /** A step named no document at all. Structured output makes the field
+   *  mandatory, so it is a real remedy here and only here. */
+  | 'unnumbered'
+  /** A step named a document that was not sent, or two named the same one.
+   *  This is the case where an effect would land on the wrong document. */
+  | 'unattributable';
+
 /** Why a raw trail could not be aligned to the collection's documents, in
  *  words a reviewer can act on. Never a partial trail — see `alignTrail`. */
-interface TrailMisalignment { error: string }
+interface TrailMisalignment { error: string; kind: TrailMisalignmentKind }
+
+/**
+ * The whole message a reviewer sees for a refused trail: what went wrong,
+ * what it means, and what would actually help.
+ *
+ * mn1: one sentence used to be appended to all three refusals, and it was
+ * untrue for the count case (nothing had been attributed to anything) and
+ * unhelpful in two more — it offered structured output when structured
+ * output was already on, and when the schema could not have enforced the
+ * thing that failed (`COLLECTION_CLAUSE_SCHEMA.trail` has no `minItems`, so
+ * "exactly N entries" is not expressible; that is C1's own argument). And
+ * "re-run it" is not a remedy for a model that will deviate the same way
+ * every time.
+ *
+ * CLAUDE.md asks for failures that are loud, SPECIFIC and RECOVERABLE.
+ * Where nothing recovers it, saying so is the honest answer; inventing a
+ * remedy costs a reviewer a retry that was never going to work and teaches
+ * them to distrust the next message that does have one.
+ */
+function misalignmentMessage(
+  misalignment: TrailMisalignment,
+  modelSupportsStructuredOutput: boolean,
+): string {
+  if (misalignment.kind === 'count') {
+    return `${misalignment.error} No effect has been attributed to any document, so this clause ` +
+      'is reported as an error rather than a finding. The response format cannot require a ' +
+      'particular number of steps, so structured output cannot prevent this; if it keeps ' +
+      'happening with this model, only a different model will help.';
+  }
+
+  if (misalignment.kind === 'unnumbered') {
+    const remedy = modelSupportsStructuredOutput
+      ? 'The model was asked for this field through structured output and left it out anyway, so ' +
+        're-running is unlikely to help; if it keeps happening, only a different model will.'
+      : 'Choosing a model that supports structured output would make this field mandatory in the ' +
+        "model's response.";
+    return `${misalignment.error} Its effect cannot be matched to a document, and an effect read ` +
+      'against the wrong document is worse than no answer, so this clause is reported as an error ' +
+      `rather than a finding. ${remedy}`;
+  }
+
+  return `${misalignment.error} An effect attributed to the wrong document reads as that ` +
+    "document's own legal position, so this clause is reported as an error rather than a finding. " +
+    'A misnumbered step is a mistake in one response, so re-running the clause may well produce a ' +
+    'correctly numbered one.';
+}
 
 /**
  * Matches every raw trail entry to the PRESENT member it says it describes,
@@ -257,6 +319,7 @@ function alignTrail(
 
   if (steps.length !== present.length) {
     return {
+      kind: 'count',
       error: `The model returned ${steps.length} derivation step(s) for the ` +
         `${present.length} document(s) sent for this clause, so its reasoning cannot be matched to them.`,
     };
@@ -266,16 +329,21 @@ function alignTrail(
   for (const { step, index } of steps) {
     const number = claimedDocumentNumber(step);
     if (number === undefined) {
-      return { error: `The model's derivation step ${index + 1} does not say which document it describes.` };
+      return {
+        kind: 'unnumbered',
+        error: `The model's derivation step ${index + 1} does not say which document it describes.`,
+      };
     }
     if (!presentPositions.has(number)) {
       return {
+        kind: 'unattributable',
         error: `The model's derivation step ${index + 1} describes DOCUMENT ${number}, which is not one ` +
           'of the documents sent for this clause.',
       };
     }
     if (byPosition.has(number)) {
       return {
+        kind: 'unattributable',
         error: `Two of the model's derivation steps both describe DOCUMENT ${number}, which leaves ` +
           'another document with no reasoning at all.',
       };
@@ -410,12 +478,7 @@ export async function extractCollectionClause(
     // clause here rather than reaching `done` looking checkable.
     const aligned = alignTrail(raw.trail, ordered, present);
     if ('error' in aligned) {
-      return {
-        ...base,
-        error: `${aligned.error} An effect attributed to the wrong document reads as that ` +
-          "document's own legal position, so this clause is reported as an error rather than a " +
-          'finding. Re-run it, or choose a model that supports structured output.',
-      };
+      return { ...base, error: misalignmentMessage(aligned, modelSupportsStructuredOutput) };
     }
 
     // Built over the collection's FULL reading order, from an alignment made
