@@ -464,7 +464,14 @@ git commit -m "feat(c): the net-position confirm/amend state machine"
 - Create: `src/lib/collectionOrder.ts`, `src/lib/collectionSuggest.ts`
 - Test: `src/lib/collectionOrder.test.ts`, `src/lib/collectionSuggest.test.ts`
 
-**Interfaces produced:** `orderedMembers(collection, documents): CollectionMember[]` where `CollectionMember = { document: DocumentRecord | null; documentId: string; kind: 'original' | 'varies'; position: number }`; `suggestCollections(documents): CollectionSuggestion[]`.
+**Interfaces produced:** `orderedMembers<T extends { id: string }>(collection, documents: T[]): CollectionMember<T>[]`, where `CollectionMember<T = DocumentRecord>` is `{ document: T | null; documentId: string; kind: 'original' | 'varies'; position: number }`; and `suggestCollections(documents): CollectionSuggestion[]`.
+
+**Generic over the document shape, on purpose.** Two callers need different shapes and neither converts to the other:
+
+- The matter home and the variation trail hold persisted `DocumentRecord`s, which by design carry **no page images** — sub-project A ruled page images are derived data, regenerated on demand, never stored.
+- Extraction holds hydrated `DocumentFile`s, **with** page images where a document is a scan.
+
+Pinning this to `DocumentRecord` would force Task 5 to either bypass this function or give up the image fallback, and a collection containing a scanned deed of variation would then be reviewed as though that document said nothing. That is this project's founding defect — a scanned PDF on a text-only model answering "the agreement is silent on this point" for every clause — reopened one level up.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -600,7 +607,9 @@ git commit -m "feat(c): the combined-text prompt, naming any document it had to 
 - Test: `src/features/review/extractCollectionClause.test.ts`
 - Modify: `src/features/review/runReview.ts`
 
-**Interfaces produced:** `extractCollectionClause(members, clause, template, settings, signal): Promise<Finding>` — never rejects, exactly as `extractClause` never rejects.
+**Interfaces produced:** `extractCollectionClause(members: CollectionMember<DocumentFile>[], clause, template, settings, signal): Promise<Finding>` — never rejects, exactly as `extractClause` never rejects.
+
+**Note the member type.** Extraction takes **hydrated** `DocumentFile`s, not persisted `DocumentRecord`s, so a scanned member still gets its page-image fallback via `assessDocument`. A persisted record has no page images, and reviewing a scanned amendment as though it were empty is the defect this whole app was built around. `App.tsx` already hydrates documents for a run (`documentFileForReview`); pass those.
 
 **This is the riskiest task in the sub-project.** It changes what a run *asks for*, where A and B only moved data underneath the engine.
 
