@@ -301,4 +301,39 @@ describe('buildTabularCsv', () => {
       expect(csv).toContain(noteLine);
     }
   });
+
+  // Step 0: `buildTabularCsv` used to key `run.findings` by the raw document
+  // id in `run.documentIds`, same bug as `buildReportRows` — a collection
+  // review keys its findings under the COLLECTION id (`findingsKeyFor`), so
+  // every document row read `undefined` and rendered as though nothing had
+  // ever been reviewed, even though the collection genuinely produced an
+  // answer.
+  it('reads a collection review\'s findings from the COLLECTION key for every document row', () => {
+    const collectionRun: ReviewRun = {
+      id: 'run-coll',
+      templateSnapshot: tmpl,
+      documentIds: ['lease', 'deed'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['lease', 'deed'] },
+      findings: {
+        'coll-1': {
+          c1: { clauseId: 'c1', status: 'done', summary: 'Break on 6 months notice, as amended.', citations: [], verification: { state: 'unchecked' }, notes: [] },
+          c2: { clauseId: 'c2', status: 'done', summary: 'Uncapped.', citations: [], verification: { state: 'unchecked' }, notes: [] },
+        },
+      },
+      startedAt: 0,
+    };
+
+    const csv = buildTabularCsv(collectionRun, [
+      { id: 'lease', name: 'Lease.pdf', text: '', file: new File([], 'Lease.pdf'), kind: 'txt' },
+      { id: 'deed', name: 'Deed of Variation.pdf', text: '', file: new File([], 'Deed of Variation.pdf'), kind: 'txt' },
+    ]);
+    const [, , leaseLine, deedLine] = csv.split('\r\n');
+
+    // Before the fix: both rows would read "not yet reviewed" for every
+    // clause, even though the collection genuinely produced an answer.
+    expect(leaseLine).toContain('Break on 6 months notice, as amended.');
+    expect(leaseLine).not.toContain('not yet reviewed');
+    expect(deedLine).toContain('Break on 6 months notice, as amended.');
+    expect(deedLine).not.toContain('not yet reviewed');
+  });
 });

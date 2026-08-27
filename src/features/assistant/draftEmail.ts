@@ -21,6 +21,14 @@ function riskRank(level: RiskLevel | undefined): number {
 export async function draftEmail(run: ReviewRun, docId: string, settings: Settings): Promise<string> {
   const rows = [...buildReportRows(run, docId)].sort((a, b) => riskRank(a.riskLevel) - riskRank(b.riskLevel));
 
+  // Fail-loudly rule (see `exportDocx`'s identical guard): a run with no
+  // findings at all for this document/collection must refuse rather than
+  // ask the model to summarise nothing and hand back a plausible-sounding
+  // email about a review that never happened.
+  if (rows.length === 0) {
+    throw new Error('No findings to draft an email from. This review has no results to report yet.');
+  }
+
   const findingsText = rows.map(row => {
     const lines = [`Clause: ${row.title}`, `Summary: ${row.summary}`];
     if (row.riskLevel) lines.push(`Risk: ${row.riskLevel}`);

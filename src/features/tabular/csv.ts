@@ -1,5 +1,6 @@
 import type { DocumentFile, Finding, ReviewRun } from '../../types';
 import { describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines } from '../../lib/findingOutcome';
+import { findingsKeyFor } from '../../lib/reviewTarget';
 
 // Characters that Excel/Google Sheets treat as the start of a formula when a
 // cell is opened, regardless of the field being quoted — quoting only
@@ -77,9 +78,14 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
 
   const rows = run.documentIds.map(docId => {
     const doc = documents.find(d => d.id === docId);
+    // Same bug `buildReportRows` had (Step 0 of Task 9): a collection
+    // review's findings live under the COLLECTION id, not each document's
+    // own id, so every document row must resolve through `findingsKeyFor`
+    // rather than indexing `run.findings` by `docId` directly.
+    const key = findingsKeyFor(run.target, docId);
     const fields = [
       doc?.name ?? docId,
-      ...clauses.map(c => cellText(run.findings[docId]?.[c.id])),
+      ...clauses.map(c => cellText(run.findings[key]?.[c.id])),
     ];
     return fields.map(escapeCsvField).join(',');
   });

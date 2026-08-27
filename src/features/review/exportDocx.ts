@@ -1,5 +1,6 @@
 import type { Citation, ReviewRun, RiskLevel } from '../../types';
 import { describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines } from '../../lib/findingOutcome';
+import { findingsKeyFor } from '../../lib/reviewTarget';
 
 export interface ReportRow {
   title: string;
@@ -24,7 +25,12 @@ export interface ReportRow {
  * which is worse than an honest failure notice.
  */
 export function buildReportRows(run: ReviewRun, docId: string): ReportRow[] {
-  const findings = run.findings[docId];
+  // A collection review's findings live under the COLLECTION id, not the
+  // document id — `findingsKeyFor` resolves that (and is a no-op for an
+  // ordinary document review, where it just returns `docId` back). Keying
+  // directly by `docId` here used to make a collection review's export
+  // silently empty (Step 0 of this task).
+  const findings = run.findings[findingsKeyFor(run.target, docId)];
   if (!findings) return [];
 
   return run.templateSnapshot.clauses.map(clause => {
@@ -276,13 +282,22 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
  */
 export async function exportDocx(run: ReviewRun, docId: string, docName: string): Promise<void> {
   const rows = buildReportRows(run, docId);
+  // Fail-loudly rule, applied to the surface where the whole app's founding
+  // defect was first learned (CLAUDE.md): a review that genuinely has no
+  // findings for this document/collection must say so, rather than handing
+  // back a technically-valid .docx with a title and a summary line but zero
+  // clause tables — a document a lawyer could send without ever noticing it
+  // says nothing.
+  if (rows.length === 0) {
+    throw new Error(`No findings to export for ${docName}. This review has no results to report yet.`);
+  }
   // Important 4: this report covers ONE document (`buildReportRows(run,
   // docId)` above), so its header summary must count only that document's
   // findings — not `exportSummaryLine(run.findings)`, which counts the
   // whole run. The CSV export (`buildTabularCsv`) genuinely does cover every
   // document, so its whole-run summary is correct as-is; scoping only
   // belongs here, at the one place that reports on a single document.
-  const docSummary = exportSummaryLine({ [docId]: run.findings[docId] ?? {} });
+  const docSummary = exportSummaryLine({ [docId]: run.findings[findingsKeyFor(run.target, docId)] ?? {} });
   const doc = await buildReportDocument(rows, docName, docSummary);
 
   const { Packer } = await import('docx');

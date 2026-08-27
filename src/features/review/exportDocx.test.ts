@@ -280,3 +280,86 @@ describe('exportDocx — header summary is scoped to the exported document (Impo
     expect(xml).toContain('1 findings: 0 verified, 1 unverified, 0 flagged, 0 rejected.');
   });
 });
+
+// Step 0: `buildReportRows` and `exportDocx` used to key `run.findings`
+// directly by the document id passed in. A collection review stores its
+// findings under the COLLECTION id (`findingsKeyFor`, Task 6A/8A) — so
+// "Export DOCX" on a collection review silently produced a report with zero
+// clause tables, no error at all. This is the founding defect (CLAUDE.md:
+// a confidently-empty export reads as "checked, nothing found") reopened one
+// screen over from where sub-project C already fixed it once (Task 8A, for
+// `ResultsView`/`TabularReview`).
+describe('buildReportRows / exportDocx — a collection review (Step 0)', () => {
+  const collectionTemplate: Template = {
+    id: 'tc', name: 'TC', contractType: 'Lease', mode: 'risk',
+    systemPrompt: '', formatPrompt: '',
+    clauses: [{ id: 'break', title: 'Break clause', prompt: '' }],
+    createdAt: 0, updatedAt: 0, schemaVersion: 2,
+  };
+
+  function collectionRun(findings: ReviewRun['findings']): ReviewRun {
+    return {
+      id: 'run-coll',
+      templateSnapshot: collectionTemplate,
+      documentIds: ['lease', 'deed'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['lease', 'deed'] },
+      findings,
+      startedAt: 0,
+    };
+  }
+
+  it('reads a collection review\'s findings from the COLLECTION key, not the document id', () => {
+    const run = collectionRun({
+      'coll-1': {
+        break: {
+          clauseId: 'break', status: 'done', summary: 'Break on 6 months notice, as amended.',
+          citations: [], verification: { state: 'unchecked' }, notes: [],
+        },
+      },
+    });
+
+    // Before the fix: run.findings['lease'] is undefined, so this returned [].
+    const rows = buildReportRows(run, 'lease');
+    expect(rows).not.toEqual([]);
+    expect(rows[0].summary).toContain('Break on 6 months notice, as amended.');
+  });
+
+  it('exports real content to the generated DOCX bytes for a collection review', async () => {
+    const run = collectionRun({
+      'coll-1': {
+        break: {
+          clauseId: 'break', status: 'done', summary: 'Break on 6 months notice, as amended.',
+          citations: [], verification: { state: 'unchecked' }, notes: [],
+        },
+      },
+    });
+
+    let capturedBlob: Blob | undefined;
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: (b: Blob) => { capturedBlob = b; return 'blob:stub'; },
+      revokeObjectURL: () => {},
+    });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      await exportDocx(run, 'lease', 'Lease.pdf');
+      expect(capturedBlob).toBeDefined();
+      const buf = await blobToArrayBuffer(capturedBlob!);
+      const zip = await JSZip.loadAsync(buf);
+      const xml = await zip.file('word/document.xml')?.async('string');
+      expect(xml).toContain('Break on 6 months notice, as amended.');
+    } finally {
+      clickSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // The fail-loudly rule, applied to the surface where it was originally
+  // learned: an export that finds nothing at all must say so, not silently
+  // hand back a technically-valid .docx with zero clause tables in it — a
+  // document a lawyer could send without ever noticing it says nothing.
+  it('refuses to export a document with no findings at all, rather than producing an empty report', async () => {
+    const run = collectionRun({}); // No key for 'coll-1' at all.
+    await expect(exportDocx(run, 'lease', 'Lease.pdf')).rejects.toThrow(/no findings/i);
+  });
+});
