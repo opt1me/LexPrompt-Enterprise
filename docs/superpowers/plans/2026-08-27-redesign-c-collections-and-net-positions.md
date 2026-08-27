@@ -771,6 +771,19 @@ git commit -m "fix(c): seed a collection run under its collection key, and carry
 
 `App.tsx` gains `handleCreateCollection`, `handleUngroupCollection` and `handleRepairCollection`. Follow the await-then-apply discipline sub-project B established: the UI reflects a change only after the store confirms it, and a failure surfaces via `notify(..., 'error')`.
 
+**Step 2b: give a collection a way to be reviewed. Without this, the whole sub-project is unreachable.**
+
+Task 6 and 6A's implementer flagged that nothing anywhere launches a collection review — a user can build a collection and then has no way to run one. That is the same class of hole sub-project B shipped and its final review caught, where the re-run reset was correct but no UI could ever produce the case it guarded. It correctly declined to invent a launch path with no spec; this step is that spec.
+
+**Checked against the file:** `MatterHome` already has a `Run a review` button and an `onRunReview: (playbook: Template) => Promise<void>` prop, which `App.tsx`'s `handleStartRun` implements over the matter's documents.
+
+- Widen that one path rather than adding a parallel one: `onRunReview(playbook, target?)`, where an omitted target means today's behaviour over the matter's standalone documents, byte for byte.
+- A collection card gains its own `Run a review` action, passing `{ kind: 'collection', collectionId, documentIds }` built from `orderedMembers`.
+- `handleStartRun` hydrates the collection's members with `documentFileForReview` — **the same helper the standalone path uses**, so a scanned member keeps its page images — builds the `CollectionRunInput`, and passes it to `runReview`'s optional sixth argument.
+- **A collection whose base document is missing cannot be run.** Offer the action disabled with the reason visible, rather than starting a review that will fail every clause. `orderedMembers` already reports a missing member as `document: null` at its rightful position; use it.
+
+Assert in the tests: the standalone path still receives no target and behaves identically; a collection run passes a `CollectionRunInput` whose members are hydrated (not `DocumentRecord`s); and a broken collection offers no runnable action.
+
 **Ungrouping never deletes documents.** It deletes the collection record and clears `role`/`collectionId` on each member. **Deleting a collection likewise never deletes documents.** Deleting a *matter* still deletes everything in it, as sub-project A established and Task 1 extended.
 
 - [ ] **Step 3: Run and pass. Step 4: Commit**
