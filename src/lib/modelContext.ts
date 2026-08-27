@@ -5,6 +5,18 @@ import { pageSegments } from './pageSegments';
 const PAGE_MARKER = /\[Page \d+\]/g;
 
 /**
+ * Everything `usableText`/`assessDocument` actually read from a document:
+ * its extracted text, and any page images it carries. `DocumentFile`
+ * (session-only, may carry live-rendered images) satisfies this as-is; so
+ * does `DocumentRecord` (persisted — page images are never persisted, see
+ * CLAUDE.md, so it simply has none). Typed as the fields used, not as
+ * `DocumentFile` itself, so a collection's `buildCollectionPrompt` — which
+ * only ever has `DocumentRecord`s — can run the identical readability
+ * judgement instead of a second, parallel one.
+ */
+export type ReadableSource = Pick<DocumentFile, 'text' | 'pageImages'>;
+
+/**
  * Strips the `[Page N]` markers `lib/documents.ts` inserts unconditionally
  * around every page's extracted text (`parsePdf`), so a fully scanned PDF —
  * whose pages contribute only those markers, no real content — is correctly
@@ -12,7 +24,7 @@ const PAGE_MARKER = /\[Page \d+\]/g;
  * multi-page scan's `doc.text` reads as non-empty ("[Page 1]\n\n[Page 2]\n...")
  * even though there is nothing in it a model could actually read.
  */
-export function extractableText(doc: DocumentFile): string {
+export function extractableText(doc: ReadableSource): string {
   return doc.text.replace(PAGE_MARKER, '').trim();
 }
 
@@ -35,7 +47,7 @@ export function extractableText(doc: DocumentFile): string {
  * review engine's pre-flight guard (`extractClause.ts`) so both apply the
  * identical rule rather than two separately-tuned checks.
  */
-export function usableText(doc: DocumentFile): string {
+export function usableText(doc: ReadableSource): string {
   return pageSegments(doc.text)
     .map(page => page.trim())
     .filter(page => page.length >= SCAN_TEXT_THRESHOLD)
@@ -61,7 +73,7 @@ export type DocumentReadability =
  * places, instead of the review path silently sending an empty prompt and
  * getting back a confident "the agreement is silent on this point."
  */
-export function assessDocument(doc: DocumentFile, modelSupportsImages: boolean): DocumentReadability {
+export function assessDocument(doc: ReadableSource, modelSupportsImages: boolean): DocumentReadability {
   const text = usableText(doc);
   const hasImages = Boolean(doc.pageImages?.length);
 
