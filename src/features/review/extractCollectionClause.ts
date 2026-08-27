@@ -209,20 +209,7 @@ export async function extractCollectionClause(
   }
 
   const budget = contextBudgetChars(settings.modelContextLength);
-  // `buildCollectionPrompt`'s landed signature (Task 4) is
-  // `CollectionMember<DocumentRecord>[]` — Task 4 never needed page images,
-  // so it was never widened to a generic document shape, even though
-  // `CollectionMember` itself already documents both callers (see
-  // collectionOrder.ts). At runtime it only ever reads `.name`,
-  // `.documentDate` and, via `assessDocument`, `.text`/`.pageImages` — every
-  // field a `DocumentFile` actually has — so this cast is behaviourally
-  // exact; TypeScript can't see that because `DocumentFile` is missing
-  // `DocumentRecord`'s persistence-only fields (`matterId`, `byteSize`, ...)
-  // that this function never touches. Reported in task-5-report.md rather
-  // than widening `collectionPrompt.ts` here, which is out of this task's
-  // file scope.
-  const membersForPrompt = ordered as unknown as CollectionMember<DocumentRecord>[];
-  const { prompt: documentsPrompt, truncated } = buildCollectionPrompt(membersForPrompt, clause, template, budget);
+  const { prompt: documentsPrompt, truncated } = buildCollectionPrompt(ordered, clause, template, budget);
 
   const imagedMembers = present.filter(p => p.readability.kind === 'ok' && p.readability.useImages);
   const images = imagedMembers.flatMap(p => p.document.pageImages ?? []);

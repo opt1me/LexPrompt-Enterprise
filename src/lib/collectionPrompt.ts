@@ -25,8 +25,13 @@ function roleLabel(kind: CollectionMember['kind']): 'BASE' | 'VARIES' {
  *  carries any, so `modelSupportsImages: false` is not a guess here, it is
  *  simply always true for a persisted record. A missing member (`document:
  *  null`) contributes no text; it is described as unavailable separately. */
-function readableText(member: CollectionMember): string {
+function readableText<T extends { text: string }>(member: CollectionMember<T>): string {
   if (!member.document) return '';
+  // `false` for image support on purpose: this is the *text* budgeting
+  // path, and it must measure only what will be sent as text. Whether a
+  // scanned member can additionally be sent as images is `extractClause`'s
+  // and `extractCollectionClause`'s decision, made against the real model
+  // capability — not something to guess at here.
   const readability = assessDocument(member.document, false);
   return readability.kind === 'ok' ? readability.text : '';
 }
@@ -72,9 +77,25 @@ function allocateBudget(lengths: number[], budgetChars: number): number[] {
  * whose document is missing is described as unavailable in the prompt
  * rather than silently dropped, so the model knows the set it was handed
  * is incomplete rather than concluding the missing document was silent.
+ *
+ * Generic over the document shape, constrained to exactly the three fields
+ * this function reads. Two callers need different shapes: the UI holds
+ * persisted `DocumentRecord`s, and extraction holds hydrated
+ * `DocumentFile`s — which carry the page images a scanned member needs and
+ * which a record never has. Neither type is assignable to the other, so
+ * pinning this to either one forces the other caller into a cast.
+ *
+ * A cast is what it forced before this was widened, and a cast here would
+ * be a lie the compiler stops checking: it asserts one shape *is* the
+ * other, works only because this function happens to read fields they
+ * share, and would keep on compiling the day someone reads `byteSize` or
+ * `role` — fields a `DocumentFile` does not have. Constraining to what is
+ * actually used says the same thing truthfully, and keeps saying it.
  */
-export function buildCollectionPrompt(
-  members: CollectionMember[],
+export function buildCollectionPrompt<
+  T extends { name: string; text: string; documentDate?: number },
+>(
+  members: CollectionMember<T>[],
   clause: Clause,
   template: Template,
   budgetChars: number,
