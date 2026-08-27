@@ -49,3 +49,26 @@ describe('orderedMembers', () => {
     expect(out.map(m => m.documentId)).not.toContain('stray');
   });
 });
+
+describe('orderedMembers is generic over the document shape', () => {
+  it('accepts a hydrated DocumentFile-shaped member, which carries page images', () => {
+    // Extraction works from hydrated documents, not persisted records:
+    // page images are never stored (sub-project A) and are regenerated on
+    // demand for scans. If this function could only take DocumentRecord,
+    // a collection holding a scanned amendment would be reviewed as though
+    // that document said nothing.
+    const hydrated = [
+      { id: 'lease', name: 'Lease.pdf', text: 'base text', kind: 'pdf' as const,
+        file: new File([], 'Lease.pdf') },
+      { id: 'dov', name: 'DoV.pdf', text: '', kind: 'pdf' as const,
+        file: new File([], 'DoV.pdf'),
+        pageImages: [{ mime: 'image/jpeg', data: 'AAAA' }] },
+    ];
+    const out = orderedMembers(collection, hydrated);
+    expect(out.map(m => m.documentId)).toEqual(['lease', 'dov', 'licence']);
+    // The page images survive the round trip — the type is not widened to
+    // something that drops them.
+    expect(out[1].document?.pageImages).toHaveLength(1);
+    expect(out[2].document).toBeNull();
+  });
+});

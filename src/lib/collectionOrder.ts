@@ -6,9 +6,26 @@ import type { Collection, DocumentRecord } from '../types';
  * the id the `Collection` names is not among the documents supplied: the
  * caller must be able to say "the deed of variation is gone" instead of
  * silently reading an incomplete set as though it were whole.
+ *
+ * Generic over the document shape on purpose. Two callers need different
+ * ones and neither can be converted to the other:
+ *
+ *  - The matter home and the variation trail hold `DocumentRecord`s — the
+ *    persisted shape, which by design carries no page images (sub-project
+ *    A's ruling: page images are derived data, regenerated on demand, never
+ *    stored).
+ *  - Extraction holds `DocumentFile`s — hydrated at run time, *with* page
+ *    images where a document is a scan.
+ *
+ * Pinning this to `DocumentRecord` would force extraction to either give up
+ * the image fallback or bypass this function, and a collection containing a
+ * scanned deed of variation would then be reviewed as though that document
+ * said nothing. This project's founding defect was a scanned PDF reviewed
+ * by a text-only model answering "the agreement is silent on this point"
+ * for every clause; the same hole must not reopen one level up.
  */
-export interface CollectionMember {
-  document: DocumentRecord | null;
+export interface CollectionMember<T = DocumentRecord> {
+  document: T | null;
   documentId: string;
   kind: 'original' | 'varies';
   /** 1-based position in reading order. */
@@ -30,7 +47,10 @@ export interface CollectionMember {
  * including the base itself, which is never silently promoted away from
  * position 1 by an amendment moving up to fill the gap.
  */
-export function orderedMembers(collection: Collection, documents: DocumentRecord[]): CollectionMember[] {
+export function orderedMembers<T extends { id: string }>(
+  collection: Collection,
+  documents: T[],
+): CollectionMember<T>[] {
   const byId = new Map(documents.map(doc => [doc.id, doc]));
 
   const memberIds: { documentId: string; kind: CollectionMember['kind'] }[] = [
