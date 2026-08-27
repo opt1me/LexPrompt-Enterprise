@@ -139,7 +139,14 @@ function makeAbandonedReview(): Review {
     documentIds: ['d1'],
     findings: {
       d1: {
-        c1: { clauseId: 'c1', status: 'done', citations: ['x'], summary: 'Governed by NY law.' },
+        c1: {
+          clauseId: 'c1',
+          status: 'done',
+          citations: [{ quote: 'x', documentId: 'd1' }],
+          summary: 'Governed by NY law.',
+          verification: { state: 'unchecked' },
+          notes: [],
+        },
         c2: { clauseId: 'c2', status: 'pending', citations: [] },
       },
     },
@@ -192,7 +199,12 @@ describe('App — reopening an abandoned review (Important 1)', () => {
 
   it('offers Retry on the stalled pending cell, and retrying it persists the result to the same matter', async () => {
     extractClauseMock.mockResolvedValue({
-      clauseId: 'c2', status: 'done', citations: ['y'], summary: 'Term is 12 months.',
+      clauseId: 'c2',
+      status: 'done',
+      citations: [{ quote: 'y', documentId: 'd1' }],
+      summary: 'Term is 12 months.',
+      verification: { state: 'unchecked' },
+      notes: [],
     });
 
     window.history.pushState(null, '', '/matters/m1/reviews/r1');

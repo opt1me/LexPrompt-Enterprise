@@ -1,8 +1,10 @@
 import React from 'react';
-import { Loader, ShieldAlert, MousePointerClick, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
+import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { Clause, Finding } from '../../types';
 import { RiskChip } from '../../components/RiskChip';
+import { StateChip } from '../../components/StateChip';
 import { Button } from '../../components/Button';
+import { EvidenceList } from './EvidenceList';
 
 export interface FindingCardProps {
   clause: Clause;
@@ -28,6 +30,11 @@ export interface FindingCardProps {
    *  in flight (Important 1). Defaults to `false` so a genuinely live run's
    *  cards are unaffected. */
   interrupted?: boolean;
+  /** documentId to display name, for the pin on each piece of evidence. A
+   *  review can cover several documents; a quote has to say which one it is
+   *  from. Optional so the tabular cell detail (single document) can omit
+   *  it — `EvidenceList` falls back to the id. */
+  documentNames?: Record<string, string>;
 }
 
 // Written fresh, not ported: the corresponding classes in the deleted
@@ -46,7 +53,7 @@ const CARD_SHELL = 'bg-[#1a1a1a] rounded-xl border';
  * for a review reopened after an abandoned run rather than one actually
  * in flight.
  */
-export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false }: FindingCardProps) {
+export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
 
   if (status === 'pending') {
@@ -137,7 +144,10 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
     <div className={`${CARD_SHELL} border-white/5`}>
       <div className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl">
         <span className="font-semibold text-sm text-white">{clause.title}</span>
-        <RiskChip level={finding?.riskLevel} />
+        <div className="flex items-center gap-2">
+          <RiskChip level={finding?.riskLevel} />
+          {finding && <StateChip verification={finding.verification} />}
+        </div>
       </div>
       <div className="p-4 space-y-3">
         {finding?.truncated && (
@@ -170,23 +180,12 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
           </div>
         )}
 
-        {finding && finding.citations.length > 0 && (
-          <div className="flex flex-wrap gap-2">
-            {finding.citations.map((c, i) => (
-              <div key={i} className="group relative">
-                <button
-                  onClick={() => onCiteClick([c])}
-                  className="text-[10px] bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white px-2 py-1 rounded border border-white/5 flex items-center gap-1 transition-colors"
-                >
-                  <MousePointerClick className="w-3 h-3" /> Ref {i + 1}
-                </button>
-                <div className="absolute left-full top-1/2 -translate-y-1/2 ml-2 w-64 p-3 bg-black/90 backdrop-blur border border-white/20 rounded-lg hidden group-hover:block z-50 text-[10px] text-gray-300 shadow-xl pointer-events-none">
-                  <div className="text-white font-bold mb-1 border-b border-white/10 pb-1">Verbatim Quote</div>
-                  &quot;{c}&quot;
-                </div>
-              </div>
-            ))}
-          </div>
+        {finding && (
+          <EvidenceList
+            citations={finding.citations}
+            documentNames={documentNames ?? {}}
+            onCiteClick={onCiteClick}
+          />
         )}
       </div>
     </div>

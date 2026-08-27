@@ -33,6 +33,24 @@ function hasRetryButton(container: HTMLDivElement): boolean {
   return Array.from(container.querySelectorAll('button')).some(b => /retry/i.test(b.textContent || ''));
 }
 
+function doneFinding(overrides: Partial<Finding> = {}): Finding {
+  return {
+    clauseId: 'c1',
+    status: 'done',
+    summary: 'The agreement is governed by English law.',
+    citations: [],
+    verification: { state: 'unchecked' },
+    notes: [],
+    ...overrides,
+  };
+}
+
+const baseProps = {
+  clause: CLAUSE,
+  onCiteClick: () => {},
+  onRetry: () => {},
+};
+
 describe('FindingCard — interrupted prop (Important 1)', () => {
   it('a pending cell offers no Retry when the run is live (default/not interrupted)', () => {
     const container = mount(
@@ -89,10 +107,44 @@ describe('FindingCard — interrupted prop (Important 1)', () => {
   });
 
   it('a done cell never offers Retry, interrupted or not', () => {
-    const doneFinding: Finding = { clauseId: 'c1', status: 'done', citations: [], summary: 'ok' };
+    const finding: Finding = {
+      clauseId: 'c1',
+      status: 'done',
+      citations: [],
+      summary: 'ok',
+      verification: { state: 'unchecked' },
+      notes: [],
+    };
     const container = mount(
-      <FindingCard clause={CLAUSE} finding={doneFinding} onCiteClick={() => {}} onRetry={() => {}} interrupted />,
+      <FindingCard clause={CLAUSE} finding={finding} onCiteClick={() => {}} onRetry={() => {}} interrupted />,
     );
     expect(hasRetryButton(container)).toBe(false);
+  });
+});
+
+describe('FindingCard verification and evidence', () => {
+  it('always shows a state chip, including on an unchecked finding', () => {
+    const container = mount(
+      <FindingCard {...baseProps} finding={doneFinding({ verification: { state: 'unchecked' } })} />,
+    );
+    expect(container.textContent).toMatch(/unverified/i);
+  });
+
+  it('shows the quote text inline without any hover interaction', () => {
+    const finding = doneFinding({
+      citations: [{ quote: 'Liability is capped at the Charges.', documentId: 'doc-1', page: 2 }],
+    });
+    const container = mount(<FindingCard {...baseProps} finding={finding} />);
+    expect(container.textContent).toMatch(/Liability is capped at the Charges\./);
+  });
+
+  it('still drives the viewer highlight from a click', () => {
+    const onCiteClick = vi.fn();
+    const finding = doneFinding({ citations: [{ quote: 'a quote here', documentId: 'doc-1' }] });
+    const container = mount(<FindingCard {...baseProps} finding={finding} onCiteClick={onCiteClick} />);
+    const button = Array.from(container.querySelectorAll('button')).find(b => /a quote here/i.test(b.textContent || ''));
+    expect(button).toBeTruthy();
+    act(() => { (button as HTMLButtonElement).click(); });
+    expect(onCiteClick).toHaveBeenCalledWith(['a quote here']);
   });
 });
