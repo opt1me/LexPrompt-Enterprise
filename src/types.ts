@@ -122,6 +122,16 @@ export interface Finding {
    *  finding can be told apart from one that actually saw the whole
    *  document. */
   truncated?: boolean;
+  /** WHICH documents were cut short, by name, on a finding derived from more
+   *  than one (a collection run). `truncated` alone can only say "something
+   *  was cut", which on a four-document derivation tells a reviewer nothing
+   *  they can act on: the spec's own words are that "the deed of variation
+   *  was cut short" is actionable and "the text was truncated" is not,
+   *  because the whole question is whether the document they grouped the
+   *  collection to ask about is the one the model did not finish reading.
+   *  Absent — not an empty array — on a single-document finding, where
+   *  `truncated` already names the only document there is. */
+  truncatedDocuments?: string[];
   /** Set when the model returned a schema-valid response with an empty (or
    *  whitespace-only) `summary`. A model with a genuine answer — including
    *  "this document is silent on this point" — always writes something; an

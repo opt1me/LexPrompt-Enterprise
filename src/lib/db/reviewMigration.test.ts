@@ -318,3 +318,44 @@ describe('reviewMigration — a collection review keeps its net position', () =>
     expect(np.trail).toEqual([]);
   });
 });
+
+/**
+ * M3. `migrateFinding` rebuilds a `Finding` field by field, so a field
+ * nobody adds there is a field silently discarded on every read — which is
+ * exactly how `netPosition` was lost once already. `truncatedDocuments`
+ * carries the NAMES of the documents a collection run had to cut short, and
+ * losing them on reload would put the reader back in front of the singular,
+ * unactionable "this document was truncated" it exists to replace.
+ */
+describe('reviewMigration — truncation names survive a read', () => {
+  function truncatedReview(finding: Record<string, unknown>) {
+    return {
+      id: 'rev-t', matterId: 'm1',
+      playbookSnapshot: { id: 'pb', name: 'PB', contractType: 'NDA', mode: 'extraction', systemPrompt: '', formatPrompt: '', clauses: [], createdAt: 0, updatedAt: 0, schemaVersion: 2 },
+      documentIds: ['doc-1'],
+      findings: { 'doc-1': { 'clause-1': { clauseId: 'clause-1', status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [], ...finding } } },
+      modelId: 'm', startedAt: 1, completedAt: 2, createdByUserId: 'u1',
+    };
+  }
+
+  it('preserves the names of the documents that were cut short', () => {
+    const out = migrateReviewRecord(truncatedReview({ truncated: true, truncatedDocuments: ['Lease.pdf', 'Deed of Variation.pdf'] }));
+    const f = out.findings['doc-1']['clause-1'];
+    expect(f.truncated).toBe(true);
+    expect(f.truncatedDocuments).toEqual(['Lease.pdf', 'Deed of Variation.pdf']);
+  });
+
+  it('drops a malformed list rather than carrying junk to the reader, and leaves no key behind', () => {
+    const out = migrateReviewRecord(truncatedReview({ truncated: true, truncatedDocuments: ['Lease.pdf', 7, null] }));
+    expect(out.findings['doc-1']['clause-1'].truncatedDocuments).toEqual(['Lease.pdf']);
+
+    const none = migrateReviewRecord(truncatedReview({ truncated: true, truncatedDocuments: 'Lease.pdf' }));
+    expect('truncatedDocuments' in none.findings['doc-1']['clause-1']).toBe(false);
+  });
+
+  it('leaves no key at all on a finding that was never truncated', () => {
+    const out = migrateReviewRecord(truncatedReview({}));
+    expect('truncatedDocuments' in out.findings['doc-1']['clause-1']).toBe(false);
+    expect('truncated' in out.findings['doc-1']['clause-1']).toBe(false);
+  });
+});

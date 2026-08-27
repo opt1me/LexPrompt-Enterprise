@@ -325,7 +325,11 @@ describe('extractClause: context budget (Important 9)', () => {
   it('does not flag a finding as truncated when the document fits the budget', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
     const finding = await extractClause(doc, clause, template, settings);
-    expect(finding.truncated).toBeUndefined();
+    // Absence, not an undefined-valued key. `toBeUndefined` passes either
+    // way, and `structuredClone` — how IndexedDB writes every record —
+    // PRESERVES an undefined-valued key, so the persisted finding would read
+    // to any `in` check as "truncation was recorded here" (CLAUDE.md).
+    expect('truncated' in finding).toBe(false);
   });
 });
 

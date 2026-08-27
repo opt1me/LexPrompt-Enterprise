@@ -230,3 +230,43 @@ describe('FindingCard — net position (Task 8)', () => {
     expect(dialog!.textContent).toContain('Cuts notice to 6 months.');
   });
 });
+
+/**
+ * M3. The truncation warning read "This document exceeds the selected
+ * model's context budget" — singular — on a finding derived from a whole
+ * collection, because `extractCollectionClause` collapsed the filenames
+ * `buildCollectionPrompt` had already collected down to a boolean. The
+ * reviewer could not tell whether the deed of variation, the document they
+ * grouped the collection to ask about, was the one that was cut. Spec
+ * section 6: "The deed of variation was cut short" is actionable; "the text
+ * was truncated" is not.
+ */
+describe('FindingCard — the truncation warning names what was cut', () => {
+  it('names each truncated document when the finding records them', () => {
+    const container = mount(
+      <FindingCard
+        clause={CLAUSE}
+        finding={doneFinding({ truncated: true, truncatedDocuments: ['Deed of Variation.pdf', 'Lease.pdf'] })}
+        onCiteClick={() => {}}
+        onRetry={() => {}}
+      />,
+    );
+    const text = container.textContent || '';
+    expect(text).toContain('Deed of Variation.pdf');
+    expect(text).toContain('Lease.pdf');
+  });
+
+  it('keeps the single-document wording when no names were recorded', () => {
+    const container = mount(
+      <FindingCard clause={CLAUSE} finding={doneFinding({ truncated: true })} onCiteClick={() => {}} onRetry={() => {}} />,
+    );
+    expect(container.textContent || '').toMatch(/this document exceeds/i);
+  });
+
+  it('shows no truncation warning at all when nothing was cut', () => {
+    const container = mount(
+      <FindingCard clause={CLAUSE} finding={doneFinding()} onCiteClick={() => {}} onRetry={() => {}} />,
+    );
+    expect(container.textContent || '').not.toMatch(/context budget/i);
+  });
+});

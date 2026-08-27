@@ -530,3 +530,55 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
     expect(step.required).toContain('document');
   });
 });
+
+/**
+ * M3 (final review). `buildCollectionPrompt` does the work of collecting the
+ * FILENAMES it had to cut short, and `extractCollectionClause` collapsed
+ * them to a bare boolean — so the card told a reviewer "this document
+ * exceeds the model's context budget" about a finding derived from four, and
+ * they could not tell whether the deed of variation, the document they
+ * grouped the collection to ask about, was the one cut.
+ *
+ * Spec section 6, verbatim: "The deed of variation was cut short" is
+ * actionable; "the text was truncated" is not.
+ */
+describe('extractCollectionClause: truncation names the documents it cut', () => {
+  // contextLength 100 -> budget = floor(100 * 4 * 0.5) = 200 characters,
+  // split across two documents, so both long members are cut short.
+  const tight: Settings = { ...settings, modelContextLength: 100 };
+
+  function longMembers(): CollectionMember<DocumentFile>[] {
+    return [
+      { document: docFile('lease', 'Lease.pdf', '[Page 1] ' + 'x'.repeat(1000)), documentId: 'lease', kind: 'original', position: 1 },
+      { document: docFile('dov', 'DoV.pdf', '[Page 1] ' + 'y'.repeat(1000)), documentId: 'dov', kind: 'varies', position: 2 },
+    ];
+  }
+
+  it('records WHICH documents were cut short, by name', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(longMembers(), clause, template, tight);
+
+    expect(finding.status).toBe('done');
+    expect(finding.truncated).toBe(true);
+    expect(finding.truncatedDocuments).toEqual(['Lease.pdf', 'DoV.pdf']);
+  });
+
+  it('records no names, and no key at all, when everything fit', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    // Absence, not an undefined-valued key: `structuredClone` (how
+    // IndexedDB writes every record) preserves one, and it would read to
+    // any `in` check as "truncation was recorded here".
+    expect('truncatedDocuments' in finding).toBe(false);
+    expect('truncated' in finding).toBe(false);
+  });
+});

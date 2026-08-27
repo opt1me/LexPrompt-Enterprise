@@ -103,6 +103,17 @@ function migrateFinding(
   if (src.edited === true) finding.edited = true;
   if (src.authError === true) finding.authError = true;
   if (src.truncated === true) finding.truncated = true;
+  // The NAMES of the documents a collection run cut short. Rebuilt here for
+  // the same reason every other field is: a field this function does not
+  // add is a field silently discarded on every read, which is how
+  // `netPosition` was lost once already. Non-string entries are dropped
+  // rather than rendered — this text is shown to a reader as a filename —
+  // and an empty result leaves no key at all rather than an empty array
+  // that would read as "we checked, nothing was truncated".
+  const truncatedDocuments = Array.isArray(src.truncatedDocuments)
+    ? src.truncatedDocuments.filter((name): name is string => typeof name === 'string' && name !== '')
+    : [];
+  if (truncatedDocuments.length > 0) finding.truncatedDocuments = truncatedDocuments;
   if (src.noContent === true) finding.noContent = true;
 
   const netPosition = readNetPosition(src.netPosition);

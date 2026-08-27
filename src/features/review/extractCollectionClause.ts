@@ -402,7 +402,18 @@ export async function extractCollectionClause(
       citations: trail.flatMap(step => step.citations),
       verification: unchecked(),
       notes: [],
-      truncated: truncated.length > 0 || undefined,
+      // Both keys OMITTED, never assigned `undefined`: `structuredClone` —
+      // how IndexedDB writes every record — preserves an undefined-valued
+      // key, so an unconditional assignment persists a key that reads to any
+      // `in` check as "truncation was recorded here".
+      //
+      // And the NAMES, not just the flag. `buildCollectionPrompt` already
+      // collected the filenames it had to cut; collapsing them to a boolean
+      // left the card saying "this document exceeds the context budget"
+      // about a finding derived from four of them, which cannot tell a
+      // reviewer whether the amendment they grouped the collection to ask
+      // about is the one that was cut.
+      ...(truncated.length > 0 ? { truncated: true, truncatedDocuments: truncated } : {}),
       netPosition: unconfirmedPosition(proposed, trail),
     };
   } catch (error) {
@@ -415,7 +426,10 @@ export async function extractCollectionClause(
     return {
       ...base,
       error: error instanceof Error ? error.message : String(error),
-      authError: isAuthError(error) || undefined,
+      // Omitted rather than set to `undefined`, same rule as `truncated`
+      // above: a persisted `authError: undefined` reads to an `in` check
+      // as "an auth failure was recorded against this finding".
+      ...(isAuthError(error) ? { authError: true } : {}),
     };
   }
 }

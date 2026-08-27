@@ -199,7 +199,7 @@ export async function extractClause(
         citations,
         riskLevel: level,
         riskAnalysis,
-        truncated: truncated || undefined,
+        ...(truncated ? { truncated: true } : {}),
         error: 'The model returned no content for this clause.',
         noContent: true,
       };
@@ -212,7 +212,12 @@ export async function extractClause(
       citations,
       riskLevel: level,
       riskAnalysis,
-      truncated: truncated || undefined,
+      // Omitted, never assigned `undefined`: `structuredClone` (how
+      // IndexedDB writes every record) PRESERVES an undefined-valued key,
+      // so `truncated: undefined` persists a key that reads to any `in`
+      // check as "truncation was recorded here". Same spread in
+      // `extractCollectionClause`, deliberately identical.
+      ...(truncated ? { truncated: true } : {}),
       verification: unchecked(),
       notes: [],
     };
@@ -228,7 +233,10 @@ export async function extractClause(
     return {
       ...base,
       error: error instanceof Error ? error.message : String(error),
-      authError: isAuthError(error) || undefined,
+      // Omitted rather than set to `undefined`, same rule as `truncated`
+      // above: a persisted `authError: undefined` reads to an `in` check
+      // as "an auth failure was recorded against this finding".
+      ...(isAuthError(error) ? { authError: true } : {}),
     };
   }
 }

@@ -213,10 +213,26 @@ export function FindingCard({
         {finding?.truncated && (
           <div className="flex items-start gap-2 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-[11px] text-yellow-300">
             <TriangleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-            <span>
-              This document exceeds the selected model&apos;s context budget — only part of it was reviewed for
-              this clause.
-            </span>
+            {/* Named, whenever the finding recorded names. A finding derived
+                from a whole collection used to show the singular sentence
+                below, which cannot tell a reviewer whether the amendment
+                they grouped the collection to ask about is the document the
+                model did not finish reading. Spec section 6: "the deed of
+                variation was cut short" is actionable; "the text was
+                truncated" is not. The singular wording stays for a
+                single-document finding, where it is accurate. */}
+            {finding.truncatedDocuments && finding.truncatedDocuments.length > 0 ? (
+              <span>
+                {finding.truncatedDocuments.length === 1 ? 'This document exceeds' : 'These documents exceed'} the
+                selected model&apos;s context budget, so only part of {finding.truncatedDocuments.length === 1 ? 'it' : 'each'} was
+                reviewed for this clause: {finding.truncatedDocuments.join(', ')}.
+              </span>
+            ) : (
+              <span>
+                This document exceeds the selected model&apos;s context budget — only part of it was reviewed for
+                this clause.
+              </span>
+            )}
           </div>
         )}
         <p className="text-xs text-gray-300 leading-relaxed">{finding?.summary}</p>
