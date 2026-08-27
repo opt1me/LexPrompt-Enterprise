@@ -295,3 +295,50 @@ describe('ResultsView — reading a collection review\'s findings (Task 8A)', ()
     expect(container.textContent).toContain('Some finding.');
   });
 });
+
+describe('ResultsView — the comparison grid\'s "Open in review" handoff', () => {
+  it('lands the keyboard cursor on the clause the reader clicked, not clause 1', () => {
+    // The grid is a triage surface: its whole value is that you scan a
+    // matrix, spot a cell, and go to it. A handoff that drops you at the
+    // top of the list loses your place, and a triage surface whose handoff
+    // loses your place is one nobody uses twice.
+    const onVerify = vi.fn();
+    const run = makeRun();
+    const container = mount(
+      <ResultsView
+        run={run}
+        documents={documents}
+        settings={settings}
+        onRetryCell={() => {}}
+        onVerify={onVerify}
+        openAt={{ docId: 'd1', clauseId: 'c4' }}
+      />,
+    );
+    // c4 is the only `done` finding, so it is the only one the keyboard
+    // gate lets `v` act on. If the cursor had defaulted to index 0 (c1,
+    // pending) this would not fire at all.
+    keyDown({ key: 'v' });
+    expect(onVerify).toHaveBeenCalledWith('d1', 'c4', { state: 'verified' });
+    expect(container).toBeTruthy();
+  });
+
+  it('leaves the cursor alone when handed a clause this run does not have', () => {
+    // Being dropped at the top of a list is a worse answer than staying
+    // put, because it looks deliberate. c1 is pending, so a cursor that
+    // wrongly moved to index 0 would be silently gated and look like
+    // nothing happened.
+    const onVerify = vi.fn();
+    mount(
+      <ResultsView
+        run={makeRun()}
+        documents={documents}
+        settings={settings}
+        onRetryCell={() => {}}
+        onVerify={onVerify}
+        openAt={{ docId: 'd1', clauseId: 'not-in-this-playbook' }}
+      />,
+    );
+    keyDown({ key: 'v' });
+    expect(onVerify).not.toHaveBeenCalled();
+  });
+});

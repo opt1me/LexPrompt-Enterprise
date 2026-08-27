@@ -32,6 +32,18 @@ export interface ResultsViewProps {
   onRetryCell: (docId: string, clauseId: string) => void;
   /** Optional: wired in Task 17. Renders the "Tabular view" toggle only when supplied. */
   onOpenTabular?: () => void;
+  /** Where to land when this view is opened from the comparison grid's
+   *  "Open in review" handoff: the document to show and the clause to put
+   *  the keyboard cursor on. Without this the grid's handoff would drop the
+   *  reader on clause 1 of whichever document happened to be first, which
+   *  is not the cell they clicked — and a triage surface whose handoff
+   *  loses your place is one nobody uses twice.
+   *
+   *  Applied on mount and whenever it changes, not merged into the
+   *  document-switch effect: switching documents by hand must still reset
+   *  the cursor to the top, which is a different intent from being sent
+   *  somewhere specific. */
+  openAt?: { docId: string; clauseId: string };
   /** Reports a failure from an assistant action (email, revision, export) so
    *  the caller can surface it however it surfaces other errors (a toast in
    *  App.tsx). Failures here are non-fatal to the run itself. */
@@ -90,7 +102,7 @@ type Tab = 'findings' | 'chat';
 export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, authorInitials,
-  onConfirmNetPosition, onAmendNetPosition, documentDates,
+  onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
 }: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
@@ -107,9 +119,37 @@ export function ResultsView({
   const [revisionData, setRevisionData] = useState<RevisionData | null>(null);
   const [revisionOpen, setRevisionOpen] = useState(false);
 
-  // If a fresh run replaces this one with a different document set, don't
-  // keep pointing at a stale id.
+  // The comparison grid's "Open in review" handoff: land on the document
+  // and clause the reader actually clicked. Keyed on the value itself so
+  // opening the same cell twice re-focuses it, and separate from the
+  // document-switch reset below because being *sent* somewhere and
+  // *choosing* to switch documents are different intents.
   useEffect(() => {
+    if (!openAt) return;
+    const clauseIndex = run.templateSnapshot.clauses.findIndex(c => c.id === openAt.clauseId);
+    if (run.documentIds.includes(openAt.docId)) setActiveDocId(openAt.docId);
+    // A clause that is not in this run's playbook leaves the cursor alone
+    // rather than sending it to index 0 — being dropped at the top of a
+    // list is a worse answer than staying put, because it looks deliberate.
+    if (clauseIndex >= 0) setFocusIndex(clauseIndex);
+    setHighlights([]);
+  }, [openAt, run.documentIds, run.templateSnapshot.clauses]);
+
+  // If a fresh run REPLACES this one with a different document set, don't
+  // keep pointing at a stale id.
+  //
+  // Guarded on the run actually changing rather than firing on mount too.
+  // It used to reset the cursor on every mount, which silently undid the
+  // `openAt` effect above: React runs effects in declaration order, so the
+  // grid's handoff would set the cursor and this would immediately move it
+  // back to clause 1. Relying on declaration order to fix that would have
+  // worked and been quietly fragile — the next person to reorder two
+  // effects would break a handoff with no test failing near their change.
+  // A run that has not changed has nothing to reset.
+  const lastRunIdRef = useRef(run.id);
+  useEffect(() => {
+    if (lastRunIdRef.current === run.id) return;
+    lastRunIdRef.current = run.id;
     if (!run.documentIds.includes(activeDocId)) {
       setActiveDocId(run.documentIds[0] ?? '');
       setHighlights([]);

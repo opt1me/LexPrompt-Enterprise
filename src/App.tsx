@@ -975,6 +975,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    *  `findingKey(docId, clauseId)`. One at a time is enough: these are
    *  single-record writes and a user verifies one finding at a time. */
   const [verifyBusyKey, setVerifyBusyKey] = useState<string | null>(null);
+  // Where the comparison grid last handed off to, so ResultsView can land
+  // on the cell the reader actually clicked rather than clause 1 of
+  // whichever document happened to be first.
+  const [openReviewAt, setOpenReviewAt] = useState<{ docId: string; clauseId: string } | undefined>(undefined);
 
   /**
    * Await the write, then apply (ruling R-B2, spec section 9). The UI must
@@ -1960,7 +1964,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     documents={documents}
                     settings={settings}
                     onRetryCell={handleRetryCell}
-                    onOpenTabular={() => setView('tabular')}
+                    onOpenTabular={() => { setOpenReviewAt(undefined); setView('tabular'); }}
+                    openAt={openReviewAt}
                     onError={(message) => notify(message, 'error')}
                     onAuthError={handleAuthError}
                     interrupted={isInterrupted}
@@ -1978,6 +1983,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     documents={documents}
                     onRetryCell={handleRetryCell}
                     onOpenCards={() => setView('results')}
+                    onOpenInReview={(docId, clauseId) => { setOpenReviewAt({ docId, clauseId }); setView('results'); }}
                     interrupted={isInterrupted}
                     onVerify={handleVerify}
                     onAddNote={handleAddNote}
