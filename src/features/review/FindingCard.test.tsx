@@ -106,7 +106,16 @@ describe('FindingCard — interrupted prop (Important 1)', () => {
     expect(hasRetryButton(containerB)).toBe(true);
   });
 
-  it('a done cell never offers Retry, interrupted or not', () => {
+  // Superseded by Task 10 (spec section 5 / definition-of-done #3): "a
+  // verified finding [is unretriable]" was true when this test was written,
+  // before `Verification` existed. Now the spec requires the opposite —
+  // "re-running a clause resets its verification to unchecked and says
+  // so" — and a `Verification` only ever exists on a `done` finding (the
+  // only status `VerificationControls` renders for). Without a way to
+  // retry a `done` finding, that reset rule would be dead code no user
+  // action could ever reach. `interrupted` is irrelevant to it either way:
+  // this Retry is offered unconditionally on `done`, live run or not.
+  it('a done cell offers Retry unconditionally, so a verified finding can be re-run (Task 10)', () => {
     const finding: Finding = {
       clauseId: 'c1',
       status: 'done',
@@ -115,10 +124,16 @@ describe('FindingCard — interrupted prop (Important 1)', () => {
       verification: { state: 'unchecked' },
       notes: [],
     };
+    const notInterrupted = mount(
+      <FindingCard clause={CLAUSE} finding={finding} onCiteClick={() => {}} onRetry={() => {}} />,
+    );
+    expect(hasRetryButton(notInterrupted)).toBe(true);
+    cleanup?.();
+
     const container = mount(
       <FindingCard clause={CLAUSE} finding={finding} onCiteClick={() => {}} onRetry={() => {}} interrupted />,
     );
-    expect(hasRetryButton(container)).toBe(false);
+    expect(hasRetryButton(container)).toBe(true);
   });
 });
 

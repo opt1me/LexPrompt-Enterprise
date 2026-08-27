@@ -2,6 +2,8 @@ import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
 import { Table, Mail, FileDown, Loader } from 'lucide-react';
 import type { Clause, DocumentFile, Finding, ReviewRun, Settings } from '../../types';
 import { isAuthError } from '../../lib/openrouter';
+import { findingKey } from '../../lib/verification';
+import type { VerificationChange } from '../../lib/verification';
 import { FindingCard } from './FindingCard';
 import { DocumentViewer } from './DocumentViewer';
 import { exportDocx } from './exportDocx';
@@ -38,6 +40,19 @@ export interface ResultsViewProps {
    *  pending/running cards get a Retry action instead of looking like work
    *  still in flight. */
   interrupted?: boolean;
+  /** Persists the human's verification intent for one finding (Task 10).
+   *  Optional: omitted entirely, a card renders its state chip with no
+   *  controls rather than an action that goes nowhere. */
+  onVerify?: (docId: string, clauseId: string, change: VerificationChange) => Promise<void>;
+  /** Persists a new note against one finding (Task 10). Same optionality
+   *  reasoning as `onVerify`. */
+  onAddNote?: (docId: string, clauseId: string, text: string) => Promise<void>;
+  /** Key (`findingKey(docId, clauseId)`) of the one finding whose
+   *  verification or note write is currently in flight — see `App.tsx`'s
+   *  `verifyBusyKey`. `null`/omitted means nothing is in flight. */
+  verifyBusyKey?: string | null;
+  /** The local profile's initials, for a note's author placeholder. */
+  authorInitials?: string;
 }
 
 type Tab = 'findings' | 'chat';
@@ -53,7 +68,10 @@ type Tab = 'findings' | 'chat';
  * Findings holds the cards plus Draft Email / Export DOCX actions, and
  * Assistant is the chat panel scoped to the active document.
  */
-export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false }: ResultsViewProps) {
+export function ResultsView({
+  run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
+  onVerify, onAddNote, verifyBusyKey, authorInitials,
+}: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>('findings');
@@ -88,6 +106,16 @@ export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabul
   };
 
   const findings = run.findings[activeDocId] ?? {};
+
+  // So `EvidenceList` can name a citation's document — a review can cover
+  // several. `findingKey` (imported above) is the one place the
+  // `docId::clauseId` shape is written; this must not re-template it inline
+  // (a second copy of the shape is exactly how six of this project's
+  // findings started).
+  const documentNames = useMemo(
+    () => Object.fromEntries(documents.map(d => [d.id, d.name])),
+    [documents],
+  );
 
   const reportError = (fallback: string, error: unknown) => {
     // A rejected API key is never just "this one action failed" — it means
@@ -219,6 +247,12 @@ export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabul
                 onSuggestFix={handleSuggestFix}
                 suggestFixLoading={revisionLoadingClauseId === clause.id}
                 interrupted={interrupted}
+                onVerify={onVerify ? (change) => onVerify(activeDocId, clause.id, change) : undefined}
+                onAddNote={onAddNote ? (text) => onAddNote(activeDocId, clause.id, text) : undefined}
+                verifyBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                documentNames={documentNames}
+                authorInitials={authorInitials}
               />
             ))}
           </div>

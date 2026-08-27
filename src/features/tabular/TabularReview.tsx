@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { AlignLeft, Download, FileText, Loader, LayoutList, RotateCcw, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { Clause, DocumentFile, Finding, ReviewRun, RiskLevel } from '../../types';
+import { findingKey } from '../../lib/verification';
+import type { VerificationChange } from '../../lib/verification';
 import { CellDetail } from './CellDetail';
 import { buildTabularCsv } from './csv';
 
@@ -15,6 +17,11 @@ export interface TabularReviewProps {
    *  after an abandoned run," not "still in flight" — and gets the same
    *  Retry a done/error/cancelled cell already has. */
   interrupted?: boolean;
+  /** Forwarded to `CellDetail` for whichever cell is open (Task 10). */
+  onVerify?: (docId: string, clauseId: string, change: VerificationChange) => Promise<void>;
+  onAddNote?: (docId: string, clauseId: string, text: string) => Promise<void>;
+  verifyBusyKey?: string | null;
+  authorInitials?: string;
 }
 
 interface SelectedCell {
@@ -40,7 +47,10 @@ const RISK_CELL_CLASSES: Record<RiskLevel, string> = {
  * results; the only writes it triggers are `onRetryCell`, which is the same
  * callback the card view's Retry button calls.
  */
-export function TabularReview({ run, documents, onRetryCell, onOpenCards, interrupted = false }: TabularReviewProps) {
+export function TabularReview({
+  run, documents, onRetryCell, onOpenCards, interrupted = false,
+  onVerify, onAddNote, verifyBusyKey, authorInitials,
+}: TabularReviewProps) {
   const [wrapText, setWrapText] = useState(false);
   const [selected, setSelected] = useState<SelectedCell | null>(null);
 
@@ -159,6 +169,10 @@ export function TabularReview({ run, documents, onRetryCell, onOpenCards, interr
             finding={selectedFinding}
             onClose={() => setSelected(null)}
             onRetry={(clauseId) => onRetryCell(selected.docId, clauseId)}
+            onVerify={onVerify ? (change) => onVerify(selected.docId, selected.clauseId, change) : undefined}
+            onAddNote={onAddNote ? (text) => onAddNote(selected.docId, selected.clauseId, text) : undefined}
+            verifyBusy={verifyBusyKey === findingKey(selected.docId, selected.clauseId)}
+            authorInitials={authorInitials}
           />
         )}
       </div>
@@ -277,13 +291,27 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = fa
       onClick={onOpen}
       className={`p-3 border-b border-r border-white/10 text-xs cursor-pointer transition-colors ${riskClass} ${selectedRing}`}
     >
-      <div className="flex items-start gap-1">
-        {finding?.truncated && (
-          <TriangleAlert className="w-3 h-3 text-yellow-400 shrink-0 mt-0.5" aria-label="Document truncated to fit context budget" />
-        )}
-        <div className={`${wrapText ? 'whitespace-normal' : 'truncate'} text-gray-300 max-h-32 overflow-hidden min-w-0`}>
-          {finding?.summary || <span className="text-gray-600 italic">Empty</span>}
+      <div className="flex items-start justify-between gap-1">
+        <div className="flex items-start gap-1 min-w-0">
+          {finding?.truncated && (
+            <TriangleAlert className="w-3 h-3 text-yellow-400 shrink-0 mt-0.5" aria-label="Document truncated to fit context budget" />
+          )}
+          <div className={`${wrapText ? 'whitespace-normal' : 'truncate'} text-gray-300 max-h-32 overflow-hidden min-w-0`}>
+            {finding?.summary || <span className="text-gray-600 italic">Empty</span>}
+          </div>
         </div>
+        {/* Mirrors FindingCard's done-state Retry control: a Verification
+           only ever exists on a `done` finding, so re-running one — the
+           spec's rule that a re-run resets its verification — needs a
+           trigger reachable from a done cell, not just error/cancelled ones. */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onRetry(); }}
+          className="p-1 hover:bg-white/10 rounded text-gray-500 hover:text-white shrink-0"
+          title="Re-run this clause"
+        >
+          <RotateCcw className="w-3 h-3" aria-hidden="true" />
+          <span className="sr-only">Retry</span>
+        </button>
       </div>
     </td>
   );

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, FileText } from 'lucide-react';
 import type { Clause, DocumentFile, Finding } from '../../types';
+import type { VerificationChange } from '../../lib/verification';
 import { FindingCard } from '../review/FindingCard';
 import { DocumentViewer } from '../review/DocumentViewer';
 
@@ -10,6 +11,15 @@ export interface CellDetailProps {
   finding: Finding | undefined;
   onClose: () => void;
   onRetry: (clauseId: string) => void;
+  /** Persists the human's verification intent for this one finding (Task
+   *  10). Optional: omitted, the card shows its state chip with no controls. */
+  onVerify?: (change: VerificationChange) => Promise<void>;
+  /** True while this finding's verification or note write is in flight. */
+  verifyBusy?: boolean;
+  /** Persists a new note against this finding (Task 10). */
+  onAddNote?: (text: string) => Promise<void>;
+  /** The local profile's initials, for a note's author placeholder. */
+  authorInitials?: string;
 }
 
 /**
@@ -20,7 +30,7 @@ export interface CellDetailProps {
  * button feeds that single quote to the viewer as its highlight, scrolling
  * to it, exactly as `ResultsView` wires `FindingCard` to `DocumentViewer`.
  */
-export function CellDetail({ doc, clause, finding, onClose, onRetry }: CellDetailProps) {
+export function CellDetail({ doc, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote, authorInitials }: CellDetailProps) {
   const [highlights, setHighlights] = useState<string[]>([]);
 
   // A stale highlight from the previously-opened cell must not linger when
@@ -48,7 +58,17 @@ export function CellDetail({ doc, clause, finding, onClose, onRetry }: CellDetai
       </div>
 
       <div className="p-4 border-b border-white/10 overflow-y-auto max-h-[50%] shrink-0">
-        <FindingCard clause={clause} finding={finding} onCiteClick={setHighlights} onRetry={onRetry} />
+        <FindingCard
+          clause={clause}
+          finding={finding}
+          onCiteClick={setHighlights}
+          onRetry={onRetry}
+          onVerify={onVerify}
+          verifyBusy={verifyBusy}
+          onAddNote={onAddNote}
+          noteBusy={verifyBusy}
+          authorInitials={authorInitials}
+        />
       </div>
 
       <div className="flex-1 min-h-0">

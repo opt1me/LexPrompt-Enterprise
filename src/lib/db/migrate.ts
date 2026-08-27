@@ -1,6 +1,7 @@
 import { getDb } from './open';
 import { STORES } from './schema';
 import type { Playbook, UserProfile } from '../../types';
+import { uid } from '../uid';
 
 /** The exact key v1 wrote its templates under (`src/lib/storage.ts`,
  *  pre-redesign — see `git show 457b6fc:src/lib/storage.ts`). Read directly;
@@ -50,10 +51,6 @@ async function writeFlag(db: Awaited<ReturnType<typeof getDb>>, count: number): 
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
-}
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 /** One-time migration of v1's localStorage templates into the `playbooks`

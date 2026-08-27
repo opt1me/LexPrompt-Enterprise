@@ -2,10 +2,7 @@ import { getDb } from './open';
 import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
 import { TEMPLATE_SCHEMA_VERSION, type Clause, type Playbook } from '../../types';
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+import { uid } from '../uid';
 
 /** A playbook record as it actually sits in IndexedDB: the public
  *  `Playbook` shape plus a write sequence number. `_seq` exists to break

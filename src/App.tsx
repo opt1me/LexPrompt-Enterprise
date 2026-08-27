@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
-import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, Settings, Matter } from './types';
+import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, Settings, Matter, Finding, UserProfile, Verification } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
+import { applyVerification, findingKey, makeNote, resetVerification } from './lib/verification';
+import type { VerificationChange } from './lib/verification';
+import { carryHumanState } from './lib/findingMerge';
+import { uid } from './lib/uid';
 import {
   listPlaybooks as listTemplates, getPlaybook as getTemplate, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
@@ -58,6 +62,25 @@ function reviewFromRun(run: ReviewRun, matterId: string, modelId: string, userId
     completedAt: run.completedAt,
     cancelledAt: run.cancelledAt,
     createdByUserId: userId,
+  };
+}
+
+/** Replaces one finding in a run, copying only the two objects on the path
+ *  to it. Extracted rather than inlined three times: this project has six
+ *  sibling-drift findings on record, and three hand-rolled copies of a
+ *  nested-map update is exactly how the seventh happens. */
+function withUpdatedFinding(
+  run: ReviewRun,
+  docId: string,
+  clauseId: string,
+  finding: Finding,
+): ReviewRun {
+  return {
+    ...run,
+    findings: {
+      ...run.findings,
+      [docId]: { ...run.findings[docId], [clauseId]: finding },
+    },
   };
 }
 
@@ -206,6 +229,17 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [runPanelKey, setRunPanelKey] = useState(0);
   const [settings, setSettings] = useState<Settings>(() => loadSettings());
   const { notify, toast } = useToast();
+
+  // Render-time profile, for `authorInitials` (a note's placeholder needs a
+  // value to render with, and an `await` can't supply one). Write handlers
+  // (`handleVerify`, `handleAddNote`, etc.) keep using their own
+  // `await getProfile()` — a write must never trust a value that could be
+  // null for one frame, but display can tolerate exactly that.
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  useEffect(() => {
+    getProfile().then(setProfile).catch(() => { /* display-only; initials falls back to 'ME' */ });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Fires exactly once, on the render where the migration gate first hands
   // control to this component — `migratedCount` is a mount-time prop, not a
@@ -746,10 +780,17 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // button and the results view for a matter `handleDeleteMatter` had
       // just cleared `run` for, moments before.
       if (matterId && deletedMatterIdsRef.current.has(matterId)) return;
-      latestRunRef.current = updated;
-      setRun(updated);
+      // `runReview` owns its own copy of the run and knows nothing about a
+      // verification or note written mid-run by `handleVerify`/`handleAddNote`
+      // — every snapshot it emits carries `unchecked()` for every finding.
+      // Without re-applying human state onto each snapshot here, the very
+      // next cell finishing would silently overwrite a verification the user
+      // just watched succeed (see `carryHumanState`'s own doc comment).
+      const merged = carryHumanState(latestRunRef.current, updated);
+      latestRunRef.current = merged;
+      setRun(merged);
       if (matterId && reviewSaver) {
-        reviewSaver.scheduleSave(reviewFromRun(updated, matterId, settings.modelId, userId));
+        reviewSaver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
       }
     };
 
@@ -802,8 +843,91 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     abortControllerRef.current?.abort();
   };
 
+  /** Key of the finding whose verification or note write is in flight, as
+   *  `findingKey(docId, clauseId)`. One at a time is enough: these are
+   *  single-record writes and a user verifies one finding at a time. */
+  const [verifyBusyKey, setVerifyBusyKey] = useState<string | null>(null);
+
+  /**
+   * Await the write, then apply (ruling R-B2, spec section 9). The UI must
+   * never show a verification the store did not take: a reviewer who marks
+   * twenty findings verified, whose writes all fail, and whose export then
+   * claims verification no store holds, is the worst outcome this feature
+   * has. A single IndexedDB record write is milliseconds; correctness is
+   * worth them.
+   *
+   * `latestRunRef` is updated alongside `run` state because a live run's
+   * debounced saver reads from it — without this, the next mid-run
+   * auto-save would write a snapshot taken before this verification and
+   * silently undo it.
+   */
+  const handleVerify = async (docId: string, clauseId: string, change: VerificationChange) => {
+    const current = latestRunRef.current ?? run;
+    const matterId = activeMatterId;
+    if (!current || !matterId) return;
+
+    const existing = current.findings[docId]?.[clauseId];
+    if (!existing) return;
+
+    const profile = await getProfile();
+
+    let verification: Verification;
+    try {
+      verification = applyVerification(existing.verification, change, profile.id, Date.now());
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'That verification is not valid.', 'error');
+      return;
+    }
+
+    const updated = withUpdatedFinding(current, docId, clauseId, { ...existing, verification });
+
+    setVerifyBusyKey(findingKey(docId, clauseId));
+    try {
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, profile.id));
+      latestRunRef.current = updated;
+      setRun(updated);
+    } catch (e) {
+      notify(
+        e instanceof Error
+          ? `This verification was not saved: ${e.message}`
+          : 'This verification was not saved.',
+        'error',
+      );
+    } finally {
+      setVerifyBusyKey(null);
+    }
+  };
+
+  const handleAddNote = async (docId: string, clauseId: string, text: string) => {
+    const current = latestRunRef.current ?? run;
+    const matterId = activeMatterId;
+    if (!current || !matterId) return;
+
+    const existing = current.findings[docId]?.[clauseId];
+    if (!existing) return;
+
+    const profile = await getProfile();
+    const note = makeNote(docId, clauseId, text, profile.id, Date.now(), uid());
+    const updated = withUpdatedFinding(current, docId, clauseId, {
+      ...existing,
+      notes: [...existing.notes, note],
+    });
+
+    setVerifyBusyKey(findingKey(docId, clauseId));
+    try {
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, profile.id));
+      latestRunRef.current = updated;
+      setRun(updated);
+    } catch (e) {
+      notify(e instanceof Error ? `This note was not saved: ${e.message}` : 'This note was not saved.', 'error');
+    } finally {
+      setVerifyBusyKey(null);
+    }
+  };
+
   const handleRetryCell = (docId: string, clauseId: string) => {
-    if (!run) return;
+    const current = latestRunRef.current ?? run;
+    if (!current) return;
     const doc = documents.find(d => d.id === docId);
     if (!doc) return;
     const matterId = activeMatterId;
@@ -812,16 +936,81 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // that already had one) must not suppress the redirect if THIS call is
     // the one that gets rejected.
     authErrorHandledRef.current = false;
-    retryCell(run, doc, clauseId, settings, setRun)
+
+    const existing = current.findings[docId]?.[clauseId];
+
+    // The single most important rule in this sub-project: a verification
+    // describes a judgement about specific content, and re-running the
+    // clause replaces that content. Keeping the verification would let an
+    // export claim a human checked text they never saw.
+    //
+    // `cleared` is what gets handed to `retryCell` — not just pushed into
+    // state alongside it. `retryCell` derives every snapshot it emits from
+    // the run it was given, so passing the un-cleared `run`/`current` here
+    // would let its first update restore the verification we just removed.
+    // `existing.verification` is guarded, not just `existing`: a finding
+    // read from storage that predates sub-project B's schema (or a stale
+    // fixture) may carry no `verification` at all. Treating that the same
+    // as `unchecked` — nothing to reset — is the honest reading and keeps
+    // this from crashing on data the type declares can't happen but that
+    // can still show up at runtime.
+    let cleared = current;
+    if (existing?.verification && existing.verification.state !== 'unchecked') {
+      cleared = withUpdatedFinding(current, docId, clauseId, {
+        ...existing,
+        verification: resetVerification(existing.verification),
+      });
+      const clauseTitle = current.templateSnapshot.clauses.find(c => c.id === clauseId)?.title ?? 'This clause';
+      notify(`${clauseTitle} is being re-run, so its verification was cleared.`);
+    }
+
+    latestRunRef.current = cleared;
+    setRun(cleared);
+
+    // Notes are commentary, not a claim about output, so they stay through a
+    // retry even though the verification does not (see the reset above).
+    // `retryCell`/`extractClause` don't know about the note the human wrote,
+    // though: every snapshot `retryCell` emits for this one clause — the
+    // 'running' placeholder and the final result alike — is built fresh with
+    // `notes: []`. Captured here, before the retry starts, and reapplied
+    // below wherever the retried clause's own snapshot shows up empty.
+    const priorNotes = existing?.notes ?? [];
+
+    // Was `setRun` passed directly. It must go through the ref as well, or
+    // `handleVerify`/`handleAddNote` read a stale `latestRunRef.current` for
+    // the rest of the session.
+    const onRetryUpdate = (updated: ReviewRun) => {
+      const retriedFinding = updated.findings[docId]?.[clauseId];
+      // Deliberately narrower than `carryHumanState`: this touches only the
+      // one finding `retryCell` is producing snapshots for, and only its
+      // notes — never its verification, which the reset above already set
+      // correctly and which must not be resurrected (see Step 4's own
+      // reasoning on `cleared`).
+      const withNotes = retriedFinding && priorNotes.length > 0 && retriedFinding.notes.length === 0
+        ? withUpdatedFinding(updated, docId, clauseId, { ...retriedFinding, notes: priorNotes })
+        : updated;
+      latestRunRef.current = withNotes;
+      setRun(withNotes);
+    };
+
+    retryCell(cleared, doc, clauseId, settings, onRetryUpdate)
       .then(async (updated) => {
         // Important 2: guards this write the same way handleStartRun's
         // handleUpdate/persistFinal do — `matterId` is a local snapshot of
         // `activeMatterId`, and the matter it names may have been deleted
         // while `retryCell`'s API call was in flight.
         if (!matterId || deletedMatterIdsRef.current.has(matterId)) return;
+        // `latestRunRef.current`, not the raw `updated` retryCell resolved
+        // with: `onRetryUpdate` (above) re-applies this clause's prior notes
+        // on top of retryCell's own snapshot, and `updated` is retryCell's
+        // un-patched return value. Persisting `updated` directly would save
+        // a review with the note gone while the screen still shows it — a
+        // verification that displays but was never written, the exact
+        // failure this task exists to remove, just for a note instead.
+        const toPersist = latestRunRef.current ?? updated;
         try {
           const profile = await getProfile();
-          await saveReview(reviewFromRun(updated, matterId, settings.modelId, profile.id));
+          await saveReview(reviewFromRun(toPersist, matterId, settings.modelId, profile.id));
           loadMatterReviews(matterId);
         } catch (e) {
           notify(e instanceof Error ? e.message : 'Could not save this retry.', 'error');
@@ -1286,6 +1475,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     onError={(message) => notify(message, 'error')}
                     onAuthError={handleAuthError}
                     interrupted={isInterrupted}
+                    onVerify={handleVerify}
+                    onAddNote={handleAddNote}
+                    verifyBusyKey={verifyBusyKey}
+                    authorInitials={profile?.initials ?? 'ME'}
                   />
                 ) : (
                   <TabularReview
@@ -1294,6 +1487,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     onRetryCell={handleRetryCell}
                     onOpenCards={() => setView('results')}
                     interrupted={isInterrupted}
+                    onVerify={handleVerify}
+                    onAddNote={handleAddNote}
+                    verifyBusyKey={verifyBusyKey}
+                    authorInitials={profile?.initials ?? 'ME'}
                   />
                 )}
               </div>

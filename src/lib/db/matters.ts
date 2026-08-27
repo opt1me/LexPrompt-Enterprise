@@ -2,10 +2,7 @@ import { getDb } from './open';
 import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
 import type { Matter } from '../../types';
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+import { uid } from '../uid';
 
 /** A matter record as it actually sits in IndexedDB: the public `Matter`
  *  shape plus a write sequence number. `_seq` exists to break ties when two

@@ -2,10 +2,7 @@ import { mapWithConcurrency } from '../../lib/concurrency';
 import type { DocumentFile, Finding, ReviewRun, Settings, Template } from '../../types';
 import { extractClause } from './extractClause';
 import { unchecked } from '../../lib/verification';
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+import { uid } from '../../lib/uid';
 
 export function emptyRun(template: Template, docs: DocumentFile[]): ReviewRun {
   const findings: ReviewRun['findings'] = {};

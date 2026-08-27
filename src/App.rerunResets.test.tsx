@@ -1,0 +1,329 @@
+import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import type { Matter, Review, DocumentRecord, Template } from './types';
+
+// No @testing-library/react in this project — see App.interrupted.test.tsx
+// for the precedent this follows: drive a real react-dom root directly,
+// mocking App.tsx's repository/module boundaries.
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const listPlaybooksMock = vi.fn();
+const listMattersMock = vi.fn();
+const listReviewsMock = vi.fn();
+const getMatterMock = vi.fn();
+const listDocumentsMock = vi.fn();
+const getDocumentMock = vi.fn();
+const getDocumentBlobMock = vi.fn();
+const getReviewMock = vi.fn();
+const saveReviewMock = vi.fn();
+const getProfileMock = vi.fn();
+const migrateIfNeededMock = vi.fn();
+
+vi.mock('./lib/db/migrate', () => ({
+  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
+}));
+
+vi.mock('./lib/db/playbooks', () => ({
+  listPlaybooks: (...args: unknown[]) => listPlaybooksMock(...args),
+  savePlaybook: vi.fn(),
+  deletePlaybook: vi.fn(),
+  newPlaybook: vi.fn(),
+  exportPlaybook: vi.fn(),
+  importPlaybook: vi.fn(),
+}));
+
+vi.mock('./lib/db/matters', () => ({
+  listMatters: (...args: unknown[]) => listMattersMock(...args),
+  getMatter: (...args: unknown[]) => getMatterMock(...args),
+  saveMatter: vi.fn(),
+  newMatter: vi.fn(),
+  deleteMatter: vi.fn(),
+}));
+
+vi.mock('./lib/db/documents', () => ({
+  listDocuments: (...args: unknown[]) => listDocumentsMock(...args),
+  getDocument: (...args: unknown[]) => getDocumentMock(...args),
+  addDocument: vi.fn(),
+  deleteDocument: vi.fn(),
+}));
+
+vi.mock('./lib/db/blobs', () => ({
+  getDocumentBlob: (...args: unknown[]) => getDocumentBlobMock(...args),
+}));
+
+vi.mock('./lib/db/reviews', () => ({
+  listReviews: (...args: unknown[]) => listReviewsMock(...args),
+  getReview: (...args: unknown[]) => getReviewMock(...args),
+  saveReview: (...args: unknown[]) => saveReviewMock(...args),
+  createDebouncedReviewSaver: vi.fn(() => ({
+    scheduleSave: vi.fn(),
+    saveNow: vi.fn().mockResolvedValue(undefined),
+    dispose: vi.fn(),
+  })),
+}));
+
+vi.mock('./lib/db/profile', () => ({
+  getProfile: (...args: unknown[]) => getProfileMock(...args),
+}));
+
+vi.mock('./lib/openrouter', () => ({
+  listModels: vi.fn().mockResolvedValue([]),
+  isAuthError: () => false,
+}));
+
+// `retryCell` itself is mocked (rather than `extractClause`, which is what
+// the real `retryCell` calls) so the test below can inspect the exact `run`
+// App.tsx's `handleRetryCell` hands to it — isolating Step 4's own
+// verification-reset logic from `retryCell`'s independent behavior. This
+// matters because the real `retryCell` always builds a brand-new Finding for
+// the retried clause (`verification: unchecked()`, discarding whatever it
+// was given), which would make the final persisted/rendered state "unchecked"
+// regardless of whether `handleRetryCell`'s own reset ran — a mutation
+// deleting that reset would go uncaught by an assertion on the end state
+// alone. Checking `retryCellMock`'s call arguments directly instead pins
+// down that `handleRetryCell` computed and passed a reset run, independent
+// of what a (real or mocked) `retryCell` later does with it.
+const retryCellMock = vi.fn();
+vi.mock('./features/review/runReview', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./features/review/runReview')>();
+  return {
+    ...actual,
+    retryCell: (...args: unknown[]) => retryCellMock(...args),
+  };
+});
+
+import App from './App';
+import type { DocumentFile, ReviewRun, Settings } from './types';
+
+async function flush(times = 8) {
+  for (let i = 0; i < times; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => { await Promise.resolve(); });
+  }
+}
+
+function findButton(container: HTMLDivElement, re: RegExp, index = 0): HTMLButtonElement {
+  const matches = Array.from(container.querySelectorAll('button')).filter(b => re.test((b.textContent || '').trim()));
+  const button = matches[index];
+  if (!button) throw new Error(`No button [${index}] found matching ${re}`);
+  return button as HTMLButtonElement;
+}
+
+function makeMatter(): Matter {
+  return { id: 'm1', name: 'Acme v Bolt', ownerId: 'u1', createdAt: 1, updatedAt: 1 };
+}
+
+function makeTemplate(): Template {
+  return {
+    id: 't1',
+    name: 'Basic Contract Review',
+    contractType: 'NDA',
+    mode: 'extraction',
+    systemPrompt: '',
+    formatPrompt: '',
+    clauses: [
+      { id: 'c1', title: 'Governing Law', prompt: 'Extract the governing law clause.' },
+      { id: 'c2', title: 'Term', prompt: 'Extract the term.' },
+    ],
+    createdAt: 1,
+    updatedAt: 1,
+    schemaVersion: 2,
+  };
+}
+
+function makeDocumentRecord(): DocumentRecord {
+  return {
+    id: 'd1',
+    matterId: 'm1',
+    name: 'nda.txt',
+    kind: 'txt',
+    text: 'This is the contract text.',
+    byteSize: 27,
+    addedAt: 1,
+    addedByUserId: 'u1',
+  };
+}
+
+const NOTE_ON_C1 = { id: 'n1', findingId: 'd1::c1', text: 'Check this against the side letter.', byUserId: 'u1', at: 50 };
+
+/** Both findings verified, c1 additionally carrying a human note — the base
+ *  case for every test below. Re-running c1 must clear only c1's
+ *  verification, leave c2's verification alone, and keep c1's note. */
+function makeReview(): Review {
+  return {
+    id: 'r1',
+    matterId: 'm1',
+    playbookSnapshot: makeTemplate(),
+    documentIds: ['d1'],
+    findings: {
+      d1: {
+        c1: {
+          clauseId: 'c1',
+          status: 'done',
+          citations: [{ quote: 'x', documentId: 'd1' }],
+          summary: 'Governed by NY law.',
+          verification: { state: 'verified', byUserId: 'u1', at: 100 },
+          notes: [NOTE_ON_C1],
+        },
+        c2: {
+          clauseId: 'c2',
+          status: 'done',
+          citations: [{ quote: 'y', documentId: 'd1' }],
+          summary: 'Term is 12 months.',
+          verification: { state: 'verified', byUserId: 'u1', at: 200 },
+          notes: [],
+        },
+      },
+    },
+    modelId: 'test/model',
+    startedAt: 1,
+    completedAt: 2,
+    createdByUserId: 'u1',
+  };
+}
+
+describe('App — re-running a clause clears its verification (Task 10, Step 4)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    localStorage.clear();
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    listPlaybooksMock.mockReset().mockResolvedValue([]);
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    getMatterMock.mockReset().mockResolvedValue(makeMatter());
+    listDocumentsMock.mockReset().mockResolvedValue([]);
+    getDocumentMock.mockReset().mockResolvedValue(makeDocumentRecord());
+    getDocumentBlobMock.mockReset().mockResolvedValue(null);
+    getReviewMock.mockReset().mockResolvedValue(makeReview());
+    saveReviewMock.mockReset().mockResolvedValue(undefined);
+    getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
+    // Simulates the real `retryCell`'s shape (a 'running' onUpdate, then a
+    // fresh, unchecked, note-free 'done' finding) closely enough to drive
+    // App.tsx's own retry-handling code paths, while leaving the `run`
+    // App.tsx passed in (this mock's first argument) inspectable — that run
+    // is what `retryCellMock.mock.calls[...][0]` checks below.
+    retryCellMock.mockReset().mockImplementation(async (
+      retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: Settings, onUpdate: (r: ReviewRun) => void,
+    ) => {
+      const running: ReviewRun = {
+        ...retryRun,
+        findings: {
+          ...retryRun.findings,
+          [doc.id]: {
+            ...retryRun.findings[doc.id],
+            [clauseId]: { clauseId, status: 'running', citations: [], verification: { state: 'unchecked' }, notes: [] },
+          },
+        },
+      };
+      onUpdate(running);
+      const done: ReviewRun = {
+        ...running,
+        findings: {
+          ...running.findings,
+          [doc.id]: {
+            ...running.findings[doc.id],
+            [clauseId]: {
+              clauseId,
+              status: 'done',
+              citations: [{ quote: 'z', documentId: doc.id }],
+              summary: 'Updated: governed by Delaware law.',
+              verification: { state: 'unchecked' },
+              notes: [],
+            },
+          },
+        },
+      };
+      onUpdate(done);
+      return done;
+    });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.pushState(null, '', '/');
+  });
+
+  async function openReview() {
+    window.history.pushState(null, '', '/matters/m1/reviews/r1');
+    act(() => { root.render(<App />); });
+    await flush();
+  }
+
+  function retryC1(container: HTMLDivElement) {
+    // Card order follows template clause order (c1, then c2) — the first
+    // Retry button belongs to c1's card.
+    act(() => { findButton(container, /^Retry$/i, 0).click(); });
+  }
+
+  it('resets a verified finding to unchecked when its clause is retried', async () => {
+    await openReview();
+
+    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+    expect(chips()[0].textContent).toBe('Verified');
+
+    retryC1(container);
+    await flush();
+
+    expect(chips()[0].textContent).toBe('Unverified');
+    expect(saveReviewMock).toHaveBeenCalled();
+    const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
+    expect(persisted.findings.d1.c1.verification).toEqual({ state: 'unchecked' });
+
+    // Pins down that `handleRetryCell` itself computed and passed a reset
+    // run — not merely that the end state happens to read "unchecked"
+    // because `retryCell` always builds a fresh Finding regardless of what
+    // it's given. The `run` passed as `retryCellMock`'s first argument is
+    // `handleRetryCell`'s own `cleared`, before any of `retryCell`'s own
+    // processing ran.
+    expect(retryCellMock).toHaveBeenCalled();
+    const clearedRunPassedIn = retryCellMock.mock.calls[0][0] as ReviewRun;
+    expect(clearedRunPassedIn.findings.d1.c1.verification).toEqual({ state: 'unchecked' });
+  });
+
+  it('tells the user their verification was cleared', async () => {
+    await openReview();
+
+    retryC1(container);
+    await flush();
+
+    expect(container.textContent).toContain('Governing Law');
+    expect(container.textContent).toMatch(/re-run/i);
+    expect(container.textContent).toMatch(/verification was cleared/i);
+  });
+
+  it('leaves the verification of other findings alone', async () => {
+    await openReview();
+
+    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+    expect(chips()[1].textContent).toBe('Verified');
+
+    retryC1(container);
+    await flush();
+
+    expect(chips()[1].textContent).toBe('Verified');
+    const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
+    expect(persisted.findings.d1.c2.verification).toEqual({ state: 'verified', byUserId: 'u1', at: 200 });
+  });
+
+  it('keeps notes across a re-run, deleting none of them', async () => {
+    await openReview();
+
+    expect(container.textContent).toContain('Check this against the side letter.');
+
+    retryC1(container);
+    await flush();
+
+    expect(container.textContent).toContain('Check this against the side letter.');
+    const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
+    expect(persisted.findings.d1.c1.notes).toEqual([NOTE_ON_C1]);
+  });
+});

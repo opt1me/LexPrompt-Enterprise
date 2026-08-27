@@ -1,10 +1,7 @@
 import { getDb } from './open';
 import { PROFILE_KEY, STORES } from './schema';
 import type { UserProfile } from '../../types';
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+import { uid } from '../uid';
 
 function defaultProfile(): UserProfile {
   return {

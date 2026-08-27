@@ -166,6 +166,22 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
         <div className="flex items-center gap-2">
           <RiskChip level={finding?.riskLevel} />
           {finding && <StateChip verification={finding.verification} />}
+          {/* A `Verification` only ever exists on a `done` finding (it's the
+             only status `VerificationControls` renders for), and the spec's
+             single most important rule in this sub-project — "re-running a
+             clause resets its verification to unchecked" (spec section 5,
+             definition-of-done #3) — needs a way to re-run a `done` finding
+             to mean anything. Without this, that reset is unreachable dead
+             code: nowhere in the UI could ever produce the case it guards. */}
+          <button
+            type="button"
+            onClick={() => onRetry(clause.id)}
+            title="Re-run this clause"
+            className="p-1 rounded text-gray-500 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
+            <span className="sr-only">Retry</span>
+          </button>
         </div>
       </div>
       <div className="p-4 space-y-3">

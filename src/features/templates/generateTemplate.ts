@@ -2,6 +2,7 @@ import { chatJson } from '../../lib/openrouter';
 import { mapWithConcurrency } from '../../lib/concurrency';
 import { newPlaybook as newTemplate } from '../../lib/db/playbooks';
 import type { Clause, Settings, Template } from '../../types';
+import { uid } from '../../lib/uid';
 
 export type Depth = 'Light-Touch' | 'Standard' | 'Detailed';
 export type Verbosity = 'Concise' | 'Standard' | 'Lengthy';
@@ -64,10 +65,6 @@ const DEPTH_GUIDANCE: Record<Depth, string> = {
   Standard: 'Standard: roughly 15-22 balanced legal and commercial points.',
   Detailed: 'Detailed: roughly 25-35 deep-dive points, only where genuinely relevant.',
 };
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
 
 export async function generateTemplate(options: GenerateOptions): Promise<Template> {
   const { contractType, depth, verbosity, context, settings, onStatus } = options;

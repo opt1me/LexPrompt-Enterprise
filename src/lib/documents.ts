@@ -2,6 +2,7 @@ import type { DocumentFile, DocumentRecord } from '../types';
 import type { PdfPageText } from './citations';
 import { debug } from './debug';
 import { pageSegments } from './pageSegments';
+import { uid } from './uid';
 
 /**
  * A page with almost no extractable text is a scan; we render it to an
@@ -52,10 +53,6 @@ export function loadPdfjs(): Promise<PdfjsModule> {
       });
   }
   return pdfjsPromise;
-}
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
 /** `File.prototype.arrayBuffer()` is standard in real browsers but is not
