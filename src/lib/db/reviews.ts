@@ -2,6 +2,7 @@ import { getDb } from './open';
 import { debug } from '../debug';
 import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
+import { migrateReviewRecord } from './reviewMigration';
 import type { Review } from '../../types';
 
 /** A review record as it actually sits in IndexedDB: the public `Review`
@@ -16,7 +17,12 @@ interface StoredReview extends Review {
 function stripSeq(record: StoredReview): Review {
   const { _seq, ...review } = record;
   void _seq;
-  return review;
+  // Every read path — `getReview`, `listReviews` — funnels through here, so
+  // a review written before sub-project B is upgraded exactly once, in one
+  // place, no matter which screen asked for it. Deliberately no document
+  // text: see `migrateReviewRecord`'s own note on why pages are derived at
+  // the screen instead.
+  return migrateReviewRecord(review);
 }
 
 /** All reviews for a matter, most recently started first; tiebreak on write

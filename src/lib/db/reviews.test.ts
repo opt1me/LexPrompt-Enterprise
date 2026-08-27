@@ -130,6 +130,37 @@ describe('review CRUD', () => {
     expect(txSpy).toHaveBeenCalledWith(STORES.reviews, 'readwrite');
     txSpy.mockRestore();
   });
+
+  it('returns a pre-B review with its citations upgraded and every finding unchecked', async () => {
+    const legacy = {
+      ...makeReview({ id: 'rev-legacy' }),
+      findings: {
+        'doc-1': {
+          'clause-1': { clauseId: 'clause-1', status: 'done', summary: 's', citations: ['a quote here'] },
+        },
+      },
+    };
+    const db = await getDb();
+    await db.put(STORES.reviews, legacy as never);
+
+    const read = await getReview('rev-legacy');
+    expect(read!.findings['doc-1']['clause-1'].citations)
+      .toEqual([{ quote: 'a quote here', documentId: 'doc-1' }]);
+    expect(read!.findings['doc-1']['clause-1'].verification).toEqual({ state: 'unchecked' });
+  });
+
+  it('migrates on listReviews too, not only on getReview', async () => {
+    const legacy = {
+      ...makeReview({ id: 'rev-legacy-2', matterId: 'matter-legacy' }),
+      findings: { 'doc-1': { 'clause-1': { clauseId: 'clause-1', status: 'done', citations: ['another quote'] } } },
+    };
+    const db = await getDb();
+    await db.put(STORES.reviews, legacy as never);
+
+    const [read] = await listReviews('matter-legacy');
+    expect(read.findings['doc-1']['clause-1'].citations)
+      .toEqual([{ quote: 'another quote', documentId: 'doc-1' }]);
+  });
 });
 
 describe('playbookSnapshot isolation', () => {
