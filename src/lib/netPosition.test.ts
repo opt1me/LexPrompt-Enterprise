@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   unconfirmedPosition, confirmPosition, amendPosition, resetPosition,
-  positionText, NetPositionError,
+  positionText, stepEffectText, NetPositionError,
 } from './netPosition';
 import type { TrailStep } from '../types';
 
@@ -81,5 +81,31 @@ describe('resetPosition', () => {
   it('drops a human amendment too — it described superseded synthesis', () => {
     const amended = amendPosition(unconfirmedPosition('m', trail), 'human', 'u1', 1);
     expect('amended' in resetPosition(amended)).toBe(false);
+  });
+});
+
+/**
+ * C1's second half. `extractCollectionClause` can hand back a step whose
+ * `effect` the model left blank, and a blank effect rendered as a blank line
+ * reads as "this document was considered and does nothing here" — an empty
+ * result presented as a checked one, which is this codebase's founding
+ * defect reproduced inside the derivation that exists to make a synthesis
+ * checkable. One place decides the wording so the modal and the two
+ * exporters cannot disagree about it.
+ */
+describe('stepEffectText', () => {
+  const step = (effect: string): TrailStep => ({ documentId: 'd1', kind: 'varies', effect, citations: [] });
+
+  it("returns the model's effect when there is one", () => {
+    expect(stepEffectText(step('Notice cut to 6 months.'))).toBe('Notice cut to 6 months.');
+  });
+
+  it('says plainly that no effect was given, rather than returning nothing', () => {
+    expect(stepEffectText(step(''))).toMatch(/no effect|not say/i);
+    expect(stepEffectText(step('')).trim()).not.toBe('');
+  });
+
+  it('treats a whitespace-only effect as no effect at all', () => {
+    expect(stepEffectText(step(' \n '))).toBe(stepEffectText(step('')));
   });
 });

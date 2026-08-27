@@ -141,3 +141,24 @@ describe('VariationTrailModal — busy disables the terminal card\'s actions', (
     expect((buttonNamed(container, AMEND_ONLY) as HTMLButtonElement).disabled).toBe(true);
   });
 });
+
+/**
+ * C1's second half, at the reader. A step whose effect the model left blank
+ * used to render as an empty `<p>` under a correct document name and date —
+ * "this document was considered and does nothing here", which is an empty
+ * result presented as a checked one, inside the very derivation that exists
+ * to make a synthesis checkable.
+ */
+describe('VariationTrailModal — a step with no effect says so', () => {
+  it('renders an explicit sentence instead of a blank line', () => {
+    const trail: TrailStep[] = [
+      { ...TRAIL[0] },
+      { ...TRAIL[1], effect: '' },
+    ];
+    const container = mount(
+      <VariationTrailModal {...baseProps()} netPosition={unconfirmedPosition('Notice is now 6 months.', trail)} />,
+    );
+    const text = container.textContent || '';
+    expect(text).toMatch(/no effect|not say/i);
+  });
+});

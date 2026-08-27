@@ -48,15 +48,28 @@ function members(overrides: { base?: DocumentFile | null; varies?: DocumentFile 
   ];
 }
 
+/**
+ * Numbers a mocked trail's entries 1..N, which is what the schema and the
+ * prompt now REQUIRE of a model: every entry says which DOCUMENT it
+ * describes, and the extractor refuses a trail whose entries do not, rather
+ * than zipping them onto the members by array position and hoping.
+ *
+ * Tests that exercise a badly numbered trail build their entries by hand
+ * instead — that is the whole point of those tests.
+ */
+function numbered<T extends object>(...steps: T[]): (T & { document: number })[] {
+  return steps.map((step, i) => ({ ...step, document: i + 1 }));
+}
+
 beforeEach(() => vi.clearAllMocks());
 
 describe('extractCollectionClause', () => {
   it('returns a trail step per contributing document, in reading order, each with its effect', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [
+      trail: numbered(
         { effect: 'The lease sets a 5-year rent review.', citations: [] },
         { effect: 'The deed makes rent review annual, capped at RPI.', citations: [] },
-      ],
+      ),
       net_position: 'Rent is now reviewed annually, capped at RPI.',
     });
 
@@ -74,7 +87,7 @@ describe('extractCollectionClause', () => {
 
   it('passes the JSON schema through to the model when the model supports structured output', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [{ effect: 'a', citations: [] }, { effect: 'b', citations: [] }],
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
       net_position: 'ok',
     });
     await extractCollectionClause(members(), clause, template, settings);
@@ -83,13 +96,13 @@ describe('extractCollectionClause', () => {
 
   it("attributes a citation naming document 2 to document 2's real id", async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [
+      trail: numbered(
         { effect: 'Base sets a 5-year review.', citations: [] },
         {
           effect: 'Amendment makes it annual.',
           citations: [{ quote: 'Rent review is now annual, capped at RPI.', document: 2 }],
         },
-      ],
+      ),
       net_position: 'Now annual, capped at RPI.',
     });
 
@@ -102,7 +115,7 @@ describe('extractCollectionClause', () => {
 
   it('drops a citation naming a document that was not in the call, and returns the finding with the rest', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [
+      trail: numbered(
         {
           effect: 'Base effect.',
           citations: [{ quote: 'The rent is reviewed every five years to open market value.', document: 1 }],
@@ -111,7 +124,7 @@ describe('extractCollectionClause', () => {
           effect: 'Amendment effect.',
           citations: [{ quote: 'Fabricated quote from nowhere.', document: 7 }],
         },
-      ],
+      ),
       net_position: 'Now annual.',
     });
 
@@ -124,11 +137,11 @@ describe('extractCollectionClause', () => {
 
   it('recovers a citation whose document number is unreadable by matching its quote against each document\'s text', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [
+      trail: numbered(
         { effect: 'Base effect.', citations: [] },
         // A bare string citation carries no document number at all.
         { effect: 'Amendment effect.', citations: ['Rent review is now annual, capped at RPI.'] },
-      ],
+      ),
       net_position: 'Now annual.',
     });
 
@@ -141,10 +154,10 @@ describe('extractCollectionClause', () => {
 
   it('drops an unreadable-number citation when quote-match recovery also fails', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [
+      trail: numbered(
         { effect: 'Base effect.', citations: [] },
         { effect: 'Amendment effect.', citations: ['Nothing like this appears anywhere in either document.'] },
-      ],
+      ),
       net_position: 'Now annual.',
     });
 
@@ -161,13 +174,13 @@ describe('extractCollectionClause', () => {
       ),
     });
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [
+      trail: numbered(
         {
           effect: 'Base effect.',
           citations: [{ quote: 'The rent is reviewed every five years to open market value.', document: 1 }],
         },
         { effect: 'Amendment effect.', citations: [] },
-      ],
+      ),
       net_position: 'Still on 5-year review.',
     });
 
@@ -180,7 +193,7 @@ describe('extractCollectionClause', () => {
 
   it('starts the net position unconfirmed and the finding unchecked, with no notes', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [{ effect: 'a', citations: [] }, { effect: 'b', citations: [] }],
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
       net_position: 'Now annual.',
     });
 
@@ -212,7 +225,7 @@ describe('extractCollectionClause', () => {
 
   it('reports an empty net position as an error finding, not done', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [{ effect: 'a', citations: [] }, { effect: 'b', citations: [] }],
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
       net_position: '',
     });
 
@@ -234,10 +247,10 @@ describe('extractCollectionClause', () => {
 
   it('produces a net position explicitly marked as derived from an incomplete set when an amendment is missing', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [
+      trail: numbered(
         { effect: 'Base effect only.', citations: [] },
         { effect: 'This document is unavailable.', citations: [] },
-      ],
+      ),
       net_position: 'Based on the base document alone.',
     });
 
@@ -282,7 +295,7 @@ describe('extractCollectionClause', () => {
 describe('extractCollectionClause: scan/image fallback', () => {
   it('sends page images for a scanned member when the model supports images', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [{ effect: 'Base effect.', citations: [] }, { effect: 'Scan effect.', citations: [] }],
+      trail: numbered({ effect: 'Base effect.', citations: [] }, { effect: 'Scan effect.', citations: [] }),
       net_position: 'ok',
     });
     const scan = docFile('dov', 'DoV.pdf', '', { pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
@@ -295,7 +308,7 @@ describe('extractCollectionClause: scan/image fallback', () => {
 
   it('sends no images when every member has a text layer', async () => {
     vi.mocked(chatJson).mockResolvedValue({
-      trail: [{ effect: 'a', citations: [] }, { effect: 'b', citations: [] }],
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
       net_position: 'ok',
     });
     await extractCollectionClause(members(), clause, template, settings);
@@ -358,5 +371,162 @@ describe('extractCollectionClause: scan/image fallback', () => {
     expect(finding.status).toBe('error');
     expect(finding.error).toContain('Could not read DoV.pdf');
     expect(chatJson).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * C1. The trail used to be zipped onto the collection's ordered members by
+ * ARRAY POSITION, guarded only against a completely empty array. A model
+ * that judged one document silent and skipped it therefore shifted every
+ * later document's effect onto the document above it — while the card kept
+ * showing the right name and date, which is the most convincing possible
+ * presentation of a false attribution — and left the last document rendering
+ * as "considered, does nothing".
+ *
+ * The fix is the treatment `RawCitation` already had one type above: each
+ * step names the DOCUMENT it describes, that claim is resolved, and anything
+ * that cannot be aligned fails the clause loudly rather than reaching `done`.
+ * An effect attributed to the wrong document is worse than no derivation.
+ */
+describe('extractCollectionClause: the trail is aligned by each step\'s own document, never by array position', () => {
+  it('fails the clause when the model returns fewer steps than the collection has documents', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      // The lease's effect, then the LICENCE's effect — the deed was judged
+      // silent and skipped. Zipped by index, the licence's effect lands on
+      // the deed's card.
+      trail: [
+        { document: 1, effect: 'Break on 12 months notice, 24 June 2027.', citations: [] },
+        { document: 3, effect: 'Moves the break date to 24 June 2030.', citations: [] },
+      ],
+      net_position: 'The break date is 24 June 2030.',
+    });
+
+    const three: CollectionMember<DocumentFile>[] = [
+      ...members(),
+      {
+        document: docFile('lic', 'Licence.pdf', '[Page 1]\nThe break date is moved to 24 June 2030 by this licence to alter.\n\n'),
+        documentId: 'lic',
+        kind: 'varies',
+        position: 3,
+      },
+    ];
+
+    const finding = await extractCollectionClause(three, clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/2 derivation step/i);
+    expect(finding.error).toMatch(/3 document/i);
+    expect(finding.netPosition).toBeUndefined();
+  });
+
+  it('fails the clause when the model returns more steps than the collection has documents', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 1, effect: 'a', citations: [] },
+        { document: 2, effect: 'b', citations: [] },
+        { document: 3, effect: 'c', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/derivation/i);
+    expect(finding.netPosition).toBeUndefined();
+  });
+
+  it('fails the clause when a step does not say which document it describes', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 1, effect: 'Base effect.', citations: [] },
+        { effect: 'Amendment effect.', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/step 2/i);
+    expect(finding.error).toMatch(/which document/i);
+    expect(finding.netPosition).toBeUndefined();
+  });
+
+  it('fails the clause when a step names a document that is not in the collection', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 1, effect: 'Base effect.', citations: [] },
+        { document: 7, effect: 'Amendment effect.', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/DOCUMENT 7/);
+    expect(finding.netPosition).toBeUndefined();
+  });
+
+  it('fails the clause when two steps describe the same document', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 1, effect: 'Base effect.', citations: [] },
+        { document: 1, effect: 'Base effect again.', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toMatch(/DOCUMENT 1/);
+    expect(finding.netPosition).toBeUndefined();
+  });
+
+  it("orders the trail by the collection's reading order using each step's own document number", async () => {
+    // Correctly attributed, returned out of order. The claim is explicit, so
+    // this is resolved rather than refused — but it is resolved by the
+    // CLAIM, which is what stops an effect landing on the wrong document.
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 2, effect: 'The deed makes rent review annual.', citations: [] },
+        { document: 1, effect: 'The lease sets a 5-year review.', citations: [] },
+      ],
+      net_position: 'Now annual.',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    expect(finding.status).toBe('done');
+    expect(finding.netPosition!.trail[0]).toMatchObject({
+      documentId: 'lease', effect: 'The lease sets a 5-year review.',
+    });
+    expect(finding.netPosition!.trail[1]).toMatchObject({
+      documentId: 'dov', effect: 'The deed makes rent review annual.',
+    });
+  });
+
+  it('still describes an unavailable member, which the model must number like any other', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 1, effect: 'Base effect only.', citations: [] },
+        { document: 2, effect: '', citations: [] },
+      ],
+      net_position: 'Based on the base document alone.',
+    });
+
+    const finding = await extractCollectionClause(members({ varies: null }), clause, template, settings);
+
+    expect(finding.status).toBe('done');
+    expect(finding.netPosition!.trail[1].documentId).toBe('dov');
+    expect(finding.netPosition!.trail[1].effect).toMatch(/unavailable/i);
+  });
+
+  it('names the schema field the model must number its steps with', () => {
+    const step = COLLECTION_CLAUSE_SCHEMA.properties.trail.items;
+    expect(step.properties.document).toBeDefined();
+    expect(step.required).toContain('document');
   });
 });

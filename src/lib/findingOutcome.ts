@@ -1,5 +1,5 @@
 import type { Finding, Review } from '../types';
-import { positionText } from './netPosition';
+import { positionText, stepEffectText } from './netPosition';
 
 /**
  * The one place that decides what text represents a clause's outcome when
@@ -180,7 +180,11 @@ export function trailLines(
     // "this document is gone" rather than a wrong name, and the id at
     // least distinguishes one missing document from another.
     const label = documentNames[step.documentId] ?? step.documentId;
-    const base = `${i + 1}. ${kind} (${label}): ${step.effect}`;
+    // `stepEffectText`, never `step.effect` raw: a blank effect used to
+    // export as "2. Varies (Deed of Variation.pdf): " with nothing after the
+    // colon, which reads as "considered, does nothing". Shared with the
+    // trail modal so the screen and the exports say the same thing.
+    const base = `${i + 1}. ${kind} (${label}): ${stepEffectText(step)}`;
     return quotes ? `${base} — ${quotes}` : base;
   });
 }

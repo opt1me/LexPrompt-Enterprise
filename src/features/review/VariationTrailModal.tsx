@@ -3,6 +3,7 @@ import { FileWarning } from 'lucide-react';
 import type { NetPosition, TrailStep } from '../../types';
 import { Modal } from '../../components/Modal';
 import { NetPositionPanel } from './NetPositionPanel';
+import { stepEffectText } from '../../lib/netPosition';
 
 /** What the trail needs to know about a contributing document, keyed by its
  *  id — nothing else in this app needs a lookup shaped quite like this, so
@@ -34,6 +35,7 @@ function formatDate(at: number | undefined): string | null {
 
 function TrailStepCard({ step, info, index }: { step: TrailStep; info: TrailDocumentInfo | undefined; index: number }) {
   const date = formatDate(info?.documentDate);
+  const hasEffect = step.effect.trim() !== '';
   return (
     <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 space-y-1.5">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -51,7 +53,15 @@ function TrailStepCard({ step, info, index }: { step: TrailStep; info: TrailDocu
         )}
       </div>
 
-      <p className="text-xs text-gray-300 leading-relaxed">{step.effect}</p>
+      {/* Never `{step.effect}` raw. A blank effect renders as an empty line
+          under a correct document name and date, which reads as "considered,
+          does nothing" — an empty result presented as a checked one, inside
+          the derivation that exists to make the position checkable.
+          `stepEffectText` states the absence instead, and is shared with
+          `trailLines` so the exports say the same thing. */}
+      <p className={`text-xs leading-relaxed ${hasEffect ? 'text-gray-300' : 'text-yellow-300'}`}>
+        {stepEffectText(step)}
+      </p>
 
       {step.citations.length > 0 && (
         <ul className="space-y-1">

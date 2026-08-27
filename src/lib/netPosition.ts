@@ -82,3 +82,23 @@ export function resetPosition(current: NetPosition): NetPosition {
 export function positionText(position: NetPosition): string {
   return position.amended ?? position.proposed;
 }
+
+/**
+ * What one trail step's effect reads as — the only place that decides,
+ * shared by the trail modal and by `trailLines` (and so by both exporters).
+ *
+ * A model can return a step with a blank `effect`, and a blank effect
+ * rendered as a blank line reads as "this document was considered and does
+ * nothing to this clause". That is an empty result presented as a checked
+ * one — this codebase's founding defect — reproduced inside the derivation
+ * that exists to make a net position checkable, which is the worst possible
+ * place for it. So the absence is stated, not shown.
+ *
+ * Here rather than in `findingOutcome.ts` because the screen needs it too,
+ * and `findingOutcome.ts` is deliberately export-side wording only.
+ */
+export function stepEffectText(step: TrailStep): string {
+  const effect = step.effect.trim();
+  if (effect) return effect;
+  return 'The model did not say what this document does to this clause.';
+}

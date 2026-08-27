@@ -103,6 +103,19 @@ describe('buildCollectionPrompt', () => {
     expect(netPositionIndex).toBeGreaterThan(effectIndex);
   });
 
+  // C1: the extractor now refuses a trail whose entries do not each name the
+  // document they describe, so the prompt has to ask for that number — a
+  // requirement enforced on the response but never stated in the request
+  // would just fail every clause.
+  it('requires one entry per document, each naming its own DOCUMENT number', () => {
+    const { prompt } = buildCollectionPrompt(twoMemberCollection(), clause, template, 100_000);
+    expect(prompt).toContain('EXACTLY 2 trail entries');
+    expect(prompt).toMatch(/- document: the DOCUMENT NUMBER/);
+    // And it must say not to skip a document it judged silent — the exact
+    // model behaviour that used to shift every later effect up one document.
+    expect(prompt).toMatch(/never skip a document/i);
+  });
+
   it('describes a member with document: null as unavailable, not silently omitted', () => {
     const members: CollectionMember[] = [
       member({ documentId: 'lease', kind: 'original', position: 1, document: doc('lease', 'Lease.pdf', BASE_TEXT) }),

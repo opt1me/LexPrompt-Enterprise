@@ -19,6 +19,14 @@ interface RawCitation {
 
 interface RawTrailStep {
   effect?: string;
+  /** 1-based, matching the same "DOCUMENT N" labels a citation names — the
+   *  step's own claim about which document it describes. Resolved, never
+   *  inherited from where the step happens to sit in the array, for exactly
+   *  the reason `RawCitation.document` exists: a model can skip a document
+   *  it judged silent, or return the steps in a different order, and a trail
+   *  zipped by array position then attributes one document's legal effect to
+   *  another while the card still shows the right name and date. */
+  document?: unknown;
   citations?: unknown;
 }
 
@@ -35,6 +43,7 @@ export const COLLECTION_CLAUSE_SCHEMA = {
       items: {
         type: 'object',
         properties: {
+          document: { type: 'integer', description: 'The DOCUMENT NUMBER this entry describes.' },
           effect: { type: 'string', description: 'What this document does to this clause, or that it is silent on it.' },
           citations: {
             type: 'array',
@@ -52,10 +61,10 @@ export const COLLECTION_CLAUSE_SCHEMA = {
             },
           },
         },
-        required: ['effect', 'citations'],
+        required: ['document', 'effect', 'citations'],
         additionalProperties: false,
       },
-      description: 'One entry per document above, in the same reading order, including any marked UNAVAILABLE.',
+      description: 'Exactly one entry per document above, including any marked UNAVAILABLE, each naming its own DOCUMENT number.',
     },
     net_position: {
       type: 'string',
@@ -73,6 +82,24 @@ interface AssessedMember {
   member: CollectionMember<DocumentFile>;
   document: DocumentFile;
   readability: DocumentReadability;
+}
+
+/**
+ * The 1-based DOCUMENT number a raw response entry claims for itself — a
+ * citation's or a trail step's — or `undefined` when it names none or names
+ * something unreadable.
+ *
+ * Shared by both resolvers rather than parsed twice, so the citation path
+ * and the trail path cannot disagree about what counts as a claim. They are
+ * the same claim, against the same `DOCUMENT N` labels `buildCollectionPrompt`
+ * writes, and this project's most repeated defect is two copies of one rule
+ * drifting apart.
+ */
+function claimedDocumentNumber(entry: unknown): number | undefined {
+  const field = typeof entry === 'object' && entry !== null
+    ? (entry as { document?: unknown }).document
+    : undefined;
+  return typeof field === 'number' && Number.isFinite(field) ? field : undefined;
 }
 
 /**
@@ -98,12 +125,7 @@ function resolveCitationDocument(
   entry: unknown,
   present: AssessedMember[],
 ): DocumentFile | undefined {
-  const documentField = typeof entry === 'object' && entry !== null
-    ? (entry as RawCitation).document
-    : undefined;
-  const number = typeof documentField === 'number' && Number.isFinite(documentField)
-    ? documentField
-    : undefined;
+  const number = claimedDocumentNumber(entry);
 
   if (number !== undefined) {
     return present.find(p => p.member.position === number)?.document;
@@ -135,6 +157,77 @@ function resolveStepCitations(rawCitations: unknown, present: AssessedMember[]):
     out.push(...repairCitations([entry], doc.id, doc.text));
   }
   return out;
+}
+
+/** Why a raw trail could not be aligned to the collection's documents, in
+ *  words a reviewer can act on. Never a partial trail — see `alignTrail`. */
+interface TrailMisalignment { error: string }
+
+/**
+ * Matches every raw trail entry to the member it says it describes, and
+ * returns them in the collection's reading order.
+ *
+ * This exists because the trail used to be zipped onto `ordered` by ARRAY
+ * POSITION, with only an "is it empty" guard in front of it. A model that
+ * judged one document silent and skipped it — an entirely ordinary shape for
+ * a model asked what each document does to a clause — therefore shifted
+ * every later document's effect onto the document above it, while the trail
+ * card kept rendering the right name and date from the member. That is the
+ * most convincing possible presentation of a false attribution, on a `done`
+ * finding, inside the derivation that exists to make a synthesis checkable.
+ *
+ * So a step is resolved by its own claim, exactly as a citation is
+ * (`resolveCitationDocument`), and every way that can fail is an error
+ * finding rather than a repaired guess:
+ *
+ *  - the trail's length does not match the collection's;
+ *  - a step names no document, so nothing can be checked;
+ *  - a step names a document that is not in this collection;
+ *  - two steps name the same document (which necessarily leaves another
+ *    with none).
+ *
+ * A trail returned in a different order but correctly numbered is NOT a
+ * failure: the claim is explicit and unambiguous, so it is honoured and
+ * re-ordered here. Guessing is what this function refuses; reading is what
+ * it does.
+ */
+function alignTrail(
+  rawTrail: unknown[],
+  ordered: CollectionMember<DocumentFile>[],
+): { steps: RawTrailStep[] } | TrailMisalignment {
+  if (rawTrail.length !== ordered.length) {
+    return {
+      error: `The model returned ${rawTrail.length} derivation step(s) for the ` +
+        `${ordered.length} document(s) in this collection, so its reasoning cannot be matched to them.`,
+    };
+  }
+
+  const byPosition = new Map<number, RawTrailStep>();
+  for (let i = 0; i < rawTrail.length; i++) {
+    const step = (rawTrail[i] ?? {}) as RawTrailStep;
+    const number = claimedDocumentNumber(step);
+    if (number === undefined) {
+      return { error: `The model's derivation step ${i + 1} does not say which document it describes.` };
+    }
+    const member = ordered.find(m => m.position === number);
+    if (!member) {
+      return {
+        error: `The model's derivation step ${i + 1} describes DOCUMENT ${number}, which is not one ` +
+          'of the documents in this collection.',
+      };
+    }
+    if (byPosition.has(number)) {
+      return {
+        error: `Two of the model's derivation steps both describe DOCUMENT ${number}, which leaves ` +
+          'another document with no reasoning at all.',
+      };
+    }
+    byPosition.set(number, step);
+  }
+
+  // Length matched, every number is in range, and no number repeats — so
+  // every member has exactly one step and this cannot produce a hole.
+  return { steps: ordered.map(m => byPosition.get(m.position)!) };
 }
 
 /**
@@ -255,8 +348,22 @@ export async function extractCollectionClause(
       };
     }
 
+    // Aligned by each step's own DOCUMENT number, never by array position:
+    // an effect attributed to the wrong document is worse than no
+    // derivation at all, so anything that cannot be matched fails the
+    // clause here rather than reaching `done` looking checkable.
+    const aligned = alignTrail(raw.trail, ordered);
+    if ('error' in aligned) {
+      return {
+        ...base,
+        error: `${aligned.error} An effect attributed to the wrong document reads as that ` +
+          "document's own legal position, so this clause is reported as an error rather than a " +
+          'finding. Re-run it, or choose a model that supports structured output.',
+      };
+    }
+
     const trail: TrailStep[] = ordered.map((member, index) => {
-      const rawStep = raw.trail![index] as RawTrailStep | undefined;
+      const rawStep = aligned.steps[index];
       const modelEffect = typeof rawStep?.effect === 'string' ? rawStep.effect.trim() : '';
       const effect = modelEffect || (member.document
         ? ''

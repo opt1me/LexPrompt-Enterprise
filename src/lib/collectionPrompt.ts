@@ -151,9 +151,14 @@ export function buildCollectionPrompt<
 CLAUSE TO REVIEW: ${clause.title}
 INSTRUCTION: ${clause.prompt}${riskBlock}${truncationSummary}
 
-Return, in reading order (base first, then each amendment as it takes effect):
-- effect: for EACH document above — including one marked UNAVAILABLE, which must be named as such
-  rather than skipped — what it does to this clause, or that it is silent on it.
+Return EXACTLY ${ordered.length} trail entr${ordered.length === 1 ? 'y' : 'ies'} — one per document above,
+including any marked UNAVAILABLE — in reading order (base first, then each amendment as it takes
+effect). Each entry has:
+- document: the DOCUMENT NUMBER above that this entry describes. Required on every entry: an entry
+  that does not name its document cannot be matched to one, and an effect read against the wrong
+  document is worse than no answer, so the whole clause is rejected rather than guessed at.
+- effect: what that document does to this clause, or that it is silent on it. Never skip a document
+  because you judged it silent — say that it is silent, in its own entry.
 - citations: exact verbatim substrings from that document's own text supporting its effect.
 - net_position: the proposed conclusion — what the documents, read together and in this order, say
   NOW about this clause. It must follow from the effects above, not stand alone as a bare answer.`;

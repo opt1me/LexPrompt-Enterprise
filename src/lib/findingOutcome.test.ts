@@ -254,6 +254,19 @@ describe('trailLines — the derivation behind a net position', () => {
     expect(lines[1]).toMatch(/varies/i);
   });
 
+  // C1: a step whose effect the model left blank used to export as
+  // `2. Varies (Deed of Variation.pdf): ` — nothing after the colon, which
+  // reads as "considered, does nothing". Shares its wording with the trail
+  // modal via `stepEffectText`, so the screen and the exports cannot
+  // disagree about what a blank effect means.
+  it('says a step has no effect rather than emitting nothing after the colon', () => {
+    const f = collectionFinding();
+    f.netPosition!.trail[1] = { ...f.netPosition!.trail[1], effect: '' };
+    const lines = trailLines(f);
+    expect(lines[1]).not.toMatch(/:\s*$/);
+    expect(lines[1]).toMatch(/no effect|not say/i);
+  });
+
   it('returns nothing for a finding with no net position', () => {
     const f: Finding = { clauseId: 'c', status: 'done', summary: 's', citations: [], verification: { state: 'unchecked' }, notes: [] };
     expect(trailLines(f)).toEqual([]);
