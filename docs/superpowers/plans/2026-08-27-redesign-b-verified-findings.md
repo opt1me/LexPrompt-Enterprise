@@ -767,7 +767,18 @@ This module decides what evidence survives, so a green suite is not evidence. Ma
 1. Change `if (!quote) continue;` to `if (quote === undefined) continue;` — should still pass (equivalent); if a test fails, the test is over-specified, fix the test.
 2. Change `asString(source.documentId) ?? documentId` to `documentId` — "passes through citations that are already the new shape" must fail.
 3. Change `Number.isFinite(source.page)` to `true` — "discards a non-numeric or non-finite stored page" must fail.
-4. Delete the `if (page !== undefined)` guard so `page` is always assigned — "omits page when the quote cannot be located" must fail (it would then be `page: undefined` rather than absent, and `toEqual` distinguishes them).
+4. Delete the `if (page !== undefined)` guard so `page` is always assigned — the resulting citation carries `page: undefined` rather than no `page` key at all.
+
+   **Vitest's `toEqual` does NOT distinguish those two**: it treats a key whose value is `undefined` as equivalent to an absent key, so every `toEqual` assertion in this suite passes under that mutation. This was found by mutation-testing this exact step, and it is the reason the step exists. Add a test that asserts the key's absence directly:
+
+   ```ts
+   it('leaves the page key absent, not present-and-undefined', () => {
+     const out = repairCitations(['Force majeure suspends performance.'], 'doc-1', PAGED);
+     expect('page' in out[0]).toBe(false);
+   });
+   ```
+
+   The distinction matters beyond tidiness: `structuredClone` — which is how IndexedDB writes every record — preserves a `page: undefined` key, so an unguarded assignment would persist a `page` property on every citation that has no page, and any later `'page' in citation` check would then be wrong about every one of them.
 
 Record in the task report which mutations were caught and which needed a new test.
 
