@@ -10,6 +10,11 @@ export interface TabularReviewProps {
   onRetryCell: (docId: string, clauseId: string) => void;
   /** Switches back to the card view (`ResultsView`). Optional so the grid can be used standalone. */
   onOpenCards?: () => void;
+  /** Mirrors `FindingCard`'s `interrupted` prop (Important 1): true when this
+   *  run is not currently live, so a `pending`/`running` cell means "stalled
+   *  after an abandoned run," not "still in flight" — and gets the same
+   *  Retry a done/error/cancelled cell already has. */
+  interrupted?: boolean;
 }
 
 interface SelectedCell {
@@ -35,7 +40,7 @@ const RISK_CELL_CLASSES: Record<RiskLevel, string> = {
  * results; the only writes it triggers are `onRetryCell`, which is the same
  * callback the card view's Retry button calls.
  */
-export function TabularReview({ run, documents, onRetryCell, onOpenCards }: TabularReviewProps) {
+export function TabularReview({ run, documents, onRetryCell, onOpenCards, interrupted = false }: TabularReviewProps) {
   const [wrapText, setWrapText] = useState(false);
   const [selected, setSelected] = useState<SelectedCell | null>(null);
 
@@ -135,6 +140,7 @@ export function TabularReview({ run, documents, onRetryCell, onOpenCards }: Tabu
                       isSelected={selected?.docId === docId && selected?.clauseId === clause.id}
                       onOpen={() => setSelected({ docId, clauseId: clause.id })}
                       onRetry={() => onRetryCell(docId, clause.id)}
+                      interrupted={interrupted}
                     />
                   ))}
                 </tr>
@@ -166,11 +172,13 @@ interface CellProps {
   isSelected: boolean;
   onOpen: () => void;
   onRetry: () => void;
+  /** Mirrors `FindingCard`'s `interrupted` — see `TabularReviewProps`. */
+  interrupted?: boolean;
 }
 
 /** One grid cell. Status mirrors `FindingCard`: pending dims, running pulses,
  *  error turns red with an inline retry, done shows the (risk-tinted) summary. */
-function Cell({ finding, wrapText, isSelected, onOpen, onRetry }: CellProps) {
+function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = false }: CellProps) {
   const status = finding?.status ?? 'pending';
   const riskClass = finding?.riskLevel ? RISK_CELL_CLASSES[finding.riskLevel] : '';
   const selectedRing = isSelected ? 'shadow-[inset_0_0_0_2px_rgba(139,92,246,0.6)]' : '';
@@ -179,9 +187,20 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry }: CellProps) {
     return (
       <td
         onClick={onOpen}
-        className={`p-3 border-b border-r border-white/10 text-xs cursor-pointer opacity-40 ${selectedRing}`}
+        className={`p-3 border-b border-r border-white/10 text-xs cursor-pointer ${interrupted ? '' : 'opacity-40'} ${selectedRing}`}
       >
-        <span className="text-gray-600 italic">Pending</span>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-gray-600 italic">Pending</span>
+          {interrupted && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRetry(); }}
+              className="p-1 hover:bg-white/10 rounded text-gray-400 hover:text-white shrink-0"
+              title="Retry"
+            >
+              <RotateCcw className="w-3 h-3" />
+            </button>
+          )}
+        </div>
       </td>
     );
   }
@@ -189,9 +208,20 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry }: CellProps) {
   if (status === 'running') {
     return (
       <td onClick={onOpen} className={`p-3 border-b border-r border-white/10 text-xs cursor-pointer ${selectedRing}`}>
-        <div className="flex items-center gap-2 text-gray-500">
-          <Loader className="w-3 h-3 animate-spin text-violet-400" />
-          <div className="h-2 bg-white/10 rounded w-16 animate-pulse" />
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 text-gray-500">
+            <Loader className="w-3 h-3 animate-spin text-violet-400" />
+            <div className="h-2 bg-white/10 rounded w-16 animate-pulse" />
+          </div>
+          {interrupted && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onRetry(); }}
+              className="p-1 hover:bg-white/10 rounded text-gray-400 hover:text-white shrink-0"
+              title="Retry"
+            >
+              <RotateCcw className="w-3 h-3" />
+            </button>
+          )}
         </div>
       </td>
     );

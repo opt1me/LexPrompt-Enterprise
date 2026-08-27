@@ -121,6 +121,23 @@ vi.mock('./features/review/RunPanel', () => ({
   RunProgressBar: () => null,
   RunCancelledBanner: () => null,
   RunEmptyFindingsBanner: () => null,
+  RunInterruptedBanner: () => null,
+}));
+
+// Important 3 (fix wave): running a playbook from the Library now opens a
+// matter picker before it ever reaches RunPanel. That flow's own mechanics
+// have dedicated coverage elsewhere; here it would only add steps to a file
+// about auth-error wiring specifically, so it's stubbed to auto-pick a
+// fixed matter id the instant it opens — mirroring how RunPanel above is
+// stubbed to auto-run the instant IT mounts.
+vi.mock('./features/matters/MatterPickerModal', () => ({
+  MatterPickerModal: ({ isOpen, onPick }: { isOpen: boolean; onPick: (matterId: string) => void }) => {
+    React.useEffect(() => {
+      if (isOpen) onPick('m-picked');
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [isOpen]);
+    return null;
+  },
 }));
 
 import App from './App';

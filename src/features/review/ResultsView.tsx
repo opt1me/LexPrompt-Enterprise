@@ -33,6 +33,11 @@ export interface ResultsViewProps {
    *  `onError` so the caller can send the user to Settings rather than
    *  showing the rejection as if it were a normal failure (Important 4). */
   onAuthError?: () => void;
+  /** Mirrors `FindingCard`'s `interrupted` prop (Important 1): true when this
+   *  run is not currently live (reopened after an abandoned run), so
+   *  pending/running cards get a Retry action instead of looking like work
+   *  still in flight. */
+  interrupted?: boolean;
 }
 
 type Tab = 'findings' | 'chat';
@@ -48,7 +53,7 @@ type Tab = 'findings' | 'chat';
  * Findings holds the cards plus Draft Email / Export DOCX actions, and
  * Assistant is the chat panel scoped to the active document.
  */
-export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError }: ResultsViewProps) {
+export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false }: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
   const [tab, setTab] = useState<Tab>('findings');
@@ -213,6 +218,7 @@ export function ResultsView({ run, documents, settings, onRetryCell, onOpenTabul
                 onRetry={(clauseId) => onRetryCell(activeDocId, clauseId)}
                 onSuggestFix={handleSuggestFix}
                 suggestFixLoading={revisionLoadingClauseId === clause.id}
+                interrupted={interrupted}
               />
             ))}
           </div>

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Upload, X, Play, FileWarning, CircleSlash, TriangleAlert } from 'lucide-react';
+import { Upload, X, Play, FileWarning, CircleSlash, TriangleAlert, AlertOctagon } from 'lucide-react';
 import type { DocumentFile, ReviewRun, Template } from '../../types';
 import { parseFiles } from '../../lib/documents';
 import { Button } from '../../components/Button';
@@ -173,6 +173,30 @@ export function RunCancelledBanner({ run }: { run: ReviewRun }) {
  * when the user switches documents (unlike a per-document header count
  * would).
  */
+/**
+ * Shown when a review is reopened neither completed nor cancelled, and is
+ * not the live run this session started (Important 1). Before this, such a
+ * review rendered with no banner at all — `isRunning` was false, so nothing
+ * said anything was wrong — while its `pending`/`running` cells kept
+ * painting an animated spinner and skeleton indistinguishable from work
+ * genuinely in flight, with no way to finish it (see `FindingCard`'s
+ * `interrupted` prop, wired up alongside this banner in App.tsx). This says
+ * plainly what happened and that Retry (on every stalled cell) is how to
+ * pick it back up.
+ */
+export function RunInterruptedBanner({ run }: { run: ReviewRun }) {
+  const { done, total } = runProgress(run);
+  return (
+    <div className="shrink-0 border-b border-yellow-500/20 bg-yellow-500/5 px-6 py-3 flex items-center gap-3 text-sm text-yellow-300">
+      <AlertOctagon className="w-4 h-4 shrink-0" />
+      <span>
+        This review was interrupted before it finished — {done} of {total} clauses were reviewed. It will not
+        resume on its own; use Retry on any stalled clause below to continue.
+      </span>
+    </div>
+  );
+}
+
 export function RunEmptyFindingsBanner({ run }: { run: ReviewRun }) {
   const noContent = countNoContent(run);
   const { total } = runProgress(run);

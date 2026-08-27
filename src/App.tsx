@@ -12,29 +12,31 @@ import {
 import { listDocuments, getDocument, addDocument, deleteDocument } from './lib/db/documents';
 import { getDocumentBlob } from './lib/db/blobs';
 import {
-  listReviews, getReview, saveReview, createDebouncedReviewSaver,
+  listReviews, getReview, saveReview, createDebouncedReviewSaver, type DebouncedReviewSaver,
 } from './lib/db/reviews';
 import { getProfile } from './lib/db/profile';
 import { migrateIfNeeded } from './lib/db/migrate';
-import { DbBlockedError } from './lib/db/open';
+import { describeLoadError } from './lib/loadError';
 import { useRoute, type Route } from './lib/router';
 import { generateTemplate } from './features/templates/generateTemplate';
 import { listModels, isAuthError } from './lib/openrouter';
 import { useToast, Toast } from './components/Toast';
+import { LoadErrorPanel } from './components/LoadErrorPanel';
 import { SettingsPanel } from './features/settings/SettingsPanel';
 import { MattersList, type MattersListItem, type CreateMatterParams } from './features/matters/MattersList';
 import { MatterHome } from './features/matters/MatterHome';
+import { MatterPickerModal } from './features/matters/MatterPickerModal';
 import { TemplateLibrary } from './features/templates/TemplateLibrary';
 import { TemplateEditor } from './features/templates/TemplateEditor';
 import { CreateTemplateDialog, type CreateTemplateParams } from './features/templates/CreateTemplateDialog';
 import { MegaPromptModal } from './features/templates/MegaPromptModal';
-import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner } from './features/review/RunPanel';
+import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, RunInterruptedBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
 import { parseFiles, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
 
-type View = 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter';
+type View = 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter' | 'not-found';
 
 /** Builds the persisted `Review` shape from an in-session `ReviewRun`, for
  *  a run scoped to a matter (`matterId` — see `activeMatterId`). Shared by
@@ -57,26 +59,6 @@ function reviewFromRun(run: ReviewRun, matterId: string, modelId: string, userId
     cancelledAt: run.cancelledAt,
     createdByUserId: userId,
   };
-}
-
-/** A dedicated load-error panel, rendered INSTEAD OF the content it
- *  replaces — never alongside it, never falling back to an empty list. One
- *  shared component for the matters list, the playbook library, a single
- *  matter, and its documents/reviews, so the pattern can't drift between
- *  those five call sites (Critical fix in Task 4; the pattern is repeated
- *  and folded here rather than copied a fifth time). */
-function LoadErrorPanel({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="p-8 max-w-md mx-auto text-center space-y-4">
-      <p className="text-red-400">{message}</p>
-      <button
-        onClick={onRetry}
-        className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
-      >
-        Retry
-      </button>
-    </div>
-  );
 }
 
 const AUTH_ERROR_MESSAGE = 'Your OpenRouter API key was rejected. Update it in Settings and try again.';
@@ -121,7 +103,14 @@ type MigrationState =
  * v1 components a live run uses, just fed hydrated-from-IndexedDB data
  * instead of an in-session run. `playbook` (a single-playbook deep link,
  * Task 12) maps to `editor` — see `playbookRouteId`'s effect below for how
- * a cold load of that URL hydrates `activeTemplate` from storage. */
+ * a cold load of that URL hydrates `activeTemplate` from storage.
+ * `not-found` maps to its own `not-found` view (Minor fix): this used to
+ * fall into the `default` case below and silently render the Matters list
+ * for any unrecognised path, contradicting `router.ts`'s own doc comment
+ * that an unparseable/unknown path yields `not-found` "rather than a silent
+ * fallback to the home route." `default` stays only as a defensive
+ * fallback — `Route`'s union already covers every case explicitly above
+ * it. */
 function viewForRoute(route: Route): View {
   switch (route.name) {
     case 'matters': return 'matters';
@@ -130,6 +119,7 @@ function viewForRoute(route: Route): View {
     case 'playbooks': return 'library';
     case 'playbook': return 'editor';
     case 'settings': return 'settings';
+    case 'not-found': return 'not-found';
     default: return 'matters';
   }
 }
@@ -180,11 +170,33 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // cancellation to persist it.
   const latestRunRef = useRef<ReviewRun | null>(null);
   // Which matter (if any) the in-session `run`/`documents` above belong to.
-  // Non-null when a run was started from, or a review opened from,
-  // MatterHome — set back to `null` for the Library's own standalone run
-  // flow (`handleRunTemplate`), which stays session-only exactly as in v1.
-  // Drives whether completing/cancelling/retrying a run persists a Review.
+  // Set whenever a run is started or a review opened — from MatterHome
+  // directly, or from the Library via `MatterPickerModal` (Important 3: a
+  // Library run used to stay session-only with this left `null`; every run
+  // is matter-scoped now, so in practice this is non-null whenever `run`
+  // is). Drives whether completing/cancelling/retrying a run persists a
+  // Review, and — together with `deletedMatterIdsRef` below — whether a
+  // pending write is still allowed to land.
   const [activeMatterId, setActiveMatterId] = useState<string | null>(null);
+  // Important 2: a matter delete must not be silently undone by a write
+  // still in flight for it. `handleStartRun` captures its own `matterId`
+  // in a local closure that outlives any later change to `activeMatterId`
+  // state (the run keeps going, and stays reachable via "Current run", even
+  // after the user navigates elsewhere) — so clearing `activeMatterId`
+  // alone cannot stop it. Every write site that persists a Review or adds a
+  // Document (`handleStartRun`'s `handleUpdate`/`persistFinal`, and
+  // `handleRetryCell`) checks this set before writing; `handleDeleteMatter`
+  // adds to it the moment `deleteMatter` resolves, before anything else.
+  const deletedMatterIdsRef = useRef<Set<string>>(new Set());
+  // The debounced saver (if any) backing the CURRENTLY in-flight run, and
+  // which matter it's scoped to — tracked separately from `activeMatterId`
+  // state for the same reason as `deletedMatterIdsRef` above: this needs to
+  // survive the user navigating away from the run while it keeps going in
+  // the background. `handleDeleteMatter` disposes it outright (killing an
+  // already-armed debounce timer, which `deletedMatterIdsRef` alone cannot
+  // do — a fired timer would still send the write it captured before being
+  // cancelled) when its matter is the one just deleted.
+  const activeRunSaverRef = useRef<{ matterId: string; saver: DebouncedReviewSaver } | null>(null);
   // RunPanel seeds its own upload-list state from `initialDocuments` only
   // on mount (a plain useState initializer, not synced on prop changes) —
   // bumping this key on every entry into the run flow forces a fresh mount,
@@ -215,6 +227,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [megaPromptOpen, setMegaPromptOpen] = useState(false);
   const [importing, setImporting] = useState(false);
 
+  // Important 3: running a playbook from the Library now goes through this
+  // picker instead of straight into the run panel, since every review is
+  // matter-scoped — `matterPickerTemplate` is the playbook awaiting a
+  // matter choice, `null` whenever the picker is closed.
+  const [matterPickerOpen, setMatterPickerOpen] = useState(false);
+  const [matterPickerTemplate, setMatterPickerTemplate] = useState<Template | null>(null);
+
   // Tracks the template as last saved (or as last opened/generated) so the
   // editor can tell whether there are unsaved changes worth warning about
   // before they're discarded (Important 7). `null` means "nothing to
@@ -226,6 +245,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const isTemplateDirty =
     view === 'editor' && activeTemplate !== null &&
     (savedTemplateSnapshot === null || JSON.stringify(activeTemplate) !== savedTemplateSnapshot);
+
+  /** Important 1: derived at render, not marked on load — see the doc
+   *  comment where this is consumed, next to `RunInterruptedBanner`, for
+   *  why deriving from `isRunning` (already unambiguous) is enough and
+   *  needs no separate stored flag. */
+  const isInterrupted = !isRunning && !!run && !run.completedAt && !run.cancelledAt;
 
   // Guards against re-showing the "your key was rejected" prompt for every
   // remaining clause in a run once the first one hits a 401/403 — reset
@@ -251,12 +276,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // DbBlockedError's own message already tells the user exactly what's
       // wrong (another tab has the DB open) and how to fix it; anything
       // else is an opaque IndexedDB failure the user can't diagnose, so it
-      // gets a generic message plus a Retry action instead.
-      setLibraryLoadError(
-        e instanceof DbBlockedError
-          ? e.message
-          : 'The playbook library could not be loaded. Try again.',
-      );
+      // gets a generic message plus a Retry action instead — see
+      // `describeLoadError` (Important 4).
+      setLibraryLoadError(describeLoadError(e, 'The playbook library could not be loaded. Try again.'));
     });
   };
 
@@ -292,11 +314,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const loadMatters = () => {
     setMattersLoadError(null);
     return refreshMatters().catch((e) => {
-      setMattersLoadError(
-        e instanceof DbBlockedError
-          ? e.message
-          : 'The matters list could not be loaded. Try again.',
-      );
+      setMattersLoadError(describeLoadError(e, 'The matters list could not be loaded. Try again.'));
     });
   };
 
@@ -323,22 +341,14 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const loadMatterDocuments = (matterId: string) => {
     setMatterDocumentsError(null);
     return listDocuments(matterId).then(setMatterDocuments).catch((e) => {
-      setMatterDocumentsError(
-        e instanceof DbBlockedError
-          ? e.message
-          : 'The documents in this matter could not be loaded. Try again.',
-      );
+      setMatterDocumentsError(describeLoadError(e, 'The documents in this matter could not be loaded. Try again.'));
     });
   };
 
   const loadMatterReviews = (matterId: string) => {
     setMatterReviewsError(null);
     return listReviews(matterId).then(setMatterReviews).catch((e) => {
-      setMatterReviewsError(
-        e instanceof DbBlockedError
-          ? e.message
-          : 'The reviews in this matter could not be loaded. Try again.',
-      );
+      setMatterReviewsError(describeLoadError(e, 'The reviews in this matter could not be loaded. Try again.'));
     });
   };
 
@@ -357,11 +367,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       loadMatterDocuments(matterId);
       loadMatterReviews(matterId);
     }).catch((e) => {
-      setMatterError(
-        e instanceof DbBlockedError
-          ? e.message
-          : 'This matter could not be loaded. Try again.',
-      );
+      setMatterError(describeLoadError(e, 'This matter could not be loaded. Try again.'));
     });
   };
 
@@ -437,11 +443,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       setRun(reviewRun);
       setIsRunning(false);
     } catch (e) {
-      setReviewLoadError(
-        e instanceof DbBlockedError
-          ? e.message
-          : 'This review could not be loaded. Try again.',
-      );
+      setReviewLoadError(describeLoadError(e, 'This review could not be loaded. Try again.'));
     } finally {
       setReviewLoading(false);
     }
@@ -478,11 +480,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         setSavedTemplateSnapshot(JSON.stringify(t));
       })
       .catch((e) => {
-        setPlaybookLoadError(
-          e instanceof DbBlockedError
-            ? e.message
-            : 'This playbook could not be loaded. Try again.',
-        );
+        setPlaybookLoadError(describeLoadError(e, 'This playbook could not be loaded. Try again.'));
       })
       .finally(() => setPlaybookLoading(false));
   };
@@ -609,13 +607,45 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     navigate({ name: 'playbook', playbookId: t.id });
   };
 
+  /** Important 3: a Library run used to skip persistence entirely — this
+   *  now opens `MatterPickerModal` first, so every run (Library or Matter
+   *  Home) ends up scoped to a matter. See `handlePickMatterForRun` /
+   *  `handleCreateMatterForRun` for what happens once one is chosen. */
   const handleRunTemplate = (t: Template) => {
-    setActiveTemplate(t);
-    setActiveMatterId(null); // Library's standalone run flow is never matter-scoped.
+    setMatterPickerTemplate(t);
+    setMatterPickerOpen(true);
+  };
+
+  const closeMatterPicker = () => {
+    setMatterPickerOpen(false);
+    setMatterPickerTemplate(null);
+  };
+
+  /** Enters the run flow scoped to `matterId`, exactly like
+   *  `handleRunReviewForMatter` (Matter Home's own "Run a review") except
+   *  starting from an empty upload rather than the matter's existing
+   *  documents — this is reached from the Library, which has no documents
+   *  of its own to pre-seed with. Refreshes `matterDocuments` first so
+   *  `handleStartRun`'s new-vs-existing-document check (further down) is
+   *  comparing against the CHOSEN matter's real documents, not whatever
+   *  matter's documents happened to be in state beforehand. */
+  const handlePickMatterForRun = async (matterId: string) => {
+    const template = matterPickerTemplate;
+    if (!template) return;
+    await loadMatterDocuments(matterId);
+    setActiveTemplate(template);
+    setActiveMatterId(matterId);
     setRun(null);
     setDocuments([]);
     setRunPanelKey(k => k + 1);
+    closeMatterPicker();
     requestView('run');
+  };
+
+  const handleCreateMatterForRun = async (params: CreateMatterParams) => {
+    const created = await createMatter(params);
+    notify('Matter created.');
+    await handlePickMatterForRun(created.id);
   };
 
   /**
@@ -642,6 +672,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
 
     let userId = '';
     if (matterId) {
+      // Important 2: the matter could already be gone by the time this run
+      // was queued up (e.g. a stale run panel) — never write a document
+      // into a matter that no longer exists.
+      if (deletedMatterIdsRef.current.has(matterId)) {
+        notify('This matter has been deleted, so this review cannot be started.', 'error');
+        return;
+      }
       try {
         const profile = await getProfile();
         userId = profile.id;
@@ -658,6 +695,14 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         notify(e instanceof Error ? e.message : 'Could not save the new documents to this matter.', 'error');
         return;
       }
+      // Re-check: the matter may have been deleted WHILE the documents above
+      // were being written. Those writes can't be undone from here, but the
+      // review itself — the bigger, ongoing write this guards — must not
+      // start against a matter that's already gone.
+      if (deletedMatterIdsRef.current.has(matterId)) {
+        notify('This matter has been deleted, so this review cannot be started.', 'error');
+        return;
+      }
     }
 
     const newRun = emptyRun(activeTemplate, docs);
@@ -671,9 +716,36 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    const reviewSaver = matterId ? createDebouncedReviewSaver() : null;
+    // Minor: `onError` used to go unused, so a failed debounced mid-run save
+    // was reported through `debug()` only — invisible to the user, exactly
+    // the "quietly wrong" failure mode this app exists to avoid. Now it
+    // surfaces the same way any other save failure in this function does.
+    const reviewSaver = matterId
+      ? createDebouncedReviewSaver(undefined, (error) => {
+          notify(error instanceof Error ? error.message : 'This review is not saving. Check your connection or storage.', 'error');
+        })
+      : null;
+    if (matterId && reviewSaver) {
+      activeRunSaverRef.current = { matterId, saver: reviewSaver };
+    }
 
     const handleUpdate = (updated: ReviewRun) => {
+      // Important 2: `matterId` is this closure's own local copy, captured
+      // at the top of this function — it does NOT track `activeMatterId`
+      // state, precisely because this run must keep going (and keep being
+      // reachable via "Current run") even after the user navigates
+      // elsewhere and that state changes. So the one thing that CAN stop
+      // this write, or this UI update, once the matter is gone is checking
+      // the deleted-ids set directly, every time, here.
+      //
+      // The `setRun` gate matters just as much as the write one below: a
+      // cancellation triggered BY this same delete (`handleDeleteMatter`
+      // aborts this run) runs `cancelPendingCells` and calls straight back
+      // into this function before its own promise chain's `.catch` ever
+      // runs — and that call would otherwise resurrect the "Current run"
+      // button and the results view for a matter `handleDeleteMatter` had
+      // just cleared `run` for, moments before.
+      if (matterId && deletedMatterIdsRef.current.has(matterId)) return;
       latestRunRef.current = updated;
       setRun(updated);
       if (matterId && reviewSaver) {
@@ -683,6 +755,18 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
 
     const persistFinal = async (finalRun: ReviewRun) => {
       if (!matterId || !reviewSaver) return;
+      if (activeRunSaverRef.current?.saver === reviewSaver) {
+        activeRunSaverRef.current = null;
+      }
+      if (deletedMatterIdsRef.current.has(matterId)) {
+        // The matter was deleted — most likely `handleDeleteMatter` already
+        // disposed this exact saver and aborted this run, which is how
+        // execution even got here (the abort's rejection lands in the
+        // `.catch` below). Disposing again is a harmless no-op; the point
+        // is that no write happens past this line.
+        reviewSaver.dispose();
+        return;
+      }
       try {
         await reviewSaver.saveNow(reviewFromRun(finalRun, matterId, settings.modelId, userId));
       } catch (e) {
@@ -703,7 +787,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         // failure, and must never surface as an error toast. Everything
         // already completed stays exactly as it was set by the last
         // onUpdate call. A cancelled run is still real, partial work, so
-        // it's persisted the same as a completed one.
+        // it's persisted the same as a completed one (unless the matter
+        // itself is what triggered the abort — see `persistFinal`'s own
+        // deleted-matter check above).
         if (error instanceof DOMException && error.name === 'AbortError') {
           await persistFinal(latestRunRef.current ?? newRun);
           return;
@@ -728,7 +814,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     authErrorHandledRef.current = false;
     retryCell(run, doc, clauseId, settings, setRun)
       .then(async (updated) => {
-        if (!matterId) return;
+        // Important 2: guards this write the same way handleStartRun's
+        // handleUpdate/persistFinal do — `matterId` is a local snapshot of
+        // `activeMatterId`, and the matter it names may have been deleted
+        // while `retryCell`'s API call was in flight.
+        if (!matterId || deletedMatterIdsRef.current.has(matterId)) return;
         try {
           const profile = await getProfile();
           await saveReview(reviewFromRun(updated, matterId, settings.modelId, profile.id));
@@ -913,12 +1003,23 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     }
   };
 
-  const handleCreateMatter = async ({ name, client }: CreateMatterParams) => {
+  /** The actual create — factored out of `handleCreateMatter` so
+   *  `handleCreateMatterForRun` (Important 3: creating a matter from the
+   *  Library's matter picker) can reuse it and get the created `Matter`
+   *  (specifically its `id`) back, rather than the void the toast-wrapped
+   *  `handleCreateMatter` below returns. Does not notify or swallow errors
+   *  itself — both callers have their own thing to do with a failure. */
+  const createMatter = async ({ name, client }: CreateMatterParams): Promise<Matter> => {
+    const profile = await getProfile();
+    const matter: Matter = { ...newMatter(name, profile.id), client };
+    await saveMatter(matter);
+    await refreshMatters();
+    return matter;
+  };
+
+  const handleCreateMatter = async (params: CreateMatterParams) => {
     try {
-      const profile = await getProfile();
-      const matter: Matter = { ...newMatter(name, profile.id), client };
-      await saveMatter(matter);
-      await refreshMatters();
+      await createMatter(params);
       notify('Matter created.');
     } catch (e) {
       notify(e instanceof Error ? e.message : 'Could not create the matter.', 'error');
@@ -928,10 +1029,49 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   /** Returns whether the delete succeeded, so `handleDeleteMatterFromHome`
    *  (Task 11) knows it's safe to navigate away — never stranding the user
    *  on a dead matter screen, but also never leaving one on a delete that
-   *  actually failed. */
+   *  actually failed.
+   *
+   *  Important 2: nothing that started before this call resolves may still
+   *  write to `id` after it. The moment `deleteMatter` itself resolves,
+   *  this adds `id` to `deletedMatterIdsRef` (checked by every write site in
+   *  `handleStartRun`/`handleRetryCell`) and, if `id` is the matter the
+   *  CURRENTLY in-flight run belongs to, aborts it and disposes its
+   *  debounced saver outright — a debounce timer already armed would
+   *  otherwise still fire the write it captured before being told about
+   *  any of this. All of `run`/`documents`/`activeMatterId` are cleared
+   *  together so the header's "Current run" button (which renders purely
+   *  off `run`) can't keep offering a way back into a run for a matter that
+   *  no longer exists.
+   *
+   *  Minor: also evicts the deleted matter's documents from the in-memory
+   *  page-image cache (`evictPageImages`) — memory-only, so not covered by
+   *  `deleteMatter`'s own IndexedDB cascade, but free to clean up here since
+   *  this is the one place that already knows which documents just went
+   *  away. The snapshot is taken before the delete and is best-effort: a
+   *  failure to read it must never block the actual delete. */
   const handleDeleteMatter = async (id: string): Promise<boolean> => {
     try {
+      const docsToEvict = await listDocuments(id).catch(() => []);
+
       await deleteMatter(id);
+
+      deletedMatterIdsRef.current.add(id);
+      if (activeRunSaverRef.current?.matterId === id) {
+        activeRunSaverRef.current.saver.dispose();
+        activeRunSaverRef.current = null;
+      }
+      if (activeMatterId === id) {
+        abortControllerRef.current?.abort();
+        setRun(null);
+        setDocuments([]);
+        setActiveMatterId(null);
+      }
+      if (matter?.id === id) {
+        setMatter(null);
+      }
+
+      docsToEvict.forEach(d => evictPageImages(d.id));
+
       await refreshMatters();
       notify('Matter deleted.');
       return true;
@@ -1048,10 +1188,22 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onOpenReview={(review) => handleOpenReview(matter.id, review)}
               playbooks={templates}
               playbooksError={libraryLoadError}
+              onRetryPlaybooks={() => loadLibrary()}
               onRunReview={(playbook) => handleRunReviewForMatter(matter.id, playbook)}
               onDeleteMatter={handleDeleteMatterFromHome}
             />
           ) : null
+        )}
+        {view === 'not-found' && (
+          <div className="p-8 max-w-md mx-auto text-center space-y-4">
+            <p className="text-gray-400">This page could not be found.</p>
+            <button
+              onClick={() => requestView('matters')}
+              className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+            >
+              Back to Matters
+            </button>
+          </div>
         )}
         {view === 'editor' && (
           route.name === 'playbook' && playbookLoadError ? (
@@ -1109,6 +1261,19 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             <div className="h-[calc(100vh-64px)] flex flex-col">
               {isRunning && <RunProgressBar run={run} onCancel={handleCancelRun} />}
               {!isRunning && run.cancelledAt && !run.completedAt && <RunCancelledBanner run={run} />}
+              {/* Important 1: `isInterrupted` (derived above, at render, not
+                 marked when the review is loaded) is true for a review that
+                 is neither completed nor cancelled and isn't the live
+                 in-flight run — exactly a review reopened after an
+                 abandoned run (tab closed, reload, crash). `isRunning`
+                 already unambiguously tells that apart from a genuinely
+                 live run (`openReview` always sets it false — see its own
+                 comment), so no extra stored flag is needed, and this stays
+                 correct automatically as `run` changes shape: retrying a
+                 stalled cell from this same banner's Retry buttons flips
+                 that one cell out of pending/running immediately, with
+                 nothing here needing to be told about it. */}
+              {isInterrupted && <RunInterruptedBanner run={run} />}
               {!isRunning && run.completedAt && <RunEmptyFindingsBanner run={run} />}
               <div className="flex-1 min-h-0">
                 {view === 'results' ? (
@@ -1120,6 +1285,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     onOpenTabular={() => setView('tabular')}
                     onError={(message) => notify(message, 'error')}
                     onAuthError={handleAuthError}
+                    interrupted={isInterrupted}
                   />
                 ) : (
                   <TabularReview
@@ -1127,6 +1293,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     documents={documents}
                     onRetryCell={handleRetryCell}
                     onOpenCards={() => setView('results')}
+                    interrupted={isInterrupted}
                   />
                 )}
               </div>
@@ -1152,6 +1319,16 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         isOpen={megaPromptOpen}
         onClose={() => setMegaPromptOpen(false)}
         template={activeTemplate}
+      />
+      <MatterPickerModal
+        isOpen={matterPickerOpen}
+        templateName={matterPickerTemplate?.name ?? ''}
+        matters={matters.map(m => m.matter)}
+        mattersError={mattersLoadError}
+        onRetryMatters={() => loadMatters()}
+        onClose={closeMatterPicker}
+        onPick={handlePickMatterForRun}
+        onCreateAndPick={handleCreateMatterForRun}
       />
     </div>
   );

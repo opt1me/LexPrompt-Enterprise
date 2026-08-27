@@ -3,6 +3,7 @@ import { Upload, Trash2, Play, FileWarning, FileText, ClipboardList, Loader } fr
 import type { DocumentRecord, Matter, Review, Template } from '../../types';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
+import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { DeleteMatterModal } from './MattersList';
 
 export interface MatterHomeProps {
@@ -28,6 +29,11 @@ export interface MatterHomeProps {
    *  fetched again here. */
   playbooks: Template[];
   playbooksError: string | null;
+  /** Retries the same library load `playbooksError` came from (Important 4:
+   *  this used to have no retry at all — a bare paragraph telling the user
+   *  to go to the Library and come back — the third of three drifted load-
+   *  error idioms this component and App.tsx had grown between them). */
+  onRetryPlaybooks: () => void;
   onRunReview: (playbook: Template) => Promise<void>;
 
   onDeleteMatter: (matterId: string) => Promise<void>;
@@ -60,24 +66,6 @@ function reviewStatusLabel(review: Review): string {
   return `In progress — ${done}/${total} clauses reviewed`;
 }
 
-/** A dedicated error block for a section's load failure — rendered INSTEAD
- *  OF that section's content, never alongside an empty-looking list, and
- *  always with a working retry. Mirrors the pattern `App.tsx` uses for the
- *  matters list and playbook library load failures. */
-function SectionLoadError({ message, onRetry }: { message: string; onRetry: () => void }) {
-  return (
-    <div className="p-6 text-center space-y-3 border border-dashed border-red-500/30 rounded-xl bg-red-950/10">
-      <p className="text-red-400 text-sm">{message}</p>
-      <button
-        onClick={onRetry}
-        className="px-3 py-1.5 rounded-md bg-violet-600 text-white text-sm hover:bg-violet-500"
-      >
-        Retry
-      </button>
-    </div>
-  );
-}
-
 /**
  * The matter home screen (Task 11): one matter's documents and reviews, and
  * the entry point to running a new review over them. Replaces v1's run
@@ -106,6 +94,7 @@ export function MatterHome({
   onOpenReview,
   playbooks,
   playbooksError,
+  onRetryPlaybooks,
   onRunReview,
   onDeleteMatter,
 }: MatterHomeProps) {
@@ -208,7 +197,7 @@ export function MatterHome({
         </div>
 
         {documentsError ? (
-          <SectionLoadError message={documentsError} onRetry={onRetryDocuments} />
+          <LoadErrorPanel compact message={documentsError} onRetry={onRetryDocuments} />
         ) : documents.length === 0 ? (
           <div className="text-gray-500 border border-dashed border-white/10 p-6 rounded-xl text-center text-sm">
             No documents yet. Add one to get started.
@@ -258,7 +247,7 @@ export function MatterHome({
         </div>
 
         {reviewsError ? (
-          <SectionLoadError message={reviewsError} onRetry={onRetryReviews} />
+          <LoadErrorPanel compact message={reviewsError} onRetry={onRetryReviews} />
         ) : reviews.length === 0 ? (
           <div className="text-gray-500 border border-dashed border-white/10 p-6 rounded-xl text-center text-sm">
             No reviews yet. Run one to get started.
@@ -299,9 +288,7 @@ export function MatterHome({
         footer={<Button variant="ghost" onClick={() => setRunPickerOpen(false)} disabled={!!startingReviewId}>Cancel</Button>}
       >
         {playbooksError ? (
-          <p className="text-sm text-red-400">
-            Playbooks could not be loaded. Go to the Library to retry, then come back here.
-          </p>
+          <LoadErrorPanel compact message={playbooksError} onRetry={onRetryPlaybooks} />
         ) : playbooks.length === 0 ? (
           <p className="text-sm text-gray-400">
             No playbooks yet. Create one in the Library first, then run it against this matter's documents.

@@ -16,6 +16,18 @@ export interface FindingCardProps {
   /** Shows a spinner on this card's Suggest Fix button while a revision for
    *  this specific clause is being generated. */
   suggestFixLoading?: boolean;
+  /** True when the review this card belongs to is NOT currently live — i.e.
+   *  nothing is actually calling the API for it right now. A `pending` or
+   *  `running` card normally means "still queued/in flight, wait" and offers
+   *  no Retry; that reading is wrong for a review reopened after an
+   *  abandoned run (tab closed, reload, crash) mid-way through, where those
+   *  same statuses mean "this cell never got a turn and never will on its
+   *  own." When `interrupted` is true, pending/running cells get the same
+   *  Retry action error/cancelled cells already have, so a stalled review is
+   *  actually finishable rather than stuck forever looking like work still
+   *  in flight (Important 1). Defaults to `false` so a genuinely live run's
+   *  cards are unaffected. */
+  interrupted?: boolean;
 }
 
 // Written fresh, not ported: the corresponding classes in the deleted
@@ -29,15 +41,28 @@ const CARD_SHELL = 'bg-[#1a1a1a] rounded-xl border';
  * One clause's finding for the active document. `status` drives the whole
  * shape of the card: pending is a dimmed placeholder, running is a skeleton,
  * error surfaces the message with a Retry, and done is the full card with
- * citations that drive the document viewer's highlights.
+ * citations that drive the document viewer's highlights. `interrupted` (see
+ * its own doc comment) additionally offers Retry on pending/running cards,
+ * for a review reopened after an abandoned run rather than one actually
+ * in flight.
  */
-export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading }: FindingCardProps) {
+export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
 
   if (status === 'pending') {
     return (
-      <div className={`${CARD_SHELL} border-white/5 border-dashed p-4 opacity-40`}>
+      <div className={`${CARD_SHELL} border-white/5 border-dashed p-4 ${interrupted ? '' : 'opacity-40'} space-y-3`}>
         <span className="text-sm text-gray-500">{clause.title}</span>
+        {interrupted && (
+          <>
+            <p className="text-xs text-gray-400 leading-relaxed">
+              This review was interrupted before this clause was reviewed.
+            </p>
+            <Button variant="ghost" onClick={() => onRetry(clause.id)} className="w-full text-xs">
+              <RotateCcw className="w-3 h-3" /> Retry
+            </Button>
+          </>
+        )}
       </div>
     );
   }
@@ -54,6 +79,16 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
           <div className="h-2.5 bg-white/10 rounded w-5/6 animate-pulse" />
           <div className="h-2.5 bg-white/10 rounded w-2/3 animate-pulse" />
         </div>
+        {interrupted && (
+          <div className="px-4 pb-4 space-y-2">
+            <p className="text-xs text-gray-400 leading-relaxed">
+              This review was interrupted before this clause finished — it will never complete on its own.
+            </p>
+            <Button variant="ghost" onClick={() => onRetry(clause.id)} className="w-full text-xs">
+              <RotateCcw className="w-3 h-3" /> Retry
+            </Button>
+          </div>
+        )}
       </div>
     );
   }

@@ -1,0 +1,240 @@
+import React from 'react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import type { Matter, Template } from './types';
+
+// No @testing-library/react in this project — see Toast.test.tsx for the
+// precedent this follows: drive a real react-dom root directly.
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const listPlaybooksMock = vi.fn();
+const listMattersMock = vi.fn();
+const listReviewsMock = vi.fn();
+const listDocumentsMock = vi.fn();
+const saveMatterMock = vi.fn();
+const newMatterMock = vi.fn();
+const getProfileMock = vi.fn();
+const migrateIfNeededMock = vi.fn();
+
+vi.mock('./lib/db/migrate', () => ({
+  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
+}));
+
+vi.mock('./lib/db/playbooks', () => ({
+  listPlaybooks: (...args: unknown[]) => listPlaybooksMock(...args),
+  savePlaybook: vi.fn(),
+  deletePlaybook: vi.fn(),
+  newPlaybook: vi.fn(),
+  exportPlaybook: vi.fn(),
+  importPlaybook: vi.fn(),
+}));
+
+vi.mock('./lib/db/matters', () => ({
+  listMatters: (...args: unknown[]) => listMattersMock(...args),
+  getMatter: vi.fn(),
+  saveMatter: (...args: unknown[]) => saveMatterMock(...args),
+  newMatter: (...args: unknown[]) => newMatterMock(...args),
+  deleteMatter: vi.fn(),
+}));
+
+vi.mock('./lib/db/documents', () => ({
+  listDocuments: (...args: unknown[]) => listDocumentsMock(...args),
+  getDocument: vi.fn(),
+  addDocument: vi.fn(),
+  deleteDocument: vi.fn(),
+}));
+
+vi.mock('./lib/db/blobs', () => ({
+  getDocumentBlob: vi.fn(),
+}));
+
+vi.mock('./lib/db/reviews', () => ({
+  listReviews: (...args: unknown[]) => listReviewsMock(...args),
+  getReview: vi.fn(),
+  saveReview: vi.fn().mockResolvedValue(undefined),
+  createDebouncedReviewSaver: vi.fn(() => ({
+    scheduleSave: vi.fn(),
+    saveNow: vi.fn().mockResolvedValue(undefined),
+    dispose: vi.fn(),
+  })),
+}));
+
+vi.mock('./lib/db/profile', () => ({
+  getProfile: (...args: unknown[]) => getProfileMock(...args),
+}));
+
+vi.mock('./lib/openrouter', () => ({
+  listModels: vi.fn().mockResolvedValue([]),
+  isAuthError: () => false,
+}));
+
+vi.mock('./features/templates/TemplateLibrary', () => ({
+  TemplateLibrary: ({ templates, onRun }: { templates: Template[]; onRun: (t: Template) => void }) => (
+    <div>
+      {templates.map(t => (
+        <button key={t.id} onClick={() => onRun(t)}>{`Run ${t.name}`}</button>
+      ))}
+    </div>
+  ),
+}));
+
+vi.mock('./features/review/RunPanel', () => ({
+  RunPanel: ({ template }: { template: Template }) => <div>run-panel-stub: {template.name}</div>,
+  RunProgressBar: () => null,
+  RunCancelledBanner: () => null,
+  RunEmptyFindingsBanner: () => null,
+  RunInterruptedBanner: () => null,
+}));
+
+import App from './App';
+
+async function flush(times = 8) {
+  for (let i = 0; i < times; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => { await Promise.resolve(); });
+  }
+}
+
+function clickNav(container: HTMLDivElement, label: string) {
+  const button = Array.from(container.querySelectorAll('button'))
+    .find(b => new RegExp(`^${label}$`, 'i').test((b.textContent || '').trim()));
+  if (!button) throw new Error(`No nav button found for "${label}"`);
+  act(() => { (button as HTMLButtonElement).click(); });
+}
+
+function clickByText(container: HTMLDivElement, text: string | RegExp) {
+  const re = typeof text === 'string' ? new RegExp(text) : text;
+  const button = Array.from(container.querySelectorAll('button')).find(b => re.test(b.textContent || ''));
+  if (!button) throw new Error(`No button found matching ${text}`);
+  act(() => { (button as HTMLButtonElement).click(); });
+}
+
+// Bypasses React's tracked-value shortcut (setting `.value` directly is a
+// no-op from React's perspective) so the subsequent 'input' event is seen
+// as a genuine change — mirrors App.test.tsx's own `setInputValue` helper.
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')!.set!;
+  setter.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function makeTemplate(): Template {
+  return {
+    id: 't1',
+    name: 'Basic Contract Review',
+    contractType: 'NDA',
+    mode: 'extraction',
+    systemPrompt: '',
+    formatPrompt: '',
+    clauses: [{ id: 'c1', title: 'Governing Law', prompt: 'Extract the governing law clause.' }],
+    createdAt: 1,
+    updatedAt: 1,
+    schemaVersion: 2,
+  };
+}
+
+function makeMatter(id: string, name: string): Matter {
+  return { id, name, ownerId: 'u1', createdAt: 1, updatedAt: 1 };
+}
+
+describe('App — running a playbook from the Library goes through a matter picker (Important 3)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    localStorage.clear();
+    // `requestView('run')` (which `handlePickMatterForRun`/
+    // `handleCreateMatterForRun` both end in) gates on `ensureConfigured()`
+    // exactly as the pre-existing Library flow did — an API key is needed
+    // here purely to get past that gate, not something this file is testing.
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
+    listMattersMock.mockReset().mockResolvedValue([makeMatter('m1', 'Acme v Bolt')]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    listDocumentsMock.mockReset().mockResolvedValue([]);
+    saveMatterMock.mockReset().mockResolvedValue(undefined);
+    newMatterMock.mockReset().mockImplementation((name: string, ownerId: string) => ({
+      id: 'new-matter-id', name, ownerId, createdAt: 1, updatedAt: 1,
+    }));
+    getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.pushState(null, '', '/');
+  });
+
+  it('does not enter the run panel until a matter is chosen', async () => {
+    act(() => { root.render(<App />); });
+    await flush();
+    clickNav(container, 'Library');
+    await flush();
+    clickByText(container, /^Run Basic Contract Review$/);
+    await flush();
+
+    expect(container.textContent).not.toContain('run-panel-stub');
+    expect(container.textContent).toContain('Run "Basic Contract Review" against a matter');
+    expect(container.textContent).toContain('Acme v Bolt');
+  });
+
+  it('picking an existing matter enters the run panel scoped to it', async () => {
+    act(() => { root.render(<App />); });
+    await flush();
+    clickNav(container, 'Library');
+    await flush();
+    clickByText(container, /^Run Basic Contract Review$/);
+    await flush();
+
+    clickByText(container, /^Acme v Bolt$/);
+    await flush();
+
+    expect(container.textContent).toContain('run-panel-stub: Basic Contract Review');
+    expect(container.textContent).not.toContain('against a matter');
+  });
+
+  it('creating a new matter from the picker also enters the run panel, scoped to the new matter', async () => {
+    listMattersMock.mockResolvedValue([]); // no existing matters
+    act(() => { root.render(<App />); });
+    await flush();
+    clickNav(container, 'Library');
+    await flush();
+    clickByText(container, /^Run Basic Contract Review$/);
+    await flush();
+
+    clickByText(container, /New matter/);
+    await flush();
+
+    const nameInput = Array.from(container.querySelectorAll('input'))[0] as HTMLInputElement;
+    act(() => { setInputValue(nameInput, 'Brand New Matter'); });
+    await flush();
+
+    clickByText(container, /Create and run/);
+    await flush();
+
+    expect(newMatterMock).toHaveBeenCalledWith('Brand New Matter', 'u1');
+    expect(saveMatterMock).toHaveBeenCalled();
+    expect(container.textContent).toContain('run-panel-stub: Basic Contract Review');
+  });
+
+  it('Cancel closes the picker without starting a run', async () => {
+    act(() => { root.render(<App />); });
+    await flush();
+    clickNav(container, 'Library');
+    await flush();
+    clickByText(container, /^Run Basic Contract Review$/);
+    await flush();
+
+    clickByText(container, /^Cancel$/);
+    await flush();
+
+    expect(container.textContent).not.toContain('run-panel-stub');
+    expect(container.textContent).not.toContain('against a matter');
+  });
+});
