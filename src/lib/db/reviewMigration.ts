@@ -97,10 +97,12 @@ function migrateFinding(
  *
  * `documentText` is an optional lookup rather than a required argument so
  * this stays synchronous and independently testable, and so `getReview` need
- * not read the `documents` store to return a review. Callers that already
- * have the document text loaded (the review screen) pass it and get page
- * pins; callers that do not (a matter's review list) get correct citations
- * without pages.
+ * not read the `documents` store to return a review. A caller that has the
+ * document text loaded could pass it and get page pins on the migrated
+ * citations — but no production caller does today (`reviews.ts`'s
+ * `stripSeq`, the only one, always omits it), so a review migrated from
+ * before sub-project B opens with citations and no page pins, which is the
+ * honest answer spec §4 asks for when a page cannot be derived, not a bug.
  */
 export function migrateReviewRecord(
   raw: unknown,

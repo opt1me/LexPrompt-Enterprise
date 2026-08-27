@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine } from './findingOutcome';
+import { describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines } from './findingOutcome';
 import type { Finding, Verification } from '../types';
 
 describe('describeFindingOutcome', () => {
@@ -76,6 +76,46 @@ describe('verificationLabel', () => {
   it('never returns an empty string for a rejection with no readable reason', () => {
     const f = { ...finding('rejected'), verification: { state: 'rejected' as const } };
     expect(verificationLabel(f)).toBe('REJECTED: no reason recorded');
+  });
+});
+
+describe('noteLines (Important 3 — spec section 6: "a flagged finding carries its flag and any note")', () => {
+  it('returns nothing for a finding with no notes', () => {
+    expect(noteLines(finding('flagged'))).toEqual([]);
+  });
+
+  it('returns nothing for a missing finding', () => {
+    expect(noteLines(undefined)).toEqual([]);
+  });
+
+  it('formats one note, attributed to who wrote it', () => {
+    const f: Finding = {
+      ...finding('flagged'),
+      notes: [{ id: 'n1', findingId: 'x', text: 'Check this against the side letter.', byUserId: 'u1', at: 1 }],
+    };
+    expect(noteLines(f)).toEqual(['Note (u1): Check this against the side letter.']);
+  });
+
+  it('formats every note on a finding, not just the first', () => {
+    const f: Finding = {
+      ...finding('flagged'),
+      notes: [
+        { id: 'n1', findingId: 'x', text: 'First note.', byUserId: 'u1', at: 1 },
+        { id: 'n2', findingId: 'x', text: 'Second note.', byUserId: 'u1', at: 2 },
+      ],
+    };
+    expect(noteLines(f)).toEqual([
+      'Note (u1): First note.',
+      'Note (u1): Second note.',
+    ]);
+  });
+
+  it('is not limited to flagged findings — a note on a verified finding still carries', () => {
+    const f: Finding = {
+      ...finding('verified'),
+      notes: [{ id: 'n1', findingId: 'x', text: 'Confirmed against the executed copy.', byUserId: 'u1', at: 1 }],
+    };
+    expect(noteLines(f)).toEqual(['Note (u1): Confirmed against the executed copy.']);
   });
 });
 

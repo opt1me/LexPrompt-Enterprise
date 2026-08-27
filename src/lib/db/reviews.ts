@@ -19,9 +19,12 @@ function stripSeq(record: StoredReview): Review {
   void _seq;
   // Every read path — `getReview`, `listReviews` — funnels through here, so
   // a review written before sub-project B is upgraded exactly once, in one
-  // place, no matter which screen asked for it. Deliberately no document
-  // text: see `migrateReviewRecord`'s own note on why pages are derived at
-  // the screen instead.
+  // place, no matter which screen asked for it. No `documentText` lookup is
+  // passed — this is the only production caller of `migrateReviewRecord`,
+  // so a pre-B review's citations always come back without page pins (an
+  // absent page is the honest answer spec §4 asks for; it is never wrong,
+  // just less than it could be). See `migrateReviewRecord`'s own comment for
+  // why the parameter exists anyway.
   return migrateReviewRecord(review);
 }
 

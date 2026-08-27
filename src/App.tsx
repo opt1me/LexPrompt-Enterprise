@@ -192,6 +192,17 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // `handleStartRun`, which needs the run as it stood at the moment of
   // cancellation to persist it.
   const latestRunRef = useRef<ReviewRun | null>(null);
+  // Minor 2: the id of whoever CREATED the in-session review — set once,
+  // either from a freshly-started run's own creator (`handleStartRun`) or
+  // from a reopened review's stored `createdByUserId` (`openReview`), and
+  // read (never rewritten) by every later save. Before this existed,
+  // `handleVerify`/`handleAddNote`/`handleRetryCell`'s persist all passed
+  // the CURRENT actor's profile id into `reviewFromRun`'s `userId` param,
+  // which becomes `createdByUserId` — so verifying a finding silently
+  // reattributed authorship of the whole review to whoever last touched it.
+  // With one local profile (ruling R1) this was invisible; it would not be
+  // once a second reviewer exists.
+  const createdByUserIdRef = useRef<string>('');
   // Which matter (if any) the in-session `run`/`documents` above belong to.
   // Set whenever a run is started or a review opened — from MatterHome
   // directly, or from the Library via `MatterPickerModal` (Important 3: a
@@ -474,6 +485,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // resets it back to `false` before any retry, so a genuinely new
       // auth error from retrying a cell in this same review still redirects.
       authErrorHandledRef.current = true;
+      createdByUserIdRef.current = review.createdByUserId;
       setRun(reviewRun);
       setIsRunning(false);
     } catch (e) {
@@ -716,6 +728,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       try {
         const profile = await getProfile();
         userId = profile.id;
+        createdByUserIdRef.current = userId;
         const existingIds = new Set(matterDocuments.map(d => d.id));
         const newDocs = docs.filter(d => !existingIds.has(d.id));
         if (newDocs.length > 0) {
@@ -895,7 +908,14 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
 
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, profile.id));
+      // Minor 2: `createdByUserId` records who created the REVIEW, not who
+      // most recently verified something in it — pass the tracked original
+      // through rather than `profile.id` (the current actor, who is instead
+      // recorded on the `Verification`/`Note` itself, correctly, above).
+      // `|| profile.id` only covers the defensive case where the ref was
+      // never set (should not happen: reaching here requires either
+      // `openReview` or `handleStartRun` to have run first).
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, createdByUserIdRef.current || profile.id));
       latestRunRef.current = updated;
       setRun(updated);
     } catch (e) {
@@ -927,7 +947,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
 
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, profile.id));
+      // Minor 2: same reasoning as `handleVerify` above — preserve the
+      // review's original creator rather than reattributing to whoever
+      // just added a note.
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, createdByUserIdRef.current || profile.id));
       latestRunRef.current = updated;
       setRun(updated);
     } catch (e) {
@@ -1027,8 +1050,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         // the exact failure this task exists to remove.
         const toPersist = latestRunRef.current ?? updated;
         try {
-          const profile = await getProfile();
-          await saveReview(reviewFromRun(toPersist, matterId, settings.modelId, profile.id));
+          // Minor 2: same reasoning as `handleVerify`/`handleAddNote` — a
+          // retry's save must not reattribute the review to whoever
+          // triggered the retry either. `getProfile()` was only ever
+          // fetched here to feed this one field, so it's dropped rather
+          // than kept around unused.
+          await saveReview(reviewFromRun(toPersist, matterId, settings.modelId, createdByUserIdRef.current));
           loadMatterReviews(matterId);
         } catch (e) {
           notify(e instanceof Error ? e.message : 'Could not save this retry.', 'error');

@@ -311,6 +311,24 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     expect(verification.at).toBeGreaterThanOrEqual(before);
   });
 
+  it('Minor 2: does not reattribute the review\'s createdByUserId to whoever verifies or adds a note', async () => {
+    // makeReview()'s createdByUserId is 'u1'; the acting user here is a
+    // different profile ('u42') to prove the two are not conflated.
+    getProfileMock.mockResolvedValue({ id: 'u42', name: 'Someone Else', initials: 'SE' });
+    saveReviewMock.mockResolvedValue(undefined);
+
+    await openReview();
+
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+
+    expect(saveReviewMock).toHaveBeenCalled();
+    const persisted = saveReviewMock.mock.calls[0][0];
+    expect(persisted.findings.d1.c1.verification.byUserId).toBe('u42');
+    // The review's authorship must be untouched by a later verification.
+    expect(persisted.createdByUserId).toBe('u1');
+  });
+
   it('persists a note the same way, and does not show one the store rejected', async () => {
     saveReviewMock.mockResolvedValue(undefined);
     await openReview();

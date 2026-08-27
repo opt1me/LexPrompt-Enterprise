@@ -267,4 +267,36 @@ describe('buildTabularCsv', () => {
       expect(csv).toContain(`[${label}]`);
     }
   });
+
+  // Important 3 (spec §6: "a flagged finding carries its flag and any
+  // note"). A note went missing from both exporters before this fix.
+  it('carries a note into the cell', () => {
+    const csv = buildTabularCsv(
+      runWith({
+        'clause-1': doneFinding({
+          verification: { state: 'flagged' },
+          notes: [{ id: 'n1', findingId: 'x', text: 'Confirm against the side letter.', byUserId: 'u1', at: 1 }],
+        }),
+      }),
+      docs,
+    );
+    expect(csv).toContain('Confirm against the side letter.');
+  });
+
+  // The two exporters share `noteLines` via `findingOutcome.ts` for exactly
+  // this reason: they must not be able to disagree about a note's text.
+  it('agrees with the DOCX exporter on a note\'s text', () => {
+    const run = runWith({
+      'clause-1': doneFinding({
+        verification: { state: 'flagged' },
+        notes: [{ id: 'n1', findingId: 'x', text: 'Cross-check clause 14.2.', byUserId: 'u1', at: 1 }],
+      }),
+    });
+    const docxNotes = buildReportRows(run, 'doc-1')[0].notes;
+    const csv = buildTabularCsv(run, docs);
+    expect(docxNotes).toEqual(['Note (u1): Cross-check clause 14.2.']);
+    for (const noteLine of docxNotes) {
+      expect(csv).toContain(noteLine);
+    }
+  });
 });

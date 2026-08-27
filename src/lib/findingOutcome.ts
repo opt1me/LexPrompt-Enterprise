@@ -63,6 +63,26 @@ export function verificationLabel(finding: Finding | undefined): string | null {
   return 'UNVERIFIED AI OUTPUT';
 }
 
+/**
+ * Formats a finding's notes for export — one line per note, attributed to
+ * whoever wrote it. Spec section 6: "A `flagged` finding carries its flag
+ * **and any note**." Extracted here, next to `verificationLabel`, so the
+ * DOCX report and the CSV export cannot disagree about what a note looks
+ * like once it leaves the app — the exact reason this module exists. Not
+ * limited to `flagged` findings: a note can be added to any finding
+ * regardless of its verification state, and the spec's honesty rule ("say
+ * what a human has and has not confirmed") applies just as much there.
+ *
+ * Attribution uses the raw `byUserId` rather than a display name: this
+ * module only sees a `Finding`/`Review`, not the profile store, and R1's
+ * "schema-ready but not multi-user" posture means there is exactly one
+ * local user today regardless.
+ */
+export function noteLines(finding: Finding | undefined): string[] {
+  const notes = finding?.notes ?? [];
+  return notes.map(note => `Note (${note.byUserId}): ${note.text}`);
+}
+
 export interface VerificationCounts {
   total: number;
   verified: number;

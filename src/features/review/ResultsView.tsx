@@ -341,6 +341,15 @@ export function ResultsView({
 
       <RejectReasonModal
         open={rejectClauseId !== null}
+        // Minor 3: mirrors `VerificationControls`'s own mount — re-rejecting
+        // an already-rejected finding (via `r`) must prefill its existing
+        // reason exactly as the mouse path does, or the same action behaves
+        // differently depending on which entry point triggered it.
+        initialReason={
+          rejectClauseId && findings[rejectClauseId]?.verification.state === 'rejected'
+            ? findings[rejectClauseId]?.verification.reason ?? ''
+            : ''
+        }
         onCancel={() => setRejectClauseId(null)}
         onConfirm={(reason) => {
           const clauseId = rejectClauseId;

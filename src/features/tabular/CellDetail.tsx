@@ -67,6 +67,7 @@ export function CellDetail({ doc, clause, finding, onClose, onRetry, onVerify, v
           verifyBusy={verifyBusy}
           onAddNote={onAddNote}
           noteBusy={verifyBusy}
+          documentNames={doc ? { [doc.id]: doc.name } : {}}
           authorInitials={authorInitials}
         />
       </div>

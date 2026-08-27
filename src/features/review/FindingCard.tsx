@@ -35,8 +35,10 @@ export interface FindingCardProps {
   interrupted?: boolean;
   /** documentId to display name, for the pin on each piece of evidence. A
    *  review can cover several documents; a quote has to say which one it is
-   *  from. Optional so the tabular cell detail (single document) can omit
-   *  it — `EvidenceList` falls back to the id. */
+   *  from. Optional so a caller with no name to give (a bare preview, or a
+   *  finding not yet attached to any document) can omit it — `EvidenceList`
+   *  falls back to the id in that case. `CellDetail` (the tabular cell
+   *  detail panel) always has its one document in hand and passes it. */
   documentNames?: Record<string, string>;
   /** Reports the human's verification intent. Optional: a card rendered
    *  somewhere with no way to persist (a preview) simply shows the state

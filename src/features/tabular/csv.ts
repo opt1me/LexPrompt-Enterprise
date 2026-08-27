@@ -1,5 +1,5 @@
 import type { DocumentFile, Finding, ReviewRun } from '../../types';
-import { describeFindingOutcome, exportSummaryLine, verificationLabel } from '../../lib/findingOutcome';
+import { describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines } from '../../lib/findingOutcome';
 
 // Characters that Excel/Google Sheets treat as the start of a formula when a
 // cell is opened, regardless of the field being quoted — quoting only
@@ -40,7 +40,15 @@ export function escapeCsvField(value: string): string {
 function cellText(finding: Finding | undefined): string {
   const outcome = describeFindingOutcome(finding);
   const label = verificationLabel(finding);
-  return label ? `[${label}] ${outcome}` : outcome;
+  const base = label ? `[${label}] ${outcome}` : outcome;
+  // Important 3 (spec §6: "a flagged finding carries its flag and any
+  // note"): notes go at the END here, unlike the label — the label is a
+  // caveat that must be seen before a truncated summary, a note is
+  // supplementary detail a reader who opens the full cell should still find.
+  // `noteLines`/`verificationLabel` are both shared with exportDocx.ts via
+  // `findingOutcome.ts` so the two exporters cannot disagree about either.
+  const notes = noteLines(finding);
+  return notes.length > 0 ? `${base} | ${notes.join(' | ')}` : base;
 }
 
 /**

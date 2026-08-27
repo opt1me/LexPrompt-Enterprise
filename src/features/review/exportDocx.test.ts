@@ -1,12 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 // `jszip` is a transitive dependency (pulled in via `docx`, not declared in
 // this project's own package.json) used only here, to unzip the generated
 // .docx buffer so a test can read its raw XML. If a future `docx` version
 // bump drops it, this import fails loudly at test collection time — not a
 // silent wrong answer — and the fix is to add it to devDependencies then.
 import JSZip from 'jszip';
-import { buildReportRows, buildReportDocument } from './exportDocx';
+import { buildReportRows, buildReportDocument, exportDocx } from './exportDocx';
 import type { Finding, ReviewRun, Template } from '../../types';
+
+/** jsdom has no `Blob.prototype.arrayBuffer` — see vitest.setup.ts's
+ *  `Blob.prototype.text` polyfill for the same gap on the text side. Needed
+ *  only by the `exportDocx` (not `buildReportDocument`) tests below, which
+ *  exercise the real browser-download path end to end. */
+function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(blob);
+  });
+}
 
 const template: Template = {
   id: 't', name: 'T', contractType: 'NDA', mode: 'risk',
@@ -174,5 +187,93 @@ describe('buildReportRows', () => {
 
     expect(xml).toContain('REJECTED:');
     expect(xml).toContain('Cites the indemnity, not the cap');
+  });
+
+  // Important 3 (spec §6: "a flagged finding carries its flag and any
+  // note"). See findingOutcome.test.ts for `noteLines` itself; this proves
+  // the note actually reaches the generated docx XML, not just the
+  // intermediate `ReportRow[]`.
+  it('carries a note from a row into the generated docx XML', async () => {
+    const run = runWith({
+      'clause-1': doneFinding({
+        verification: { state: 'flagged' },
+        notes: [{ id: 'n1', findingId: 'x', text: 'Confirm against the side letter.', byUserId: 'u1', at: 1 }],
+      }),
+    });
+    const rows = buildReportRows(run, 'doc-1');
+    expect(rows[0].notes).toEqual(['Note (u1): Confirm against the side letter.']);
+
+    const doc = await buildReportDocument(rows, 'doc-1', 'stub summary line');
+    const { Packer } = await import('docx');
+    const buffer = await Packer.toBuffer(doc);
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('word/document.xml')?.async('string');
+
+    expect(xml).toContain('Confirm against the side letter.');
+  });
+});
+
+// Important 4: the DOCX report is per-document (`buildReportRows(run,
+// docId)`), so its header summary must count only that document's findings
+// — not the whole run. Exercises `exportDocx` itself (not just
+// `buildReportDocument`), because the bug lived in the one line that decides
+// which findings the summary counts, not in row-building or rendering.
+describe('exportDocx — header summary is scoped to the exported document (Important 4)', () => {
+  const twoDocTemplate: Template = {
+    id: 't2', name: 'T2', contractType: 'NDA', mode: 'risk',
+    systemPrompt: '', formatPrompt: '',
+    clauses: [{ id: 'c1', title: 'Term', prompt: '' }],
+    createdAt: 0, updatedAt: 0, schemaVersion: 2,
+  };
+
+  function twoDocRun(): ReviewRun {
+    return {
+      id: 'r2', templateSnapshot: twoDocTemplate, documentIds: ['doc-a', 'doc-b'],
+      findings: {
+        // doc-a: one finding, verified.
+        'doc-a': { c1: { clauseId: 'c1', status: 'done', summary: 'a', citations: [], verification: { state: 'verified', byUserId: 'u', at: 1 }, notes: [] } },
+        // doc-b: one finding, unchecked — if the summary were run-wide, this
+        // would drag doc-a's "1 verified" report down to "1 of 2 verified".
+        'doc-b': { c1: { clauseId: 'c1', status: 'done', summary: 'b', citations: [], verification: { state: 'unchecked' }, notes: [] } },
+      },
+      startedAt: 0,
+    };
+  }
+
+  /** jsdom implements neither `URL.createObjectURL` nor anchor-driven
+   *  navigation; `exportDocx`'s download side effects are stubbed so the
+   *  function itself — the thing that was actually wrong — can run
+   *  end-to-end rather than only its `buildReportRows`/`buildReportDocument`
+   *  pieces in isolation. */
+  async function runExportAndReadXml(run: ReviewRun, docId: string, docName: string): Promise<string | undefined> {
+    let capturedBlob: Blob | undefined;
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: (b: Blob) => { capturedBlob = b; return 'blob:stub'; },
+      revokeObjectURL: () => {},
+    });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      await exportDocx(run, docId, docName);
+      expect(capturedBlob).toBeDefined();
+      const buf = await blobToArrayBuffer(capturedBlob!);
+      const zip = await JSZip.loadAsync(buf);
+      return await zip.file('word/document.xml')?.async('string');
+    } finally {
+      clickSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it('counts only the exported document, not the whole two-document run', async () => {
+    const xml = await runExportAndReadXml(twoDocRun(), 'doc-a', 'docA.pdf');
+    expect(xml).toContain('1 findings: 1 verified, 0 unverified, 0 flagged, 0 rejected.');
+    // The whole-run wording this bug produced must be absent.
+    expect(xml).not.toContain('2 findings: 1 verified, 1 unverified, 0 flagged, 0 rejected.');
+  });
+
+  it('scopes to whichever document is exported, not always the first', async () => {
+    const xml = await runExportAndReadXml(twoDocRun(), 'doc-b', 'docB.pdf');
+    expect(xml).toContain('1 findings: 0 verified, 1 unverified, 0 flagged, 0 rejected.');
   });
 });

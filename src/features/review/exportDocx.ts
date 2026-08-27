@@ -1,5 +1,5 @@
 import type { Citation, ReviewRun, RiskLevel } from '../../types';
-import { describeFindingOutcome, exportSummaryLine, verificationLabel } from '../../lib/findingOutcome';
+import { describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines } from '../../lib/findingOutcome';
 
 export interface ReportRow {
   title: string;
@@ -8,6 +8,11 @@ export interface ReportRow {
   riskAnalysis?: string;
   citations: Citation[];
   verificationLabel: string | null;
+  /** Important 3 (spec §6: "a flagged finding carries its flag and any
+   *  note"): one formatted, attributed line per note. Shared with the CSV
+   *  exporter via `findingOutcome.ts`'s `noteLines` so the two cannot
+   *  disagree about what a note looks like once it leaves the app. */
+  notes: string[];
 }
 
 /**
@@ -31,6 +36,7 @@ export function buildReportRows(run: ReviewRun, docId: string): ReportRow[] {
         summary: describeFindingOutcome(finding),
         citations: [],
         verificationLabel: verificationLabel(finding),
+        notes: noteLines(finding),
       };
     }
 
@@ -41,6 +47,7 @@ export function buildReportRows(run: ReviewRun, docId: string): ReportRow[] {
       riskAnalysis: finding.riskAnalysis,
       citations: finding.citations,
       verificationLabel: verificationLabel(finding),
+      notes: noteLines(finding),
     };
   });
 }
@@ -129,6 +136,23 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
             children: [new Paragraph({ children: [new TextRun({ text: row.verificationLabel, bold: true })] })],
             columnSpan: 2,
             shading: { fill: 'FFF4CC' },
+            margins: cellMargins,
+          }),
+        ],
+      }));
+    }
+
+    // Notes (Important 3 — spec §6): each one its own row, right after the
+    // verification caveat and before the summary, for the same reason the
+    // label sits there — a reader skimming must meet a human's own comment
+    // before the AI-authored claim.
+    for (const note of row.notes) {
+      tableRows.push(new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: note })] })],
+            columnSpan: 2,
+            shading: { fill: 'EEF2FF' },
             margins: cellMargins,
           }),
         ],
@@ -252,7 +276,14 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
  */
 export async function exportDocx(run: ReviewRun, docId: string, docName: string): Promise<void> {
   const rows = buildReportRows(run, docId);
-  const doc = await buildReportDocument(rows, docName, exportSummaryLine(run.findings));
+  // Important 4: this report covers ONE document (`buildReportRows(run,
+  // docId)` above), so its header summary must count only that document's
+  // findings — not `exportSummaryLine(run.findings)`, which counts the
+  // whole run. The CSV export (`buildTabularCsv`) genuinely does cover every
+  // document, so its whole-run summary is correct as-is; scoping only
+  // belongs here, at the one place that reports on a single document.
+  const docSummary = exportSummaryLine({ [docId]: run.findings[docId] ?? {} });
+  const doc = await buildReportDocument(rows, docName, docSummary);
 
   const { Packer } = await import('docx');
   const blob = await Packer.toBlob(doc);

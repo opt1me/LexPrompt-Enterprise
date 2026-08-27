@@ -137,3 +137,43 @@ describe('ResultsView — keyboard verify loop gated on status (Critical 2)', ()
     expect(container.textContent).toContain('Assignment');
   });
 });
+
+// Minor 3: the two `RejectReasonModal` mounts (the mouse path in
+// `VerificationControls`, and this keyboard path here) had diverged — the
+// mouse mount passes `initialReason` for an already-rejected finding, this
+// one did not, so the same action ("re-reject this") behaved differently
+// depending on which entry point triggered it.
+describe('ResultsView — keyboard reject dialog prefills an existing reason (Minor 3)', () => {
+  function rejectedRun(): ReviewRun {
+    const run = makeRun();
+    run.findings.d1.c4 = {
+      ...run.findings.d1.c4,
+      verification: { state: 'rejected', reason: 'Cites the indemnity, not the cap', byUserId: 'u1', at: 1 },
+    };
+    return run;
+  }
+
+  it('prefills the reason when re-rejecting a done, already-rejected finding via r', () => {
+    const onVerify = vi.fn();
+    const container = renderResultsView(onVerify, rejectedRun());
+    keyDown({ key: 'j' }); // c2
+    keyDown({ key: 'j' }); // c3
+    keyDown({ key: 'j' }); // c4, done + already rejected
+    keyDown({ key: 'r' });
+
+    const textarea = container.querySelector('[role="dialog"] textarea') as HTMLTextAreaElement | null;
+    expect(textarea).not.toBeNull();
+    expect(textarea!.value).toBe('Cites the indemnity, not the cap');
+  });
+
+  it('leaves the reason blank when rejecting a finding for the first time', () => {
+    const onVerify = vi.fn();
+    const container = renderResultsView(onVerify); // c4 is `done` but unchecked
+    keyDown({ key: 'j' }); keyDown({ key: 'j' }); keyDown({ key: 'j' }); // c4
+    keyDown({ key: 'r' });
+
+    const textarea = container.querySelector('textarea') as HTMLTextAreaElement | null;
+    expect(textarea).not.toBeNull();
+    expect(textarea!.value).toBe('');
+  });
+});
