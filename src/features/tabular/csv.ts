@@ -41,7 +41,10 @@ export function escapeCsvField(value: string): string {
  *  guard — the guard inspects the first character of whatever it is
  *  handed, and a verified cell (no prefix) is exactly the unprefixed case
  *  it was written for. */
-function cellText(finding: Finding | undefined): string {
+function cellText(
+  finding: Finding | undefined,
+  documentNames: Record<string, string>,
+): string {
   const outcome = describeFindingOutcome(finding);
   // Task 9: a net position caveat is a SECOND, independent label from the
   // verification one — a collection finding can be unverified AND carry a
@@ -61,7 +64,7 @@ function cellText(finding: Finding | undefined): string {
   // `noteLines`/`verificationLabel`/`trailLines` are all shared with
   // exportDocx.ts via `findingOutcome.ts` so the two exporters cannot
   // disagree about any of them.
-  const extras = [...noteLines(finding), ...trailLines(finding)];
+  const extras = [...noteLines(finding), ...trailLines(finding, documentNames)];
   return extras.length > 0 ? `${base} | ${extras.join(' | ')}` : base;
 }
 
@@ -82,6 +85,10 @@ function cellText(finding: Finding | undefined): string {
  */
 export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): string {
   const clauses = run.templateSnapshot.clauses;
+  // Trail steps name their document rather than its id — see `trailLines`.
+  // The documents are already here for the row labels, so this needs no
+  // new parameter.
+  const documentNames = Object.fromEntries(documents.map(d => [d.id, d.name]));
 
   // Ruling R-B4: a single-field first row. Excel opens it as a title line
   // above the table, and every export — DOCX and CSV alike — has to say how
@@ -98,7 +105,7 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
     const key = findingsKeyFor(run.target, docId);
     const fields = [
       doc?.name ?? docId,
-      ...clauses.map(c => cellText(run.findings[key]?.[c.id])),
+      ...clauses.map(c => cellText(run.findings[key]?.[c.id], documentNames)),
     ];
     return fields.map(escapeCsvField).join(',');
   });

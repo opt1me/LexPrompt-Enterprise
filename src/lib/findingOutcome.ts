@@ -160,12 +160,27 @@ export function netPositionAmendmentLabel(finding: Finding | undefined): string 
  * assertion, not the derivation `VariationTrailModal` shows on screen (spec:
  * "a net position without its trail is an assertion").
  */
-export function trailLines(finding: Finding | undefined): string[] {
+export function trailLines(
+  finding: Finding | undefined,
+  documentNames: Record<string, string> = {},
+): string[] {
   const trail = finding?.netPosition?.trail ?? [];
   return trail.map((step, i) => {
     const kind = step.kind === 'original' ? 'Original' : 'Varies';
     const quotes = step.citations.map(c => `"${c.quote}"`).join('; ');
-    const base = `${i + 1}. ${kind} (${step.documentId}): ${step.effect}`;
+    // Name the document, not its id. Which document varied a clause IS the
+    // information a derivation carries — "varied by the deed of variation"
+    // is the whole point, and `(a3f9x2mtaoyw)` says nothing to a reader
+    // while looking like it should. Sub-project B shipped exactly this in
+    // note attribution (`Note (vzcsj71fs7mtalycwr):`) and it had to be
+    // fixed after a browser check, not a test, caught it.
+    //
+    // Falls back to the id when a name is genuinely unavailable — a
+    // document deleted from the matter since the run. That is an honest
+    // "this document is gone" rather than a wrong name, and the id at
+    // least distinguishes one missing document from another.
+    const label = documentNames[step.documentId] ?? step.documentId;
+    const base = `${i + 1}. ${kind} (${label}): ${step.effect}`;
     return quotes ? `${base} — ${quotes}` : base;
   });
 }

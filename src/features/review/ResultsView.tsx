@@ -193,7 +193,7 @@ export function ResultsView({
     if (!activeDocId || !activeDoc) return;
     setExportLoading(true);
     try {
-      await exportDocx(run, activeDocId, activeDoc.name);
+      await exportDocx(run, activeDocId, activeDoc.name, documentNames);
     } catch (error) {
       reportError('Could not export the report.', error);
     } finally {

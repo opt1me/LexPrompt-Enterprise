@@ -296,10 +296,18 @@ describe('buildTabularCsv', () => {
   it('carries the derivation trail into the CSV text', () => {
     const run = runWith({ 'clause-1': doneFinding({ summary: undefined, netPosition: unconfirmedPosition('Break on 6 months notice.', npTrail) }) });
     const csv = buildTabularCsv(run, docs);
-    expect(csv).toContain('d1');
+    // Each step names its DOCUMENT, not its id. Which document varied a
+    // clause is the information a derivation carries — "varied by the deed
+    // of variation" is the point, and a raw id says nothing to a reader
+    // while looking like it should. Sub-project B shipped this exact defect
+    // in note attribution and a browser check, not a test, caught it.
+    expect(csv).toContain('Agreement One.pdf');
     expect(csv).toContain('Break on 12 months notice.');
-    expect(csv).toContain('d2');
+    expect(csv).toContain('Agreement, Two.pdf');
     expect(csv).toContain('Notice cut to 6 months.');
+    // And the internal ids do not leak into a client-facing export.
+    expect(csv).not.toMatch(/\(d1\)/);
+    expect(csv).not.toMatch(/\(d2\)/);
   });
 
   it('exports the human\'s amended text in the CSV, and says a person amended it', () => {

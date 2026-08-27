@@ -43,7 +43,11 @@ export interface ReportRow {
  * report that omits a failed clause reads as "checked, nothing found",
  * which is worse than an honest failure notice.
  */
-export function buildReportRows(run: ReviewRun, docId: string): ReportRow[] {
+export function buildReportRows(
+  run: ReviewRun,
+  docId: string,
+  documentNames: Record<string, string> = {},
+): ReportRow[] {
   // A collection review's findings live under the COLLECTION id, not the
   // document id — `findingsKeyFor` resolves that (and is a no-op for an
   // ordinary document review, where it just returns `docId` back). Keying
@@ -73,7 +77,7 @@ export function buildReportRows(run: ReviewRun, docId: string): ReportRow[] {
         notes: noteLines(finding),
         netPositionLabel: netPositionLabel(finding),
         netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
-        trail: trailLines(finding),
+        trail: trailLines(finding, documentNames),
       };
     }
 
@@ -87,7 +91,7 @@ export function buildReportRows(run: ReviewRun, docId: string): ReportRow[] {
       notes: noteLines(finding),
       netPositionLabel: netPositionLabel(finding),
       netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
-      trail: trailLines(finding),
+      trail: trailLines(finding, documentNames),
     };
   });
 }
@@ -380,8 +384,17 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
  * `buildReportRows` for the row-level decisions and `buildReportDocument`
  * for how those rows become the actual `docx` document.
  */
-export async function exportDocx(run: ReviewRun, docId: string, docName: string): Promise<void> {
-  const rows = buildReportRows(run, docId);
+export async function exportDocx(
+  run: ReviewRun,
+  docId: string,
+  docName: string,
+  /** documentId → display name, so a derivation trail names the document
+   *  that varied a clause rather than printing its internal id. Optional so
+   *  the existing tests and any caller without the map still compile;
+   *  `trailLines` falls back to the id when a name is genuinely missing. */
+  documentNames: Record<string, string> = {},
+): Promise<void> {
+  const rows = buildReportRows(run, docId, documentNames);
   // Fail-loudly rule, applied to the surface where the whole app's founding
   // defect was first learned (CLAUDE.md): a review that genuinely has no
   // findings for this document/collection must say so, rather than handing
