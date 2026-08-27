@@ -467,6 +467,66 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     expect(container.textContent).not.toContain('NDA Review EDITED');
   });
 
+  // M2 (fix round 1). `handleOpenTemplate` used to do
+  // `setActiveTemplate(t); setSavedTemplateSnapshot(JSON.stringify(t))` from
+  // the library's own record, so reopening a playbook always reset the
+  // editor. Task 3 reduced it to a bare `navigate(...)`, and the route
+  // effect short-circuits when `activePlaybook.id` already matches — so
+  // nothing anywhere reset `activeDraft` on leaving. A confirmed
+  // "Discard them?" then discarded nothing: the editor reopened holding the
+  // rejected edits, still dirty, and the next Save PUBLISHED them as a
+  // version. In the sub-project whose purpose is making "which version did
+  // this review run against" answerable, a version could record a change
+  // the user explicitly rejected.
+  it('reopening a playbook after a confirmed discard shows the stored content, not the discarded edits', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    confirmSpy.mockReturnValue(true);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    const nameInput = container.querySelector('input') as HTMLInputElement;
+    act(() => { setInputValue(nameInput, 'EDITED'); });
+    expect((container.querySelector('input') as HTMLInputElement).value).toBe('EDITED');
+
+    const closeButton = Array.from(container.querySelectorAll('button'))
+      .find(b => /^close$/i.test(b.textContent || '')) as HTMLButtonElement;
+    act(() => { closeButton.click(); });
+    await flush();
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe('/playbooks');
+
+    const card = Array.from(container.querySelectorAll('h3'))
+      .find(h => h.textContent === 'NDA Review');
+    expect(card).toBeTruthy();
+    act(() => { (card as HTMLElement).click(); });
+    await flush();
+
+    expect(window.location.pathname).toBe('/playbooks/pb1');
+    expect((container.querySelector('input') as HTMLInputElement).value).toBe('NDA Review');
+  });
+
+  // The same reset, reached by the browser's own Back button rather than
+  // the Close control — a different code path into "left the editor".
+  it('reopening after a confirmed discard via browser Back also shows the stored content', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    confirmSpy.mockReturnValue(true);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    const nameInput = container.querySelector('input') as HTMLInputElement;
+    act(() => { setInputValue(nameInput, 'EDITED'); });
+
+    simulateBrowserBack('/playbooks');
+    await flush();
+
+    const card = Array.from(container.querySelectorAll('h3'))
+      .find(h => h.textContent === 'NDA Review');
+    act(() => { (card as HTMLElement).click(); });
+    await flush();
+
+    expect((container.querySelector('input') as HTMLInputElement).value).toBe('NDA Review');
+  });
+
   it('never prompts on Back when the editor has no unsaved changes', async () => {
     window.history.replaceState(null, '', '/playbooks/pb1');
     act(() => { root.render(<App />); });

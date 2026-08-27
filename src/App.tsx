@@ -681,6 +681,32 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playbookRouteId]);
 
+  // Leaving the editor DISCARDS its working copy (M2, fix round 1).
+  //
+  // Before Task 3, `handleOpenTemplate` re-seeded `activeTemplate` and
+  // `savedTemplateSnapshot` from the library's own record on every open, so
+  // reopening always reset. The library now holds identity records only and
+  // opening is a bare `navigate`, and the effect above short-circuits when
+  // `activePlaybook.id` already matches — so without this, a confirmed
+  // "This template has unsaved changes. Discard them?" discarded nothing:
+  // reopening the same card showed the rejected edits, still marked dirty,
+  // and the next Save PUBLISHED them. A version that records a change the
+  // user explicitly rejected is precisely what this sub-project exists to
+  // make impossible.
+  //
+  // Guarded on the route rather than placed relative to the effect above:
+  // the two are mutually exclusive on `playbookRouteId` being null, so
+  // neither can clobber the other whichever order they end up declared in
+  // (the reordering hazard CLAUDE.md names). `handleCreateTemplate` seeds
+  // the editor and navigates in the same batch, so `playbookRouteId` is
+  // already set by the time this runs and its unsaved draft survives.
+  useEffect(() => {
+    if (playbookRouteId) return;
+    setActivePlaybook(null);
+    setActiveDraft(null);
+    setSavedTemplateSnapshot(null);
+  }, [playbookRouteId]);
+
   // Keeps `view` in step with the URL for the routes an existing screen
   // understands (see `viewForRoute`) — fires on browser back/forward
   // (`useRoute`'s popstate listener updates `route`) and on our own
@@ -784,7 +810,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
 
   const handleOpenTemplate = (t: Playbook) => {
     // The library holds identity records only, so the content has to be
-    // fetched — which `loadPlaybookForEdit` does, driven by the route.
+    // fetched — which `loadPlaybookForEdit` does, driven by the route. The
+    // reset that this function used to do lives in the route effect above
+    // (see "Leaving the editor DISCARDS its working copy"), where every way
+    // out of the editor reaches it, not just this one.
     navigate({ name: 'playbook', playbookId: t.id });
   };
 
