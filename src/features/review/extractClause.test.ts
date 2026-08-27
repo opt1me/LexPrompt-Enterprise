@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractClause, buildClausePrompt, CLAUSE_SCHEMA } from './extractClause';
-import type { Clause, Template, DocumentFile, Settings } from '../../types';
+import type { PlaybookClause, Template, DocumentFile, Settings } from '../../types';
 
 vi.mock('../../lib/openrouter', async () => {
   const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
@@ -17,10 +17,10 @@ const settings: Settings = {
   modelSupportsImages: true, modelSupportsStructuredOutput: true, modelContextLength: 1_000_000,
 };
 
-const clause: Clause = {
+const clause: PlaybookClause = {
   id: 'c1',
   title: 'Governing Law',
-  prompt: 'Identify the governing law.',
+  extractPrompt: 'Identify the governing law.',
   riskCriteria: 'Must be England and Wales.',
 };
 

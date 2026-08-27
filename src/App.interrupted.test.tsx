@@ -105,8 +105,8 @@ function makeTemplate(): Template {
     systemPrompt: '',
     formatPrompt: '',
     clauses: [
-      { id: 'c1', title: 'Governing Law', prompt: 'Extract the governing law clause.' },
-      { id: 'c2', title: 'Term', prompt: 'Extract the term.' },
+      { id: 'c1', title: 'Governing Law', extractPrompt: 'Extract the governing law clause.' },
+      { id: 'c2', title: 'Term', extractPrompt: 'Extract the term.' },
     ],
     createdAt: 1,
     updatedAt: 1,

@@ -25,7 +25,7 @@ function makePlaybook(): Playbook {
     mode: 'extraction',
     systemPrompt: 'Be careful.',
     formatPrompt: 'Quote verbatim.',
-    clauses: [{ id: 'c1', title: 'Term', prompt: 'What is the term?' }],
+    clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }],
     createdAt: Date.now(),
     updatedAt: Date.now(),
     schemaVersion: 2,
@@ -172,20 +172,20 @@ describe('playbookSnapshot isolation', () => {
     // test that only pushes a new top-level clause would pass against a
     // shallow copy of `playbookSnapshot` and prove nothing.
     const playbook = makePlaybook();
-    const originalPrompt = playbook.clauses[0].prompt;
+    const originalPrompt = playbook.clauses[0].extractPrompt;
     const r = makeReview({ playbookSnapshot: playbook });
 
     const saved = await saveReview(r);
-    playbook.clauses[0].prompt = 'MUTATED';
+    playbook.clauses[0].extractPrompt = 'MUTATED';
 
     // The value returned from saveReview in this same tick must not have
     // leaked a reference to the caller's clause object.
-    expect(saved.playbookSnapshot.clauses[0].prompt).toBe(originalPrompt);
+    expect(saved.playbookSnapshot.clauses[0].extractPrompt).toBe(originalPrompt);
 
     // And the persisted copy, read back fresh from the store, must also be
     // unaffected.
     const reread = await getReview(r.id);
-    expect(reread?.playbookSnapshot.clauses[0].prompt).toBe(originalPrompt);
+    expect(reread?.playbookSnapshot.clauses[0].extractPrompt).toBe(originalPrompt);
   });
 
   it('is unaffected by pushing a new clause onto the original playbook after saving', async () => {
@@ -193,7 +193,7 @@ describe('playbookSnapshot isolation', () => {
     const r = makeReview({ playbookSnapshot: playbook });
     await saveReview(r);
 
-    playbook.clauses.push({ id: 'c2', title: 'New', prompt: 'New?' });
+    playbook.clauses.push({ id: 'c2', title: 'New', extractPrompt: 'New?' });
 
     const reread = await getReview(r.id);
     expect(reread?.playbookSnapshot.clauses.length).toBe(1);

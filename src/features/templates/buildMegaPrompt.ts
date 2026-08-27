@@ -13,7 +13,7 @@ export function buildMegaPrompt(template: Template, format: MegaPromptFormat, in
 
   const clauseListStr = clauses.map((c, i) => {
     let str = `${i + 1}. **${c.title}**`;
-    str += `\n   - Instruction: ${c.prompt}`;
+    str += `\n   - Instruction: ${c.extractPrompt}`;
     if (includeRisk && c.riskCriteria) {
       str += `\n   - Risk Criteria: ${c.riskCriteria}`;
     }
@@ -50,7 +50,7 @@ Acknowledge this prompt and tell me when you are ready.
     task: 'Extract and analyze contract clauses.',
     clauses: clauses.map(c => ({
       title: c.title,
-      instruction: c.prompt,
+      instruction: c.extractPrompt,
       ...(includeRisk ? { risk_criteria: c.riskCriteria || 'Use global tolerance' } : {}),
     })),
   };

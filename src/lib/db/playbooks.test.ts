@@ -133,7 +133,7 @@ describe('playbook CRUD', () => {
 describe('import / export', () => {
   it('round-trips through export and import', async () => {
     const p = newPlaybook('Round Trip');
-    p.clauses = [{ id: 'c1', title: 'Term', prompt: 'What is the term?' }];
+    p.clauses = [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }];
     const text = await exportPlaybook(p).text();
     const imported = await importPlaybook(text);
     expect(imported.name).toBe('Round Trip');
@@ -183,5 +183,32 @@ describe('import / export', () => {
     expect(migrated.schemaVersion).toBe(TEMPLATE_SCHEMA_VERSION);
     expect(migrated.clauses[0].id).toBeTruthy();
     expect(migrated.createdAt).toBeGreaterThan(0);
+  });
+
+  it('reads a pre-D clause `prompt` into `extractPrompt`', async () => {
+    await savePlaybook({ ...newPlaybook('legacy'), id: 'pb-legacy',
+      clauses: [{ id: 'c1', title: 'Break', prompt: 'Find the break clause' } as never] });
+    const got = await getPlaybook('pb-legacy');
+    expect(got!.clauses[0].extractPrompt).toBe('Find the break clause');
+    expect('prompt' in got!.clauses[0]).toBe(false);
+  });
+
+  it('drops an empty-text standard position rather than repairing it to empty', async () => {
+    await savePlaybook({ ...newPlaybook('p'), id: 'pb-empty',
+      clauses: [{ id: 'c1', title: 'T', extractPrompt: 'x',
+        standardPosition: { text: '   ', origin: 'authored', reviewedByHuman: true } }] });
+    const got = await getPlaybook('pb-empty');
+    expect('standardPosition' in got!.clauses[0]).toBe(false);
+  });
+
+  it('defaults an unreadable reviewedByHuman to false, never true', async () => {
+    await savePlaybook({ ...newPlaybook('p'), id: 'pb-rev',
+      clauses: [{ id: 'c1', title: 'T', extractPrompt: 'x',
+        standardPosition: { text: 'We ask for 6 months', origin: 'nonsense',
+          reviewedByHuman: 'yes' } as never }] });
+    const got = await getPlaybook('pb-rev');
+    expect(got!.clauses[0].standardPosition).toEqual({
+      text: 'We ask for 6 months', origin: 'authored', reviewedByHuman: false, provenance: undefined,
+    });
   });
 });

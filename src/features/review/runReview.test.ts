@@ -15,8 +15,8 @@ const template: Template = {
   id: 't1', name: 'T', contractType: 'NDA', mode: 'risk',
   systemPrompt: 's', formatPrompt: 'f',
   clauses: [
-    { id: 'c1', title: 'Term', prompt: 'p1' },
-    { id: 'c2', title: 'Law', prompt: 'p2' },
+    { id: 'c1', title: 'Term', extractPrompt: 'p1' },
+    { id: 'c2', title: 'Law', extractPrompt: 'p2' },
   ],
   createdAt: 0, updatedAt: 0, schemaVersion: 2,
 };
@@ -51,10 +51,10 @@ describe('emptyRun', () => {
     // top-level clauses array — a shallow copy (`{...template, clauses:
     // [...template.clauses]}`) would still share this inner clause object
     // and would let this mutation leak through, incorrectly passing.
-    const originalPrompt = template.clauses[0].prompt;
-    template.clauses[0].prompt = 'MUTATED';
-    expect(run.templateSnapshot.clauses[0].prompt).toBe(originalPrompt);
-    template.clauses[0].prompt = originalPrompt;
+    const originalPrompt = template.clauses[0].extractPrompt;
+    template.clauses[0].extractPrompt = 'MUTATED';
+    expect(run.templateSnapshot.clauses[0].extractPrompt).toBe(originalPrompt);
+    template.clauses[0].extractPrompt = originalPrompt;
   });
 
   // Regression pin (Task 6A): a documents-target run must seed EXACTLY as

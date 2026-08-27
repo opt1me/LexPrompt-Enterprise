@@ -2,7 +2,7 @@ import { chatJson, isAuthError } from '../../lib/openrouter';
 import { assessDocument, contextBudgetChars } from '../../lib/modelContext';
 import { repairCitations } from '../../lib/citationRepair';
 import { unchecked } from '../../lib/verification';
-import type { Clause, DocumentFile, Finding, RiskLevel, Settings, Template } from '../../types';
+import type { PlaybookClause, DocumentFile, Finding, RiskLevel, Settings, Template } from '../../types';
 
 const RISK_LEVELS: RiskLevel[] = ['High', 'Medium', 'Low', 'Info'];
 
@@ -47,7 +47,7 @@ export interface BuildClausePromptOptions {
 
 export function buildClausePrompt(
   doc: DocumentFile,
-  clause: Clause,
+  clause: PlaybookClause,
   template: Template,
   options: BuildClausePromptOptions = {},
 ): string {
@@ -68,7 +68,7 @@ DOCUMENT TEXT:
 ${text}${truncationNote}
 
 CLAUSE TO REVIEW: ${clause.title}
-INSTRUCTION: ${clause.prompt}${riskBlock}
+INSTRUCTION: ${clause.extractPrompt}${riskBlock}
 
 Return:
 - summary: what the document says on this point, or that it is silent.
@@ -96,7 +96,7 @@ If the document text above is empty and images are attached, read the images ins
  */
 export async function extractClause(
   doc: DocumentFile,
-  clause: Clause,
+  clause: PlaybookClause,
   template: Template,
   settings: Settings,
   signal?: AbortSignal,

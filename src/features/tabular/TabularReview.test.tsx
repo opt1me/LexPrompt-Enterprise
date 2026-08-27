@@ -20,7 +20,7 @@ function makeTemplate(): Template {
     mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
-    clauses: [{ id: 'c1', title: 'Governing Law', prompt: '' }],
+    clauses: [{ id: 'c1', title: 'Governing Law', extractPrompt: '' }],
     createdAt: 1,
     updatedAt: 1,
     schemaVersion: 2,

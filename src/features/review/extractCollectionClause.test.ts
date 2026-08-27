@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractCollectionClause, COLLECTION_CLAUSE_SCHEMA } from './extractCollectionClause';
-import type { Clause, Template, DocumentFile, Settings } from '../../types';
+import type { PlaybookClause, Template, DocumentFile, Settings } from '../../types';
 import type { CollectionMember } from '../../lib/collectionOrder';
 
 vi.mock('../../lib/openrouter', async () => {
@@ -16,10 +16,10 @@ const settings: Settings = {
   modelSupportsImages: true, modelSupportsStructuredOutput: true, modelContextLength: 1_000_000,
 };
 
-const clause: Clause = {
+const clause: PlaybookClause = {
   id: 'c1',
   title: 'Rent Review',
-  prompt: 'Describe how rent is reviewed and by whom.',
+  extractPrompt: 'Describe how rent is reviewed and by whom.',
   riskCriteria: 'Should not exceed RPI.',
 };
 

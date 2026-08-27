@@ -34,7 +34,7 @@ describe('generateTemplate', () => {
     expect(t.name).toBe('Commercial Lease');
     expect(t.systemPrompt).toBe('You are a reviewer.');
     expect(t.clauses.map(c => c.title)).toEqual(['Term', 'Rent']);
-    expect(t.clauses[0].prompt).toBe('generated prompt');
+    expect(t.clauses[0].extractPrompt).toBe('generated prompt');
     expect(t.clauses[0].id).toBeTruthy();
     expect(t.schemaVersion).toBeGreaterThan(0);
   });
@@ -53,8 +53,8 @@ describe('generateTemplate', () => {
       contractType: 'Lease', depth: 'Standard', verbosity: 'Standard', settings,
     });
 
-    expect(t.clauses[0].prompt).toBe('slow first');
-    expect(t.clauses[1].prompt).toBe('fast second');
+    expect(t.clauses[0].extractPrompt).toBe('slow first');
+    expect(t.clauses[1].extractPrompt).toBe('fast second');
   });
 
   it('keeps a clause whose prompt generation failed, using the planned summary', async () => {
@@ -69,8 +69,8 @@ describe('generateTemplate', () => {
     });
 
     expect(t.clauses.length).toBe(2);
-    expect(t.clauses[0].prompt).toBe('find the term');
-    expect(t.clauses[1].prompt).toBe('ok');
+    expect(t.clauses[0].extractPrompt).toBe('find the term');
+    expect(t.clauses[1].extractPrompt).toBe('ok');
   });
 
   it('reports status as it progresses', async () => {

@@ -177,7 +177,7 @@ function makeTemplate(): Template {
     mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
-    clauses: [{ id: 'c1', title: 'Governing Law', prompt: 'Extract the governing law clause.' }],
+    clauses: [{ id: 'c1', title: 'Governing Law', extractPrompt: 'Extract the governing law clause.' }],
     createdAt: 1,
     updatedAt: 1,
     schemaVersion: 2,

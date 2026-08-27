@@ -1,5 +1,5 @@
 import type { CollectionMember } from './collectionOrder';
-import type { Clause, Template } from '../types';
+import type { PlaybookClause, Template } from '../types';
 import { assessDocument } from './modelContext';
 
 const MONTH_NAMES = [
@@ -96,7 +96,7 @@ export function buildCollectionPrompt<
   T extends { name: string; text: string; documentDate?: number },
 >(
   members: CollectionMember<T>[],
-  clause: Clause,
+  clause: PlaybookClause,
   template: Template,
   budgetChars: number,
 ): { prompt: string; truncated: string[] } {
@@ -158,7 +158,7 @@ export function buildCollectionPrompt<
   const prompt = `${blocks.join('\n\n')}
 
 CLAUSE TO REVIEW: ${clause.title}
-INSTRUCTION: ${clause.prompt}${riskBlock}${truncationSummary}
+INSTRUCTION: ${clause.extractPrompt}${riskBlock}${truncationSummary}
 
 Return EXACTLY ${availableCount} trail entr${availableCount === 1 ? 'y' : 'ies'} — one per document above whose text
 was supplied — in reading order (base first, then each amendment as it takes effect). Do NOT return

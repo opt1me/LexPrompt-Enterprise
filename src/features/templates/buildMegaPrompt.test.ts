@@ -9,8 +9,8 @@ function templateWithClauses(): Template {
   t.formatPrompt = 'Return structured JSON.';
   t.riskTolerance = 'Risk-averse on liability.';
   t.clauses = [
-    { id: 'c1', title: 'Term', prompt: 'What is the lease term?', riskCriteria: 'Flag any term over 10 years.' },
-    { id: 'c2', title: 'Rent', prompt: 'What is the rent?' },
+    { id: 'c1', title: 'Term', extractPrompt: 'What is the lease term?', riskCriteria: 'Flag any term over 10 years.' },
+    { id: 'c2', title: 'Rent', extractPrompt: 'What is the rent?' },
   ];
   return t;
 }

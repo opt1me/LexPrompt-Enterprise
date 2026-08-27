@@ -1,6 +1,6 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Mail, FileDown, Loader } from 'lucide-react';
-import type { Clause, DocumentFile, Finding, ReviewRun, Settings } from '../../types';
+import type { PlaybookClause, DocumentFile, Finding, ReviewRun, Settings } from '../../types';
 import { isAuthError } from '../../lib/openrouter';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
@@ -277,7 +277,7 @@ export function ResultsView({
     }
   };
 
-  const handleSuggestFix = async (clause: Clause, finding: Finding) => {
+  const handleSuggestFix = async (clause: PlaybookClause, finding: Finding) => {
     setRevisionLoadingClauseId(clause.id);
     try {
       const original = finding.citations[0]?.quote ?? finding.summary ?? '';

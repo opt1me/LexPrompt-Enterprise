@@ -2,11 +2,31 @@ export const TEMPLATE_SCHEMA_VERSION = 2;
 
 export type RiskLevel = 'High' | 'Medium' | 'Low' | 'Info';
 
-export interface Clause {
+export type PositionOrigin = 'authored' | 'ai-drafted' | 'learned';
+
+/** The firm's own answer to a clause — "we ask for a 6-month break notice,
+ *  no conditions." Its presence is what turns a finding from a summary into
+ *  a comparison; `Template.mode` used to decide that and no longer exists. */
+export interface StandardPosition {
+  text: string;
+  origin: PositionOrigin;
+  /** True once a human has read and accepted it. An AI-drafted position
+   *  nobody has read is not the firm's position — it is a suggestion, and
+   *  the editor says so. */
+  reviewedByHuman: boolean;
+  /** Free text naming where it came from ("Commercial Lease — Tenant v4",
+   *  "6 redlines across 4 documents"). Presentational; nothing resolves it. */
+  provenance?: string;
+}
+
+export interface PlaybookClause {
   id: string;
   title: string;
-  prompt: string;
+  /** Was `Clause.prompt`. Renamed because a clause now carries more than one
+   *  prompt-shaped field. */
+  extractPrompt: string;
   riskCriteria?: string;
+  standardPosition?: StandardPosition;
 }
 
 export interface Template {
@@ -17,7 +37,7 @@ export interface Template {
   systemPrompt: string;
   formatPrompt: string;
   riskTolerance?: string;
-  clauses: Clause[];
+  clauses: PlaybookClause[];
   createdAt: number;
   updatedAt: number;
   schemaVersion: number;

@@ -31,8 +31,8 @@ const template: Template = {
   id: 't', name: 'T', contractType: 'NDA', mode: 'risk',
   systemPrompt: '', formatPrompt: '',
   clauses: [
-    { id: 'clause-1', title: 'Term', prompt: '' },
-    { id: 'c2', title: 'Law', prompt: '' },
+    { id: 'clause-1', title: 'Term', extractPrompt: '' },
+    { id: 'c2', title: 'Law', extractPrompt: '' },
   ],
   createdAt: 0, updatedAt: 0, schemaVersion: 2,
 };
@@ -230,7 +230,7 @@ describe('exportDocx — header summary is scoped to the exported document (Impo
   const twoDocTemplate: Template = {
     id: 't2', name: 'T2', contractType: 'NDA', mode: 'risk',
     systemPrompt: '', formatPrompt: '',
-    clauses: [{ id: 'c1', title: 'Term', prompt: '' }],
+    clauses: [{ id: 'c1', title: 'Term', extractPrompt: '' }],
     createdAt: 0, updatedAt: 0, schemaVersion: 2,
   };
 
@@ -299,7 +299,7 @@ describe('buildReportRows / exportDocx — a collection review (Step 0)', () => 
   const collectionTemplate: Template = {
     id: 'tc', name: 'TC', contractType: 'Lease', mode: 'risk',
     systemPrompt: '', formatPrompt: '',
-    clauses: [{ id: 'break', title: 'Break clause', prompt: '' }],
+    clauses: [{ id: 'break', title: 'Break clause', extractPrompt: '' }],
     createdAt: 0, updatedAt: 0, schemaVersion: 2,
   };
 
@@ -379,7 +379,7 @@ describe('buildReportRows / exportDocx / buildReportDocument — net positions',
   const netPositionTemplate: Template = {
     id: 'tnp', name: 'TNP', contractType: 'Lease', mode: 'risk',
     systemPrompt: '', formatPrompt: '',
-    clauses: [{ id: 'break', title: 'Break clause', prompt: '' }],
+    clauses: [{ id: 'break', title: 'Break clause', extractPrompt: '' }],
     createdAt: 0, updatedAt: 0, schemaVersion: 2,
   };
 

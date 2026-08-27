@@ -1,7 +1,7 @@
 import { getDb } from './open';
 import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
-import { TEMPLATE_SCHEMA_VERSION, type Clause, type Playbook } from '../../types';
+import { TEMPLATE_SCHEMA_VERSION, type PlaybookClause, type Playbook, type StandardPosition, type PositionOrigin } from '../../types';
 import { uid } from '../uid';
 
 /** A playbook record as it actually sits in IndexedDB: the public
@@ -38,13 +38,46 @@ function migrate(input: unknown): Playbook {
   };
 }
 
-function migrateClause(input: unknown): Clause {
-  const c = (input ?? {}) as Partial<Clause>;
+function migrateClause(input: unknown): PlaybookClause {
+  const c = (input ?? {}) as Partial<PlaybookClause> & { prompt?: unknown };
+  // Both names are read on migration; only the new one is written (spec §5).
+  // A pre-D record has `prompt`; anything already migrated has
+  // `extractPrompt`. Reading both is what makes this idempotent.
+  const extractPrompt =
+    typeof c.extractPrompt === 'string' ? c.extractPrompt :
+    typeof c.prompt === 'string' ? c.prompt : '';
+  const standardPosition = migratePosition(c.standardPosition);
   return {
     id: typeof c.id === 'string' && c.id ? c.id : uid(),
     title: typeof c.title === 'string' ? c.title : 'Untitled clause',
-    prompt: typeof c.prompt === 'string' ? c.prompt : '',
+    extractPrompt,
     riskCriteria: typeof c.riskCriteria === 'string' ? c.riskCriteria : undefined,
+    // Key omitted entirely when absent, not set to `undefined` — an
+    // `undefined`-valued key survives structuredClone (how IndexedDB writes
+    // every record), so a plain assignment here would let a dropped
+    // position's key linger on the stored clause.
+    ...(standardPosition ? { standardPosition } : {}),
+  };
+}
+
+/** A position that cannot be read is dropped rather than repaired to an
+ *  empty one: an empty-text position would render as "we ask for: (nothing)"
+ *  and would make a clause claim a house rule it does not have. Absent is
+ *  the honest answer, and it is the same answer a clause that never had a
+ *  position gives. */
+function migratePosition(input: unknown): StandardPosition | undefined {
+  const p = (input ?? {}) as Partial<StandardPosition>;
+  if (typeof p.text !== 'string' || p.text.trim() === '') return undefined;
+  const origin: PositionOrigin =
+    p.origin === 'ai-drafted' || p.origin === 'learned' ? p.origin : 'authored';
+  return {
+    text: p.text,
+    origin,
+    // Unreadable provenance defaults to NOT reviewed. Same reasoning as
+    // `readStatus` in sub-project B: the safe default is the one that
+    // prompts a human to look.
+    reviewedByHuman: p.reviewedByHuman === true,
+    provenance: typeof p.provenance === 'string' ? p.provenance : undefined,
   };
 }
 

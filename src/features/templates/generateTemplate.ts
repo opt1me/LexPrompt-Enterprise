@@ -1,7 +1,7 @@
 import { chatJson } from '../../lib/openrouter';
 import { mapWithConcurrency } from '../../lib/concurrency';
 import { newPlaybook as newTemplate } from '../../lib/db/playbooks';
-import type { Clause, Settings, Template } from '../../types';
+import type { PlaybookClause, Settings, Template } from '../../types';
 import { uid } from '../../lib/uid';
 
 export type Depth = 'Light-Touch' | 'Standard' | 'Detailed';
@@ -115,7 +115,7 @@ Return systemPrompt, formatPrompt, riskTolerance, and clausePlans[{title, instru
   // Phase 2: bounded, not Promise.all over up to 35 at once — the old code
   // reliably tripped rate limits. A failed clause degrades to its planned
   // summary rather than losing the whole template.
-  const clauses = await mapWithConcurrency<ClausePlan, Clause>(
+  const clauses = await mapWithConcurrency<ClausePlan, PlaybookClause>(
     validClausePlans,
     settings.concurrency,
     async cp => {
@@ -136,7 +136,10 @@ Return { prompt, riskCriteria }.`,
         return {
           id: uid(),
           title: cp.title,
-          prompt: generated.prompt,
+          // Left side is ours (`PlaybookClause.extractPrompt`); right side is
+          // the model's wire field, described to it as `prompt` in
+          // CLAUSE_PROMPT_SCHEMA above — that wire key is unchanged (R-D6).
+          extractPrompt: generated.prompt,
           riskCriteria: generated.riskCriteria,
         };
       } catch {
@@ -145,7 +148,7 @@ Return { prompt, riskCriteria }.`,
         return {
           id: uid(),
           title: cp.title,
-          prompt: cp.instructionSummary,
+          extractPrompt: cp.instructionSummary,
           riskCriteria: cp.riskCriteriaSummary,
         };
       }

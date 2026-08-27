@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildCollectionPrompt } from './collectionPrompt';
 import type { CollectionMember } from './collectionOrder';
-import type { Clause, DocumentRecord, Template } from '../types';
+import type { PlaybookClause, DocumentRecord, Template } from '../types';
 
 function doc(id: string, name: string, text: string, overrides: Partial<DocumentRecord> = {}): DocumentRecord {
   return {
@@ -14,10 +14,10 @@ function member(overrides: Partial<CollectionMember> & Pick<CollectionMember, 'd
   return { document: null, ...overrides };
 }
 
-const clause: Clause = {
+const clause: PlaybookClause = {
   id: 'cl1',
   title: 'Rent Review',
-  prompt: 'Describe how rent is reviewed and by whom.',
+  extractPrompt: 'Describe how rent is reviewed and by whom.',
 };
 
 const template: Template = {
@@ -78,7 +78,7 @@ describe('buildCollectionPrompt', () => {
   it('states the clause instruction and risk criteria once, after the documents, not per document', () => {
     const { prompt } = buildCollectionPrompt(twoMemberCollection(), clause, riskTemplate, 100_000);
     const clauseIndex = prompt.indexOf('CLAUSE TO REVIEW: Rent Review');
-    const instructionIndex = prompt.indexOf(clause.prompt);
+    const instructionIndex = prompt.indexOf(clause.extractPrompt);
     const riskIndex = prompt.indexOf('RISK CRITERIA');
     const lastDocumentIndex = prompt.lastIndexOf('DOCUMENT 2 (VARIES)');
 

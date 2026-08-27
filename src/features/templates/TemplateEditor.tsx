@@ -28,7 +28,7 @@ export function TemplateEditor({ template, onChange, onSave, onExport, onShowMeg
   const addClause = () => {
     onChange({
       ...template,
-      clauses: [...template.clauses, { id: Date.now().toString(), title: 'New Clause', prompt: 'Instruction...', riskCriteria: '' }],
+      clauses: [...template.clauses, { id: Date.now().toString(), title: 'New Clause', extractPrompt: 'Instruction...', riskCriteria: '' }],
     });
   };
 
@@ -37,7 +37,7 @@ export function TemplateEditor({ template, onChange, onSave, onExport, onShowMeg
     onChange({ ...template, clauses: newClauses });
   };
 
-  const updateClause = (index: number, field: 'title' | 'prompt' | 'riskCriteria', value: string) => {
+  const updateClause = (index: number, field: 'title' | 'extractPrompt' | 'riskCriteria', value: string) => {
     const newClauses = template.clauses.map((c, i) =>
       i === index ? { ...c, [field]: value } : c
     );
@@ -133,8 +133,8 @@ export function TemplateEditor({ template, onChange, onSave, onExport, onShowMeg
                     <div>
                       <label className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1 block">Extraction Instruction</label>
                       <AutoResizeTextarea
-                        value={clause.prompt}
-                        onChange={(e) => updateClause(idx, 'prompt', e.target.value)}
+                        value={clause.extractPrompt}
+                        onChange={(e) => updateClause(idx, 'extractPrompt', e.target.value)}
                         className="w-full bg-white/5 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:ring-1 focus:ring-violet-500/50 border border-transparent focus:border-violet-500/30"
                         placeholder="What to extract..."
                       />

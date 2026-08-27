@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
-import type { Clause, Finding } from '../../types';
+import type { PlaybookClause, Finding } from '../../types';
 import type { VerificationChange } from '../../lib/verification';
 import { RiskChip } from '../../components/RiskChip';
 import { StateChip } from '../../components/StateChip';
@@ -13,14 +13,14 @@ import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailMod
 import { isVerifiable } from '../../lib/findingOutcome';
 
 export interface FindingCardProps {
-  clause: Clause;
+  clause: PlaybookClause;
   finding: Finding | undefined;
   onCiteClick: (quotes: string[], documentId?: string) => void;
   onRetry: (clauseId: string) => void;
   /** Optional: wired in Task 18. Renders "Suggest Fix" on High/Medium risk
    *  findings only. Omitted entirely (e.g. in the tabular cell detail panel)
    *  when the caller has no revision flow to hand it off to. */
-  onSuggestFix?: (clause: Clause, finding: Finding) => void;
+  onSuggestFix?: (clause: PlaybookClause, finding: Finding) => void;
   /** Shows a spinner on this card's Suggest Fix button while a revision for
    *  this specific clause is being generated. */
   suggestFixLoading?: boolean;

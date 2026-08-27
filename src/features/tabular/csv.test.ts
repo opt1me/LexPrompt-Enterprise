@@ -77,8 +77,8 @@ describe('escapeCsvField', () => {
 
 describe('buildTabularCsv', () => {
   const clauses = [
-    { id: 'c1', title: 'Termination', prompt: 'p1' },
-    { id: 'c2', title: 'Liability, Cap', prompt: 'p2' },
+    { id: 'c1', title: 'Termination', extractPrompt: 'p1' },
+    { id: 'c2', title: 'Liability, Cap', extractPrompt: 'p2' },
   ];
   const tmpl = template(clauses);
   const docs = [doc('d1', 'Agreement One.pdf'), doc('d2', 'Agreement, Two.pdf')];
@@ -219,7 +219,7 @@ describe('buildTabularCsv', () => {
   function runWith(findings: Record<string, Finding>): ReviewRun {
     return {
       id: 'run-1',
-      templateSnapshot: template([{ id: 'clause-1', title: 'Clause', prompt: 'p' }]),
+      templateSnapshot: template([{ id: 'clause-1', title: 'Clause', extractPrompt: 'p' }]),
       documentIds: ['doc-1'],
       target: { kind: 'documents', documentIds: ['doc-1'] },
       findings: { 'doc-1': findings },

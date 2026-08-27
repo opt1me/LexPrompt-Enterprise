@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { X, FileText, BookOpen } from 'lucide-react';
-import type { Clause, DocumentFile, Finding } from '../../types';
+import type { PlaybookClause, DocumentFile, Finding } from '../../types';
 import type { VerificationChange } from '../../lib/verification';
 import { FindingCard } from '../review/FindingCard';
 import { DocumentViewer } from '../review/DocumentViewer';
@@ -31,7 +31,7 @@ export interface CellDetailProps {
    *  Optional: omitted, the panel behaves exactly as it did — one document,
    *  no swap. */
   documents?: DocumentFile[];
-  clause: Clause;
+  clause: PlaybookClause;
   finding: Finding | undefined;
   onClose: () => void;
   onRetry: (clauseId: string) => void;

@@ -2,13 +2,13 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Clause, Finding } from '../../types';
+import type { PlaybookClause, Finding } from '../../types';
 import { FindingCard } from './FindingCard';
 import { unconfirmedPosition } from '../../lib/netPosition';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const CLAUSE: Clause = { id: 'c1', title: 'Governing Law', prompt: 'Extract the governing law clause.' };
+const CLAUSE: PlaybookClause = { id: 'c1', title: 'Governing Law', extractPrompt: 'Extract the governing law clause.' };
 
 function render(node: React.ReactElement): { container: HTMLDivElement; root: Root } {
   const container = document.createElement('div');

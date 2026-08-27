@@ -13,7 +13,7 @@ const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
 const template: Template = {
   id: 't', name: 'T', contractType: 'Lease', mode: 'risk',
   systemPrompt: '', formatPrompt: '',
-  clauses: [{ id: 'break', title: 'Break clause', prompt: '' }],
+  clauses: [{ id: 'break', title: 'Break clause', extractPrompt: '' }],
   createdAt: 0, updatedAt: 0, schemaVersion: 2,
 };
 
