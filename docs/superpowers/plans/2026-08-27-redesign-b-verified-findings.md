@@ -1816,29 +1816,40 @@ export function RejectReasonModal({ open, initialReason = '', onCancel, onConfir
   const trimmed = reason.trim();
 
   return (
-    <Modal open={open} onClose={onCancel} title="Reject this finding">
-      <div className="space-y-3">
-        <p className="text-xs text-gray-400 leading-relaxed">
-          A rejected finding is still exported, with this reason attached. Say what is wrong with it
-          so whoever reads the report knows why it was not relied on.
-        </p>
-        <AutoResizeTextarea
-          value={reason}
-          onChange={(e) => setReason(e.target.value)}
-          placeholder="e.g. Cites the indemnity, not the liability cap"
-          className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white outline-none"
-        />
-        <div className="flex gap-2 justify-end">
+    <Modal
+      isOpen={open}
+      onClose={onCancel}
+      title="Reject this finding"
+      footer={
+        <>
           <Button variant="ghost" onClick={onCancel}>Cancel</Button>
-          <Button onClick={() => onConfirm(trimmed)} disabled={trimmed === ''}>Confirm rejection</Button>
-        </div>
-      </div>
+          <Button variant="danger" onClick={() => onConfirm(trimmed)} disabled={trimmed === ''}>
+            Confirm rejection
+          </Button>
+        </>
+      }
+    >
+      <p className="text-xs text-gray-400 leading-relaxed">
+        A rejected finding is still exported, with this reason attached. Say what is wrong with it
+        so whoever reads the report knows why it was not relied on.
+      </p>
+      <AutoResizeTextarea
+        value={reason}
+        onChange={(e) => setReason(e.target.value)}
+        placeholder="e.g. Cites the indemnity, not the liability cap"
+        className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white outline-none"
+      />
     </Modal>
   );
 }
 ```
 
-Read `src/components/Modal.tsx` and `src/components/AutoResizeTextarea.tsx` first and match their actual prop names — the names above are the expected ones, not verified ones. If `Modal` does not put `role="dialog"` on its container, add it there; the test depends on it and every future dialog benefits.
+**Verified facts about the components this uses** — these were checked against the real files, so do not "correct" them:
+
+- `Modal`'s open prop is **`isOpen`**, not `open`. Its full contract is `{ isOpen, title, onClose, children, footer?, size? }`, and it returns `null` when closed. The action buttons go in the `footer` slot — that is what every other dialog in this app does, and the slot already supplies the right border and spacing.
+- `Button` extends `React.ButtonHTMLAttributes`, so **`disabled` works** and already renders `disabled:opacity-50 disabled:cursor-not-allowed`. It also has a `danger` variant, used above.
+- `AutoResizeTextarea` takes `value: string` and passes everything else through to the `<textarea>`.
+- **`Modal` does NOT set `role="dialog"` today.** Add it to `Modal`'s panel div, together with `aria-modal="true"` — the test depends on it, and every dialog in the app gains a correct accessibility role from one three-word change. This is the one edit to a shared component this task makes; make it in `Modal.tsx` and nowhere else.
 
 - [ ] **Step 4: Write the controls**
 
@@ -2136,7 +2147,7 @@ export function NotesPanel({ notes, authorInitials, busy = false, onAddNote }: N
 }
 ```
 
-Check `Button`'s actual props before using `disabled` — if it only accepts `loading`, add a `disabled` passthrough rather than working around it.
+`Button` extends `React.ButtonHTMLAttributes`, so `disabled` is already supported and already styled (`disabled:opacity-50 disabled:cursor-not-allowed`) — verified against the file. Use it directly; no passthrough is needed.
 
 - [ ] **Step 4: Mount on the card**
 
