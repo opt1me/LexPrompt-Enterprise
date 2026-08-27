@@ -825,42 +825,51 @@ In `src/types.ts`, on `Review`:
 
 - [ ] **Step 2: Write the failing tests**
 
-Append to `src/lib/db/reviewMigration.test.ts` — read the file first and match its helpers.
+Append to `src/lib/db/reviewMigration.test.ts`. **Written against that file's real fixtures, checked at plan time — do not assume:** it provides exactly one helper, `legacyReview()`, whose `playbookSnapshot.id` is **`'pb'`** (not `'pb1'`), and there is no `snapshot` const to spread. `src/lib/db/reviews.test.ts` provides `makePlaybook()`, `makeReview(overrides)` and a local `uid()`.
 
 ```ts
-it('points a pre-D review at the migrated v1 of the playbook its snapshot names', async () => {
-  // versionIndex maps playbookId -> its v1 version id
-  const migrated = migrateReviewRecord(legacyReview, { pb1: 'v1-of-pb1' });
-  expect(migrated.playbookVersionId).toBe('v1-of-pb1');
+it('points a pre-D review at the migrated v1 of the playbook its snapshot names', () => {
+  // The index maps playbookId -> that playbook's v1 version id. `legacyReview()`'s
+  // snapshot id is 'pb', so that is the key the migration must look up.
+  const migrated = migrateReviewRecord(legacyReview(), { pb: 'v1-of-pb' });
+  expect(migrated.playbookVersionId).toBe('v1-of-pb');
 });
 
-it('leaves playbookVersionId absent when the playbook no longer exists', async () => {
-  const migrated = migrateReviewRecord(
-    { ...legacyReview, playbookSnapshot: { ...snapshot, id: 'deleted-pb' } },
-    { pb1: 'v1-of-pb1' },
-  );
+it('leaves playbookVersionId absent when the playbook no longer exists', () => {
+  const orphan = legacyReview();
+  orphan.playbookSnapshot = { ...orphan.playbookSnapshot, id: 'deleted-pb' };
+  const migrated = migrateReviewRecord(orphan, { pb: 'v1-of-pb' });
+  // Absent, not undefined — `structuredClone` persists an undefined-valued key.
   expect('playbookVersionId' in migrated).toBe(false);
-  // and it still opens on its snapshot
-  expect(migrated.playbookSnapshot.clauses).toHaveLength(1);
+  // and it still opens on its snapshot, which is what makes such a review readable at all
+  expect(migrated.playbookSnapshot).toBeDefined();
 });
 
-it('does not overwrite a version id a review already has', async () => {
-  const migrated = migrateReviewRecord(
-    { ...legacyReview, playbookVersionId: 'v4' }, { pb1: 'v1-of-pb1' });
+it('does not overwrite a version id a review already has', () => {
+  const migrated = migrateReviewRecord({ ...legacyReview(), playbookVersionId: 'v4' }, { pb: 'v1-of-pb' });
   expect(migrated.playbookVersionId).toBe('v4');
+});
+
+it('an empty index leaves every review unbound rather than guessing', () => {
+  expect('playbookVersionId' in migrateReviewRecord(legacyReview(), {})).toBe(false);
 });
 ```
 
-Append to `src/lib/db/reviews.test.ts`:
+Append to `src/lib/db/reviews.test.ts`, using its own `makePlaybook`/`makeReview`:
 
 ```ts
 it('reopening a review reads the version it ran against, not the current one', async () => {
-  // publish v1, save a review carrying v1's id, publish v2, reopen
-  const reopened = await getReview(reviewId);
+  const v1 = await publishVersion('pb-1', draftFrom(makePlaybook()), 'u1');
+  const review = await saveReview(makeReview({ playbookVersionId: v1.id }));
+  await publishVersion('pb-1', { ...draftFrom(makePlaybook()), changeSummary: 'later' }, 'u1');
+
+  const reopened = await getReview(review.id);
   const version = await getVersion(reopened!.playbookVersionId!);
   expect(version!.version).toBe(1);
 });
 ```
+
+`draftFrom(playbook)` is a local helper you write: it maps a `Playbook`-shaped fixture onto a `PlaybookDraft`. Task 3 provides `migrateDraft`, which does exactly this — prefer calling it over hand-rolling.
 
 - [ ] **Step 3: Run, confirm failure**
 
