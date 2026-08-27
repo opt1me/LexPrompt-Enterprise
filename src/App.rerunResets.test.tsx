@@ -2,8 +2,14 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Matter, Review, DocumentRecord, Template, TrailStep } from './types';
+import type { Matter, Review, DocumentRecord, Template, TrailStep, Collection } from './types';
 import { unconfirmedPosition, confirmPosition } from './lib/netPosition';
+// Deliberately UNMOCKED: Task 8A's App-level collection-retry tests (bottom
+// of this file) need `getCollection` to run for real against fake-indexeddb
+// (this project's standard test setup — `vitest.setup.ts`), exercising the
+// actual `openReview` reconstruction path rather than a stand-in for it.
+import { saveCollection } from './lib/db/collections';
+import { closeDb } from './lib/db/open';
 
 // No @testing-library/react in this project — see App.interrupted.test.tsx
 // for the precedent this follows: drive a real react-dom root directly,
@@ -617,5 +623,122 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
       const clearedRunPassedIn = retryCellMock.mock.calls[0][0] as ReviewRun;
       expect('netPosition' in clearedRunPassedIn.findings.d1.c2).toBe(false);
     });
+  });
+});
+
+// Task 8A: a collection review's retry must go through the COLLECTION
+// extractor, never `extractClause` — verified here at the point
+// `handleRetryCell` actually invokes `retryCell`, by inspecting the
+// collection argument it is handed (and, in the second test, that it is
+// refused rather than silently omitted).
+describe('App — retrying a collection clause calls the collection extractor (Task 8A)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  function makeCollectionReview(): Review {
+    return {
+      id: 'r1',
+      matterId: 'm1',
+      playbookSnapshot: makeTemplate(),
+      documentIds: ['d1', 'd2'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] },
+      findings: {
+        'coll-1': {
+          c1: {
+            clauseId: 'c1', status: 'done', citations: [],
+            summary: 'The notice period is now 6 months.',
+            verification: { state: 'unchecked' }, notes: [],
+          },
+          c2: {
+            clauseId: 'c2', status: 'done', citations: [],
+            summary: 'Unaffected by the amendment.',
+            verification: { state: 'unchecked' }, notes: [],
+          },
+        },
+      },
+      modelId: 'test/model',
+      startedAt: 1,
+      completedAt: 2,
+      createdByUserId: 'u1',
+    };
+  }
+
+  beforeEach(async () => {
+    closeDb();
+    indexedDB.deleteDatabase('lexprompt');
+    localStorage.clear();
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    listPlaybooksMock.mockReset().mockResolvedValue([]);
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    getMatterMock.mockReset().mockResolvedValue(makeMatter());
+    listDocumentsMock.mockReset().mockResolvedValue([]);
+    // Two distinct member documents — `documentFileForViewing` keys off
+    // `record.id`, not the id it was fetched by, so a single fixed record
+    // (as other describe blocks in this file use) would collapse d1/d2.
+    getDocumentMock.mockReset().mockImplementation((id: string) => Promise.resolve({
+      ...makeDocumentRecord(), id, name: `${id}.txt`,
+    }));
+    getDocumentBlobMock.mockReset().mockResolvedValue(null);
+    getReviewMock.mockReset().mockResolvedValue(makeCollectionReview());
+    saveReviewMock.mockReset().mockResolvedValue(undefined);
+    getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
+    retryCellMock.mockReset();
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.pushState(null, '', '/');
+  });
+
+  async function openReview() {
+    window.history.pushState(null, '', '/matters/m1/reviews/r1');
+    act(() => { root.render(<App />); });
+    await flush();
+  }
+
+  it('calls retryCell with the collection\'s target and ordered members, not with extractClause\'s single document', async () => {
+    const collection: Collection = {
+      id: 'coll-1',
+      matterId: 'm1',
+      name: 'Lease + amendments',
+      baseDocumentId: 'd1',
+      variesDocumentIds: ['d2'],
+      createdAt: 1,
+      createdByUserId: 'u1',
+    };
+    await saveCollection(collection);
+    retryCellMock.mockResolvedValue(makeCollectionReview());
+
+    await openReview();
+    act(() => { findButton(container, /^Retry$/i, 0).click(); });
+    await flush();
+
+    expect(retryCellMock).toHaveBeenCalled();
+    const collectionArg = retryCellMock.mock.calls[0][5] as
+      { target: unknown; members: { documentId: string }[] } | undefined;
+    expect(collectionArg).toBeDefined();
+    expect(collectionArg?.target).toEqual({ kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] });
+    expect(collectionArg?.members.map(m => m.documentId)).toEqual(['d1', 'd2']);
+  });
+
+  it('refuses the retry, without calling retryCell, when the collection record cannot be reloaded', async () => {
+    // Deliberately no `saveCollection` call — `getCollection('coll-1')`
+    // genuinely resolves null here, mirroring a deleted or unreachable
+    // collection. Falling back to `extractClause` in this situation would be
+    // exactly the silent, confidently-wrong single-document answer this
+    // sub-project exists to prevent.
+    await openReview();
+
+    act(() => { findButton(container, /^Retry$/i, 0).click(); });
+    await flush();
+
+    expect(retryCellMock).not.toHaveBeenCalled();
+    expect(container.textContent).toMatch(/could not be prepared for retry/i);
   });
 });

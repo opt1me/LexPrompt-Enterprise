@@ -26,7 +26,7 @@ import {
   listCollections, getCollection, saveCollection, deleteCollection, newCollection,
 } from './lib/db/collections';
 import { orderedMembers } from './lib/collectionOrder';
-import { isCollectionTarget } from './lib/reviewTarget';
+import { findingsKeyFor, isCollectionTarget } from './lib/reviewTarget';
 import { useRoute, type Route } from './lib/router';
 import { generateTemplate } from './features/templates/generateTemplate';
 import { listModels, isAuthError } from './lib/openrouter';
@@ -75,18 +75,29 @@ function reviewFromRun(run: ReviewRun, matterId: string, modelId: string, userId
 /** Replaces one finding in a run, copying only the two objects on the path
  *  to it. Extracted rather than inlined three times: this project has six
  *  sibling-drift findings on record, and three hand-rolled copies of a
- *  nested-map update is exactly how the seventh happens. */
+ *  nested-map update is exactly how the seventh happens.
+ *
+ *  Task 8A: `docId` is always the ACTIVE document (which viewer pane/tab a
+ *  human was looking at when they wrote this), never assumed to be the key
+ *  a finding is stored under — those are the same thing for a standalone
+ *  review and different things for a collection one, where every clause's
+ *  finding lives under the collection id (`findingsKeyFor`, Task 6A)
+ *  regardless of which member document happens to be on screen. Resolving
+ *  the key here, once, means every caller (`handleVerify`, `handleAddNote`,
+ *  `handleConfirmNetPosition`, `handleAmendNetPosition`, `handleRetryCell`)
+ *  writes under the same key `ResultsView`/`TabularReview` read from. */
 function withUpdatedFinding(
   run: ReviewRun,
   docId: string,
   clauseId: string,
   finding: Finding,
 ): ReviewRun {
+  const key = findingsKeyFor(run.target, docId);
   return {
     ...run,
     findings: {
       ...run.findings,
-      [docId]: { ...run.findings[docId], [clauseId]: finding },
+      [key]: { ...run.findings[key], [clauseId]: finding },
     },
   };
 }
@@ -199,6 +210,17 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // `handleStartRun`, which needs the run as it stood at the moment of
   // cancellation to persist it.
   const latestRunRef = useRef<ReviewRun | null>(null);
+  // Task 8A: the collection info (`target` + ordered, hydrated `members`) a
+  // LIVE run over a collection was started with (`handleStartRun`), or that
+  // a REOPENED collection review was reconstructed with (`openReview`) — the
+  // one thing `handleRetryCell` needs beyond `run` itself to re-run a
+  // collection clause through the collection extractor rather than
+  // `extractClause`. `null` for a standalone (document-target) run/review,
+  // or when a collection review's own collection record could not be
+  // reloaded — `handleRetryCell` refuses to retry a collection clause
+  // rather than silently falling back to a single-document answer, which is
+  // exactly the confidently-wrong result this sub-project exists to avoid.
+  const activeCollectionRef = useRef<CollectionRunInput | null>(null);
   // Minor 2: the id of whoever CREATED the in-session review — set once,
   // either from a freshly-started run's own creator (`handleStartRun`) or
   // from a reopened review's stored `createdByUserId` (`openReview`), and
@@ -486,6 +508,27 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         const blob = await getDocumentBlob(id);
         return documentFileForViewing(record, blob);
       }));
+      // Task 8A: reconstruct what a retry needs to re-run a collection
+      // clause through the collection extractor — the `Collection` record
+      // itself is not part of a `Review`, so it has to be fetched
+      // separately. Failing to load it (deleted collection, a DB error)
+      // must not block the review from opening at all — its findings are
+      // still real work (spec §9's reasoning, applied one level up) — it
+      // only means `handleRetryCell` will refuse a retry on this review
+      // rather than silently re-running a collection clause as a
+      // single-document one.
+      if (isCollectionTarget(review.target)) {
+        try {
+          const collectionRecord = await getCollection(review.target.collectionId);
+          activeCollectionRef.current = collectionRecord
+            ? { target: review.target, members: orderedMembers(collectionRecord, hydratedDocs) }
+            : null;
+        } catch {
+          activeCollectionRef.current = null;
+        }
+      } else {
+        activeCollectionRef.current = null;
+      }
       const reviewRun: ReviewRun = {
         id: review.id,
         templateSnapshot: review.playbookSnapshot,
@@ -810,6 +853,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     const newRun = emptyRun(template, docs, collectionInput?.target);
     authErrorHandledRef.current = false;
     latestRunRef.current = newRun;
+    // Task 8A: so a retry later in THIS run (`handleRetryCell`) can re-run a
+    // collection clause through the collection extractor rather than
+    // `extractClause` — `null` for the standalone path, exactly as before
+    // this ref existed.
+    activeCollectionRef.current = collectionInput ?? null;
     setDocuments(docs);
     setRun(newRun);
     setIsRunning(true);
@@ -961,7 +1009,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     const matterId = activeMatterId;
     if (!current || !matterId) return;
 
-    const existing = current.findings[docId]?.[clauseId];
+    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
     if (!existing) return;
 
     const profile = await getProfile();
@@ -991,7 +1039,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // trusting `current`/`updated`, which were captured before the two
       // awaits above and may already be stale.
       const latest = latestRunRef.current ?? updated;
-      const latestExisting = latest.findings[docId]?.[clauseId] ?? existing;
+      const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
       const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, verification });
       latestRunRef.current = merged;
       setRun(merged);
@@ -1032,7 +1080,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     const matterId = activeMatterId;
     if (!current || !matterId) return;
 
-    const existing = current.findings[docId]?.[clauseId];
+    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
     if (!existing) return;
 
     const profile = await getProfile();
@@ -1050,7 +1098,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       const userId = createdByUserIdRef.current || profile.id;
       await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
       const latest = latestRunRef.current ?? updated;
-      const latestExisting = latest.findings[docId]?.[clauseId] ?? existing;
+      const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
       const merged = withUpdatedFinding(latest, docId, clauseId, {
         ...latestExisting,
         notes: [...latestExisting.notes, note],
@@ -1088,7 +1136,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     const matterId = activeMatterId;
     if (!current || !matterId) return;
 
-    const existing = current.findings[docId]?.[clauseId];
+    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
     if (!existing?.netPosition) return;
 
     const profile = await getProfile();
@@ -1102,7 +1150,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // Re-read the ref rather than trusting `current`/`updated`, which were
       // captured before the two awaits above and may already be stale.
       const latest = latestRunRef.current ?? updated;
-      const latestExisting = latest.findings[docId]?.[clauseId] ?? existing;
+      const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
       const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
       latestRunRef.current = merged;
       setRun(merged);
@@ -1129,7 +1177,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     const matterId = activeMatterId;
     if (!current || !matterId) return;
 
-    const existing = current.findings[docId]?.[clauseId];
+    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
     if (!existing?.netPosition) return;
 
     const profile = await getProfile();
@@ -1149,7 +1197,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       const userId = createdByUserIdRef.current || profile.id;
       await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
       const latest = latestRunRef.current ?? updated;
-      const latestExisting = latest.findings[docId]?.[clauseId] ?? existing;
+      const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
       const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
       latestRunRef.current = merged;
       setRun(merged);
@@ -1170,13 +1218,30 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     const doc = documents.find(d => d.id === docId);
     if (!doc) return;
     const matterId = activeMatterId;
+
+    // Task 8A: a collection clause's answer is a synthesis across every
+    // member document — re-running it must go through the SAME collection
+    // extractor that originally produced it, never `extractClause` (which
+    // would silently replace that synthesis with a one-document answer, on
+    // screen indistinguishable from a correct re-run). `activeCollectionRef`
+    // is only ever populated for a collection target (`handleStartRun`,
+    // `openReview`); if it's missing here for a collection run, the
+    // collection info genuinely could not be prepared (e.g. its `Collection`
+    // record failed to reload) — refusing the retry is the honest answer,
+    // not a silent fallback to the wrong extractor.
+    const isCollection = isCollectionTarget(current.target);
+    if (isCollection && !activeCollectionRef.current) {
+      notify('This collection could not be prepared for retry. Reload the review and try again.', 'error');
+      return;
+    }
+
     // Mirrors handleStartRun: a retry is a fresh, live API call, so a stale
     // `authErrorHandledRef` from an earlier run (or from opening a review
     // that already had one) must not suppress the redirect if THIS call is
     // the one that gets rejected.
     authErrorHandledRef.current = false;
 
-    const existing = current.findings[docId]?.[clauseId];
+    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
 
     // The single most important rule in this sub-project: a verification
     // describes a judgement about specific content, and re-running the
@@ -1251,7 +1316,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       setRun(merged);
     };
 
-    retryCell(cleared, doc, clauseId, settings, onRetryUpdate)
+    retryCell(cleared, doc, clauseId, settings, onRetryUpdate, isCollection ? activeCollectionRef.current! : undefined)
       .then(async (updated) => {
         // Important 2: guards this write the same way handleStartRun's
         // handleUpdate/persistFinal do — `matterId` is a local snapshot of

@@ -3,6 +3,7 @@ import { AlignLeft, Download, FileText, Loader, LayoutList, RotateCcw, CircleSla
 import type { Clause, DocumentFile, Finding, ReviewRun, RiskLevel } from '../../types';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
+import { findingsKeyFor } from '../../lib/reviewTarget';
 import { CellDetail } from './CellDetail';
 import { buildTabularCsv } from './csv';
 
@@ -71,7 +72,13 @@ export function TabularReview({
 
   const selectedDoc = selected ? documents.find(d => d.id === selected.docId) ?? null : null;
   const selectedClause = selected ? clauses.find(c => c.id === selected.clauseId) ?? null : null;
-  const selectedFinding = selected ? run.findings[selected.docId]?.[selected.clauseId] : undefined;
+  // Task 8A: a collection review's findings are keyed by the collection id
+  // (`findingsKeyFor`), not by `selected.docId`/`docId` — those name which
+  // document a cell's row belongs to for display, not the key its finding
+  // lives under.
+  const selectedFinding = selected
+    ? run.findings[findingsKeyFor(run.target, selected.docId)]?.[selected.clauseId]
+    : undefined;
 
   return (
     <div className="h-full flex flex-col bg-[#09090b]">
@@ -145,7 +152,7 @@ export function TabularReview({
                   {clauses.map(clause => (
                     <Cell
                       key={clause.id}
-                      finding={run.findings[docId]?.[clause.id]}
+                      finding={run.findings[findingsKeyFor(run.target, docId)]?.[clause.id]}
                       wrapText={wrapText}
                       isSelected={selected?.docId === docId && selected?.clauseId === clause.id}
                       onOpen={() => setSelected({ docId, clauseId: clause.id })}

@@ -6,6 +6,7 @@ import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { isVerifiable } from '../../lib/findingOutcome';
+import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 import { FindingCard } from './FindingCard';
 import type { TrailDocumentInfo } from './VariationTrailModal';
 import { DocumentViewer } from './DocumentViewer';
@@ -128,7 +129,19 @@ export function ResultsView({
     setFocusIndex(0);
   };
 
-  const findings = run.findings[activeDocId] ?? {};
+  // Task 8A: a collection review's findings are keyed by the COLLECTION id
+  // (`findingsKeyFor`, Task 6A), never by whichever document happens to be
+  // active in the viewer pane — `activeDocId` only picks which document
+  // the viewer/tab-strip show, and is not itself a valid lookup key for a
+  // collection run. Guarded rather than always calling `findingsKeyFor`
+  // with `activeDocId`: a `documents` target with no active id yet (e.g. an
+  // empty `run.documentIds` on first render) must still degrade to an empty
+  // pane instead of throwing (`findingsKeyFor` throws for that combination
+  // on purpose — see its own doc comment).
+  const findingsKey = isCollectionTarget(run.target)
+    ? findingsKeyFor(run.target)
+    : (activeDocId ? findingsKeyFor(run.target, activeDocId) : undefined);
+  const findings = (findingsKey ? run.findings[findingsKey] : undefined) ?? {};
 
   // So `EvidenceList` can name a citation's document — a review can cover
   // several. `findingKey` (imported above) is the one place the

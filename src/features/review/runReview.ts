@@ -213,12 +213,26 @@ export async function runReview(
   return current;
 }
 
+/**
+ * `collection` is the SAME optional `CollectionRunInput` shape `runReview`
+ * takes (Task 8A) — not a second, narrower one — so the two agree on what a
+ * collection retry needs. When present, this re-runs the COLLECTION
+ * extractor (`extractCollectionClause`) over `collection.members` and writes
+ * under `findingsKeyFor(collection.target)`, never under `doc.id`: a
+ * collection's answer is a synthesis across every member document, and
+ * silently falling back to `extractClause` — the single-document extractor —
+ * would replace that synthesis with a one-document answer with no sign
+ * anything had gone wrong. When absent, behaviour is exactly as before this
+ * parameter existed: `doc` is retried through `extractClause` and the result
+ * written under `doc.id`.
+ */
 export async function retryCell(
   run: ReviewRun,
   doc: DocumentFile,
   clauseId: string,
   settings: Settings,
   onUpdate: (run: ReviewRun) => void,
+  collection?: CollectionRunInput,
 ): Promise<ReviewRun> {
   const clause = run.templateSnapshot.clauses.find(c => c.id === clauseId);
   // Deliberately return the identical `run` reference: an unknown clause id
@@ -227,13 +241,17 @@ export async function retryCell(
   // triggers a pointless re-render.
   if (!clause) return run;
 
-  let current = withFinding(run, doc.id, {
+  const key = collection ? findingsKeyFor(collection.target) : doc.id;
+
+  let current = withFinding(run, key, {
     clauseId, status: 'running', citations: [], verification: unchecked(), notes: [],
   });
   onUpdate(current);
 
-  const finding = await extractClause(doc, clause, run.templateSnapshot, settings);
-  current = withFinding(current, doc.id, finding);
+  const finding = collection
+    ? await extractCollectionClause(collection.members, clause, run.templateSnapshot, settings)
+    : await extractClause(doc, clause, run.templateSnapshot, settings);
+  current = withFinding(current, key, finding);
   onUpdate(current);
   return current;
 }

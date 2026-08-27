@@ -240,3 +240,58 @@ describe('ResultsView — keyboard verify loop gated on verifyBusyKey (Minor 5)'
     expect(container.textContent).toContain('Governing Law');
   });
 });
+
+// Task 8A: the read side of a collection review. Task 6A made a collection
+// run seed and write its findings under `findingsKeyFor(target)` — the
+// collection id — but `ResultsView` still read `run.findings[activeDocId]`,
+// so a collection review rendered an empty findings pane no matter how much
+// work the run actually did.
+describe('ResultsView — reading a collection review\'s findings (Task 8A)', () => {
+  function makeCollectionRun(): ReviewRun {
+    return {
+      id: 'r1',
+      templateSnapshot: makeTemplate(),
+      documentIds: ['d1', 'd2'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] },
+      findings: {
+        'coll-1': {
+          c1: {
+            clauseId: 'c1', status: 'done',
+            summary: 'The notice period is now 6 months.',
+            citations: [{ quote: 'q', documentId: 'd2' }],
+            verification: { state: 'unchecked' }, notes: [],
+          },
+          c2: makeFinding('c2', 'pending'),
+          c3: makeFinding('c3', 'pending'),
+          c4: makeFinding('c4', 'pending'),
+        },
+      },
+      startedAt: 1,
+    };
+  }
+
+  it('renders a collection review\'s findings, keyed by the collection id — not an empty pane', () => {
+    const container = mount(
+      <ResultsView
+        run={makeCollectionRun()}
+        documents={documents}
+        settings={settings}
+        onRetryCell={() => {}}
+      />,
+    );
+    expect(container.textContent).toContain('The notice period is now 6 months.');
+  });
+
+  it('a standalone (document-keyed) review still renders exactly as before (regression pin)', () => {
+    const container = mount(
+      <ResultsView
+        run={makeRun()}
+        documents={documents}
+        settings={settings}
+        onRetryCell={() => {}}
+      />,
+    );
+    // c4 (done) is the only finding in `makeRun()` with a real summary.
+    expect(container.textContent).toContain('Some finding.');
+  });
+});

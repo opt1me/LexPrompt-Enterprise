@@ -881,3 +881,141 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     expect(finalSaved.findings['live-doc'].c1.verification.state).toBe('verified');
   });
 });
+
+// Task 8A: the read side of a collection review. Task 6A made a collection
+// run write its findings under `findingsKeyFor(target)` — the collection id
+// — but `withUpdatedFinding` (App.tsx) still wrote by `docId`, and
+// `ResultsView` still read by `docId`. So a verification on a collection
+// finding landed under a document key nothing read, and the reviewer's own
+// click appeared to do nothing. `onVerify`/`onAddNote`/etc. are still called
+// with the ACTIVE document id (one of the collection's members, for the
+// viewer pane) — App.tsx, not the caller, is responsible for resolving that
+// to the collection key via `findingsKeyFor`.
+describe('App — reading and writing a collection review\'s findings (Task 8A)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  /** A completed collection review with one clause, keyed by the
+   *  collection id — exactly what a collection run seeds and writes
+   *  (Task 6A's `emptyRun`/`runReview`). */
+  function makeCollectionReview(): Review {
+    return {
+      id: 'r1',
+      matterId: 'm1',
+      playbookSnapshot: makeTemplate(),
+      documentIds: ['d1', 'd2'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] },
+      findings: {
+        'coll-1': {
+          c1: {
+            clauseId: 'c1',
+            status: 'done',
+            citations: [{ quote: 'x', documentId: 'd2' }],
+            summary: 'The notice period is now 6 months.',
+            verification: { state: 'unchecked' },
+            notes: [],
+          },
+          c2: {
+            clauseId: 'c2',
+            status: 'done',
+            citations: [],
+            summary: 'Unaffected by the amendment.',
+            verification: { state: 'unchecked' },
+            notes: [],
+          },
+        },
+      },
+      modelId: 'test/model',
+      startedAt: 1,
+      completedAt: 2,
+      createdByUserId: 'u1',
+    };
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    listPlaybooksMock.mockReset().mockResolvedValue([]);
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    getMatterMock.mockReset().mockResolvedValue(makeMatter());
+    listDocumentsMock.mockReset().mockResolvedValue([]);
+    // Two distinct member documents, unlike the single fixed record other
+    // describe blocks in this file use — a collection review's viewer pane
+    // switches between real, distinct documents (`documentFileForViewing`
+    // keys off `record.id`, not the id it was fetched by).
+    getDocumentMock.mockReset().mockImplementation((id: string) => Promise.resolve({
+      ...makeDocumentRecord(), id, name: `${id}.txt`,
+    }));
+    getDocumentBlobMock.mockReset().mockResolvedValue(null);
+    getReviewMock.mockReset().mockResolvedValue(makeCollectionReview());
+    saveReviewMock.mockReset().mockResolvedValue(undefined);
+    getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
+    extractClauseMock.mockReset();
+    createDebouncedReviewSaverMock.mockClear();
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.pushState(null, '', '/');
+  });
+
+  async function openReview() {
+    window.history.pushState(null, '', '/matters/m1/reviews/r1');
+    act(() => { root.render(<App />); });
+    await flush();
+  }
+
+  it('renders a collection review\'s findings — not an empty pane', async () => {
+    await openReview();
+    expect(container.textContent).toContain('The notice period is now 6 months.');
+  });
+
+  it('verifies a collection finding, persists it under the COLLECTION key, and reads it back once the write resolves', async () => {
+    let resolveSave: (() => void) | undefined;
+    saveReviewMock.mockImplementation(() => new Promise<void>(resolve => { resolveSave = () => resolve(); }));
+
+    await openReview();
+
+    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+    expect(chips()[0].textContent).toBe('Unverified');
+
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+
+    // The write is in flight — persisted under 'coll-1', never under 'd1' or
+    // 'd2' (the active document in the viewer pane, which is what `onVerify`
+    // is actually called with).
+    expect(saveReviewMock).toHaveBeenCalled();
+    const persisted = saveReviewMock.mock.calls[0][0];
+    expect('coll-1' in persisted.findings).toBe(true);
+    expect(persisted.findings['coll-1'].c1.verification.state).toBe('verified');
+    expect('d1' in persisted.findings).toBe(false);
+    expect('d2' in persisted.findings).toBe(false);
+
+    // await-then-apply: not shown on screen until the write resolves.
+    expect(chips()[0].textContent).toBe('Unverified');
+
+    resolveSave!();
+    await flush();
+
+    // The round trip: written under the collection key, and read back from
+    // that same key onto the screen.
+    expect(chips()[0].textContent).toBe('Verified');
+  });
+
+  it('leaves the OTHER clause\'s finding, under the same collection key, untouched', async () => {
+    await openReview();
+
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+
+    const persisted = saveReviewMock.mock.calls[0][0];
+    expect(persisted.findings['coll-1'].c2.verification).toEqual({ state: 'unchecked' });
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { emptyRun, runReview, retryCell, runProgress, countNoContent } from './runReview';
-import type { DocumentFile, Settings, Template, Finding, ReviewTarget } from '../../types';
+import type { DocumentFile, Settings, Template, Finding, ReviewTarget, ReviewRun } from '../../types';
 import type { CollectionMember } from '../../lib/collectionOrder';
 
 vi.mock('./extractClause', () => ({ extractClause: vi.fn() }));
@@ -287,6 +287,90 @@ describe('retryCell', () => {
     const run = await runReview(emptyRun(template, docs), docs, settings, () => {});
     const same = await retryCell(run, docs[0], 'nope', settings, () => {});
     expect(same.findings).toEqual(run.findings);
+  });
+});
+
+// Task 8A: a collection run's retry must call the COLLECTION extractor and
+// write under the collection key — never fall back to `extractClause`, which
+// would silently replace a synthesised net position with a one-document
+// answer.
+describe('retryCell — a collection run', () => {
+  const target: ReviewTarget = { kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] };
+  const members: CollectionMember<DocumentFile>[] = [
+    { document: doc('d1'), documentId: 'd1', kind: 'original', position: 1 },
+    { document: doc('d2'), documentId: 'd2', kind: 'varies', position: 2 },
+  ];
+
+  /** A completed collection run whose c1 already carries a CONFIRMED net
+   *  position — the case a re-run must clear. c2 is left pending, to prove
+   *  a retry on c1 leaves a neighbouring clause untouched. */
+  function seededRun(): ReviewRun {
+    const run = emptyRun(template, [doc('d1'), doc('d2')], target);
+    return {
+      ...run,
+      findings: {
+        'coll-1': {
+          c1: {
+            clauseId: 'c1', status: 'done', citations: [],
+            verification: { state: 'unchecked' }, notes: [],
+            netPosition: { proposed: 'Old position.', state: 'confirmed', byUserId: 'u1', at: 1, trail: [] },
+          },
+          c2: { clauseId: 'c2', status: 'pending', citations: [], verification: { state: 'unchecked' }, notes: [] },
+        },
+      },
+    };
+  }
+
+  it('re-runs the COLLECTION extractor, not extractClause, and writes under the collection key', async () => {
+    vi.mocked(extractCollectionClause).mockResolvedValue({
+      clauseId: 'c1', status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [],
+      netPosition: { proposed: 'New position.', state: 'unconfirmed', trail: [] },
+    });
+
+    const run = seededRun();
+    const retried = await retryCell(run, doc('d1'), 'c1', settings, () => {}, { target, members });
+
+    expect(extractCollectionClause).toHaveBeenCalledTimes(1);
+    expect(extractClause).not.toHaveBeenCalled();
+    // Written under the collection id, not under 'd1' (the `doc` argument
+    // retryCell was handed) — no per-document key was created alongside it.
+    expect(Object.keys(retried.findings)).toEqual(['coll-1']);
+    expect(retried.findings['coll-1'].c1.status).toBe('done');
+    expect(retried.findings['coll-1'].c1.netPosition?.proposed).toBe('New position.');
+  });
+
+  it('resets a confirmed net position: the retried finding no longer carries the old confirmation', async () => {
+    vi.mocked(extractCollectionClause).mockResolvedValue({
+      clauseId: 'c1', status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [],
+      netPosition: { proposed: 'New position.', state: 'unconfirmed', trail: [] },
+    });
+
+    const run = seededRun();
+    expect(run.findings['coll-1'].c1.netPosition?.state).toBe('confirmed');
+
+    const retried = await retryCell(run, doc('d1'), 'c1', settings, () => {}, { target, members });
+
+    expect(retried.findings['coll-1'].c1.netPosition?.state).toBe('unconfirmed');
+    expect(retried.findings['coll-1'].c1.netPosition && 'byUserId' in retried.findings['coll-1'].c1.netPosition).toBe(false);
+  });
+
+  it('leaves a neighbouring clause untouched', async () => {
+    vi.mocked(extractCollectionClause).mockResolvedValue({
+      clauseId: 'c1', status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [],
+    });
+    const run = seededRun();
+    const retried = await retryCell(run, doc('d1'), 'c1', settings, () => {}, { target, members });
+    expect(retried.findings['coll-1'].c2).toEqual(run.findings['coll-1'].c2);
+  });
+
+  it('with no collection argument, behaves exactly as the standalone path (regression pin)', async () => {
+    vi.mocked(extractClause).mockImplementation(async (d, c) => ok(d.id, c.id));
+    const docs = [doc('d1')];
+    const run = await runReview(emptyRun(template, docs), docs, settings, () => {});
+    const retried = await retryCell(run, docs[0], 'c1', settings, () => {});
+    expect(extractClause).toHaveBeenCalled();
+    expect(extractCollectionClause).not.toHaveBeenCalled();
+    expect(retried.findings.d1.c1.status).toBe('done');
   });
 });
 
