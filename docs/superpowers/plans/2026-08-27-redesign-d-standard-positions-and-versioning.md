@@ -326,7 +326,17 @@ export interface PlaybookVersion {
 export type PlaybookDraft =
   Omit<PlaybookVersion, 'id' | 'playbookId' | 'version' | 'publishedAt' | 'publishedByUserId' | 'schemaVersion'>;
 
-/** A playbook's identity. Its content lives in `PlaybookVersion` records. */
+```
+
+**Do NOT reshape `Playbook` in this task.** Leave `export type Playbook = Template` exactly as it is, and leave `Template` alone.
+
+This matters for a concrete reason rather than tidiness: `src/lib/db/playbooks.ts` implements the *old* `Playbook` shape (`contractType`, `systemPrompt`, `clauses`, …) and **Task 3 is what rewrites it**. Reshaping the type here would break that file's compilation, and this task's own gate is `npx tsc --noEmit` clean — so Task 2 could not pass its own gate. `publishVersion` needs only `PlaybookDraft` and `PlaybookVersion`, both of which are new names that collide with nothing.
+
+The identity reshape belongs to Task 3, together with the repository rewrite that satisfies it:
+
+```ts
+/** Task 3 adds this, not Task 2. A playbook's identity; its content lives
+ *  in `PlaybookVersion` records. */
 export interface Playbook {
   id: string;
   /** Mirrors the current version's name, for listing without a second read. */
@@ -340,8 +350,6 @@ export interface Playbook {
   schemaVersion: number;
 }
 ```
-
-Leave `Template` in place for now — Task 3 removes it along with `mode`.
 
 - [ ] **Step 2: Bump the DB and add the store**
 
@@ -536,8 +544,9 @@ The most invasive migration since sub-project A, and it touches playbooks the us
 - Modify: `src/lib/db/playbooks.ts`, `src/lib/db/reviewMigration.ts`, `src/types.ts` (remove `Template` and `mode`)
 
 **Interfaces:**
-- Consumes: `publishVersion` (Task 2), `PlaybookDraft`, `PlaybookVersion`, `Playbook`.
-- Produces: `migratePlaybookRecord(raw: unknown): { playbook: Playbook; version: PlaybookDraft | null }`, `IMPORTED_SUMMARY`, and `listPlaybooks`/`getPlaybook` returning the reshaped `Playbook`.
+- Consumes: `publishVersion` (Task 2), `PlaybookDraft`, `PlaybookVersion`.
+- Produces: the reshaped **`Playbook`** identity interface (moved here from Task 2 — see that task's Step 1 for the exact shape and why it could not live there), `migratePlaybookRecord(raw: unknown): { playbook: Playbook; version: PlaybookDraft | null }`, `IMPORTED_SUMMARY`, `migrateDraft`, `migrateClause`, `migratePosition`, and `listPlaybooks`/`getPlaybook` returning the reshaped `Playbook`.
+- **This task defines `Playbook` and rewrites `db/playbooks.ts` in the same commit.** They cannot be split: the type and its only implementation must change together or neither compiles.
 
 - [ ] **Step 1: Write the failing tests first**
 
