@@ -944,9 +944,18 @@ Replace the `const citations = ...` line with:
     // migrated v1 output can never end up in different shapes. It also
     // derives each quote's page from the document's `[Page N]` markers —
     // and leaves `page` absent where the quote cannot be located, rather
-    // than guessing. `readability.text` is passed rather than `doc.text`
-    // because it is the text the model was actually shown.
-    const citations = repairCitations(raw.citations, doc.id, readability.text);
+    // than guessing.
+    //
+    // `doc.text`, NOT `readability.text`. It is tempting to pass the text
+    // the model was actually shown, but `readability.text` comes from
+    // `usableText`, which splits on the page markers (discarding them) and
+    // drops any page below `SCAN_TEXT_THRESHOLD` before rejoining. So it
+    // has no markers to read, and its pages would be renumbered even if it
+    // did. `doc.text` keeps every marker and every page, which makes its
+    // numbers the real ones — the same numbers `findQuoteRects` will scroll
+    // the viewer to. A page pin that disagrees with the viewer is worse
+    // than no pin.
+    const citations = repairCitations(raw.citations, doc.id, doc.text);
 ```
 
 Add `verification: unchecked(), notes: [],` to the `'cancelled'` literal in the catch block:
