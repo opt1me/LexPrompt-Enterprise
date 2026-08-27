@@ -128,6 +128,28 @@ describe('buildCollectionPrompt', () => {
     expect(buildCollectionPrompt(members, clause, template, 100_000).truncated).toEqual([]);
   });
 
+  /**
+   * MJ1. The request has to ask for what the response contract actually
+   * checks, or a compliant model fails every clause. `alignTrail` matches
+   * one step per document whose TEXT WAS SENT; an UNAVAILABLE member's text
+   * never was, so asking for an entry about it invites the model to write a
+   * sentence about a document it has not read — the one thing this app must
+   * never present as a document's own legal effect.
+   */
+  it('asks for one entry per available document only, and says not to write one for an unavailable member', () => {
+    const members: CollectionMember[] = [
+      member({ documentId: 'lease', kind: 'original', position: 1, document: doc('lease', 'Lease.pdf', BASE_TEXT) }),
+      member({ documentId: 'dov', kind: 'varies', position: 2, document: null }),
+    ];
+    const { prompt } = buildCollectionPrompt(members, clause, template, 100_000);
+
+    expect(prompt).toContain('EXACTLY 1 trail entry');
+    expect(prompt).not.toContain('EXACTLY 2 trail entries');
+    // Line-wrapped in the prompt text, so whitespace between the words is
+    // whatever the wrapping made it.
+    expect(prompt).toMatch(/do not\s+(return|write)\s+an entry for a document marked UNAVAILABLE/i);
+  });
+
   it('names truncated documents in the returned array and in the prompt text, when the budget forces truncation', () => {
     const longBase = 'B'.repeat(500);
     const longAmendment = 'A'.repeat(500);

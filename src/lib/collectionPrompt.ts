@@ -105,6 +105,14 @@ export function buildCollectionPrompt<
   const allocation = allocateBudget(fullTexts.map(t => t.length), budgetChars);
 
   const truncated: string[] = [];
+  // MJ1: the entry count asked for is the number of documents whose text is
+  // actually in this prompt, NOT the collection's member count. An
+  // UNAVAILABLE member contributes an explanatory block and no text, and
+  // `alignTrail` matches steps against the documents that were sent — asking
+  // for one more entry than that would either invite a sentence about a
+  // document the model has not read, or (when it sensibly declines) fail
+  // every clause of a collection with a missing amendment.
+  const availableCount = ordered.filter(m => m.document).length;
 
   const blocks = ordered.map((member, i) => {
     const label = `DOCUMENT ${member.position} (${roleLabel(member.kind)})`;
@@ -112,8 +120,9 @@ export function buildCollectionPrompt<
     if (!member.document) {
       return (
         `${label} — UNAVAILABLE: this document (id ${member.documentId}) is missing from the ` +
-        'matter and cannot be reviewed. Do not assume it is silent on this clause — say plainly ' +
-        'that it is unavailable and that the position below cannot account for it.'
+        'matter, so none of its text is included below. Do not assume it is silent on this clause, ' +
+        'and do not return a trail entry for it — you have not read it. Say in the net_position ' +
+        'that the set is incomplete and that the position cannot account for this document.'
       );
     }
 
@@ -151,9 +160,11 @@ export function buildCollectionPrompt<
 CLAUSE TO REVIEW: ${clause.title}
 INSTRUCTION: ${clause.prompt}${riskBlock}${truncationSummary}
 
-Return EXACTLY ${ordered.length} trail entr${ordered.length === 1 ? 'y' : 'ies'} — one per document above,
-including any marked UNAVAILABLE — in reading order (base first, then each amendment as it takes
-effect). Each entry has:
+Return EXACTLY ${availableCount} trail entr${availableCount === 1 ? 'y' : 'ies'} — one per document above whose text
+was supplied — in reading order (base first, then each amendment as it takes effect). Do NOT return
+an entry for a document marked UNAVAILABLE: its text was never sent, so anything written about it
+would be invented rather than read, and the app records the fact that it is missing itself. Say in
+the net_position that the set is incomplete instead. Each entry has:
 - document: the DOCUMENT NUMBER above that this entry describes. Required on every entry: an entry
   that does not name its document cannot be matched to one, and an effect read against the wrong
   document is worse than no answer, so the whole clause is rejected rather than guessed at.

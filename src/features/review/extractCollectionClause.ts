@@ -64,7 +64,7 @@ export const COLLECTION_CLAUSE_SCHEMA = {
         required: ['document', 'effect', 'citations'],
         additionalProperties: false,
       },
-      description: 'Exactly one entry per document above, including any marked UNAVAILABLE, each naming its own DOCUMENT number.',
+      description: 'Exactly one entry per document whose text was supplied above — NOT the ones marked UNAVAILABLE — each naming its own DOCUMENT number.',
     },
     net_position: {
       type: 'string',
@@ -164,8 +164,8 @@ function resolveStepCitations(rawCitations: unknown, present: AssessedMember[]):
 interface TrailMisalignment { error: string }
 
 /**
- * Matches every raw trail entry to the member it says it describes, and
- * returns them in the collection's reading order.
+ * Matches every raw trail entry to the PRESENT member it says it describes,
+ * keyed by that member's position in the collection's reading order.
  *
  * This exists because the trail used to be zipped onto `ordered` by ARRAY
  * POSITION, with only an "is it empty" guard in front of it. A model that
@@ -180,9 +180,9 @@ interface TrailMisalignment { error: string }
  * (`resolveCitationDocument`), and every way that can fail is an error
  * finding rather than a repaired guess:
  *
- *  - the trail's length does not match the collection's;
+ *  - the trail does not carry exactly one step per document that was SENT;
  *  - a step names no document, so nothing can be checked;
- *  - a step names a document that is not in this collection;
+ *  - a step names a document that was not sent for this clause;
  *  - two steps name the same document (which necessarily leaves another
  *    with none).
  *
@@ -190,30 +190,64 @@ interface TrailMisalignment { error: string }
  * failure: the claim is explicit and unambiguous, so it is honoured and
  * re-ordered here. Guessing is what this function refuses; reading is what
  * it does.
+ *
+ * MJ1: the set matched against is the PRESENT members, never `ordered`. A
+ * member whose document is missing had no text in the prompt, so the model
+ * cannot have read it and the app already has its own deterministic step for
+ * it (see the `trail` build in `extractCollectionClause`). Demanding a step
+ * for it made that safeguard — and the "[Incomplete set: ...]" note beside
+ * it — conditional on the model inventing one, and failed every clause of a
+ * base-plus-missing-amendment collection when it sensibly did not.
+ *
+ * The bijection C1 rests on still holds, over the present set: `position` is
+ * `index + 1` from `orderedMembers` and so is unique per member; this
+ * function asserts one step per present member, every number resolving to a
+ * present position, and no number repeating. N distinct in-range numbers
+ * over N distinctly-positioned present members is injective and therefore
+ * bijective, so `byPosition.get(m.position)` is defined for every present
+ * member and no hole can appear.
  */
 function alignTrail(
   rawTrail: unknown[],
   ordered: CollectionMember<DocumentFile>[],
-): { steps: RawTrailStep[] } | TrailMisalignment {
-  if (rawTrail.length !== ordered.length) {
+  present: AssessedMember[],
+): { byPosition: Map<number, RawTrailStep> } | TrailMisalignment {
+  const presentPositions = new Set(present.map(p => p.member.position));
+  const absentPositions = new Set(
+    ordered.filter(m => !m.document).map(m => m.position),
+  );
+
+  // A step claiming a member whose text was never sent is discarded, not
+  // counted and not rendered. Its effect cannot be evidence of anything —
+  // the model has not read that document — so keeping it would print
+  // invented text as a document's own legal effect, on a `done` finding,
+  // inside the derivation that exists to make a synthesis checkable. The
+  // deterministic "this document is unavailable" wording replaces it. The
+  // original index is kept so an error still names the step the model
+  // actually returned.
+  const claimed = rawTrail.map((step, index) => ({ step: (step ?? {}) as RawTrailStep, index }));
+  const steps = claimed.filter(({ step }) => {
+    const number = claimedDocumentNumber(step);
+    return number === undefined || !absentPositions.has(number);
+  });
+
+  if (steps.length !== present.length) {
     return {
-      error: `The model returned ${rawTrail.length} derivation step(s) for the ` +
-        `${ordered.length} document(s) in this collection, so its reasoning cannot be matched to them.`,
+      error: `The model returned ${steps.length} derivation step(s) for the ` +
+        `${present.length} document(s) sent for this clause, so its reasoning cannot be matched to them.`,
     };
   }
 
   const byPosition = new Map<number, RawTrailStep>();
-  for (let i = 0; i < rawTrail.length; i++) {
-    const step = (rawTrail[i] ?? {}) as RawTrailStep;
+  for (const { step, index } of steps) {
     const number = claimedDocumentNumber(step);
     if (number === undefined) {
-      return { error: `The model's derivation step ${i + 1} does not say which document it describes.` };
+      return { error: `The model's derivation step ${index + 1} does not say which document it describes.` };
     }
-    const member = ordered.find(m => m.position === number);
-    if (!member) {
+    if (!presentPositions.has(number)) {
       return {
-        error: `The model's derivation step ${i + 1} describes DOCUMENT ${number}, which is not one ` +
-          'of the documents in this collection.',
+        error: `The model's derivation step ${index + 1} describes DOCUMENT ${number}, which is not one ` +
+          'of the documents sent for this clause.',
       };
     }
     if (byPosition.has(number)) {
@@ -225,9 +259,7 @@ function alignTrail(
     byPosition.set(number, step);
   }
 
-  // Length matched, every number is in range, and no number repeats — so
-  // every member has exactly one step and this cannot produce a hole.
-  return { steps: ordered.map(m => byPosition.get(m.position)!) };
+  return { byPosition };
 }
 
 /**
@@ -352,7 +384,7 @@ export async function extractCollectionClause(
     // an effect attributed to the wrong document is worse than no
     // derivation at all, so anything that cannot be matched fails the
     // clause here rather than reaching `done` looking checkable.
-    const aligned = alignTrail(raw.trail, ordered);
+    const aligned = alignTrail(raw.trail, ordered, present);
     if ('error' in aligned) {
       return {
         ...base,
@@ -362,8 +394,15 @@ export async function extractCollectionClause(
       };
     }
 
-    const trail: TrailStep[] = ordered.map((member, index) => {
-      const rawStep = aligned.steps[index];
+    // Built over the collection's FULL reading order, from an alignment made
+    // over the present members only: a present member takes its aligned step,
+    // an absent one takes the deterministic sentence below and no citations
+    // (nothing could resolve to a document that was never sent anyway — see
+    // `resolveCitationDocument`, which searches `present`). The reader still
+    // sees every member of the collection, in order, with the missing one
+    // named as missing rather than quietly dropped.
+    const trail: TrailStep[] = ordered.map(member => {
+      const rawStep = member.document ? aligned.byPosition.get(member.position) : undefined;
       const modelEffect = typeof rawStep?.effect === 'string' ? rawStep.effect.trim() : '';
       const effect = modelEffect || (member.document
         ? ''

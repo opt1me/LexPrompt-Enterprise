@@ -539,11 +539,53 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
     });
   });
 
-  it('still describes an unavailable member, which the model must number like any other', async () => {
+  /**
+   * MJ1 (re-review of C1's fix). The alignment above is a contract about the
+   * documents the model was actually SENT, and an unavailable member is not
+   * one of them: `buildCollectionPrompt` writes an UNAVAILABLE block for it
+   * and no text, so a step describing it could only be invented.
+   *
+   * C1's first fix demanded one step per member of the collection's reading
+   * order, unavailable members included, which made the deterministic
+   * "this document is unavailable" effect and the "[Incomplete set: ...]"
+   * note — two pieces of machinery that exist for exactly this case —
+   * conditional on the model volunteering a step for a document it had
+   * never read. The likeliest model behaviour (not inventing one) then
+   * failed EVERY clause of a base-plus-missing-amendment collection, a flow
+   * the app supports on purpose: only a missing BASE blocks the run.
+   */
+  it('completes the clause when the model returns one step per PRESENT document and an amendment is missing', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      // One entry, for the one document whose text was actually sent.
+      trail: [{ document: 1, effect: 'The lease sets a 5-year review.', citations: [] }],
+      net_position: 'Still a 5-year review.',
+    });
+
+    const finding = await extractCollectionClause(members({ varies: null }), clause, template, settings);
+
+    expect(finding.status).toBe('done');
+    expect(finding.error).toBeUndefined();
+    // The trail still covers the whole collection: the app fills the absent
+    // member's step in itself rather than asking the model for it.
+    expect(finding.netPosition!.trail).toHaveLength(2);
+    expect(finding.netPosition!.trail[0]).toMatchObject({
+      documentId: 'lease', kind: 'original', effect: 'The lease sets a 5-year review.',
+    });
+    expect(finding.netPosition!.trail[1].documentId).toBe('dov');
+    expect(finding.netPosition!.trail[1].effect).toMatch(/unavailable/i);
+    expect(finding.netPosition!.trail[1].citations).toEqual([]);
+    expect(finding.netPosition!.proposed).toMatch(/incomplete set/i);
+  });
+
+  it('discards a step describing an unavailable member rather than presenting invented text as its effect', async () => {
     vi.mocked(chatJson).mockResolvedValue({
       trail: [
         { document: 1, effect: 'Base effect only.', citations: [] },
-        { document: 2, effect: '', citations: [] },
+        // The model was told this document is UNAVAILABLE and wrote an
+        // effect for it anyway. It has never seen the document, so this
+        // sentence cannot be evidence of anything — it is dropped and the
+        // deterministic wording used instead.
+        { document: 2, effect: 'The deed extends the term by ten years.', citations: [] },
       ],
       net_position: 'Based on the base document alone.',
     });
@@ -553,6 +595,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.trail[1].documentId).toBe('dov');
     expect(finding.netPosition!.trail[1].effect).toMatch(/unavailable/i);
+    expect(finding.netPosition!.trail[1].effect).not.toContain('ten years');
   });
 
   it('names the schema field the model must number its steps with', () => {
