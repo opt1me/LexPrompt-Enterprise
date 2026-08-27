@@ -41,6 +41,18 @@ export interface DocumentFile {
   pageImages?: { mime: string; data: string }[];
   /** Set when parsing failed; the file still appears in the list, marked. */
   parseError?: string;
+  /** Set when the extracted text is not a faithful rendering of the file:
+   *  a `.docx` carrying tracked changes (read with every change accepted)
+   *  or margin comments (dropped), or one whose package could not be
+   *  checked for either — see `lib/docxMarkup.ts`.
+   *
+   *  DELIBERATELY NOT a `parseError`. The document parsed, its text is
+   *  usable, and the review must run: this is a caveat about the text's
+   *  provenance, not a failure to read it, and a caller must be able to
+   *  tell "unreadable" from "readable with a caveat". Everything that
+   *  reads `parseError` refuses the document; nothing may refuse a
+   *  document over this. */
+  markupNotice?: string;
 }
 
 /** One piece of attributed evidence. Replaces v1's bare quote string: a
@@ -223,6 +235,12 @@ export interface DocumentRecord {
   kind: 'pdf' | 'docx' | 'txt';
   text: string;
   parseError?: string;
+  /** The provenance caveat recorded at ingest — see `DocumentFile`. Absent,
+   *  never `undefined`, on a document that has nothing to disclose and on
+   *  every document added before this check existed (those were not
+   *  checked; the README's known limitations say so, and re-adding one
+   *  checks it). */
+  markupNotice?: string;
   byteSize: number;
   addedAt: number;
   addedByUserId: string;

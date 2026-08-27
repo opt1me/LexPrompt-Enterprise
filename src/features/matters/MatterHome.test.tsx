@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Collection, DocumentRecord, Finding, Matter, Review, ReviewTarget } from '../../types';
 import { MatterHome } from './MatterHome';
+import { TRACKED_CHANGES_NOTICE } from '../../lib/docxMarkup';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -392,5 +393,36 @@ describe('MatterHome — a collections load failure does not mis-describe docume
     const text = container.textContent ?? '';
     expect(text).toContain('Lease as varied');
     expect(text).toContain('could not be loaded');
+  });
+});
+
+describe('MatterHome — a marked-up document is marked as such in the list', () => {
+  it('shows the markup notice on the document row', () => {
+    const container = mount(
+      <MatterHome
+        {...baseProps}
+        documents={[makeDoc({ id: 'd1', name: 'Lease.docx', kind: 'docx', markupNotice: TRACKED_CHANGES_NOTICE })]}
+      />,
+    );
+    expect(container.textContent).toContain(TRACKED_CHANGES_NOTICE);
+  });
+
+  it('does not call a document with a caveat unreadable', () => {
+    // The row's existing red "Unreadable:" treatment is for `parseError`. A
+    // marked-up document is perfectly readable and perfectly reviewable —
+    // labelling it unreadable would be a different lie in the other
+    // direction, and would train the reader to ignore both labels.
+    const container = mount(
+      <MatterHome
+        {...baseProps}
+        documents={[makeDoc({ id: 'd1', name: 'Lease.docx', kind: 'docx', markupNotice: TRACKED_CHANGES_NOTICE })]}
+      />,
+    );
+    expect(container.textContent).not.toContain('Unreadable');
+  });
+
+  it('says nothing about markup for a document with no notice', () => {
+    const container = mount(<MatterHome {...baseProps} documents={[makeDoc({ id: 'd1' })]} />);
+    expect(container.textContent).not.toContain('tracked changes');
   });
 });

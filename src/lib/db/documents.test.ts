@@ -4,6 +4,7 @@ import { listDocuments, getDocument, addDocument, deleteDocument, setDocumentRol
 import { getDocumentBlob } from './blobs';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
+import { TRACKED_CHANGES_NOTICE } from '../docxMarkup';
 import type { DocumentRecord } from '../../types';
 
 // jsdom's `Blob` (the global `Blob` in this test environment) does not
@@ -186,6 +187,42 @@ describe('a document whose blob is missing is still readable (spec §9)', () => 
 
     await expect(getDocument(rec.id)).resolves.toEqual(rec);
     await expect(getDocumentBlob(rec.id)).resolves.toBeNull();
+  });
+});
+
+describe('the tracked-changes notice survives persistence', () => {
+  // The reader of a review is often not the uploader, and may open it weeks
+  // later in a different session. A caveat that lived only on the in-memory
+  // DocumentFile would be gone exactly when someone acts on the findings.
+  it('reads back on the record, alongside the text it qualifies', async () => {
+    const rec = makeRecord({
+      name: 'lease.docx',
+      kind: 'docx',
+      text: 'Consent may be withheld only where it is reasonable to do so.',
+      markupNotice: TRACKED_CHANGES_NOTICE,
+    });
+    await addDocument(rec, makeBlob(['x'], 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'));
+
+    const found = await getDocument(rec.id);
+    expect(found?.markupNotice).toBe(TRACKED_CHANGES_NOTICE);
+    expect(found?.parseError).toBeUndefined();
+    const [listed] = await listDocuments(rec.matterId);
+    expect(listed.markupNotice).toBe(TRACKED_CHANGES_NOTICE);
+  });
+
+  // A document added before this check existed was never checked. It must
+  // read back with the field genuinely ABSENT rather than back-filled with
+  // `undefined` (which structuredClone preserves as a real key) or, worse,
+  // with a notice guessed on its behalf — and `migrateDocumentRecord` must
+  // not invent one.
+  it('leaves a pre-existing record without the field, rather than back-filling it', async () => {
+    const rec = makeRecord({ name: 'old.docx', kind: 'docx' });
+    expect('markupNotice' in rec).toBe(false);
+    await addDocument(rec, makeBlob(['x'], 'application/octet-stream'));
+
+    const found = await getDocument(rec.id);
+    expect(found).not.toBeNull();
+    expect('markupNotice' in found!).toBe(false);
   });
 });
 

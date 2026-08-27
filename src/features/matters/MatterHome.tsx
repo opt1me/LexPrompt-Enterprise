@@ -429,7 +429,9 @@ export function MatterHome({
                     />
                     {doc.parseError
                       ? <FileWarning className="w-4 h-4 text-red-400 shrink-0" />
-                      : <FileText className="w-4 h-4 text-gray-500 shrink-0" />}
+                      : doc.markupNotice
+                        ? <FileWarning className="w-4 h-4 text-yellow-400 shrink-0" />
+                        : <FileText className="w-4 h-4 text-gray-500 shrink-0" />}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-white truncate">{doc.name}</p>
                       <p className="text-xs text-gray-500">
@@ -437,6 +439,15 @@ export function MatterHome({
                       </p>
                       {doc.parseError && (
                         <p className="text-xs text-red-400 mt-0.5">Unreadable: {doc.parseError}</p>
+                      )}
+                      {/* Yellow, not red, and never "unreadable": this
+                          document parsed and is reviewable — the caveat is
+                          that its text is the file with every tracked change
+                          accepted. The same wording appears beside the
+                          findings (`DocumentViewer`), because whoever reads
+                          the review may never have seen this screen. */}
+                      {doc.markupNotice && (
+                        <p className="text-xs text-yellow-300/90 mt-0.5">{doc.markupNotice}</p>
                       )}
                     </div>
                     <button

@@ -1,6 +1,7 @@
 import type { DocumentFile, DocumentRecord } from '../types';
 import type { PdfPageText } from './citations';
 import { debug } from './debug';
+import { detectDocxMarkup, markupNoticeFor, MARKUP_UNCHECKED_NOTICE } from './docxMarkup';
 import { pageSegments } from './pageSegments';
 import { uid } from './uid';
 
@@ -135,6 +136,28 @@ async function parsePdf(file: File): Promise<{ text: string; pageImages?: { mime
   return { text, pageImages: pageImages.length ? pageImages : undefined };
 }
 
+/**
+ * The provenance caveat for a `.docx`, or `undefined` when there is nothing
+ * to say. Never throws: a document whose package cannot be inspected is
+ * still perfectly readable (mammoth got its text), so the failure must not
+ * become the file's `parseError` and block a review that can legitimately
+ * run — but it must not pass in silence either, because silence here reads
+ * as "checked, clean". It becomes `MARKUP_UNCHECKED_NOTICE` instead.
+ *
+ * The `try` covers `detectDocxMarkup` whole, which includes its own lazy
+ * import of jszip — so a chunk that fails to load (a stale hash after a
+ * redeploy, an offline tab) reports "could not check" like any other
+ * failure to look, rather than escaping as an unhandled rejection.
+ */
+async function docxMarkupNotice(bytes: ArrayBuffer, name: string): Promise<string | undefined> {
+  try {
+    return markupNoticeFor(await detectDocxMarkup(bytes));
+  } catch (error) {
+    debug('could not check for tracked changes', name, error);
+    return MARKUP_UNCHECKED_NOTICE;
+  }
+}
+
 export async function parseFile(file: File): Promise<DocumentFile> {
   const kind = classify(file);
   const base: DocumentFile = { id: uid(), name: file.name, text: '', file, kind };
@@ -145,9 +168,15 @@ export async function parseFile(file: File): Promise<DocumentFile> {
       return { ...base, text, pageImages };
     }
     if (kind === 'docx') {
+      const bytes = await readArrayBuffer(file);
       const mammoth = (await import('mammoth')).default;
-      const result = await mammoth.extractRawText({ arrayBuffer: await readArrayBuffer(file) });
-      return { ...base, text: result.value ?? '' };
+      const result = await mammoth.extractRawText({ arrayBuffer: bytes });
+      const markupNotice = await docxMarkupNotice(bytes, file.name);
+      // Spread conditionally rather than writing `markupNotice: undefined`:
+      // `structuredClone` (how every record reaches IndexedDB) preserves an
+      // undefined-valued key, and a stored `markupNotice: undefined` is not
+      // the same thing as a document with nothing to disclose.
+      return { ...base, text: result.value ?? '', ...(markupNotice ? { markupNotice } : {}) };
     }
     return { ...base, text: await file.text() };
   } catch (error) {
@@ -186,6 +215,14 @@ export function toDocumentRecord(
       kind: doc.kind,
       text: doc.text,
       parseError: doc.parseError,
+      // Conditional, unlike `parseError` above, so a document with nothing
+      // to disclose stores no key at all: `structuredClone` preserves an
+      // `undefined`-valued key, and a record written with
+      // `markupNotice: undefined` is indistinguishable, on read, from one
+      // that was checked and found clean — while a record with the key
+      // genuinely absent is exactly what a pre-existing document looks
+      // like (never checked; see the README's known limitations).
+      ...(doc.markupNotice ? { markupNotice: doc.markupNotice } : {}),
       byteSize: doc.file.size,
       addedAt: Date.now(),
       addedByUserId: userId,
@@ -302,6 +339,21 @@ export function evictPageImages(documentId: string): void {
   pageImageCache.delete(documentId);
 }
 
+/**
+ * The stored provenance caveat, spread onto every `DocumentFile` rebuilt
+ * from a record — for viewing and for review alike.
+ *
+ * The person reading a review is often not the person who uploaded the
+ * file, and may be reading it weeks later in a different session, so a
+ * notice that existed only on the in-memory `DocumentFile` at upload time
+ * would be gone exactly when it matters. Spread (rather than assigned) so a
+ * record with no notice yields a `DocumentFile` with no key, not one with
+ * `markupNotice: undefined`.
+ */
+function carriedMarkupNotice(record: DocumentRecord): { markupNotice?: string } {
+  return record.markupNotice ? { markupNotice: record.markupNotice } : {};
+}
+
 /** Rebuilds a `DocumentFile` for VIEWING a persisted document: wraps the
  *  stored blob back into a `File` and reuses the text already extracted at
  *  ingest time, without re-parsing. No re-parse is needed here because the
@@ -321,6 +373,7 @@ export function documentFileForViewing(record: DocumentRecord, blob: Blob | null
     file: blob ? new File([blob], record.name, { type: blob.type }) : new File([], record.name),
     kind: record.kind,
     parseError: record.parseError ?? (blob ? undefined : BLOB_UNAVAILABLE_MESSAGE),
+    ...carriedMarkupNotice(record),
   };
 }
 
@@ -359,15 +412,19 @@ export async function documentFileForReview(record: DocumentRecord, blob: Blob |
       file: new File([], record.name),
       kind: record.kind,
       parseError: record.parseError ?? BLOB_UNAVAILABLE_MESSAGE,
+      ...carriedMarkupNotice(record),
     };
   }
   const file = new File([blob], record.name, { type: blob.type });
   if (record.parseError) {
-    return { id: record.id, name: record.name, text: record.text, file, kind: record.kind, parseError: record.parseError };
+    return {
+      id: record.id, name: record.name, text: record.text, file, kind: record.kind,
+      parseError: record.parseError, ...carriedMarkupNotice(record),
+    };
   }
 
   if (!documentNeedsPageImages(record)) {
-    return { id: record.id, name: record.name, text: record.text, file, kind: record.kind };
+    return { id: record.id, name: record.name, text: record.text, file, kind: record.kind, ...carriedMarkupNotice(record) };
   }
 
   const cached = cachedPageImages(record.id);
@@ -379,6 +436,7 @@ export async function documentFileForReview(record: DocumentRecord, blob: Blob |
       file,
       kind: record.kind,
       pageImages: cached.length ? cached : undefined,
+      ...carriedMarkupNotice(record),
     };
   }
 
@@ -395,7 +453,13 @@ export async function documentFileForReview(record: DocumentRecord, blob: Blob |
   // document); overridden here so the returned DocumentFile keeps the
   // DocumentRecord's real id — the id a review's `documentIds` and
   // `findings` map must key against for this document.
-  return { ...reparsed, id: record.id, name: record.name };
+  // The re-parse's own notice wins over the record's: it was derived from
+  // the same bytes, just now, by the same detector. In practice this branch
+  // is PDF-only (`documentNeedsPageImages` is false for every docx), so
+  // neither has one — spelled out rather than assumed, so that if a future
+  // re-parse path ever covers docx it discloses what it actually found
+  // instead of a stale caveat.
+  return { ...carriedMarkupNotice(record), ...reparsed, id: record.id, name: record.name };
 }
 
 /** Builds the per-page text-item index the citation matcher needs. */
