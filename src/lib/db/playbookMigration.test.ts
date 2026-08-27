@@ -7,6 +7,7 @@ import {
   IMPORTED_SUMMARY,
 } from './playbookMigration';
 import { migrateIfNeeded } from './migrate';
+import { riskCriteriaBlock } from '../riskBlock';
 import { listPlaybooks, getPlaybook } from './playbooks';
 import { listVersions } from './playbookVersions';
 import { getDb, closeDb } from './open';
@@ -180,6 +181,60 @@ describe('migrateClause (moved here from playbooks.ts)', () => {
     expect(c.standardPosition).toEqual({
       text: 'We ask for 6 months', origin: 'authored', reviewedByHuman: false, provenance: undefined,
     });
+  });
+});
+
+// Spec 11: "A risk-mode template must produce the same review it does today
+// after migration — that is a test, not an assumption." These assert on the
+// PROMPT TEXT the migrated playbook actually emits, through the same
+// `riskCriteriaBlock` the extractors call, rather than on the intermediate
+// fields — the pre-D expression was
+// `mode === 'risk' ? clause.riskCriteria || template.riskTolerance || 'General commercial reasonableness.' : ''`,
+// and that string is what has to survive.
+describe('the risk block a migrated playbook emits (spec 11)', () => {
+  const blockFor = (record: unknown, clauseIndex = 0) => {
+    const version = migrateVersionRecord(record);
+    return riskCriteriaBlock(version.clauses[clauseIndex], version);
+  };
+
+  it('a risk-mode playbook with a tolerance and clause criteria emits exactly what it did before', () => {
+    expect(blockFor(preD)).toBe('\nRISK CRITERIA: Must be unconditional');
+    expect(blockFor({ ...preD, clauses: [{ id: 'c1', title: 'Cap', prompt: 'p' }] }))
+      .toBe('\nRISK CRITERIA: We are risk-averse on uncapped liability.');
+  });
+
+  it('a risk-mode playbook with NO tolerance and NO clause criteria still emits the generic block', () => {
+    // Pre-D this fell through to `'General commercial reasonableness.'`.
+    // R-D1's wording never addressed the empty case, so dropping it was an
+    // unintended consequence: a risk playbook that used to send a generic
+    // block and now sends none has had its review behaviour silently
+    // changed on data the user owns — the exact thing R-D1 exists to stop.
+    expect(blockFor({
+      id: 'pb9', name: 'Bare risk', mode: 'risk',
+      clauses: [{ id: 'c1', title: 'Cap', prompt: 'p' }],
+    })).toBe('\nRISK CRITERIA: General commercial reasonableness.');
+  });
+
+  it('the mirror: an extraction-mode playbook with nothing emits no block at all', () => {
+    expect(blockFor({
+      id: 'pb9', name: 'Bare standard', mode: 'extraction',
+      clauses: [{ id: 'c1', title: 'Cap', prompt: 'p' }],
+    })).toBe('');
+  });
+
+  it('the mirror: an extraction-mode playbook carrying stale risk strings still emits no block', () => {
+    // Both halves of R-D1 read end to end: the tolerance AND the clause
+    // criteria the pre-D editor hid without clearing.
+    expect(blockFor({ ...preD, mode: 'extraction' })).toBe('');
+  });
+
+  it('a post-D (modeless) playbook with no risk strings gains no generic block', () => {
+    // The generic fallback is a PRE-D compatibility fact, materialised once
+    // at migration. Applying it to a modeless record would switch the risk
+    // block on for every playbook authored after `mode` retired.
+    expect(blockFor({
+      id: 'pb9', name: 'Post-D', clauses: [{ id: 'c1', title: 'Cap', extractPrompt: 'p' }],
+    })).toBe('');
   });
 });
 

@@ -7,6 +7,7 @@ import {
   type PositionOrigin,
   type StandardPosition,
 } from '../../types';
+import { DEFAULT_RISK_TOLERANCE } from '../riskBlock';
 import { uid } from '../uid';
 
 /** The change summary given to the v1 minted for a playbook that existed
@@ -98,10 +99,21 @@ export function migrateDraft(input: unknown, fallbackName: string): PlaybookDraf
   // is what the clause mapping below is given.
   const hadMode = t.mode === 'risk' || t.mode === 'extraction';
   const keepsRisk = !hadMode || t.mode === 'risk';
-  const riskTolerance =
+  const storedTolerance =
     keepsRisk && typeof t.riskTolerance === 'string' && t.riskTolerance.trim() !== ''
       ? t.riskTolerance
       : undefined;
+  // An explicit `mode: 'risk'` with nothing to say still sent
+  // `RISK CRITERIA: General commercial reasonableness.` on every clause that
+  // had no criteria of its own — the whole block was gated on the flag, not
+  // on the strings. Materialising that default here is what makes such a
+  // playbook review identically after migration (spec 11); leaving it out
+  // silently turned the risk block off for data the user already owns.
+  // Only for a record that CARRIED the flag: a modeless (post-D) record is
+  // governed by presence, so inventing a tolerance for it would switch the
+  // block on instead.
+  const riskTolerance =
+    storedTolerance ?? (t.mode === 'risk' ? DEFAULT_RISK_TOLERANCE : undefined);
 
   const draft: PlaybookDraft = {
     name: typeof t.name === 'string' && t.name ? t.name : fallbackName,
