@@ -83,6 +83,23 @@ describe('migratePlaybookRecord', () => {
     expect('riskTolerance' in version!).toBe(false);
   });
 
+  it('clears a stale per-clause riskCriteria on an extraction-mode playbook (R-D1, one level down)', () => {
+    // The same defect as the tolerance above, one level down. The pre-D
+    // editor hid the per-clause "Risk Scorer" field inside the SAME
+    // `{isRiskMode && …}` guard that hid the tolerance, and never cleared it
+    // either. A playbook created with Create Template -> AI (which wrote
+    // `mode: 'risk'` and a populated `riskCriteria` on every clause) and then
+    // switched to Standard sends no risk block today; leaving the criteria
+    // behind would make `riskCriteriaBlock` start emitting
+    // `RISK CRITERIA: …` on every clause, silently changing the risk levels
+    // in the user's next review of a playbook they already own.
+    const { version } = migratePlaybookRecord({ ...preD, mode: 'extraction' });
+    expect(version!.clauses[0].riskCriteria).toBeUndefined();
+    // Absent, not present-and-undefined: structuredClone preserves an
+    // `undefined`-valued key all the way into the stored version.
+    expect('riskCriteria' in version!.clauses[0]).toBe(false);
+  });
+
   it('keeps a riskTolerance on a record that never had a mode at all', () => {
     // Post-D records carry no `mode`. Treating "no mode" as extraction would
     // strip the tolerance off an already-migrated playbook on every read.
@@ -90,6 +107,16 @@ describe('migratePlaybookRecord', () => {
       id: 'pb2', name: 'Post-D', riskTolerance: 'Averse', clauses: [],
     });
     expect(version!.riskTolerance).toBe('Averse');
+  });
+
+  it('keeps a per-clause riskCriteria on a record that never had a mode at all', () => {
+    // Modeless means POST-D (see `migrateDraft`). Clearing here would be the
+    // cumulative silent loss the corrected R-D1 exists to prevent, applied
+    // to the clause field instead of the playbook one.
+    const { version } = migratePlaybookRecord({
+      id: 'pb3', name: 'Post-D', clauses: [{ id: 'c1', title: 'Cap', extractPrompt: 'x', riskCriteria: 'Must be capped' }],
+    });
+    expect(version!.clauses[0].riskCriteria).toBe('Must be capped');
   });
 
   it('invents no standard position from a risk tolerance', () => {
