@@ -1,10 +1,13 @@
 import { repairCitations } from '../citationRepair';
 import { migrateVersionRecord } from './playbookMigration';
 import { unchecked } from '../verification';
-import type { Finding, NetPosition, Note, Review, ReviewTarget, TrailStep, Verification } from '../../types';
+import type {
+  Finding, NetPosition, Note, PositionOutcome, Review, ReviewTarget, TrailStep, Verification,
+} from '../../types';
 
 const STATUSES: Finding['status'][] = ['pending', 'running', 'done', 'error', 'cancelled'];
 const STATES: Verification['state'][] = ['unchecked', 'verified', 'flagged', 'rejected'];
+const POSITION_OUTCOMES: PositionOutcome[] = ['meets', 'deviates', 'unclear'];
 
 /** A stored status this version does not recognise becomes `error`, never
  *  `done`. A finding whose status cannot be read is a finding nobody can
@@ -123,6 +126,23 @@ function migrateFinding(
   // `undefined`-valued key, so an unconditional assignment would persist a
   // key that reads as "there was a position here" to any `in` check.
   if (netPosition) finding.netPosition = netPosition;
+
+  // `positionOutcome`/`positionRationale` (sub-project D). Absent on read
+  // means "there was no standard position to compare against" — the SAME
+  // rule `netPositionLabel` states for `hasStandingPosition`, and never
+  // routed through `normalisePositionOutcome`: that function defaults a
+  // missing/unrecognised outcome to `unclear`, which is right when producing
+  // a finding from a fresh model response but wrong here, where absence must
+  // stay absence rather than inventing "we had a position and could not
+  // tell" for a clause that never had one. An unrecognised stored value is
+  // dropped rather than guessed, the same posture `readStatus` takes for a
+  // status this version does not know.
+  if (POSITION_OUTCOMES.includes(src.positionOutcome as PositionOutcome)) {
+    finding.positionOutcome = src.positionOutcome as PositionOutcome;
+  }
+  if (typeof src.positionRationale === 'string' && src.positionRationale !== '') {
+    finding.positionRationale = src.positionRationale;
+  }
 
   return finding;
 }

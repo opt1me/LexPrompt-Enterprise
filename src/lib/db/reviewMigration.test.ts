@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { migrateReviewRecord } from './reviewMigration';
 import { migrateDocumentRecord } from './documents';
+import type { Finding } from '../../types';
 
 function legacyReview() {
   return {
@@ -401,5 +402,152 @@ describe('migrateReviewRecord — records the playbook version it ran against (T
 
   it('an empty index leaves every review unbound rather than guessing', () => {
     expect('playbookVersionId' in migrateReviewRecord(legacyReview(), undefined, {})).toBe(false);
+  });
+});
+
+// Critical fix found in browser verification: `migrateFinding` rebuilds a
+// `Finding` field by field, and it was never taught about `positionOutcome`/
+// `positionRationale` (sub-project D) — the exact same failure mode that
+// already happened once to `netPosition` (see the comment on
+// `truncatedDocuments`, above, which was warning about this before it
+// happened again). A verified `meets`/`deviates` survived on disk perfectly
+// intact and vanished on every reopen: the playbook editor reported UNTESTED
+// for a position a human had actually verified, and reopened cards/exports
+// lost the comparison entirely.
+describe('reviewMigration — positionOutcome/positionRationale survive a read (sub-project D)', () => {
+  function reviewWithFinding(finding: Record<string, unknown>) {
+    return {
+      id: 'rev-po', matterId: 'm1',
+      playbookSnapshot: { id: 'pb', name: 'PB', contractType: 'NDA', mode: 'extraction', systemPrompt: '', formatPrompt: '', clauses: [], createdAt: 0, updatedAt: 0, schemaVersion: 2 },
+      documentIds: ['doc-1'],
+      findings: { 'doc-1': { 'clause-1': { clauseId: 'clause-1', status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [], ...finding } } },
+      modelId: 'm', startedAt: 1, completedAt: 2, createdByUserId: 'u1',
+    };
+  }
+
+  it('preserves a meets outcome and its rationale', () => {
+    const out = migrateReviewRecord(reviewWithFinding({ positionOutcome: 'meets', positionRationale: 'Matches exactly.' }));
+    const f = out.findings['doc-1']['clause-1'];
+    expect(f.positionOutcome).toBe('meets');
+    expect(f.positionRationale).toBe('Matches exactly.');
+  });
+
+  it('preserves a deviates outcome', () => {
+    const out = migrateReviewRecord(reviewWithFinding({ positionOutcome: 'deviates' }));
+    expect(out.findings['doc-1']['clause-1'].positionOutcome).toBe('deviates');
+  });
+
+  it('preserves an unclear outcome — it is its own case, never folded into deviates', () => {
+    const out = migrateReviewRecord(reviewWithFinding({ positionOutcome: 'unclear' }));
+    expect(out.findings['doc-1']['clause-1'].positionOutcome).toBe('unclear');
+  });
+
+  it('drops an unrecognised stored outcome rather than guessing, leaving the key absent', () => {
+    const out = migrateReviewRecord(reviewWithFinding({ positionOutcome: 'not-a-real-outcome' }));
+    expect('positionOutcome' in out.findings['doc-1']['clause-1']).toBe(false);
+  });
+
+  // The critical distinction (findingOutcome.ts's own doc comment on
+  // `positionOutcomeLabel`): "no position to compare against" and "compared,
+  // and unclear" are different facts. `migrateFinding` must never invent the
+  // second for a finding that never carried the first — deliberately NOT
+  // routed through `normalisePositionOutcome`, which defaults a missing
+  // outcome to `unclear` (right for a fresh model response, wrong on read).
+  it('leaves positionOutcome absent — never defaulted to unclear — when the finding never had one', () => {
+    const out = migrateReviewRecord(reviewWithFinding({}));
+    expect('positionOutcome' in out.findings['doc-1']['clause-1']).toBe(false);
+  });
+
+  it('leaves positionRationale absent when it was never recorded, or was empty', () => {
+    const out = migrateReviewRecord(reviewWithFinding({ positionOutcome: 'meets', positionRationale: '' }));
+    expect('positionRationale' in out.findings['doc-1']['clause-1']).toBe(false);
+
+    const none = migrateReviewRecord(reviewWithFinding({}));
+    expect('positionRationale' in none.findings['doc-1']['clause-1']).toBe(false);
+  });
+});
+
+/**
+ * Guard against a THIRD field being silently dropped the same way
+ * `netPosition`, then `positionOutcome`/`positionRationale`, already were.
+ * A comment warning about exactly this was already sitting in
+ * `migrateFinding` the second time it happened, so another comment is not
+ * the fix — this has to fail a build.
+ *
+ * `fullFinding` is typed `Required<Finding>`: every property on `Finding`
+ * becomes mandatory, so the moment a new optional field is added to that
+ * interface, this fixture stops compiling under `tsc --noEmit` until the
+ * field is given a value here. A grown fixture then exercises
+ * `migrateFinding` on that field for the first time, which is what turns a
+ * silently-dropped field back into a failing test rather than a silent gap —
+ * the fixture cannot go stale without the build going red first.
+ *
+ * Every value below is already in the exact canonical shape `migrateFinding`
+ * produces (a real `Citation`, a `rejected` verification with its required
+ * reason, a `Note` with every field filled in, an `original`-kind trail
+ * step) specifically so the whole object survives the round trip unchanged —
+ * `repairCitations`/`readStatus`/`readVerification` legitimately transform
+ * non-canonical input, and picking already-canonical input is how a single
+ * whole-object `toEqual` can cover every field without special-casing those
+ * three.
+ */
+describe('reviewMigration — migrateFinding carries every Finding field (regression guard)', () => {
+  const fullFinding: Required<Finding> = {
+    clauseId: 'clause-full',
+    status: 'done',
+    summary: 'Full summary text.',
+    citations: [
+      { quote: 'the quoted passage', documentId: 'doc-1', page: 4, clauseRef: '9.1' },
+    ],
+    verification: {
+      state: 'rejected',
+      byUserId: 'user-1',
+      at: 12345,
+      reason: 'not applicable here',
+      assigneeId: 'user-2',
+    },
+    notes: [
+      { id: 'note-1', findingId: 'doc-1::clause-full', text: 'a human note', byUserId: 'user-1', at: 999 },
+    ],
+    riskLevel: 'High',
+    riskAnalysis: 'The risk analysis text.',
+    error: 'a recorded error',
+    edited: true,
+    authError: true,
+    truncated: true,
+    truncatedDocuments: ['Lease.pdf'],
+    noContent: true,
+    netPosition: {
+      proposed: 'the proposed synthesis',
+      amended: 'the amended text a person wrote',
+      state: 'confirmed',
+      byUserId: 'user-1',
+      at: 54321,
+      trail: [
+        {
+          documentId: 'doc-1',
+          kind: 'original',
+          effect: 'sets the baseline',
+          citations: [{ quote: 'baseline quote', documentId: 'doc-1', page: 1, clauseRef: '1.1' }],
+        },
+      ],
+    },
+    positionOutcome: 'deviates',
+    positionRationale: 'the rationale text',
+  };
+
+  function reviewWithFullFinding() {
+    return {
+      id: 'rev-full', matterId: 'm1',
+      playbookSnapshot: { id: 'pb', name: 'PB', contractType: 'NDA', mode: 'extraction', systemPrompt: '', formatPrompt: '', clauses: [], createdAt: 0, updatedAt: 0, schemaVersion: 2 },
+      documentIds: ['doc-1'],
+      findings: { 'doc-1': { 'clause-full': fullFinding } },
+      modelId: 'm', startedAt: 1, completedAt: 2, createdByUserId: 'u1',
+    };
+  }
+
+  it('round-trips a fully-populated finding unchanged, field for field', () => {
+    const out = migrateReviewRecord(reviewWithFullFinding());
+    expect(out.findings['doc-1']['clause-full']).toEqual(fullFinding);
   });
 });
