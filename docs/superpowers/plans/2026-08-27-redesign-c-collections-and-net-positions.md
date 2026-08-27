@@ -702,6 +702,49 @@ git commit -m "feat(c): migrate stored reviews onto ReviewTarget and documents o
 
 ---
 
+### Task 6A: Seeding a collection run
+
+**This task exists because the plan had a hole**, found by Task 5's implementer and confirmed by the controller.
+
+Task 5 gave `runReview` an optional `CollectionRunInput`, so a collection review runs one call per clause and stores results under `findingsKeyFor(target)`. But **`emptyRun` still seeds `findings[doc.id][clause.id]` per document**, and `ReviewRun` has no `target` at all. So a collection run would seed ten pending cells under document keys, then write its results under the collection key — and the UI, reading by document, would show a grid of cells that never leave `pending` beside results it never displays.
+
+Nothing would error. It would just be quietly, completely wrong, which is the failure mode this project exists to remove.
+
+**Files:**
+- Modify: `src/types.ts` (`ReviewTarget` onto `ReviewRun`), `src/features/review/runReview.ts` (`emptyRun`), `src/App.tsx` (the run-start path)
+- Test: `src/features/review/runReview.test.ts` (extend)
+
+- [ ] **Step 1: Write the failing tests**
+
+Extend `runReview.test.ts` — **read it first and reuse its fixtures**. Assert:
+
+- `emptyRun` for a **documents** target seeds exactly as it does today: one entry per document per clause, keyed by document id. This is a regression pin; it must pass before and after.
+- `emptyRun` for a **collection** target seeds **one** entry per clause, keyed by the **collection id**, and none keyed by any document id.
+- The seeded run carries its `target`, so a consumer never has to guess which kind it is.
+- A collection run's results land under the same key `emptyRun` seeded — assert this by running a stubbed collection review end to end and checking no cell is left `pending`. **This is the assertion that would have caught the hole**, so make sure it genuinely fails against per-document seeding rather than passing incidentally.
+
+- [ ] **Step 2: Run, confirm failure, implement.**
+
+`ReviewRun` gains `target: ReviewTarget`. `emptyRun(template, docs, target?)` defaults to `{ kind: 'documents', documentIds: docs.map(d => d.id) }` so every existing caller keeps working unchanged, and seeds via `findingsKeyFor` rather than by iterating documents.
+
+In `App.tsx`, the collection run path builds the target, hydrates the collection's members with the same `documentFileForReview` helper the standalone path already uses, and passes the `CollectionRunInput` through. `reviewFromRun` carries `target` onto the persisted `Review`.
+
+- [ ] **Step 3: Mutation-test the seeding**
+
+1. Seed a collection run per-document — the "no cell left pending" test must fail.
+2. Default `emptyRun`'s target to a collection — the documents-target regression pin must fail.
+3. Drop `target` from `reviewFromRun` — a reopened collection review must fail to identify itself.
+
+- [ ] **Step 4: Commit**
+
+Stage by name. `git show --stat HEAD` must list only your files.
+
+```bash
+git commit -m "fix(c): seed a collection run under its collection key, and carry the target on the run"
+```
+
+---
+
 ### Task 7: Grouping and ungrouping on the matter home
 
 **Files:**
