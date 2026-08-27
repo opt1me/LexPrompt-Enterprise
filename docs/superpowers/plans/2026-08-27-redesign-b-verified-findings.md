@@ -2817,6 +2817,36 @@ it('agrees with the DOCX exporter on every label', () => {
 });
 ```
 
+**The `runWith` and `doneFinding` helpers used above do not exist yet — checked against both files.** Today `exportDocx.test.ts` has module-level `const template` / `const run`, and `csv.test.ts` has `template(clauses)` and `doc(id, name)` factories and builds its runs inline. Add these two small factories to **each** of the two test files, matching that file's local style, rather than importing one from the other (a test helper reaching across feature folders is worse than two four-line factories):
+
+```ts
+function doneFinding(overrides: Partial<Finding> = {}): Finding {
+  return {
+    clauseId: 'clause-1',
+    status: 'done',
+    summary: 'Capped at the Charges.',
+    citations: [],
+    verification: { state: 'unchecked' },
+    notes: [],
+    ...overrides,
+  };
+}
+
+function runWith(findings: Record<string, Finding>): ReviewRun {
+  return {
+    id: 'run-1',
+    templateSnapshot: /* the file's existing template value or template([...]) factory */,
+    documentIds: ['doc-1'],
+    findings: { 'doc-1': findings },
+    startedAt: 1,
+  };
+}
+```
+
+In `exportDocx.test.ts`, `runWith` uses the file's existing `template` const. In `csv.test.ts` it calls the existing `template([...])` factory with a single clause whose id is `clause-1`, and the existing `docs` array is what `buildTabularCsv`'s second argument takes — reuse it rather than declaring another.
+
+The "agrees with the DOCX exporter on every label" test lives in `csv.test.ts` and calls `buildReportRows`, so that file needs `import { buildReportRows } from '../review/exportDocx';`. That cross-import is deliberate: the whole point of the test is that the two exporters cannot disagree, and it cannot make that assertion from inside one of them.
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `npx vitest run src/lib/findingOutcome.test.ts src/features/review/exportDocx.test.ts src/features/tabular/csv.test.ts`
@@ -3157,7 +3187,7 @@ it('shows verification progress separately from run progress', () => {
 });
 ```
 
-Write these fully against the existing fixtures in that file.
+Write these fully against the existing fixtures in that file. **Checked against it:** `MatterHome.test.tsx` already has its own `mount(node)` helper and a `makeMatter()` factory, and uses the `createRoot`/`act` pattern directly. Use that file's own `mount`, **not** the shared `src/test/mount.tsx` harness — the rule set in Task 6 is that existing test files keep the harness they have; only new files take the shared one. There is no review fixture in that file yet, so add a small local one producing a `Review` whose `findings` map has the verified/unchecked mix each test needs.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
