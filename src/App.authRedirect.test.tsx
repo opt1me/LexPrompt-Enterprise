@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Template, Review, DocumentRecord } from './types';
+import type { PlaybookVersion, Review, DocumentRecord } from './types';
 
 // No @testing-library/react in this project — see Toast.test.tsx /
 // App.test.tsx for the precedent this follows: drive a real react-dom root
@@ -31,8 +31,15 @@ vi.mock('./lib/db/migrate', () => ({
   migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
 }));
 
-vi.mock('./lib/db/playbooks', () => ({
+vi.mock('./lib/db/playbooks', async (importOriginal) => ({
+  // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
+  // the real module: re-implementing them here would be a second copy of
+  // logic this task just extracted. Only the store-touching functions
+  // below are replaced.
+  ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
   listPlaybooks: (...args: unknown[]) => listPlaybooksMock(...args),
+  getPlaybook: vi.fn(),
+  getPlaybookContent: async (id: string) => (await listPlaybooksMock()).find((p: { id: string }) => p.id === id) ?? null,
   savePlaybook: vi.fn(),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),
@@ -99,7 +106,7 @@ vi.mock('./features/review/extractClause', () => ({
 // NOT. Fighting jsdom's file-input upload just to reach that assertion
 // would test RunPanel's upload plumbing a second time, not this.
 vi.mock('./features/templates/TemplateLibrary', () => ({
-  TemplateLibrary: ({ templates, onRun }: { templates: Template[]; onRun: (t: Template) => void }) => (
+  TemplateLibrary: ({ templates, onRun }: { templates: PlaybookVersion[]; onRun: (t: PlaybookVersion) => void }) => (
     <div>
       {templates.map(t => (
         <button key={t.id} onClick={() => onRun(t)}>{`Run ${t.name}`}</button>
@@ -169,18 +176,20 @@ function clickByText(container: HTMLDivElement, text: string | RegExp) {
 const AUTH_TOAST = 'Your OpenRouter API key was rejected. Update it in Settings and try again.';
 const STALE_FINDING_ERROR = 'Your OpenRouter API key was rejected: User not found.';
 
-function makePlaybook(): Template {
+function makePlaybook(): PlaybookVersion {
   return {
     id: 'p1',
     name: 'Basic Contract Review',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
     clauses: [{ id: 'c1', title: 'Governing Law', extractPrompt: 'Extract the governing law clause.' }],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 2,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 }
 

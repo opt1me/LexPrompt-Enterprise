@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractClause, buildClausePrompt, CLAUSE_SCHEMA } from './extractClause';
-import type { PlaybookClause, Template, DocumentFile, Settings } from '../../types';
+import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings } from '../../types';
 
 vi.mock('../../lib/openrouter', async () => {
   const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
@@ -24,11 +24,11 @@ const clause: PlaybookClause = {
   riskCriteria: 'Must be England and Wales.',
 };
 
-const template: Template = {
-  id: 't1', name: 'Lease', contractType: 'Lease', mode: 'risk',
+const template: PlaybookVersion = {
+  id: 't1', name: 'Lease', contractType: 'Lease',
   systemPrompt: 'You are a reviewer.', formatPrompt: 'Quote verbatim.',
   riskTolerance: 'Conservative.', clauses: [clause],
-  createdAt: 0, updatedAt: 0, schemaVersion: 2,
+  playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '', schemaVersion: 6,
 };
 
 const doc: DocumentFile = {
@@ -50,9 +50,19 @@ describe('buildClausePrompt', () => {
     expect(buildClausePrompt(doc, clause, template)).toContain('Must be England and Wales.');
   });
 
-  it('omits risk criteria in extraction mode', () => {
-    const prompt = buildClausePrompt(doc, clause, { ...template, mode: 'extraction' });
+  it('omits risk criteria when neither the clause nor the playbook has any (R-D1)', () => {
+    // `mode` is gone: the PRESENCE of criteria decides, so a clause with no
+    // riskCriteria under a playbook with no riskTolerance gets no block.
+    const plain = { ...clause, riskCriteria: undefined };
+    const prompt = buildClausePrompt(doc, plain, { ...template, riskTolerance: undefined, clauses: [plain] });
     expect(prompt).not.toContain('Must be England and Wales.');
+    expect(prompt).not.toContain('RISK CRITERIA');
+  });
+
+  it('falls back to the playbook riskTolerance when the clause has no criteria', () => {
+    const plain = { ...clause, riskCriteria: undefined };
+    expect(buildClausePrompt(doc, plain, { ...template, clauses: [plain] }))
+      .toContain('RISK CRITERIA: Conservative.');
   });
 });
 

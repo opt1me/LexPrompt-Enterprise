@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { buildMegaPrompt } from './buildMegaPrompt';
-import { newPlaybook as newTemplate } from '../../lib/db/playbooks';
-import type { Template } from '../../types';
+import { newPlaybookDraft } from '../../lib/db/playbooks';
+import type { PlaybookDraft } from '../../types';
 
-function templateWithClauses(): Template {
-  const t = newTemplate('Lease Review');
+function templateWithClauses(): PlaybookDraft {
+  const t = newPlaybookDraft('Lease Review');
   t.systemPrompt = 'You are a reviewer.';
   t.formatPrompt = 'Return structured JSON.';
   t.riskTolerance = 'Risk-averse on liability.';
@@ -57,7 +57,7 @@ describe('buildMegaPrompt', () => {
   });
 
   it('handles a template with no clauses', () => {
-    const t = newTemplate('Empty');
+    const t = newPlaybookDraft('Empty');
     expect(() => buildMegaPrompt(t, 'copilot', true)).not.toThrow();
     expect(() => buildMegaPrompt(t, 'json', true)).not.toThrow();
   });

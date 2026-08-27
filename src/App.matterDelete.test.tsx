@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Matter, DocumentRecord, Template } from './types';
+import type { Matter, DocumentRecord, PlaybookVersion } from './types';
 
 // No @testing-library/react in this project — see Toast.test.tsx /
 // App.documentRemoval.test.tsx for the precedent this follows: drive a real
@@ -43,8 +43,15 @@ vi.mock('./lib/db/migrate', () => ({
   migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
 }));
 
-vi.mock('./lib/db/playbooks', () => ({
+vi.mock('./lib/db/playbooks', async (importOriginal) => ({
+  // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
+  // the real module: re-implementing them here would be a second copy of
+  // logic this task just extracted. Only the store-touching functions
+  // below are replaced.
+  ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
   listPlaybooks: (...args: unknown[]) => listPlaybooksMock(...args),
+  getPlaybook: vi.fn(),
+  getPlaybookContent: async (id: string) => (await listPlaybooksMock()).find((p: { id: string }) => p.id === id) ?? null,
   savePlaybook: vi.fn(),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),
@@ -106,7 +113,7 @@ vi.mock('./features/review/extractClause', () => ({
 }));
 
 vi.mock('./features/templates/TemplateLibrary', () => ({
-  TemplateLibrary: ({ templates, onRun }: { templates: Template[]; onRun: (t: Template) => void }) => (
+  TemplateLibrary: ({ templates, onRun }: { templates: PlaybookVersion[]; onRun: (t: PlaybookVersion) => void }) => (
     <div>
       {templates.map(t => (
         <button key={t.id} onClick={() => onRun(t)}>{`Run ${t.name}`}</button>
@@ -169,18 +176,20 @@ function makeMatter(): Matter {
   return { id: 'm1', name: 'Acme v Bolt', ownerId: 'u1', createdAt: 1, updatedAt: 1 };
 }
 
-function makeTemplate(): Template {
+function makeTemplate(): PlaybookVersion {
   return {
     id: 't1',
     name: 'Basic Contract Review',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
     clauses: [{ id: 'c1', title: 'Governing Law', extractPrompt: 'Extract the governing law clause.' }],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 2,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 }
 

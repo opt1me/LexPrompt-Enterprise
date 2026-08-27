@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount, keyDown, click } from '../../test/mount';
 import { ResultsView } from './ResultsView';
 import { TRACKED_CHANGES_NOTICE } from '../../lib/docxMarkup';
-import type { DocumentFile, Finding, ReviewRun, Settings, Template } from '../../types';
+import type { DocumentFile, Finding, ReviewRun, Settings, PlaybookVersion } from '../../types';
 
 // Critical 2 (final whole-branch review, redesign sub-project B): the
 // keyboard verify loop (`useVerifyKeys`, wired here) acted on any clause
@@ -15,12 +15,11 @@ import type { DocumentFile, Finding, ReviewRun, Settings, Template } from '../..
 // counted in progress indicators and export summaries. This file is the
 // seam nothing tested before: the hook-to-finding adaptor in `ResultsView`.
 //
-function makeTemplate(): Template {
+function makeTemplate(): PlaybookVersion {
   return {
     id: 't1',
     name: 'Basic Contract Review',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
     clauses: [
@@ -29,9 +28,12 @@ function makeTemplate(): Template {
       { id: 'c3', title: 'Indemnity', extractPrompt: 'Extract the indemnity clause.' },
       { id: 'c4', title: 'Assignment', extractPrompt: 'Extract the assignment clause.' },
     ],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 2,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 }
 

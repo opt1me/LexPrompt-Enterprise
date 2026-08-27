@@ -1,4 +1,4 @@
-import type { Template } from '../../types';
+import type { PlaybookDraft } from '../../types';
 
 export type MegaPromptFormat = 'copilot' | 'json';
 
@@ -7,7 +7,7 @@ export type MegaPromptFormat = 'copilot' | 'json';
  * into any chat model to do the review by hand, without this app. Pure
  * string-building so it is testable without mounting the modal.
  */
-export function buildMegaPrompt(template: Template, format: MegaPromptFormat, includeRisk: boolean): string {
+export function buildMegaPrompt(template: PlaybookDraft, format: MegaPromptFormat, includeRisk: boolean): string {
   const clauses = template.clauses || [];
   const riskTolerance = template.riskTolerance || 'Use standard commercial risk judgment.';
 

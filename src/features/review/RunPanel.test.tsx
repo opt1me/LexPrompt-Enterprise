@@ -2,25 +2,27 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { DocumentFile, Template } from '../../types';
+import type { DocumentFile, PlaybookVersion } from '../../types';
 import { RunPanel } from './RunPanel';
 
 // No @testing-library/react in this project — see Toast.test.tsx for the
 // precedent this follows: drive a real react-dom root directly.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-function makeTemplate(): Template {
+function makeTemplate(): PlaybookVersion {
   return {
     id: 't1',
     name: 'Basic Contract Review',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
     clauses: [{ id: 'c1', title: 'Governing Law', extractPrompt: 'Extract the governing law clause.' }],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 2,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 }
 

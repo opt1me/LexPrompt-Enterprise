@@ -1,7 +1,7 @@
 import { chatJson } from '../../lib/openrouter';
 import { mapWithConcurrency } from '../../lib/concurrency';
-import { newPlaybook as newTemplate } from '../../lib/db/playbooks';
-import type { PlaybookClause, Settings, Template } from '../../types';
+import { newPlaybookDraft } from '../../lib/db/playbooks';
+import type { PlaybookClause, PlaybookDraft, Settings } from '../../types';
 import { uid } from '../../lib/uid';
 
 export type Depth = 'Light-Touch' | 'Standard' | 'Detailed';
@@ -66,7 +66,7 @@ const DEPTH_GUIDANCE: Record<Depth, string> = {
   Detailed: 'Detailed: roughly 25-35 deep-dive points, only where genuinely relevant.',
 };
 
-export async function generateTemplate(options: GenerateOptions): Promise<Template> {
+export async function generateTemplate(options: GenerateOptions): Promise<PlaybookDraft> {
   const { contractType, depth, verbosity, context, settings, onStatus } = options;
 
   onStatus?.(`Planning a ${depth} review template for ${contractType}...`);
@@ -157,10 +157,12 @@ Return { prompt, riskCriteria }.`,
 
   onStatus?.('Finalising template...');
 
+  // No `mode` any more (R-D1): a generated playbook carries a risk
+  // tolerance, and the presence of that tolerance is what turns the RISK
+  // CRITERIA block on — the flag that used to say so is gone.
   return {
-    ...newTemplate(contractType),
+    ...newPlaybookDraft(contractType),
     contractType,
-    mode: 'risk',
     systemPrompt: plan.systemPrompt,
     formatPrompt: plan.formatPrompt,
     riskTolerance: plan.riskTolerance,

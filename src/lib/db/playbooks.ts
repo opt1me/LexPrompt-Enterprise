@@ -1,7 +1,9 @@
 import { getDb } from './open';
 import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
-import { TEMPLATE_SCHEMA_VERSION, type PlaybookClause, type Playbook, type StandardPosition, type PositionOrigin } from '../../types';
+import { migrateDraft, migratePlaybookRecord, migrateVersionRecord } from './playbookMigration';
+import { getVersion, publishVersion } from './playbookVersions';
+import { SCHEMA_VERSION, type Playbook, type PlaybookDraft, type PlaybookVersion } from '../../types';
 import { uid } from '../uid';
 
 /** A playbook record as it actually sits in IndexedDB: the public
@@ -15,99 +17,72 @@ interface StoredPlaybook extends Playbook {
   _seq: number;
 }
 
-/** Brings a playbook of any earlier (or malformed) shape up to the current
- *  one. Anything missing gets a sane default rather than causing the
- *  playbook to be dropped — mirrors v1's storage.ts `migrate()`, which took
- *  three fix rounds to get right: a record that cannot be fully read is
- *  repaired, never discarded. */
-function migrate(input: unknown): Playbook {
-  const t = (input ?? {}) as Partial<Playbook> & Record<string, unknown>;
-  const now = Date.now();
-  return {
-    id: typeof t.id === 'string' && t.id ? t.id : uid(),
-    name: typeof t.name === 'string' ? t.name : 'Untitled playbook',
-    contractType: typeof t.contractType === 'string' ? t.contractType : 'Custom',
-    mode: t.mode === 'risk' ? 'risk' : 'extraction',
-    systemPrompt: typeof t.systemPrompt === 'string' ? t.systemPrompt : '',
-    formatPrompt: typeof t.formatPrompt === 'string' ? t.formatPrompt : '',
-    riskTolerance: typeof t.riskTolerance === 'string' ? t.riskTolerance : undefined,
-    clauses: Array.isArray(t.clauses) ? t.clauses.map(migrateClause) : [],
-    createdAt: typeof t.createdAt === 'number' ? t.createdAt : now,
-    updatedAt: typeof t.updatedAt === 'number' ? t.updatedAt : now,
-    schemaVersion: TEMPLATE_SCHEMA_VERSION,
-  };
-}
-
-function migrateClause(input: unknown): PlaybookClause {
-  const c = (input ?? {}) as Partial<PlaybookClause> & { prompt?: unknown };
-  // Both names are read on migration; only the new one is written (spec §5).
-  // A pre-D record has `prompt`; anything already migrated has
-  // `extractPrompt`. Reading both is what makes this idempotent.
-  const extractPrompt =
-    typeof c.extractPrompt === 'string' ? c.extractPrompt :
-    typeof c.prompt === 'string' ? c.prompt : '';
-  const standardPosition = migratePosition(c.standardPosition);
-  return {
-    id: typeof c.id === 'string' && c.id ? c.id : uid(),
-    title: typeof c.title === 'string' ? c.title : 'Untitled clause',
-    extractPrompt,
-    riskCriteria: typeof c.riskCriteria === 'string' ? c.riskCriteria : undefined,
-    // Key omitted entirely when absent, not set to `undefined` — an
-    // `undefined`-valued key survives structuredClone (how IndexedDB writes
-    // every record), so a plain assignment here would let a dropped
-    // position's key linger on the stored clause.
-    ...(standardPosition ? { standardPosition } : {}),
-  };
-}
-
-/** A position that cannot be read is dropped rather than repaired to an
- *  empty one: an empty-text position would render as "we ask for: (nothing)"
- *  and would make a clause claim a house rule it does not have. Absent is
- *  the honest answer, and it is the same answer a clause that never had a
- *  position gives. */
-function migratePosition(input: unknown): StandardPosition | undefined {
-  const p = (input ?? {}) as Partial<StandardPosition>;
-  if (typeof p.text !== 'string' || p.text.trim() === '') return undefined;
-  const origin: PositionOrigin =
-    p.origin === 'ai-drafted' || p.origin === 'learned' ? p.origin : 'authored';
-  return {
-    text: p.text,
-    origin,
-    // Unreadable provenance defaults to NOT reviewed. Same reasoning as
-    // `readStatus` in sub-project B: the safe default is the one that
-    // prompts a human to look.
-    reviewedByHuman: p.reviewedByHuman === true,
-    provenance: typeof p.provenance === 'string' ? p.provenance : undefined,
-  };
-}
-
 const STORAGE_FULL_MESSAGE =
   'Could not save — your browser storage is full. Try deleting an old playbook, or exporting and removing some data.';
 
+const DEFAULT_SYSTEM_PROMPT = 'You are an expert legal contract reviewer.';
+const DEFAULT_FORMAT_PROMPT = 'Answer strictly from the document text. Quote verbatim.';
+
+/** A new playbook's IDENTITY. Its content is a separate `PlaybookDraft`
+ *  (see `newPlaybookDraft`) that becomes v1 on the first publish — the two
+ *  are minted separately because a playbook can exist with no published
+ *  content at all, and `Playbook` no longer has anywhere to put clauses. */
 export function newPlaybook(name: string): Playbook {
   const now = Date.now();
   return {
     id: uid(),
     name,
-    contractType: 'Custom',
-    mode: 'extraction',
-    systemPrompt: 'You are an expert legal contract reviewer.',
-    formatPrompt: 'Answer strictly from the document text. Quote verbatim.',
-    clauses: [],
     createdAt: now,
     updatedAt: now,
-    schemaVersion: TEMPLATE_SCHEMA_VERSION,
+    schemaVersion: SCHEMA_VERSION,
   };
 }
 
+/** The starting content for a new playbook. */
+export function newPlaybookDraft(name: string): PlaybookDraft {
+  return {
+    name,
+    contractType: 'Custom',
+    systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    formatPrompt: DEFAULT_FORMAT_PROMPT,
+    clauses: [],
+    changeSummary: '',
+  };
+}
+
+/** The editable copy of a published version.
+ *
+ *  `changeSummary` is deliberately NOT carried over: it describes what the
+ *  version being copied changed, and reusing it would label the next
+ *  version with the previous one's reason. */
+export function draftFromVersion(version: PlaybookVersion): PlaybookDraft {
+  const draft: PlaybookDraft = {
+    name: version.name,
+    contractType: version.contractType,
+    systemPrompt: version.systemPrompt,
+    formatPrompt: version.formatPrompt,
+    clauses: structuredClone(version.clauses),
+    changeSummary: '',
+  };
+  if (version.riskTolerance !== undefined) draft.riskTolerance = version.riskTolerance;
+  return draft;
+}
+
+/**
+ * PURE READ (R-D7). Repairs each record on the way out and writes nothing —
+ * not even the pre-D → versioned conversion, which belongs to
+ * `migrateIfNeeded`'s one-time, flag-guarded startup step. Two components
+ * calling this on the same tick must be incapable of publishing two
+ * identical v1s between them.
+ */
 export async function listPlaybooks(): Promise<Playbook[]> {
   const db = await getDb();
-  // getAll() never throws on a per-record shape problem — only migrate()
-  // below has to deal with that, on read, without ever writing back (so a
-  // record we can't fully make sense of is repaired for display but left
-  // exactly as found in the store).
+  // getAll() never throws on a per-record shape problem — only
+  // migratePlaybookRecord below has to deal with that, on read, without
+  // ever writing back (so a record we can't fully make sense of is repaired
+  // for display but left exactly as found in the store).
   const raw = (await db.getAll(STORES.playbooks)) as StoredPlaybook[];
-  const entries = raw.map(r => ({ playbook: migrate(r), seq: seqOf(r) }));
+  const entries = raw.map(r => ({ playbook: migratePlaybookRecord(r).playbook, seq: seqOf(r) }));
   // Sort by updatedAt descending; tiebreak on write sequence descending so
   // the record saved most recently wins a same-millisecond collision.
   entries.sort((a, b) => {
@@ -117,15 +92,33 @@ export async function listPlaybooks(): Promise<Playbook[]> {
   return entries.map(e => e.playbook);
 }
 
+/** PURE READ — see `listPlaybooks`. */
 export async function getPlaybook(id: string): Promise<Playbook | null> {
   const db = await getDb();
   const raw = await db.get(STORES.playbooks, id);
-  return raw ? migrate(raw) : null;
+  return raw ? migratePlaybookRecord(raw).playbook : null;
 }
 
+/**
+ * The playbook's current published content, or `null` when it has never
+ * been published (or its pointer names a version that is no longer there).
+ *
+ * `null` is deliberately distinguishable from an empty version: a caller
+ * about to run a review has to be able to tell "this playbook has no
+ * published content" from "its content is a playbook with no clauses".
+ */
+export async function getPlaybookContent(playbookId: string): Promise<PlaybookVersion | null> {
+  const playbook = await getPlaybook(playbookId);
+  if (!playbook?.currentVersionId) return null;
+  const version = await getVersion(playbook.currentVersionId);
+  return version ? migrateVersionRecord(version) : null;
+}
+
+/** Saves the identity record. Content goes through `publishVersion` or
+ *  `saveDraft`; nothing here can change what a published version says. */
 export async function savePlaybook(playbook: Playbook): Promise<Playbook> {
   const db = await getDb();
-  const saved: Playbook = { ...playbook, updatedAt: Date.now(), schemaVersion: TEMPLATE_SCHEMA_VERSION };
+  const saved: Playbook = { ...playbook, updatedAt: Date.now(), schemaVersion: SCHEMA_VERSION };
   try {
     // The read (current max _seq) and the write share ONE readwrite
     // transaction, so two concurrent savePlaybook calls can never both read
@@ -144,6 +137,18 @@ export async function savePlaybook(playbook: Playbook): Promise<Playbook> {
   return saved;
 }
 
+/** Stores unpublished edits against the playbook's identity record.
+ *
+ *  Loud rather than quiet on a missing playbook: silently creating one
+ *  would hide a deleted playbook behind a draft nothing can publish. */
+export async function saveDraft(playbookId: string, draft: PlaybookDraft): Promise<void> {
+  const playbook = await getPlaybook(playbookId);
+  if (!playbook) {
+    throw new Error('That playbook no longer exists, so the draft could not be saved.');
+  }
+  await savePlaybook({ ...playbook, draft });
+}
+
 export async function deletePlaybook(id: string): Promise<void> {
   const db = await getDb();
   try {
@@ -153,11 +158,16 @@ export async function deletePlaybook(id: string): Promise<void> {
   }
 }
 
-export function exportPlaybook(playbook: Playbook): Blob {
-  return new Blob([JSON.stringify(playbook, null, 2)], { type: 'application/json' });
+/** Exports a playbook's CONTENT — the clauses and prompts are the part
+ *  worth carrying to another browser. Identity (`createdAt`, the version
+ *  pointer, the id) is local bookkeeping and is minted fresh on import. */
+export function exportPlaybook(content: PlaybookDraft): Blob {
+  return new Blob([JSON.stringify(content, null, 2)], { type: 'application/json' });
 }
 
-export async function importPlaybook(json: string): Promise<Playbook> {
+/** Imports exported content — or a pre-D exported `Template` — as a brand
+ *  new playbook with its own fresh identity and a published v1. */
+export async function importPlaybook(json: string, byUserId = ''): Promise<{ playbook: Playbook; version: PlaybookVersion }> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(json);
@@ -167,7 +177,10 @@ export async function importPlaybook(json: string): Promise<Playbook> {
   if (!parsed || typeof parsed !== 'object' || !Array.isArray((parsed as { clauses?: unknown }).clauses)) {
     throw new Error('That file is not a template — it has no clauses.');
   }
-  const migrated = migrate(parsed);
+  const draft = migrateDraft(parsed, 'Untitled playbook');
   // Fresh id so importing a playbook you already have does not overwrite it.
-  return savePlaybook({ ...migrated, id: uid() });
+  const identity = { ...newPlaybook(draft.name), id: uid() };
+  const version = await publishVersion(identity.id, draft, byUserId);
+  const playbook = await savePlaybook({ ...identity, currentVersionId: version.id });
+  return { playbook, version };
 }

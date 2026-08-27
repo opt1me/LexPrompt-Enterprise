@@ -1,5 +1,6 @@
+import type { IDBPObjectStore, StoreNames } from 'idb';
 import { getDb } from './open';
-import { STORES } from './schema';
+import { STORES, type LexPromptDB } from './schema';
 import { SCHEMA_VERSION, type PlaybookDraft, type PlaybookVersion } from '../../types';
 import { uid } from '../uid';
 
@@ -31,28 +32,7 @@ export async function publishVersion(
   const db = await getDb();
   try {
     const tx = db.transaction(STORES.playbookVersions, 'readwrite');
-    const existing = await tx.store.index('byPlaybook').getAll(playbookId);
-    const nextVersion = existing.reduce((max, v) => Math.max(max, v.version), 0) + 1;
-
-    // A version history whose entries do not say what changed is a list of
-    // dates (spec §4). v1 is exempt: there is no previous version for it to
-    // have changed from.
-    const summary = draft.changeSummary?.trim() ?? '';
-    if (nextVersion > 1 && summary === '') {
-      throw new Error('A change summary is required when publishing a new version.');
-    }
-
-    const record: PlaybookVersion = {
-      ...draft,
-      changeSummary: summary,
-      id: uid(),
-      playbookId,
-      version: nextVersion,
-      publishedAt: Date.now(),
-      publishedByUserId: byUserId,
-      schemaVersion: SCHEMA_VERSION,
-    };
-    await tx.store.put(record);
+    const record = await publishVersionIn(tx.store, playbookId, draft, byUserId);
     await tx.done;
     return record;
   } catch (error) {
@@ -62,6 +42,52 @@ export async function publishVersion(
     if (error instanceof Error && /change summary/i.test(error.message)) throw error;
     throw new Error(STORAGE_FULL_MESSAGE);
   }
+}
+
+/**
+ * The allocation itself, against an object store handle from an ALREADY-OPEN
+ * readwrite transaction — the same shape (and the same reason) as `seq.ts`'s
+ * `nextSeq`.
+ *
+ * It exists so the startup conversion in `migrate.ts` can do its version put
+ * and its identity write-back inside ONE transaction spanning both stores,
+ * without a second copy of the version-number allocation. Two copies of this
+ * is precisely the sibling drift that `matters.ts` reproducing
+ * `playbooks.ts`'s allocation *without* its transaction scoping produced.
+ *
+ * The caller owns the transaction and must not await anything non-IDB
+ * between calling this and its own put, or IndexedDB auto-commits early and
+ * reopens the race the shared transaction exists to close.
+ */
+export async function publishVersionIn<TxStores extends ArrayLike<StoreNames<LexPromptDB>>>(
+  store: IDBPObjectStore<LexPromptDB, TxStores, 'playbookVersions', 'readwrite'>,
+  playbookId: string,
+  draft: PlaybookDraft,
+  byUserId: string,
+): Promise<PlaybookVersion> {
+  const existing = await store.index('byPlaybook').getAll(playbookId);
+  const nextVersion = existing.reduce((max, v) => Math.max(max, v.version), 0) + 1;
+
+  // A version history whose entries do not say what changed is a list of
+  // dates (spec §4). v1 is exempt: there is no previous version for it to
+  // have changed from.
+  const summary = draft.changeSummary?.trim() ?? '';
+  if (nextVersion > 1 && summary === '') {
+    throw new Error('A change summary is required when publishing a new version.');
+  }
+
+  const record: PlaybookVersion = {
+    ...draft,
+    changeSummary: summary,
+    id: uid(),
+    playbookId,
+    version: nextVersion,
+    publishedAt: Date.now(),
+    publishedByUserId: byUserId,
+    schemaVersion: SCHEMA_VERSION,
+  };
+  await store.put(record);
+  return record;
 }
 
 export async function getVersion(id: string): Promise<PlaybookVersion | null> {

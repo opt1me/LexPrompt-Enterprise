@@ -28,9 +28,15 @@ vi.mock('./lib/db/migrate', () => ({
 // exports; mocking the module lets the mount effect's very first await
 // reject deterministically, without needing a real (or fake) IndexedDB
 // failure mode.
-vi.mock('./lib/db/playbooks', () => ({
+vi.mock('./lib/db/playbooks', async (importOriginal) => ({
+  // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
+  // the real module: re-implementing them here would be a second copy of
+  // logic this task just extracted. Only the store-touching functions
+  // below are replaced.
+  ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
   listPlaybooks: (...args: unknown[]) => listPlaybooksMock(...args),
   getPlaybook: (...args: unknown[]) => getPlaybookMock(...args),
+  getPlaybookContent: async (id: string) => (await listPlaybooksMock()).find((p: { id: string }) => p.id === id) ?? null,
   savePlaybook: vi.fn(),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),
@@ -249,13 +255,15 @@ describe('App — playbook editor route (Task 12)', () => {
     id: 'pb1',
     name: 'NDA Review',
     contractType: 'NDA',
-    mode: 'extraction' as const,
     systemPrompt: 'You are an expert.',
     formatPrompt: 'Quote verbatim.',
     clauses: [],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 1,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 
   beforeEach(() => {
@@ -264,7 +272,10 @@ describe('App — playbook editor route (Task 12)', () => {
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);
     listPlaybooksMock.mockReset().mockResolvedValue([playbook]);
-    getPlaybookMock.mockReset();
+    // The library lists IDENTITY records now — they carry no clauses — so
+    // opening one always reads it (and its published content) from storage,
+    // where before the card handed the whole template over in memory.
+    getPlaybookMock.mockReset().mockResolvedValue(playbook);
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -361,13 +372,15 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     id: 'pb1',
     name: 'NDA Review',
     contractType: 'NDA',
-    mode: 'extraction' as const,
     systemPrompt: 'You are an expert.',
     formatPrompt: 'Quote verbatim.',
     clauses: [],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 1,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 
   // Bypasses React's tracked-value shortcut (setting `.value` directly is a

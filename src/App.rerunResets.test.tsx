@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Matter, Review, DocumentRecord, Template, TrailStep, Collection } from './types';
+import type { Matter, Review, DocumentRecord, PlaybookVersion, TrailStep, Collection } from './types';
 import { unconfirmedPosition, confirmPosition } from './lib/netPosition';
 // Deliberately UNMOCKED: Task 8A's App-level collection-retry tests (bottom
 // of this file) need `getCollection` to run for real against fake-indexeddb
@@ -32,8 +32,15 @@ vi.mock('./lib/db/migrate', () => ({
   migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
 }));
 
-vi.mock('./lib/db/playbooks', () => ({
+vi.mock('./lib/db/playbooks', async (importOriginal) => ({
+  // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
+  // the real module: re-implementing them here would be a second copy of
+  // logic this task just extracted. Only the store-touching functions
+  // below are replaced.
+  ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
   listPlaybooks: (...args: unknown[]) => listPlaybooksMock(...args),
+  getPlaybook: vi.fn(),
+  getPlaybookContent: async (id: string) => (await listPlaybooksMock()).find((p: { id: string }) => p.id === id) ?? null,
   savePlaybook: vi.fn(),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),
@@ -160,21 +167,23 @@ function makeMatter(): Matter {
   return { id: 'm1', name: 'Acme v Bolt', ownerId: 'u1', createdAt: 1, updatedAt: 1 };
 }
 
-function makeTemplate(): Template {
+function makeTemplate(): PlaybookVersion {
   return {
     id: 't1',
     name: 'Basic Contract Review',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
     clauses: [
       { id: 'c1', title: 'Governing Law', extractPrompt: 'Extract the governing law clause.' },
       { id: 'c2', title: 'Term', extractPrompt: 'Extract the term.' },
     ],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 2,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 }
 

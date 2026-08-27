@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Copy, MessageSquare, Code, ToggleLeft, ToggleRight } from 'lucide-react';
-import type { Template } from '../../types';
+import type { PlaybookDraft } from '../../types';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
 import { buildMegaPrompt, type MegaPromptFormat } from './buildMegaPrompt';
@@ -8,7 +8,7 @@ import { buildMegaPrompt, type MegaPromptFormat } from './buildMegaPrompt';
 export interface MegaPromptModalProps {
   isOpen: boolean;
   onClose: () => void;
-  template: Template | null;
+  template: PlaybookDraft | null;
 }
 
 /** The "DIY mode" viewer: a self-contained prompt the user can copy and paste elsewhere. */

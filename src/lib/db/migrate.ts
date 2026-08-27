@@ -1,5 +1,9 @@
+import type { IDBPDatabase } from 'idb';
 import { getDb } from './open';
-import { STORES } from './schema';
+import { STORES, type LexPromptDB } from './schema';
+import { seqOf } from './seq';
+import { migratePlaybookRecord } from './playbookMigration';
+import { publishVersionIn } from './playbookVersions';
 import type { Playbook, UserProfile } from '../../types';
 import { uid } from '../uid';
 
@@ -13,6 +17,13 @@ const V1_TEMPLATES_KEY = 'lexprompt.templates.v2';
  *  Deliberately distinct from `PROFILE_KEY` ('local'), which holds the
  *  user's actual profile record, so the two can never collide. */
 const MIGRATION_FLAG_KEY = 'migration:v1-templates';
+
+/** Sub-project D's own flag, deliberately SEPARATE from the one above.
+ *  Reusing `MIGRATION_FLAG_KEY` would silently skip D's conversion for
+ *  every user sub-project A already migrated — the flag says "A's import
+ *  ran", not "this record is current" (R-D7). The `migration:<name>`
+ *  convention already anticipated more than one. */
+const PLAYBOOK_VERSIONS_FLAG_KEY = 'migration:d-playbook-versions';
 
 export interface MigrationResult {
   status: 'not-needed' | 'migrated' | 'failed';
@@ -39,22 +50,32 @@ function isMigrationFlag(v: unknown): v is MigrationFlag {
 // module's own flag record in the same store means going through that
 // type at the two points that touch it; the casts are contained to these
 // two tiny helpers rather than sprinkled through the migration logic.
-async function readFlag(db: Awaited<ReturnType<typeof getDb>>): Promise<MigrationFlag | undefined> {
-  const v = (await db.get(STORES.profile, MIGRATION_FLAG_KEY)) as unknown;
+async function readFlag(db: Awaited<ReturnType<typeof getDb>>, key: string): Promise<MigrationFlag | undefined> {
+  const v = (await db.get(STORES.profile, key)) as unknown;
   return isMigrationFlag(v) ? v : undefined;
 }
 
-async function writeFlag(db: Awaited<ReturnType<typeof getDb>>, count: number): Promise<void> {
+async function writeFlag(db: Awaited<ReturnType<typeof getDb>>, key: string, count: number): Promise<void> {
   const flag: MigrationFlag = { done: true, count, migratedAt: Date.now() };
-  await db.put(STORES.profile, flag as unknown as UserProfile, MIGRATION_FLAG_KEY);
+  await db.put(STORES.profile, flag as unknown as UserProfile, key);
 }
 
 function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** One-time migration of v1's localStorage templates into the `playbooks`
- *  IndexedDB store. Three rules govern every line below:
+/** The app's one-time, startup-ordered migrations, in order:
+ *
+ *  1. sub-project A — v1's localStorage templates into the `playbooks`
+ *     IndexedDB store.
+ *  2. sub-project D — every pre-D playbook into an identity record plus one
+ *     published `PlaybookVersion` (R-D7).
+ *
+ *  Each carries its own durable flag, so a user already migrated by A still
+ *  runs D's, and D's runs after A's within a single call — a v1 template
+ *  imported by step 1 is converted by step 2 before anything can read it.
+ *
+ *  Three rules govern every line below:
  *
  *  1. The localStorage source is NEVER deleted here, on any path —
  *     success, partial success, or failure. A later, separate cleanup may
@@ -81,73 +102,179 @@ export async function migrateIfNeeded(): Promise<MigrationResult> {
   // an unhandled rejection. A caller written against `Promise<MigrationResult>`
   // has no reason to `.catch()`; letting this reject at startup — the exact
   // moment a user's v1 playbooks are being moved — would be the worst
-  // possible time for that gap to show up. `count` lives outside the try so
-  // the catch can still report an accurate partial count from a mid-loop
-  // failure, per Rule 3.
-  let count = 0;
+  // possible time for that gap to show up. The counters live outside the try
+  // so the catch can still report an accurate partial count from a mid-loop
+  // failure, per Rule 3; `phase` says which step's count that is, so a
+  // failure in one step never reports the other step's progress.
+  let importedCount = 0;
+  const converted = { count: 0 };
+  let phase: 'v1' | 'versions' = 'v1';
   try {
     const db = await getDb();
 
-    // Fast path — the whole point of the durable flag: a returning user who
-    // has already been migrated (or who never had v1 data) never causes
-    // localStorage to be touched again.
-    if (await readFlag(db)) {
-      return { status: 'not-needed', count: 0 };
-    }
+    // --- Step 1 (sub-project A): v1 localStorage -> the playbooks store ---
+    //
+    // Its own durable flag still short-circuits it entirely for a returning
+    // user. What changed in sub-project D is that this no longer RETURNS
+    // early on its "nothing to do" paths — Step 2 below has to run whether
+    // or not this one did, which is the whole point of giving it a separate
+    // flag.
+    let v1Status: 'not-needed' | 'migrated' = 'not-needed';
+    if (!(await readFlag(db, MIGRATION_FLAG_KEY))) {
+      const raw = localStorage.getItem(V1_TEMPLATES_KEY);
+      if (raw === null) {
+        await writeFlag(db, MIGRATION_FLAG_KEY, 0);
+      } else {
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(raw);
+        } catch (e) {
+          // Rule 3. An unparseable source is not "nothing to migrate" — it is
+          // a migration that cannot proceed. No flag is written, so a fixed or
+          // recovered source gets another chance on the next call. Step 2 is
+          // deliberately NOT reached: the app renders its migration-blocked
+          // screen on this result and nothing reads a playbook until the user
+          // retries, so there is nothing to be gained by converting first and
+          // everything to be gained by leaving the store exactly as found.
+          return { status: 'failed', count: 0, error: `v1 template storage could not be parsed: ${errorMessage(e)}` };
+        }
 
-    const raw = localStorage.getItem(V1_TEMPLATES_KEY);
-    if (raw === null) {
-      await writeFlag(db, 0);
-      return { status: 'not-needed', count: 0 };
-    }
+        if (!Array.isArray(parsed)) {
+          return { status: 'failed', count: 0, error: 'v1 template storage was not an array.' };
+        }
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch (e) {
-      // Rule 3. An unparseable source is not "nothing to migrate" — it is a
-      // migration that cannot proceed. No flag is written, so a fixed or
-      // recovered source gets another chance on the next call.
-      return { status: 'failed', count: 0, error: `v1 template storage could not be parsed: ${errorMessage(e)}` };
-    }
+        if (parsed.length === 0) {
+          await writeFlag(db, MIGRATION_FLAG_KEY, 0);
+        } else {
+          for (const entry of parsed) {
+            const src = (entry ?? {}) as Partial<Playbook> & Record<string, unknown>;
+            const id = typeof src.id === 'string' && src.id ? src.id : uid();
+            // Rule 2 (the check that matters). A record already present — from
+            // a prior, possibly-interrupted run, or because the user has since
+            // edited it in the app — is left exactly as it is. Never
+            // unconditionally overwritten with what v1 originally had.
+            const existing = await db.get(STORES.playbooks, id);
+            if (existing) {
+              importedCount++;
+              continue;
+            }
+            // Written in its ORIGINAL pre-D shape, on purpose: Step 2 below
+            // is what converts it, and it runs in this same call, so a v1
+            // import never lands in the store un-versioned for longer than
+            // one migration pass.
+            const record = { ...src, id } as unknown as Playbook;
+            await db.put(STORES.playbooks, record);
+            importedCount++;
+          }
 
-    if (!Array.isArray(parsed)) {
-      return { status: 'failed', count: 0, error: 'v1 template storage was not an array.' };
-    }
-
-    if (parsed.length === 0) {
-      await writeFlag(db, 0);
-      return { status: 'not-needed', count: 0 };
-    }
-
-    for (const entry of parsed) {
-      const src = (entry ?? {}) as Partial<Playbook> & Record<string, unknown>;
-      const id = typeof src.id === 'string' && src.id ? src.id : uid();
-      // Rule 2 (the check that matters). A record already present — from a
-      // prior, possibly-interrupted run, or because the user has since
-      // edited it in the app — is left exactly as it is. Never
-      // unconditionally overwritten with what v1 originally had.
-      const existing = await db.get(STORES.playbooks, id);
-      if (existing) {
-        count++;
-        continue;
+          await writeFlag(db, MIGRATION_FLAG_KEY, importedCount);
+          v1Status = 'migrated';
+        }
       }
-      const record = { ...src, id } as Playbook;
-      await db.put(STORES.playbooks, record);
-      count++;
     }
 
-    await writeFlag(db, count);
-    return { status: 'migrated', count };
+    // --- Step 2 (sub-project D, R-D7): playbooks -> identity + v1 --------
+    phase = 'versions';
+    if (!(await readFlag(db, PLAYBOOK_VERSIONS_FLAG_KEY))) {
+      await migratePlaybooksToVersions(db, converted);
+      await writeFlag(db, PLAYBOOK_VERSIONS_FLAG_KEY, converted.count);
+    }
+
+    // `count` stays the number of playbooks IMPORTED from v1 — it is what
+    // `App`'s "Migrated N playbooks." toast reports, and D's conversion
+    // touches those same playbooks, so adding the two would double-count
+    // them for the one user who hits both in a single load.
+    return { status: v1Status, count: importedCount };
   } catch (e) {
-    // Rule 3, for every failure this function can hit — a bad `getDb()`
-    // open, a per-record write failure (count reflects successes strictly
-    // before the failing record, since `count++` only happens after a
-    // successful get/skip or put), or a failure writing the completion
-    // flag itself after every record succeeded. No flag is written on any
-    // of these paths — the successfully-written records are recognized as
-    // already-present on the next attempt, so a retry resumes rather than
-    // reprocessing them.
-    return { status: 'failed', count, error: errorMessage(e) };
+    // Rule 3, for every failure either step can hit — a bad `getDb()` open, a
+    // per-record write failure, a failed publish, or a failure writing a
+    // completion flag after every record succeeded. No flag is written on any
+    // of these paths, so a retry resumes: Step 1 recognises its
+    // already-written records as present, and Step 2 adopts an already-
+    // published version instead of publishing a second one.
+    return { status: 'failed', count: phase === 'v1' ? importedCount : converted.count, error: errorMessage(e) };
   }
+}
+
+/**
+ * Sub-project D: converts every pre-D playbook into an identity record plus
+ * one published v1.
+ *
+ * Runs ONCE, here, at startup — never lazily from `listPlaybooks` or
+ * `getPlaybook` (R-D7). A read path that publishes races itself: two
+ * components reading on the same tick both see no `currentVersionId`, both
+ * publish, and the playbook ends up holding v1 and v2 with identical
+ * content, in the sub-project whose entire purpose is making "which version
+ * did this review run against" answerable.
+ *
+ * The durable flag is NOT what makes that safe, and assuming it was is a
+ * mistake this function has already made once. Two calls to
+ * `migrateIfNeeded()` on the same tick — which React StrictMode's
+ * double-invoked mount effect produces on every dev load, and a second tab
+ * produces in production — both read no flag and both start converting.
+ * A browser run caught exactly that: one playbook came out holding v1 AND
+ * v2 with byte-identical content.
+ *
+ * What makes it safe is that each playbook's conversion is ONE readwrite
+ * transaction spanning both stores, and the record it decides from is read
+ * fresh INSIDE that transaction. IndexedDB serialises readwrite
+ * transactions with overlapping scopes, so a second pass cannot begin until
+ * the first has committed, and it then reads the `currentVersionId` the
+ * first one wrote and skips. Nothing non-IDB is awaited inside the
+ * transaction, which is what keeps IndexedDB from auto-committing it early.
+ *
+ * `progress` is an out-parameter rather than the return value alone because
+ * a mid-loop throw carries no return value, and `migrateIfNeeded`'s contract
+ * is to report a partial count from exactly that. It is incremented only
+ * after a transaction has committed, so it never counts a rolled-back one.
+ */
+async function migratePlaybooksToVersions(
+  db: IDBPDatabase<LexPromptDB>,
+  progress: { count: number },
+): Promise<number> {
+  // Ids only. Every decision below is made from a record re-read inside the
+  // conversion's own transaction — a record captured out here would be stale
+  // the moment a concurrent pass converted it, which is the whole defect.
+  const ids = (await db.getAll(STORES.playbooks)).map(p => p.id);
+
+  for (const id of ids) {
+    const tx = db.transaction([STORES.playbooks, STORES.playbookVersions], 'readwrite');
+    const playbooks = tx.objectStore(STORES.playbooks);
+    const versions = tx.objectStore(STORES.playbookVersions);
+
+    const record = await playbooks.get(id);
+    if (!record) {
+      // Deleted between the id sweep and now. Nothing to convert.
+      await tx.done;
+      continue;
+    }
+
+    const { playbook, version } = migratePlaybookRecord(record);
+    // Already migrated — it has a version pointer, and its content lives in
+    // the versions store. This is also the branch a concurrent pass lands in.
+    if (!version) {
+      await tx.done;
+      continue;
+    }
+
+    // Rule 2, one level up. An older build could have left a version behind
+    // with nothing pointing at it; adopting it is right where publishing a
+    // second copy of the same content would not be.
+    const existing = await versions.index('byPlaybook').getAll(playbook.id);
+    const current = existing.length > 0
+      ? existing.reduce((latest, v) => (v.version > latest.version ? v : latest))
+      : await publishVersionIn(versions, playbook.id, version, '');
+
+    // `_seq` is preserved rather than reallocated, and `createdAt` /
+    // `updatedAt` come straight from the source: converting a playbook is
+    // not the user editing it, and must not reorder their library.
+    await playbooks.put({
+      ...playbook,
+      currentVersionId: current.id,
+      _seq: seqOf(record as { _seq?: unknown }),
+    } as unknown as Playbook);
+    await tx.done;
+    progress.count++;
+  }
+  return progress.count;
 }

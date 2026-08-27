@@ -2,7 +2,8 @@ import { chatJson, isAuthError } from '../../lib/openrouter';
 import { assessDocument, contextBudgetChars } from '../../lib/modelContext';
 import { repairCitations } from '../../lib/citationRepair';
 import { unchecked } from '../../lib/verification';
-import type { PlaybookClause, DocumentFile, Finding, RiskLevel, Settings, Template } from '../../types';
+import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, RiskLevel, Settings } from '../../types';
+import { riskCriteriaBlock } from '../../lib/riskBlock';
 
 const RISK_LEVELS: RiskLevel[] = ['High', 'Medium', 'Low', 'Info'];
 
@@ -48,13 +49,10 @@ export interface BuildClausePromptOptions {
 export function buildClausePrompt(
   doc: DocumentFile,
   clause: PlaybookClause,
-  template: Template,
+  template: PlaybookVersion,
   options: BuildClausePromptOptions = {},
 ): string {
-  const riskBlock =
-    template.mode === 'risk'
-      ? `\nRISK CRITERIA: ${clause.riskCriteria || template.riskTolerance || 'General commercial reasonableness.'}`
-      : '';
+  const riskBlock = riskCriteriaBlock(clause, template);
   const text = options.text ?? doc.text;
   const truncationNote = options.truncated
     ? '\n\nNOTE: The document text above was TRUNCATED to fit the context budget of the selected ' +
@@ -97,7 +95,7 @@ If the document text above is empty and images are attached, read the images ins
 export async function extractClause(
   doc: DocumentFile,
   clause: PlaybookClause,
-  template: Template,
+  template: PlaybookVersion,
   settings: Settings,
   signal?: AbortSignal,
 ): Promise<Finding> {

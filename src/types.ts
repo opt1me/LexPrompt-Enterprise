@@ -1,12 +1,11 @@
-export const TEMPLATE_SCHEMA_VERSION = 2;
-
 export type RiskLevel = 'High' | 'Medium' | 'Low' | 'Info';
 
 export type PositionOrigin = 'authored' | 'ai-drafted' | 'learned';
 
 /** The firm's own answer to a clause — "we ask for a 6-month break notice,
  *  no conditions." Its presence is what turns a finding from a summary into
- *  a comparison; `Template.mode` used to decide that and no longer exists. */
+ *  a comparison; `Template.mode` used to decide that and has now been
+ *  retired (R-D1). */
 export interface StandardPosition {
   text: string;
   origin: PositionOrigin;
@@ -29,23 +28,27 @@ export interface PlaybookClause {
   standardPosition?: StandardPosition;
 }
 
-export interface Template {
+/** A playbook's IDENTITY. Its content lives in `PlaybookVersion` records,
+ *  one per publish, so a review that says "ran against v4" can prove what
+ *  v4 was. Nothing here carries clauses or prompts: the pre-D `Template`
+ *  shape, which did, is gone along with its `mode` flag (R-D1).
+ *
+ *  `schemaVersion` is carried deliberately (R-D8) even though D's spec §4
+ *  omits it — every repair-on-read path in this codebase exists to upgrade
+ *  records that record which version wrote them. */
+export interface Playbook {
   id: string;
+  /** Mirrors the current version's name, so the library can list playbooks
+   *  without a second read per row. */
   name: string;
-  contractType: string;
-  mode: 'extraction' | 'risk';
-  systemPrompt: string;
-  formatPrompt: string;
-  riskTolerance?: string;
-  clauses: PlaybookClause[];
   createdAt: number;
   updatedAt: number;
+  /** Absent until the first publish. */
+  currentVersionId?: string;
+  /** Present when there are unpublished edits. */
+  draft?: PlaybookDraft;
   schemaVersion: number;
 }
-
-/** The redesign's name for a Template. Structurally identical in sub-project A;
- *  versioning and standard positions arrive in sub-project D. */
-export type Playbook = Template;
 
 /** The content of a playbook at one published moment. Immutable: nothing
  *  overwrites a version once published, because a review that says "ran
@@ -209,7 +212,7 @@ export interface Finding {
 export interface ReviewRun {
   id: string;
   /** Frozen copy, so editing the template later does not rewrite what this run claims to have checked. */
-  templateSnapshot: Template;
+  templateSnapshot: PlaybookVersion;
   documentIds: string[];
   /** Which documents this run covers and how its findings are keyed —
    *  by document for an ordinary review, by the collection for a
@@ -253,8 +256,11 @@ export const DEFAULT_SETTINGS: Settings = {
  *  `verification` and `notes` (sub-project B). Reviews written at 3 are
  *  upgraded on read — see `src/lib/db/reviewMigration.ts`.
  *  4 to 5: `Review` gained `target` (sub-project C, Task 5 migration fills it
- *  in from `documentIds` on read). */
-export const SCHEMA_VERSION = 5;
+ *  in from `documentIds` on read).
+ *  5 to 6: `Playbook` split into an identity record plus immutable
+ *  `PlaybookVersion` content records, and `Template.mode` retired
+ *  (sub-project D — see `src/lib/db/playbookMigration.ts`). */
+export const SCHEMA_VERSION = 6;
 
 export interface UserProfile {
   id: string;
@@ -358,7 +364,7 @@ export type ReviewTarget =
 export interface Review {
   id: string;
   matterId: string;
-  playbookSnapshot: Playbook;
+  playbookSnapshot: PlaybookVersion;
   documentIds: string[];
   target: ReviewTarget;
   findings: Record<string, Record<string, Finding>>;

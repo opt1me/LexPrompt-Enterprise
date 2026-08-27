@@ -2,20 +2,22 @@ import { describe, it, expect } from 'vitest';
 import { escapeCsvField, buildTabularCsv } from './csv';
 import { buildReportRows } from '../review/exportDocx';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
-import type { DocumentFile, Finding, ReviewRun, Template, TrailStep } from '../../types';
+import type { DocumentFile, Finding, ReviewRun, PlaybookVersion, TrailStep } from '../../types';
 
-function template(clauses: Template['clauses']): Template {
+function template(clauses: PlaybookVersion['clauses']): PlaybookVersion {
   return {
     id: 't1',
     name: 'Test template',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
     clauses,
-    createdAt: 0,
-    updatedAt: 0,
-    schemaVersion: 2,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 0,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 }
 

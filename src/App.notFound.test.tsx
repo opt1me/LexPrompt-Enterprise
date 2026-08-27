@@ -13,8 +13,15 @@ vi.mock('./lib/db/migrate', () => ({
   migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
 }));
 
-vi.mock('./lib/db/playbooks', () => ({
+vi.mock('./lib/db/playbooks', async (importOriginal) => ({
+  // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
+  // the real module: re-implementing them here would be a second copy of
+  // logic this task just extracted. Only the store-touching functions
+  // below are replaced.
+  ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
   listPlaybooks: vi.fn().mockResolvedValue([]),
+  getPlaybook: vi.fn(),
+  getPlaybookContent: vi.fn().mockResolvedValue(null),
   savePlaybook: vi.fn(),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),

@@ -36,7 +36,9 @@ describe('generateTemplate', () => {
     expect(t.clauses.map(c => c.title)).toEqual(['Term', 'Rent']);
     expect(t.clauses[0].extractPrompt).toBe('generated prompt');
     expect(t.clauses[0].id).toBeTruthy();
-    expect(t.schemaVersion).toBeGreaterThan(0);
+    // `generateTemplate` produces DRAFT content now; a schemaVersion is
+    // stamped by `publishVersion` when the draft is published.
+    expect(t.changeSummary).toBe('');
   });
 
   it('preserves the planned clause order despite parallel generation', async () => {

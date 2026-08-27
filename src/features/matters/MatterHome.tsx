@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { Upload, Trash2, Play, FileWarning, FileText, ClipboardList, Loader, Layers, Lightbulb, X } from 'lucide-react';
-import type { Collection, DocumentRecord, Matter, Review, ReviewTarget, Template } from '../../types';
+import type { Collection, DocumentRecord, Matter, Playbook, Review, ReviewTarget } from '../../types';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
@@ -46,7 +46,7 @@ export interface MatterHomeProps {
   /** Playbooks available to run against this matter's documents — the same
    *  list the Library screen already loads; passed through rather than
    *  fetched again here. */
-  playbooks: Template[];
+  playbooks: Playbook[];
   playbooksError: string | null;
   /** Retries the same library load `playbooksError` came from (Important 4:
    *  this used to have no retry at all — a bare paragraph telling the user
@@ -57,7 +57,7 @@ export interface MatterHomeProps {
    *  own documents, byte for byte unchanged (Task 7 widened this from
    *  `(playbook) => Promise<void>` without adding a second entry point).
    *  A collection's own `Run a review` action supplies one. */
-  onRunReview: (playbook: Template, target?: ReviewTarget) => Promise<void>;
+  onRunReview: (playbook: Playbook, target?: ReviewTarget) => Promise<void>;
 
   onDeleteMatter: (matterId: string) => Promise<void>;
 }
@@ -269,7 +269,7 @@ export function MatterHome({
     setRunPickerOpen(true);
   };
 
-  const handlePickPlaybook = async (playbook: Template) => {
+  const handlePickPlaybook = async (playbook: Playbook) => {
     setStartingReviewId(playbook.id);
     try {
       await onRunReview(playbook, runTarget);

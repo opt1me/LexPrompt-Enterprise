@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
-import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
+import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
 import { applyVerification, findingKey, makeNote, resetVerification, unchecked } from './lib/verification';
 import type { VerificationChange } from './lib/verification';
@@ -10,7 +10,9 @@ import { uid } from './lib/uid';
 import {
   listPlaybooks as listTemplates, getPlaybook as getTemplate, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
+  getPlaybookContent, newPlaybookDraft, draftFromVersion,
 } from './lib/db/playbooks';
+import { publishVersion } from './lib/db/playbookVersions';
 import {
   listMatters, getMatter, saveMatter, newMatter, deleteMatter,
 } from './lib/db/matters';
@@ -236,9 +238,16 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // click (`requestView`, below).
   const [route, navigate] = useRoute(() => confirmDiscardIfDirty());
   const [view, setView] = useState<View>(() => viewForRoute(route));
-  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templates, setTemplates] = useState<Playbook[]>([]);
   const [matters, setMatters] = useState<MattersListItem[]>([]);
-  const [activeTemplate, setActiveTemplate] = useState<Template | null>(null);
+  // The CONTENT a run or a reopened review is working against — a published
+  // version, or a review's frozen snapshot. Never the thing the editor
+  // edits: a published version is immutable.
+  const [activeTemplate, setActiveTemplate] = useState<PlaybookVersion | null>(null);
+  // The editor's pair: the playbook's identity, and the working copy of its
+  // content. Split because `Playbook` no longer carries clauses or prompts.
+  const [activePlaybook, setActivePlaybook] = useState<Playbook | null>(null);
+  const [activeDraft, setActiveDraft] = useState<PlaybookDraft | null>(null);
   const [documents, setDocuments] = useState<DocumentFile[]>([]);
   const [run, setRun] = useState<ReviewRun | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -350,7 +359,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // matter-scoped — `matterPickerTemplate` is the playbook awaiting a
   // matter choice, `null` whenever the picker is closed.
   const [matterPickerOpen, setMatterPickerOpen] = useState(false);
-  const [matterPickerTemplate, setMatterPickerTemplate] = useState<Template | null>(null);
+  const [matterPickerTemplate, setMatterPickerTemplate] = useState<PlaybookVersion | null>(null);
 
   // Tracks the template as last saved (or as last opened/generated) so the
   // editor can tell whether there are unsaved changes worth warning about
@@ -361,8 +370,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // after a ~30s paid AI generation is exactly the loss this guards.
   const [savedTemplateSnapshot, setSavedTemplateSnapshot] = useState<string | null>(null);
   const isTemplateDirty =
-    view === 'editor' && activeTemplate !== null &&
-    (savedTemplateSnapshot === null || JSON.stringify(activeTemplate) !== savedTemplateSnapshot);
+    view === 'editor' && activeDraft !== null &&
+    (savedTemplateSnapshot === null || JSON.stringify(activeDraft) !== savedTemplateSnapshot);
 
   /** Important 1: derived at render, not marked on load — see the doc
    *  comment where this is consumed, next to `RunInterruptedBanner`, for
@@ -637,13 +646,19 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setPlaybookNotFound(false);
     setPlaybookLoading(true);
     return getTemplate(id)
-      .then((t) => {
+      .then(async (t) => {
         if (!t) {
           setPlaybookNotFound(true);
           return;
         }
-        setActiveTemplate(t);
-        setSavedTemplateSnapshot(JSON.stringify(t));
+        // The editor edits a DRAFT: an unpublished one if there is one,
+        // otherwise a working copy of the current published version, and a
+        // blank one for a playbook that has never been published.
+        const version = await getPlaybookContent(id);
+        const draft = t.draft ?? (version ? draftFromVersion(version) : newPlaybookDraft(t.name));
+        setActivePlaybook(t);
+        setActiveDraft(draft);
+        setSavedTemplateSnapshot(JSON.stringify(draft));
       })
       .catch((e) => {
         setPlaybookLoadError(describeLoadError(e, 'This playbook could not be loaded. Try again.'));
@@ -661,7 +676,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // yet, which a fetch would wrongly report as not-found). A cold load,
     // refresh, or browser back/forward into this URL always starts with no
     // matching `activeTemplate`, so it still fetches from storage then.
-    if (activeTemplate && activeTemplate.id === playbookRouteId) return;
+    if (activePlaybook && activePlaybook.id === playbookRouteId) return;
     loadPlaybookForEdit(playbookRouteId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playbookRouteId]);
@@ -767,18 +782,38 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     if (routeForNext) navigate(routeForNext);
   };
 
-  const handleOpenTemplate = (t: Template) => {
-    setActiveTemplate(t);
-    setSavedTemplateSnapshot(JSON.stringify(t));
+  const handleOpenTemplate = (t: Playbook) => {
+    // The library holds identity records only, so the content has to be
+    // fetched — which `loadPlaybookForEdit` does, driven by the route.
     navigate({ name: 'playbook', playbookId: t.id });
+  };
+
+  /** Loads a playbook's published content, or reports why it cannot. `null`
+   *  content is a real state (a playbook created but never saved), and
+   *  running it would produce a review of no clauses that looked like a
+   *  review that found nothing. */
+  const contentForRun = async (t: Playbook): Promise<PlaybookVersion | null> => {
+    try {
+      const content = await getPlaybookContent(t.id);
+      if (!content) {
+        notify('This playbook has no published version yet. Open it and save it first.', 'error');
+        return null;
+      }
+      return content;
+    } catch (e) {
+      notify(describeLoadError(e, 'This playbook could not be loaded. Try again.'), 'error');
+      return null;
+    }
   };
 
   /** Important 3: a Library run used to skip persistence entirely — this
    *  now opens `MatterPickerModal` first, so every run (Library or Matter
    *  Home) ends up scoped to a matter. See `handlePickMatterForRun` /
    *  `handleCreateMatterForRun` for what happens once one is chosen. */
-  const handleRunTemplate = (t: Template) => {
-    setMatterPickerTemplate(t);
+  const handleRunTemplate = async (t: Playbook) => {
+    const content = await contentForRun(t);
+    if (!content) return;
+    setMatterPickerTemplate(content);
     setMatterPickerOpen(true);
   };
 
@@ -856,7 +891,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    */
   const handleStartRun = async (
     docs: DocumentFile[],
-    options: { template?: Template; matterId?: string | null; collection?: CollectionRunInput } = {},
+    options: { template?: PlaybookVersion; matterId?: string | null; collection?: CollectionRunInput } = {},
   ) => {
     const template = options.template ?? activeTemplate;
     if (!template || docs.length === 0) return;
@@ -1706,7 +1741,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * collection's own ordered members, not something to preview or add
    * loose uploads to.
    */
-  const handleRunReviewForMatter = async (matterId: string, template: Template, target?: ReviewTarget) => {
+  const handleRunReviewForMatter = async (matterId: string, playbook: Playbook, target?: ReviewTarget) => {
+    const template = await contentForRun(playbook);
+    if (!template) return;
     if (target && isCollectionTarget(target)) {
       try {
         const collection = matterCollections.find(c => c.id === target.collectionId) ?? await getCollection(target.collectionId);
@@ -1773,8 +1810,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setCreateLoading(true);
     setGenerationStatus('');
     try {
-      const t = params.type === 'manual'
-        ? newTemplate(params.name)
+      const draft = params.type === 'manual'
+        ? newPlaybookDraft(params.name)
         : await generateTemplate({
             contractType: params.contractType,
             depth: params.depth,
@@ -1783,13 +1820,17 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             settings,
             onStatus: setGenerationStatus,
           });
-      setActiveTemplate(t);
+      // The identity is minted here and written only by Save, exactly as the
+      // whole template used to be — nothing is persisted until then.
+      const identity = newTemplate(draft.name);
+      setActivePlaybook(identity);
+      setActiveDraft(draft);
       // Never-saved: any further edit (or none at all) counts as unsaved —
       // this is what makes closing right after a paid AI generation trigger
       // the discard warning (Important 7).
       setSavedTemplateSnapshot(null);
       setCreateOpen(false);
-      navigate({ name: 'playbook', playbookId: t.id });
+      navigate({ name: 'playbook', playbookId: identity.id });
     } catch (e) {
       if (isAuthError(e)) {
         setCreateOpen(false);
@@ -1803,20 +1844,41 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     }
   };
 
+  /**
+   * Saving PUBLISHES a version.
+   *
+   * It would be less work to write the edits into `Playbook.draft` and stop
+   * there, and it would be wrong: a review runs against a published
+   * version, so a draft nothing publishes never reaches a run — the
+   * reviewer would save, run, and quietly get the previous clauses. Task 9
+   * adds the draft/publish split properly, with a publish dialog; until
+   * then Save is a publish, and `publishVersion`'s own change-summary rule
+   * is surfaced as the loud error it already throws.
+   */
   const handleSaveTemplate = async () => {
-    if (!activeTemplate) return;
+    if (!activePlaybook || !activeDraft) return;
     try {
-      const saved = await saveTemplate(activeTemplate);
-      setActiveTemplate(saved);
-      setSavedTemplateSnapshot(JSON.stringify(saved));
+      const profile = await getProfile();
+      const version = await publishVersion(activePlaybook.id, activeDraft, profile.id);
+      const saved = await saveTemplate({
+        ...activePlaybook,
+        // The identity mirrors the current version's name so the library can
+        // list playbooks without reading a version per row.
+        name: version.name,
+        currentVersionId: version.id,
+      });
+      const nextDraft = draftFromVersion(version);
+      setActivePlaybook(saved);
+      setActiveDraft(nextDraft);
+      setSavedTemplateSnapshot(JSON.stringify(nextDraft));
       await refreshTemplates();
-      notify('Template saved.');
+      notify(`Published v${version.version}.`);
     } catch (e) {
       notify(e instanceof Error ? e.message : 'Could not save the template.', 'error');
     }
   };
 
-  const handleExportTemplate = (t: Template) => {
+  const handleExportTemplate = (t: PlaybookDraft) => {
     const blob = exportTemplate(t);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1840,7 +1902,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setImporting(true);
     try {
       const text = await file.text();
-      await importTemplate(text);
+      const profile = await getProfile();
+      await importTemplate(text, profile.id);
       await refreshTemplates();
       notify('Template imported.');
     } catch (e) {
@@ -2086,14 +2149,14 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                 Back to Library
               </button>
             </div>
-          ) : route.name === 'playbook' && playbookLoading && !activeTemplate ? (
+          ) : route.name === 'playbook' && playbookLoading && !activeDraft ? (
             <div className="p-8 text-gray-500">Loading playbook…</div>
-          ) : activeTemplate ? (
+          ) : activeDraft ? (
             <TemplateEditor
-              template={activeTemplate}
-              onChange={setActiveTemplate}
+              template={activeDraft}
+              onChange={setActiveDraft}
               onSave={handleSaveTemplate}
-              onExport={() => handleExportTemplate(activeTemplate)}
+              onExport={() => handleExportTemplate(activeDraft)}
               onShowMegaPrompt={() => setMegaPromptOpen(true)}
               onClose={() => { if (confirmDiscardIfDirty()) navigate({ name: 'playbooks' }); }}
             />
@@ -2196,7 +2259,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       <MegaPromptModal
         isOpen={megaPromptOpen}
         onClose={() => setMegaPromptOpen(false)}
-        template={activeTemplate}
+        template={activeDraft}
       />
       <MatterPickerModal
         isOpen={matterPickerOpen}

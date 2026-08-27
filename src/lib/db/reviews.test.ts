@@ -4,7 +4,7 @@ import {
 } from './reviews';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
-import type { Review, Playbook } from '../../types';
+import type { Review, PlaybookVersion } from '../../types';
 
 beforeEach(async () => {
   const db = await getDb();
@@ -17,18 +17,20 @@ function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-function makePlaybook(): Playbook {
+function makePlaybook(): PlaybookVersion {
   return {
     id: uid(),
+    playbookId: 'pb-1',
+    version: 1,
     name: 'NDA',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: 'Be careful.',
     formatPrompt: 'Quote verbatim.',
     clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }],
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    schemaVersion: 2,
+    changeSummary: '',
+    publishedAt: Date.now(),
+    publishedByUserId: 'owner-1',
+    schemaVersion: 6,
   };
 }
 

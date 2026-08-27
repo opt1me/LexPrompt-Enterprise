@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildCollectionPrompt } from './collectionPrompt';
 import type { CollectionMember } from './collectionOrder';
-import type { PlaybookClause, DocumentRecord, Template } from '../types';
+import type { PlaybookClause, DocumentRecord, PlaybookVersion } from '../types';
 
 function doc(id: string, name: string, text: string, overrides: Partial<DocumentRecord> = {}): DocumentRecord {
   return {
@@ -20,14 +20,14 @@ const clause: PlaybookClause = {
   extractPrompt: 'Describe how rent is reviewed and by whom.',
 };
 
-const template: Template = {
-  id: 't1', name: 'Lease Playbook', contractType: 'lease', mode: 'extraction',
+const template: PlaybookVersion = {
+  id: 't1', name: 'Lease Playbook', contractType: 'lease',
   systemPrompt: 'You are a careful reviewer.', formatPrompt: 'Return JSON.',
-  clauses: [clause], createdAt: 1, updatedAt: 1, schemaVersion: 2,
+  clauses: [clause], playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 1, publishedByUserId: '', schemaVersion: 6,
 };
 
-const riskTemplate: Template = {
-  ...template, mode: 'risk', riskTolerance: 'Standard commercial risk.',
+const riskTemplate: PlaybookVersion = {
+  ...template, riskTolerance: 'Standard commercial risk.',
 };
 
 const BASE_TEXT = 'The rent is reviewed every five years to open market value.';

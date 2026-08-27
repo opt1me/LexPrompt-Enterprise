@@ -1,5 +1,5 @@
 import { mapWithConcurrency } from '../../lib/concurrency';
-import type { DocumentFile, Finding, ReviewRun, ReviewTarget, Settings, Template } from '../../types';
+import type { DocumentFile, Finding, ReviewRun, ReviewTarget, Settings, PlaybookVersion } from '../../types';
 import { extractClause } from './extractClause';
 import { extractCollectionClause } from './extractCollectionClause';
 import { unchecked } from '../../lib/verification';
@@ -28,7 +28,7 @@ function pendingFinding(clauseId: string): Finding {
  * through means the two can no longer disagree about which key holds a
  * clause's result.
  */
-export function emptyRun(template: Template, docs: DocumentFile[], target?: ReviewTarget): ReviewRun {
+export function emptyRun(template: PlaybookVersion, docs: DocumentFile[], target?: ReviewTarget): ReviewRun {
   const resolvedTarget: ReviewTarget = target ?? { kind: 'documents', documentIds: docs.map(d => d.id) };
   const findings: ReviewRun['findings'] = {};
 

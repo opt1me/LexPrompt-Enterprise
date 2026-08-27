@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { listMatters, getMatter, saveMatter, newMatter, deleteMatter } from './matters';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
-import type { DocumentRecord, Review, Playbook } from '../../types';
+import type { DocumentRecord, Review, PlaybookVersion } from '../../types';
 
 beforeEach(async () => {
   const db = await getDb();
@@ -34,17 +34,19 @@ function makeDocument(matterId: string): DocumentRecord {
   };
 }
 
-const playbookSnapshot: Playbook = {
-  id: 'pb-1',
+const playbookSnapshot: PlaybookVersion = {
+  id: 'pb-1-v1',
+  playbookId: 'pb-1',
+  version: 1,
   name: 'NDA',
   contractType: 'NDA',
-  mode: 'extraction',
   systemPrompt: '',
   formatPrompt: '',
   clauses: [],
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-  schemaVersion: 2,
+  changeSummary: '',
+  publishedAt: Date.now(),
+  publishedByUserId: 'owner-1',
+  schemaVersion: 6,
 };
 
 function makeReview(matterId: string, documentIds: string[]): Review {

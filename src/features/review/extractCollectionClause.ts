@@ -6,7 +6,7 @@ import { normalizeForMatch } from '../../lib/citations';
 import { unchecked } from '../../lib/verification';
 import { unconfirmedPosition } from '../../lib/netPosition';
 import type { CollectionMember } from '../../lib/collectionOrder';
-import type { Citation, PlaybookClause, DocumentFile, Finding, Settings, Template, TrailStep } from '../../types';
+import type { Citation, PlaybookClause, DocumentFile, Finding, Settings, PlaybookVersion, TrailStep } from '../../types';
 
 interface RawCitation {
   quote?: unknown;
@@ -367,7 +367,7 @@ function alignTrail(
 export async function extractCollectionClause(
   members: CollectionMember<DocumentFile>[],
   clause: PlaybookClause,
-  template: Template,
+  template: PlaybookVersion,
   settings: Settings,
   signal?: AbortSignal,
 ): Promise<Finding> {

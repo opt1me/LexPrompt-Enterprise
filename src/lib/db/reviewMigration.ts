@@ -1,4 +1,5 @@
 import { repairCitations } from '../citationRepair';
+import { migrateVersionRecord } from './playbookMigration';
 import { unchecked } from '../verification';
 import type { Finding, NetPosition, Note, Review, ReviewTarget, TrailStep, Verification } from '../../types';
 
@@ -237,5 +238,13 @@ export function migrateReviewRecord(
     : [];
   const target = readTarget(src.target, documentIds);
 
-  return { ...(src as Review), findings, documentIds, target };
+  // Sub-project D: `playbookSnapshot` is a `PlaybookVersion` now. A review
+  // written before D holds a pre-D `Template` — `mode` and all — and it must
+  // still open, because the work in it is real. `migrateVersionRecord` is
+  // the same repair `getPlaybookContent` uses, deliberately: two copies of
+  // "turn a stale content record into a PlaybookVersion" is the sibling
+  // drift this project keeps paying for.
+  const playbookSnapshot = migrateVersionRecord(src.playbookSnapshot);
+
+  return { ...(src as Review), findings, documentIds, target, playbookSnapshot };
 }

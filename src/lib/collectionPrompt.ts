@@ -1,5 +1,6 @@
 import type { CollectionMember } from './collectionOrder';
-import type { PlaybookClause, Template } from '../types';
+import type { PlaybookClause, PlaybookVersion } from '../types';
+import { riskCriteriaBlock } from './riskBlock';
 import { assessDocument } from './modelContext';
 
 const MONTH_NAMES = [
@@ -97,7 +98,7 @@ export function buildCollectionPrompt<
 >(
   members: CollectionMember<T>[],
   clause: PlaybookClause,
-  template: Template,
+  template: PlaybookVersion,
   budgetChars: number,
 ): { prompt: string; truncated: string[] } {
   const ordered = [...members].sort((a, b) => a.position - b.position);
@@ -146,9 +147,7 @@ export function buildCollectionPrompt<
     return `${header}\n${text}${truncationNote}`;
   });
 
-  const riskBlock = template.mode === 'risk'
-    ? `\nRISK CRITERIA: ${clause.riskCriteria || template.riskTolerance || 'General commercial reasonableness.'}`
-    : '';
+  const riskBlock = riskCriteriaBlock(clause, template);
 
   const truncationSummary = truncated.length > 0
     ? `\n\nNOTE: The following document(s) were cut short to fit the context budget and may be ` +

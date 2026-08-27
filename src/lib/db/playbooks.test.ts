@@ -1,18 +1,31 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   listPlaybooks, getPlaybook, savePlaybook, deletePlaybook,
-  newPlaybook, exportPlaybook, importPlaybook,
+  newPlaybook, newPlaybookDraft, draftFromVersion, getPlaybookContent, saveDraft,
+  exportPlaybook, importPlaybook,
 } from './playbooks';
+import { publishVersion } from './playbookVersions';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
-import { TEMPLATE_SCHEMA_VERSION } from '../../types';
+import { SCHEMA_VERSION, type PlaybookDraft } from '../../types';
 
 beforeEach(async () => {
   const db = await getDb();
   await db.clear(STORES.playbooks);
+  await db.clear(STORES.playbookVersions);
 });
 
 afterEach(() => closeDb());
+
+/** A playbook with one published version, which is what every playbook the
+ *  user actually owns looks like after the startup conversion. */
+async function published(name: string, overrides: Partial<PlaybookDraft> = {}) {
+  const identity = newPlaybook(name);
+  const draft = { ...newPlaybookDraft(name), ...overrides };
+  const version = await publishVersion(identity.id, draft, 'u1');
+  const playbook = await savePlaybook({ ...identity, currentVersionId: version.id });
+  return { playbook, version };
+}
 
 describe('playbook CRUD', () => {
   it('starts empty', async () => {
@@ -75,10 +88,21 @@ describe('playbook CRUD', () => {
     await db.put('playbooks', { id: 'partial', name: 'Partial', clauses: [{ title: 'Rent' }] } as never);
     const [found] = await listPlaybooks();
     expect(found.name).toBe('Partial');
-    expect(found.schemaVersion).toBe(TEMPLATE_SCHEMA_VERSION);
-    expect(found.clauses[0].id).toBeTruthy();
-    expect(found.clauses[0].title).toBe('Rent');
+    expect(found.schemaVersion).toBe(SCHEMA_VERSION);
     expect(found.createdAt).toBeGreaterThan(0);
+    // The record is repaired FOR DISPLAY only — the pre-D content is still
+    // sitting in the store, untouched, for the startup conversion to publish.
+    expect((await db.get('playbooks', 'partial') as { clauses?: unknown }).clauses).toBeTruthy();
+  });
+
+  it('reading a pre-D record publishes nothing (R-D7)', async () => {
+    const db = await getDb();
+    await db.put('playbooks', {
+      id: 'pre-d', name: 'Pre-D', clauses: [{ id: 'c1', title: 'T', prompt: 'p' }],
+    } as never);
+    await getPlaybook('pre-d');
+    await listPlaybooks();
+    expect(await db.getAll(STORES.playbookVersions)).toEqual([]);
   });
 
   it('savePlaybook rejects with a clear message when storage is full', async () => {
@@ -130,22 +154,99 @@ describe('playbook CRUD', () => {
   });
 });
 
+describe('content and drafts', () => {
+  it('reads back the published version as the playbook content', async () => {
+    const { playbook } = await published('Lease', {
+      clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }],
+    });
+    const content = await getPlaybookContent(playbook.id);
+    expect(content!.version).toBe(1);
+    expect(content!.clauses[0].title).toBe('Term');
+  });
+
+  it('returns null — not an empty version — for a playbook that has never been published', async () => {
+    // "No published content" and "content with no clauses" are different
+    // facts, and a run started on the second would look like a review that
+    // found nothing.
+    const p = await savePlaybook(newPlaybook('Unpublished'));
+    expect(await getPlaybookContent(p.id)).toBeNull();
+  });
+
+  it('returns null when the version pointer names a version that is gone', async () => {
+    const p = await savePlaybook({ ...newPlaybook('Dangling'), currentVersionId: 'missing' });
+    expect(await getPlaybookContent(p.id)).toBeNull();
+  });
+
+  it('repairs a malformed stored version on read', async () => {
+    const db = await getDb();
+    const identity = await savePlaybook({ ...newPlaybook('Broken'), currentVersionId: 'v-broken' });
+    await db.put(STORES.playbookVersions, {
+      id: 'v-broken', playbookId: identity.id, version: 1, name: 'Broken',
+      clauses: [{ title: 'Rent', prompt: 'What is the rent?' }],
+    } as never);
+    const content = await getPlaybookContent(identity.id);
+    expect(content!.clauses[0].extractPrompt).toBe('What is the rent?');
+    expect(content!.clauses[0].id).toBeTruthy();
+    // And the repair does NOT invent a change summary for a v1 that has none.
+    expect(content!.changeSummary).toBe('');
+  });
+
+  it('a draft is stored against the identity and read back', async () => {
+    const { playbook } = await published('Lease');
+    await saveDraft(playbook.id, { ...newPlaybookDraft('Lease'), changeSummary: 'added a clause' });
+    expect((await getPlaybook(playbook.id))!.draft!.changeSummary).toBe('added a clause');
+    // A draft never changes what the published version says.
+    expect((await getPlaybookContent(playbook.id))!.changeSummary).toBe('');
+  });
+
+  it('saveDraft fails loudly for a playbook that no longer exists', async () => {
+    await expect(saveDraft('gone', newPlaybookDraft('X'))).rejects.toThrow(/no longer exists/i);
+  });
+
+  it('draftFromVersion does not carry the previous version\'s change summary', async () => {
+    const { version } = await published('Lease');
+    const republished = await publishVersion(version.playbookId, {
+      ...draftFromVersion(version), changeSummary: 'added a break clause',
+    }, 'u1');
+    // v3's draft must start blank rather than claiming v2's reason.
+    expect(draftFromVersion(republished).changeSummary).toBe('');
+  });
+
+  it('draftFromVersion deep-copies the clauses', async () => {
+    const { version } = await published('Lease', {
+      clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'p' }],
+    });
+    const draft = draftFromVersion(version);
+    draft.clauses[0].title = 'Edited';
+    expect(version.clauses[0].title).toBe('Term');
+  });
+});
+
 describe('import / export', () => {
   it('round-trips through export and import', async () => {
-    const p = newPlaybook('Round Trip');
-    p.clauses = [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }];
-    const text = await exportPlaybook(p).text();
-    const imported = await importPlaybook(text);
-    expect(imported.name).toBe('Round Trip');
-    expect(imported.clauses[0].title).toBe('Term');
+    const draft = {
+      ...newPlaybookDraft('Round Trip'),
+      clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }],
+    };
+    const text = await exportPlaybook(draft).text();
+    const { playbook, version } = await importPlaybook(text);
+    expect(playbook.name).toBe('Round Trip');
+    expect(version.clauses[0].title).toBe('Term');
   });
 
   it('assigns a fresh id on import so it cannot clobber the original', async () => {
-    const p = newPlaybook('Original');
-    await savePlaybook(p);
-    const imported = await importPlaybook(await exportPlaybook(p).text());
-    expect(imported.id).not.toBe(p.id);
+    const { playbook, version } = await published('Original');
+    const imported = await importPlaybook(await exportPlaybook(draftFromVersion(version)).text());
+    expect(imported.playbook.id).not.toBe(playbook.id);
     expect((await listPlaybooks()).length).toBe(2);
+  });
+
+  it('an imported playbook is immediately runnable — it gets a published v1', async () => {
+    const { playbook } = await importPlaybook(JSON.stringify({
+      name: 'Importable', clauses: [{ id: 'c1', title: 'T', extractPrompt: 'p' }],
+    }));
+    expect(playbook.currentVersionId).toBeTruthy();
+    expect((await getPlaybookContent(playbook.id))!.clauses[0].title).toBe('T');
   });
 
   it('rejects malformed JSON', async () => {
@@ -157,15 +258,14 @@ describe('import / export', () => {
   });
 
   it('never leaks the internal _seq write-counter into an export', async () => {
-    const saved = await savePlaybook(newPlaybook('No Leak'));
-    // Read back through the two paths that touch the raw (_seq-bearing)
-    // stored record, to pin that migrate() reconstructs field-by-field
-    // rather than spreading it — a future refactor that spread the raw
-    // record instead would fail this immediately.
-    const viaGet = await getPlaybook(saved.id);
+    const { version } = await published('No Leak');
+    // Read back through the path that touches the raw (_seq-bearing) stored
+    // record, to pin that the identity is reconstructed field-by-field
+    // rather than spread — a future refactor that spread the raw record
+    // instead would fail this immediately.
     const [viaList] = await listPlaybooks();
-    expect('_seq' in JSON.parse(await exportPlaybook(viaGet!).text())).toBe(false);
-    expect('_seq' in JSON.parse(await exportPlaybook(viaList).text())).toBe(false);
+    expect('_seq' in viaList).toBe(false);
+    expect('_seq' in JSON.parse(await exportPlaybook(draftFromVersion(version)).text())).toBe(false);
   });
 
   it('migrates a v1 template that used content-era field names', async () => {
@@ -177,38 +277,15 @@ describe('import / export', () => {
       mode: 'risk',
       systemPrompt: 'You are a reviewer.',
       formatPrompt: 'Return JSON.',
+      riskTolerance: 'Conservative.',
       clauses: [{ title: 'Rent', prompt: 'What is the rent?' }],
     });
-    const migrated = await importPlaybook(legacy);
-    expect(migrated.schemaVersion).toBe(TEMPLATE_SCHEMA_VERSION);
-    expect(migrated.clauses[0].id).toBeTruthy();
-    expect(migrated.createdAt).toBeGreaterThan(0);
-  });
-
-  it('reads a pre-D clause `prompt` into `extractPrompt`', async () => {
-    await savePlaybook({ ...newPlaybook('legacy'), id: 'pb-legacy',
-      clauses: [{ id: 'c1', title: 'Break', prompt: 'Find the break clause' } as never] });
-    const got = await getPlaybook('pb-legacy');
-    expect(got!.clauses[0].extractPrompt).toBe('Find the break clause');
-    expect('prompt' in got!.clauses[0]).toBe(false);
-  });
-
-  it('drops an empty-text standard position rather than repairing it to empty', async () => {
-    await savePlaybook({ ...newPlaybook('p'), id: 'pb-empty',
-      clauses: [{ id: 'c1', title: 'T', extractPrompt: 'x',
-        standardPosition: { text: '   ', origin: 'authored', reviewedByHuman: true } }] });
-    const got = await getPlaybook('pb-empty');
-    expect('standardPosition' in got!.clauses[0]).toBe(false);
-  });
-
-  it('defaults an unreadable reviewedByHuman to false, never true', async () => {
-    await savePlaybook({ ...newPlaybook('p'), id: 'pb-rev',
-      clauses: [{ id: 'c1', title: 'T', extractPrompt: 'x',
-        standardPosition: { text: 'We ask for 6 months', origin: 'nonsense',
-          reviewedByHuman: 'yes' } as never }] });
-    const got = await getPlaybook('pb-rev');
-    expect(got!.clauses[0].standardPosition).toEqual({
-      text: 'We ask for 6 months', origin: 'authored', reviewedByHuman: false, provenance: undefined,
-    });
+    const { playbook, version } = await importPlaybook(legacy);
+    expect(version.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(version.clauses[0].id).toBeTruthy();
+    expect(version.clauses[0].extractPrompt).toBe('What is the rent?');
+    expect(version.riskTolerance).toBe('Conservative.');
+    expect(playbook.createdAt).toBeGreaterThan(0);
+    expect('mode' in version).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { emptyRun, runReview, retryCell, runProgress, countNoContent } from './runReview';
-import type { DocumentFile, Settings, Template, Finding, ReviewTarget, ReviewRun } from '../../types';
+import type { DocumentFile, Settings, PlaybookVersion, Finding, ReviewTarget, ReviewRun } from '../../types';
 import type { CollectionMember } from '../../lib/collectionOrder';
 
 vi.mock('./extractClause', () => ({ extractClause: vi.fn() }));
@@ -11,14 +11,14 @@ const { extractCollectionClause } = await import('./extractCollectionClause');
 
 const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 2 };
 
-const template: Template = {
-  id: 't1', name: 'T', contractType: 'NDA', mode: 'risk',
+const template: PlaybookVersion = {
+  id: 't1', name: 'T', contractType: 'NDA',
   systemPrompt: 's', formatPrompt: 'f',
   clauses: [
     { id: 'c1', title: 'Term', extractPrompt: 'p1' },
     { id: 'c2', title: 'Law', extractPrompt: 'p2' },
   ],
-  createdAt: 0, updatedAt: 0, schemaVersion: 2,
+  playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '', schemaVersion: 6,
 };
 
 function doc(id: string): DocumentFile {

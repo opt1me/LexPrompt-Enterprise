@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { mount, buttons, buttonNamed, click } from '../../test/mount';
 import { TabularReview } from './TabularReview';
-import type { DocumentFile, Finding, ReviewRun, Template } from '../../types';
+import type { DocumentFile, Finding, ReviewRun, PlaybookVersion } from '../../types';
 
 // Task 10: sub-project B's final review found the grid's cells show no
 // verification state at all — a rejected and a verified cell looked
@@ -12,18 +12,20 @@ import type { DocumentFile, Finding, ReviewRun, Template } from '../../types';
 // produces one position per clause, not one per document — is refused a
 // grid rather than shown one that has nothing genuine to compare.
 
-function makeTemplate(): Template {
+function makeTemplate(): PlaybookVersion {
   return {
     id: 't1',
     name: 'Basic Contract Review',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
     clauses: [{ id: 'c1', title: 'Governing Law', extractPrompt: '' }],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 2,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 }
 

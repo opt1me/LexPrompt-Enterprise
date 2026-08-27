@@ -1,0 +1,195 @@
+import {
+  SCHEMA_VERSION,
+  type Playbook,
+  type PlaybookClause,
+  type PlaybookDraft,
+  type PlaybookVersion,
+  type PositionOrigin,
+  type StandardPosition,
+} from '../../types';
+import { uid } from '../uid';
+
+/** The change summary given to the v1 minted for a playbook that existed
+ *  before versioning did. Exported because Task 4 needs to recognise it and
+ *  because two copies of a user-visible string is exactly the drift
+ *  `verificationLabel` exists to prevent. */
+export const IMPORTED_SUMMARY = 'Imported from before versioning.';
+
+/**
+ * Brings a playbook record of any earlier shape up to D's identity+versions
+ * split. Returns the identity record and, when the input was a pre-D
+ * content-carrying record, the draft that should be published as its v1.
+ *
+ * Repair, never drop (sub-project A): a record that cannot be fully read is
+ * repaired to a sane default, and the source is never deleted. A `version`
+ * of `null` means "already migrated" — publishing another v1 for it would
+ * duplicate the user's history on every app start, which is what makes the
+ * idempotency test load-bearing rather than decorative.
+ *
+ * PURE. It writes nothing and reads no store, so calling it from a read
+ * path (`listPlaybooks`, `getPlaybook`) is safe; the WRITE half of the
+ * conversion lives in `migrate.ts`'s one-time, flag-guarded startup step
+ * (R-D7), because a read path that publishes races itself.
+ */
+export function migratePlaybookRecord(
+  input: unknown,
+): { playbook: Playbook; version: PlaybookDraft | null } {
+  const t = (input ?? {}) as Record<string, unknown>;
+  const now = Date.now();
+  const id = typeof t.id === 'string' && t.id ? t.id : uid();
+  const name = typeof t.name === 'string' && t.name ? t.name : 'Untitled playbook';
+  const createdAt = typeof t.createdAt === 'number' ? t.createdAt : now;
+  const updatedAt = typeof t.updatedAt === 'number' ? t.updatedAt : now;
+
+  // Keys are omitted entirely when absent rather than set to `undefined`:
+  // `structuredClone` — how IndexedDB writes every record — PRESERVES an
+  // `undefined`-valued key, so a plain assignment would leave a stored
+  // playbook claiming it has a `draft` (or a `currentVersionId`) that any
+  // `in` check would agree was there.
+  const playbook: Playbook = {
+    id,
+    name,
+    createdAt,
+    updatedAt,
+    schemaVersion: SCHEMA_VERSION,
+    ...(typeof t.currentVersionId === 'string' && t.currentVersionId
+      ? { currentVersionId: t.currentVersionId }
+      : {}),
+    ...(t.draft && typeof t.draft === 'object' ? { draft: migrateDraft(t.draft, name) } : {}),
+  };
+
+  // Already migrated: it has a version pointer, so its content lives in the
+  // versions store and there is nothing here to publish.
+  if (playbook.currentVersionId) return { playbook, version: null };
+
+  return { playbook, version: migrateDraft(t, name) };
+}
+
+/**
+ * Repairs any content-shaped record — a pre-D `Template`, a stored
+ * `PlaybookDraft`, or the content half of a `PlaybookVersion` — into a
+ * `PlaybookDraft`.
+ */
+export function migrateDraft(input: unknown, fallbackName: string): PlaybookDraft {
+  const t = (input ?? {}) as Record<string, unknown>;
+  // R-D1: `mode: 'risk'` keeps its risk tolerance so the migrated playbook
+  // emits the same RISK CRITERIA block and produces the same review it does
+  // today. `mode: 'extraction'` clears it: the editor hides the field
+  // outside risk mode but never clears it, so a leftover string would make
+  // an extraction playbook start emitting criteria it never had.
+  //
+  // A record with NO mode at all keeps its tolerance. Every pre-D record
+  // has an explicit mode — `playbooks.ts`'s old `migrate()` wrote
+  // `t.mode === 'risk' ? 'risk' : 'extraction'` on every read — so the
+  // modeless case is a POST-D record (a draft, or a published version being
+  // repaired on read through this same function), where clearing would
+  // silently delete a tolerance a user typed after `mode` was retired.
+  // Treating modeless as extraction, as an earlier draft of this did, would
+  // strip the risk block from an already-migrated playbook on every read.
+  const hadMode = t.mode === 'risk' || t.mode === 'extraction';
+  const keepsTolerance = !hadMode || t.mode === 'risk';
+  const riskTolerance =
+    keepsTolerance && typeof t.riskTolerance === 'string' && t.riskTolerance.trim() !== ''
+      ? t.riskTolerance
+      : undefined;
+
+  const draft: PlaybookDraft = {
+    name: typeof t.name === 'string' && t.name ? t.name : fallbackName,
+    contractType: typeof t.contractType === 'string' ? t.contractType : 'Custom',
+    systemPrompt: typeof t.systemPrompt === 'string' ? t.systemPrompt : '',
+    formatPrompt: typeof t.formatPrompt === 'string' ? t.formatPrompt : '',
+    clauses: Array.isArray(t.clauses) ? t.clauses.map(migrateClause) : [],
+    changeSummary:
+      typeof t.changeSummary === 'string' && t.changeSummary ? t.changeSummary : IMPORTED_SUMMARY,
+  };
+  // Omitted, never assigned as `undefined` — see the note in
+  // `migratePlaybookRecord`, and `migrateClause`'s `standardPosition`.
+  if (riskTolerance !== undefined) draft.riskTolerance = riskTolerance;
+  return draft;
+}
+
+/**
+ * Repairs a stored `PlaybookVersion` (or a pre-D `Review.playbookSnapshot`,
+ * which is a `Template`) on read.
+ *
+ * One function rather than one per caller: `getPlaybookContent` and
+ * `migrateReviewRecord` both have to turn a possibly-stale content record
+ * into a `PlaybookVersion`, and two implementations of that would be the
+ * sibling drift CLAUDE.md names. Nothing here invents a change summary: a
+ * v1's summary is legitimately empty, and rewriting it to `IMPORTED_SUMMARY`
+ * on every read would put words in the publisher's mouth.
+ */
+export function migrateVersionRecord(input: unknown): PlaybookVersion {
+  const t = (input ?? {}) as Record<string, unknown>;
+  const name = typeof t.name === 'string' && t.name ? t.name : 'Untitled playbook';
+  // A real stored version carries `playbookId`. A pre-D snapshot does not:
+  // its `id` IS the playbook's id, and it was never a published version, so
+  // it gets no version id rather than one that would resolve to nothing.
+  const isVersion = typeof t.playbookId === 'string' && t.playbookId !== '';
+  const playbookId = isVersion
+    ? (t.playbookId as string)
+    : typeof t.id === 'string'
+      ? t.id
+      : '';
+
+  return {
+    ...migrateDraft(t, name),
+    changeSummary: typeof t.changeSummary === 'string' ? t.changeSummary : '',
+    id: isVersion && typeof t.id === 'string' ? t.id : '',
+    playbookId,
+    version: typeof t.version === 'number' && Number.isFinite(t.version) && t.version > 0
+      ? t.version
+      : 1,
+    publishedAt:
+      typeof t.publishedAt === 'number' && Number.isFinite(t.publishedAt)
+        ? t.publishedAt
+        : typeof t.createdAt === 'number' && Number.isFinite(t.createdAt)
+          ? t.createdAt
+          : 0,
+    publishedByUserId: typeof t.publishedByUserId === 'string' ? t.publishedByUserId : '',
+    schemaVersion: SCHEMA_VERSION,
+  };
+}
+
+export function migrateClause(input: unknown): PlaybookClause {
+  const c = (input ?? {}) as Partial<PlaybookClause> & { prompt?: unknown };
+  // Both names are read on migration; only the new one is written (spec §5).
+  // A pre-D record has `prompt`; anything already migrated has
+  // `extractPrompt`. Reading both is what makes this idempotent.
+  const extractPrompt =
+    typeof c.extractPrompt === 'string' ? c.extractPrompt :
+    typeof c.prompt === 'string' ? c.prompt : '';
+  const standardPosition = migratePosition(c.standardPosition);
+  return {
+    id: typeof c.id === 'string' && c.id ? c.id : uid(),
+    title: typeof c.title === 'string' ? c.title : 'Untitled clause',
+    extractPrompt,
+    riskCriteria: typeof c.riskCriteria === 'string' ? c.riskCriteria : undefined,
+    // Key omitted entirely when absent, not set to `undefined` — an
+    // `undefined`-valued key survives structuredClone (how IndexedDB writes
+    // every record), so a plain assignment here would let a dropped
+    // position's key linger on the stored clause.
+    ...(standardPosition ? { standardPosition } : {}),
+  };
+}
+
+/** A position that cannot be read is dropped rather than repaired to an
+ *  empty one: an empty-text position would render as "we ask for: (nothing)"
+ *  and would make a clause claim a house rule it does not have. Absent is
+ *  the honest answer, and it is the same answer a clause that never had a
+ *  position gives. */
+export function migratePosition(input: unknown): StandardPosition | undefined {
+  const p = (input ?? {}) as Partial<StandardPosition>;
+  if (typeof p.text !== 'string' || p.text.trim() === '') return undefined;
+  const origin: PositionOrigin =
+    p.origin === 'ai-drafted' || p.origin === 'learned' ? p.origin : 'authored';
+  return {
+    text: p.text,
+    origin,
+    // Unreadable provenance defaults to NOT reviewed. Same reasoning as
+    // `readStatus` in sub-project B: the safe default is the one that
+    // prompts a human to look.
+    reviewedByHuman: p.reviewedByHuman === true,
+    provenance: typeof p.provenance === 'string' ? p.provenance : undefined,
+  };
+}

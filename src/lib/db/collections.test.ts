@@ -9,7 +9,7 @@ import {
 import { deleteMatter, newMatter, saveMatter } from './matters';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
-import type { DocumentRecord, Review, Playbook } from '../../types';
+import type { DocumentRecord, Review, PlaybookVersion } from '../../types';
 
 function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -30,17 +30,19 @@ function makeDocument(matterId: string, overrides: Partial<DocumentRecord> = {})
   };
 }
 
-const playbookSnapshot: Playbook = {
-  id: 'pb-1',
+const playbookSnapshot: PlaybookVersion = {
+  id: 'pb-1-v1',
+  playbookId: 'pb-1',
+  version: 1,
   name: 'NDA',
   contractType: 'NDA',
-  mode: 'extraction',
   systemPrompt: '',
   formatPrompt: '',
   clauses: [],
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-  schemaVersion: 2,
+  changeSummary: '',
+  publishedAt: Date.now(),
+  publishedByUserId: 'owner-1',
+  schemaVersion: 6,
 };
 
 function makeReview(matterId: string, documentIds: string[]): Review {

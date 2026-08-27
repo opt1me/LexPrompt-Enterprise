@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Upload, X, Play, FileWarning, CircleSlash, TriangleAlert, AlertOctagon } from 'lucide-react';
-import type { DocumentFile, ReviewRun, Template } from '../../types';
+import type { DocumentFile, ReviewRun, PlaybookVersion } from '../../types';
 import { parseFiles } from '../../lib/documents';
 import { Button } from '../../components/Button';
 import { runProgress, countNoContent } from './runReview';
 
 export interface RunPanelProps {
-  template: Template;
+  template: PlaybookVersion;
   onBack: () => void;
   onRun: (documents: DocumentFile[]) => void;
   /** Pre-populates the document list (Task 11: "Run a review" from a

@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { mount } from '../../test/mount';
 import { TabularReview } from './TabularReview';
-import type { DocumentFile, ReviewRun, Template } from '../../types';
+import type { DocumentFile, ReviewRun, PlaybookVersion } from '../../types';
 
 // Task 8A: `TabularReview` is a pure renderer over `run.findings` — same map
 // `ResultsView` reads. It still looked cells up by `run.findings[docId]`,
@@ -20,18 +20,20 @@ import type { DocumentFile, ReviewRun, Template } from '../../types';
 // pin below (a standalone review) is untouched by Task 10 and still
 // exercises the original `findingsKeyFor` fix.
 
-function makeTemplate(): Template {
+function makeTemplate(): PlaybookVersion {
   return {
     id: 't1',
     name: 'Basic Contract Review',
     contractType: 'NDA',
-    mode: 'extraction',
     systemPrompt: '',
     formatPrompt: '',
     clauses: [{ id: 'c1', title: 'Governing Law', extractPrompt: '' }],
-    createdAt: 1,
-    updatedAt: 1,
-    schemaVersion: 2,
+    playbookId: 'pb',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
   };
 }
 

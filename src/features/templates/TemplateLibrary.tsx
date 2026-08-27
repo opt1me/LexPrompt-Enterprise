@@ -1,13 +1,17 @@
 import React, { useRef, useState } from 'react';
 import { Play, Plus, Trash2, Upload, Loader } from 'lucide-react';
-import type { Template } from '../../types';
+import type { Playbook } from '../../types';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
 
 export interface TemplateLibraryProps {
-  templates: Template[];
-  onOpen: (template: Template) => void;
-  onRun: (template: Template) => void;
+  /** IDENTITY records, not content. A playbook's clauses and prompts live in
+   *  its `PlaybookVersion`s now, and handing this component a version would
+   *  give it a `id` that is the VERSION's — which `onDelete` would then
+   *  delete nothing by. */
+  templates: Playbook[];
+  onOpen: (template: Playbook) => void;
+  onRun: (template: Playbook) => void;
   onDelete: (id: string) => void;
   onCreate: () => void;
   onImport: (file: File) => void;
@@ -55,7 +59,13 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
           <div key={t.id} className="group relative bg-[#1a1a1a] border border-white/10 rounded-xl hover:border-violet-500/50 transition-colors shadow-lg flex flex-col">
             <div className="p-5 flex-1 flex flex-col cursor-pointer" onClick={() => onOpen(t)}>
               <h3 className="font-bold text-white text-lg truncate pr-8 mb-2">{t.name}</h3>
-              <p className="text-xs text-gray-500 mb-4 line-clamp-2 min-h-[32px]">{t.systemPrompt}</p>
+              <p className="text-xs text-gray-500 mb-4 line-clamp-2 min-h-[32px]">
+                {t.draft
+                  ? 'Unpublished changes'
+                  : t.currentVersionId
+                    ? `Updated ${new Date(t.updatedAt).toLocaleDateString()}`
+                    : 'Not published yet'}
+              </p>
 
               <div className="mt-auto flex gap-2">
                 <button className="flex-1 py-2 bg-white/5 rounded text-xs text-gray-300 hover:bg-white/10 font-medium">Edit</button>

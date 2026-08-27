@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { draftEmail } from './draftEmail';
-import type { Finding, ReviewRun, Settings, Template } from '../../types';
+import type { Finding, ReviewRun, Settings, PlaybookVersion } from '../../types';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
 
 vi.mock('../../lib/openrouter', () => ({ chat: vi.fn() }));
@@ -10,11 +10,11 @@ beforeEach(() => vi.clearAllMocks());
 
 const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
 
-const template: Template = {
-  id: 't', name: 'T', contractType: 'Lease', mode: 'risk',
+const template: PlaybookVersion = {
+  id: 't', name: 'T', contractType: 'Lease',
   systemPrompt: '', formatPrompt: '',
   clauses: [{ id: 'break', title: 'Break clause', extractPrompt: '' }],
-  createdAt: 0, updatedAt: 0, schemaVersion: 2,
+  playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '', schemaVersion: 6,
 };
 
 // Step 0: `draftEmail` is built on `buildReportRows` (see its own doc

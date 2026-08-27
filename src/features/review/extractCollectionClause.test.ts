@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractCollectionClause, COLLECTION_CLAUSE_SCHEMA } from './extractCollectionClause';
-import type { PlaybookClause, Template, DocumentFile, Settings } from '../../types';
+import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings } from '../../types';
 import type { CollectionMember } from '../../lib/collectionOrder';
 
 vi.mock('../../lib/openrouter', async () => {
@@ -23,11 +23,11 @@ const clause: PlaybookClause = {
   riskCriteria: 'Should not exceed RPI.',
 };
 
-const template: Template = {
-  id: 't1', name: 'Lease', contractType: 'Lease', mode: 'risk',
+const template: PlaybookVersion = {
+  id: 't1', name: 'Lease', contractType: 'Lease',
   systemPrompt: 'You are a reviewer.', formatPrompt: 'Quote verbatim.',
   riskTolerance: 'Conservative.', clauses: [clause],
-  createdAt: 0, updatedAt: 0, schemaVersion: 2,
+  playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '', schemaVersion: 6,
 };
 
 function docFile(id: string, name: string, text: string, overrides: Partial<DocumentFile> = {}): DocumentFile {

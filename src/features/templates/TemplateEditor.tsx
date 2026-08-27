@@ -1,11 +1,14 @@
 import React from 'react';
 import { Cpu, FileOutput, ShieldAlert, Plus, ChevronUp, ChevronDown, X, Save, Download, Copy, Settings } from 'lucide-react';
-import type { Template } from '../../types';
+import type { PlaybookDraft } from '../../types';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
 
 export interface TemplateEditorProps {
-  template: Template;
-  onChange: (t: Template) => void;
+  /** The working copy. A playbook's published content is immutable, so what
+   *  this edits is always a draft — Task 9 replaces these props with the
+   *  full version/draft/publish set. */
+  template: PlaybookDraft;
+  onChange: (t: PlaybookDraft) => void;
   onSave: () => void;
   onExport: () => void;
   onShowMegaPrompt: () => void;
@@ -13,7 +16,6 @@ export interface TemplateEditorProps {
 }
 
 export function TemplateEditor({ template, onChange, onSave, onExport, onShowMegaPrompt, onClose }: TemplateEditorProps) {
-  const isRiskMode = template.mode === 'risk';
 
   const moveClause = (index: number, direction: 'up' | 'down') => {
     const newClauses = [...template.clauses];
@@ -54,13 +56,22 @@ export function TemplateEditor({ template, onChange, onSave, onExport, onShowMeg
             onChange={(e) => onChange({ ...template, name: e.target.value })}
             className="text-2xl font-bold bg-transparent text-white border-b border-transparent hover:border-white/20 focus:border-violet-500 outline-none px-1 w-full md:w-auto"
           />
-          <div className="flex bg-white/10 rounded-lg p-1 shrink-0">
-            <button onClick={() => onChange({ ...template, mode: 'extraction' })} className={`px-3 py-1 text-xs rounded font-medium transition-all ${!isRiskMode ? 'bg-violet-600 text-white' : 'text-gray-400'}`}>Standard</button>
-            <button onClick={() => onChange({ ...template, mode: 'risk' })} className={`px-3 py-1 text-xs rounded font-medium transition-all flex items-center gap-1 ${isRiskMode ? 'bg-red-500 text-white' : 'text-gray-400'}`}><ShieldAlert className="h-3 w-3" /> Risk Mode</button>
-          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2 md:gap-3 w-full md:w-auto justify-end">
+        <div className="flex flex-wrap gap-2 md:gap-3 w-full md:w-auto justify-end items-center">
+          {/* Saving publishes a version, and every version after the first
+              has to say what changed — a version history whose entries do
+              not is a list of dates. `publishVersion` enforces that and
+              throws a specific message if this is left empty; this is the
+              field that lets the user satisfy it. Task 9 replaces it with a
+              proper publish dialog that knows the next version number. */}
+          <input
+            value={template.changeSummary}
+            onChange={(e) => onChange({ ...template, changeSummary: e.target.value })}
+            placeholder="What changed? (required after v1)"
+            aria-label="What changed?"
+            className="px-3 py-2 rounded-lg bg-black/50 border border-white/10 text-xs md:text-sm text-gray-300 outline-none focus:border-violet-500 w-full md:w-64"
+          />
           <button onClick={onShowMegaPrompt} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors border border-blue-500/30 text-xs md:text-sm"><Copy className="h-4 w-4" /> DIY Mode</button>
           <button onClick={onExport} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm"><Download className="h-4 w-4" /> Export</button>
           <button onClick={onSave} className="flex items-center gap-2 px-5 py-2 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors border border-green-500/30 text-xs md:text-sm font-bold"><Save className="h-4 w-4" /> Save</button>
@@ -88,17 +99,22 @@ export function TemplateEditor({ template, onChange, onSave, onExport, onShowMeg
               className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-sm text-gray-300 focus:border-violet-500 outline-none min-h-[120px]"
             />
           </div>
-          {isRiskMode && (
-            <div className="bg-red-900/10 border border-red-500/30 rounded-xl p-5">
-              <label className="block text-sm font-medium text-red-300 mb-2 flex items-center gap-2"><ShieldAlert className="h-4 w-4" /> Global Risk Tolerance</label>
-              <AutoResizeTextarea
-                value={template.riskTolerance || ''}
-                onChange={(e) => onChange({ ...template, riskTolerance: e.target.value })}
-                placeholder="e.g. We are risk-averse regarding uncapped liability..."
-                className="w-full bg-black/50 border border-red-500/20 rounded-lg p-3 text-sm text-gray-300 focus:border-red-500 outline-none min-h-[100px]"
-              />
-            </div>
-          )}
+          {/* R-D1: always visible. The Standard/Risk toggle that used to hide
+              this is gone, and what decides whether a review assesses risk is
+              now whether this field (or a clause's own criteria) has anything
+              in it — so a hidden field would be a hidden decision. */}
+          <div className="bg-red-900/10 border border-red-500/30 rounded-xl p-5">
+            <label className="block text-sm font-medium text-red-300 mb-2 flex items-center gap-2"><ShieldAlert className="h-4 w-4" /> Global Risk Tolerance</label>
+            <AutoResizeTextarea
+              value={template.riskTolerance || ''}
+              onChange={(e) => onChange({ ...template, riskTolerance: e.target.value })}
+              placeholder="e.g. We are risk-averse regarding uncapped liability..."
+              className="w-full bg-black/50 border border-red-500/20 rounded-lg p-3 text-sm text-gray-300 focus:border-red-500 outline-none min-h-[100px]"
+            />
+            <p className="mt-2 text-[11px] text-gray-500">
+              Applies to every clause that has no criteria of its own. Leave it empty and no risk criteria are sent at all.
+            </p>
+          </div>
         </div>
 
         {/* Right Column: Clauses (Spans 2 cols on large screens) */}
@@ -110,7 +126,7 @@ export function TemplateEditor({ template, onChange, onSave, onExport, onShowMeg
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
             {template.clauses.map((clause, idx) => (
-              <div key={clause.id} className={`group relative p-0.5 rounded-xl bg-gradient-to-r transition-all duration-300 ${isRiskMode ? 'from-red-900/20 to-orange-900/20 border-red-500/20' : 'from-white/5 to-white/10'}`}>
+              <div key={clause.id} className={`group relative p-0.5 rounded-xl bg-gradient-to-r transition-all duration-300 from-white/5 to-white/10`}>
                 <div className="bg-[#0a0a0a] p-4 rounded-[10px] flex flex-col md:flex-row gap-4 items-start relative border border-white/5">
                   {/* Reordering Controls */}
                   <div className="flex flex-col items-center gap-1 pt-1 md:border-r md:border-white/10 md:pr-4">
@@ -139,17 +155,15 @@ export function TemplateEditor({ template, onChange, onSave, onExport, onShowMeg
                         placeholder="What to extract..."
                       />
                     </div>
-                    {isRiskMode && (
-                      <div>
-                        <label className="text-[10px] text-red-400 uppercase tracking-wider flex items-center gap-1 font-bold mb-1"><ShieldAlert className="h-3 w-3" /> Risk Scorer</label>
-                        <AutoResizeTextarea
-                          value={clause.riskCriteria || ''}
-                          onChange={(e) => updateClause(idx, 'riskCriteria', e.target.value)}
-                          className="w-full bg-red-900/10 border border-red-500/10 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:border-red-500/50"
-                          placeholder="Specific criteria (e.g., 'Must be mutual'). Leave blank to use Global Risk."
-                        />
-                      </div>
-                    )}
+                    <div>
+                      <label className="text-[10px] text-red-400 uppercase tracking-wider flex items-center gap-1 font-bold mb-1"><ShieldAlert className="h-3 w-3" /> Risk Scorer</label>
+                      <AutoResizeTextarea
+                        value={clause.riskCriteria || ''}
+                        onChange={(e) => updateClause(idx, 'riskCriteria', e.target.value)}
+                        className="w-full bg-red-900/10 border border-red-500/10 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:border-red-500/50"
+                        placeholder="Specific criteria (e.g., 'Must be mutual'). Leave blank to use Global Risk."
+                      />
+                    </div>
                   </div>
                 </div>
               </div>

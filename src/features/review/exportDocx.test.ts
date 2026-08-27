@@ -12,7 +12,7 @@ import { buildReportRows, buildReportDocument, exportDocx } from './exportDocx';
 import { buildTabularCsv } from '../tabular/csv';
 import { collectionExportLabel } from '../../lib/findingOutcome';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
-import type { Finding, ReviewRun, Template, TrailStep } from '../../types';
+import type { Finding, ReviewRun, PlaybookVersion, TrailStep } from '../../types';
 
 /** jsdom has no `Blob.prototype.arrayBuffer` — see vitest.setup.ts's
  *  `Blob.prototype.text` polyfill for the same gap on the text side. Needed
@@ -27,14 +27,14 @@ function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   });
 }
 
-const template: Template = {
-  id: 't', name: 'T', contractType: 'NDA', mode: 'risk',
+const template: PlaybookVersion = {
+  id: 't', name: 'T', contractType: 'NDA',
   systemPrompt: '', formatPrompt: '',
   clauses: [
     { id: 'clause-1', title: 'Term', extractPrompt: '' },
     { id: 'c2', title: 'Law', extractPrompt: '' },
   ],
-  createdAt: 0, updatedAt: 0, schemaVersion: 2,
+  playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '', schemaVersion: 6,
 };
 
 const run: ReviewRun = {
@@ -227,11 +227,11 @@ describe('buildReportRows', () => {
 // `buildReportDocument`), because the bug lived in the one line that decides
 // which findings the summary counts, not in row-building or rendering.
 describe('exportDocx — header summary is scoped to the exported document (Important 4)', () => {
-  const twoDocTemplate: Template = {
-    id: 't2', name: 'T2', contractType: 'NDA', mode: 'risk',
+  const twoDocTemplate: PlaybookVersion = {
+    id: 't2', name: 'T2', contractType: 'NDA',
     systemPrompt: '', formatPrompt: '',
     clauses: [{ id: 'c1', title: 'Term', extractPrompt: '' }],
-    createdAt: 0, updatedAt: 0, schemaVersion: 2,
+    playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '', schemaVersion: 6,
   };
 
   function twoDocRun(): ReviewRun {
@@ -296,11 +296,11 @@ describe('exportDocx — header summary is scoped to the exported document (Impo
 // screen over from where sub-project C already fixed it once (Task 8A, for
 // `ResultsView`/`TabularReview`).
 describe('buildReportRows / exportDocx — a collection review (Step 0)', () => {
-  const collectionTemplate: Template = {
-    id: 'tc', name: 'TC', contractType: 'Lease', mode: 'risk',
+  const collectionTemplate: PlaybookVersion = {
+    id: 'tc', name: 'TC', contractType: 'Lease',
     systemPrompt: '', formatPrompt: '',
     clauses: [{ id: 'break', title: 'Break clause', extractPrompt: '' }],
-    createdAt: 0, updatedAt: 0, schemaVersion: 2,
+    playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '', schemaVersion: 6,
   };
 
   function collectionRun(findings: ReviewRun['findings']): ReviewRun {
@@ -376,11 +376,11 @@ describe('buildReportRows / exportDocx — a collection review (Step 0)', () => 
 // checked answer, and its derivation (the trail) must travel with it, not
 // just its conclusion.
 describe('buildReportRows / exportDocx / buildReportDocument — net positions', () => {
-  const netPositionTemplate: Template = {
-    id: 'tnp', name: 'TNP', contractType: 'Lease', mode: 'risk',
+  const netPositionTemplate: PlaybookVersion = {
+    id: 'tnp', name: 'TNP', contractType: 'Lease',
     systemPrompt: '', formatPrompt: '',
     clauses: [{ id: 'break', title: 'Break clause', extractPrompt: '' }],
-    createdAt: 0, updatedAt: 0, schemaVersion: 2,
+    playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '', schemaVersion: 6,
   };
 
   const trail: TrailStep[] = [
