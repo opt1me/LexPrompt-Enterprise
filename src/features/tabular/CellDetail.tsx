@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { X, FileText } from 'lucide-react';
+import { X, FileText, BookOpen } from 'lucide-react';
 import type { Clause, DocumentFile, Finding } from '../../types';
 import type { VerificationChange } from '../../lib/verification';
 import { FindingCard } from '../review/FindingCard';
@@ -20,6 +20,11 @@ export interface CellDetailProps {
   onAddNote?: (text: string) => Promise<void>;
   /** The local profile's initials, for a note's author placeholder. */
   authorInitials?: string;
+  /** The grid's way out of triage: hands this clicked cell off to the
+   *  ledger (Task 10). Optional, same reasoning as `onVerify`/`onAddNote` —
+   *  omitted, no such affordance renders rather than a button that goes
+   *  nowhere. */
+  onOpenInReview?: () => void;
 }
 
 /**
@@ -30,7 +35,7 @@ export interface CellDetailProps {
  * button feeds that single quote to the viewer as its highlight, scrolling
  * to it, exactly as `ResultsView` wires `FindingCard` to `DocumentViewer`.
  */
-export function CellDetail({ doc, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote, authorInitials }: CellDetailProps) {
+export function CellDetail({ doc, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote, authorInitials, onOpenInReview }: CellDetailProps) {
   const [highlights, setHighlights] = useState<string[]>([]);
 
   // A stale highlight from the previously-opened cell must not linger when
@@ -48,13 +53,23 @@ export function CellDetail({ doc, clause, finding, onClose, onRetry, onVerify, v
             {doc?.name ?? 'Document'}
           </span>
         </div>
-        <button
-          onClick={onClose}
-          className="text-gray-500 hover:text-white p-1 hover:bg-white/10 rounded transition-colors"
-          aria-label="Close"
-        >
-          <X className="w-4 h-4" />
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {onOpenInReview && (
+            <button
+              onClick={onOpenInReview}
+              className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 px-2 py-1 rounded transition-colors"
+            >
+              <BookOpen className="w-3.5 h-3.5" aria-hidden="true" /> Open in review
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="text-gray-500 hover:text-white p-1 hover:bg-white/10 rounded transition-colors"
+            aria-label="Close"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       <div className="p-4 border-b border-white/10 overflow-y-auto max-h-[50%] shrink-0">

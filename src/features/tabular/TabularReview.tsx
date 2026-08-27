@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
-import { AlignLeft, Download, FileText, Loader, LayoutList, RotateCcw, CircleSlash, TriangleAlert } from 'lucide-react';
-import type { Clause, DocumentFile, Finding, ReviewRun, RiskLevel } from '../../types';
+import { AlignLeft, Download, FileText, Info, Loader, LayoutList, RotateCcw, CircleSlash, TriangleAlert } from 'lucide-react';
+import type { DocumentFile, Finding, Review, ReviewRun, RiskLevel } from '../../types';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
-import { findingsKeyFor } from '../../lib/reviewTarget';
+import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
+import { verificationCounts } from '../../lib/findingOutcome';
+import { StateChip } from '../../components/StateChip';
+import { RiskChip } from '../../components/RiskChip';
 import { CellDetail } from './CellDetail';
 import { buildTabularCsv } from './csv';
 
@@ -23,6 +26,11 @@ export interface TabularReviewProps {
   onAddNote?: (docId: string, clauseId: string, text: string) => Promise<void>;
   verifyBusyKey?: string | null;
   authorInitials?: string;
+  /** The grid's way out of triage: hands the clicked cell's `docId`/
+   *  `clauseId` off to the ledger (Task 10). Optional, like `onVerify` and
+   *  `onAddNote` — omitted, `CellDetail` renders with no such affordance
+   *  rather than a button that goes nowhere. */
+  onOpenInReview?: (docId: string, clauseId: string) => void;
 }
 
 interface SelectedCell {
@@ -50,10 +58,19 @@ const RISK_CELL_CLASSES: Record<RiskLevel, string> = {
  */
 export function TabularReview({
   run, documents, onRetryCell, onOpenCards, interrupted = false,
-  onVerify, onAddNote, verifyBusyKey, authorInitials,
+  onVerify, onAddNote, verifyBusyKey, authorInitials, onOpenInReview,
 }: TabularReviewProps) {
   const [wrapText, setWrapText] = useState(false);
   const [selected, setSelected] = useState<SelectedCell | null>(null);
+
+  // A collection produces one position per clause, however many documents
+  // fed it — there is nothing to compare across rows, so the comparison
+  // grid this component renders below is refused entirely rather than
+  // rendering a "comparison" that would just repeat the same synthesised
+  // answer under every document's name.
+  if (isCollectionTarget(run.target)) {
+    return <CollectionNotComparable documentCount={run.documentIds.length} onOpenCards={onOpenCards} />;
+  }
 
   const clauses = run.templateSnapshot.clauses;
 
@@ -130,7 +147,10 @@ export function TabularReview({
                     key={clause.id}
                     className="text-left p-4 border-b border-r border-white/10 text-[11px] uppercase tracking-wider font-bold text-gray-400 min-w-[220px]"
                   >
-                    {clause.title}
+                    <div className="flex flex-col gap-1.5">
+                      <span>{clause.title}</span>
+                      <ColumnRiskBar run={run} clauseId={clause.id} />
+                    </div>
                   </th>
                 ))}
               </tr>
@@ -180,6 +200,7 @@ export function TabularReview({
             onAddNote={onAddNote ? (text) => onAddNote(selected.docId, selected.clauseId, text) : undefined}
             verifyBusy={verifyBusyKey === findingKey(selected.docId, selected.clauseId)}
             authorInitials={authorInitials}
+            onOpenInReview={onOpenInReview ? () => onOpenInReview(selected.docId, selected.clauseId) : undefined}
           />
         )}
       </div>
@@ -298,28 +319,146 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = fa
       onClick={onOpen}
       className={`p-3 border-b border-r border-white/10 text-xs cursor-pointer transition-colors ${riskClass} ${selectedRing}`}
     >
-      <div className="flex items-start justify-between gap-1">
-        <div className="flex items-start gap-1 min-w-0">
-          {finding?.truncated && (
-            <TriangleAlert className="w-3 h-3 text-yellow-400 shrink-0 mt-0.5" aria-label="Document truncated to fit context budget" />
-          )}
-          <div className={`${wrapText ? 'whitespace-normal' : 'truncate'} text-gray-300 max-h-32 overflow-hidden min-w-0`}>
-            {finding?.summary || <span className="text-gray-600 italic">Empty</span>}
-          </div>
+      <div className="flex flex-col gap-1.5 min-w-0">
+        {/* Task 10: the defect sub-project B found — a rejected cell and a
+           verified cell looked identical because neither showed any
+           verification state at all. StateChip (what a human concluded) and
+           RiskChip (what the model concluded) are kept as two separate
+           indicators here exactly as they are on `FindingCard` — a
+           High-risk finding nobody has checked and a High-risk finding a
+           lawyer verified are different things, and one badge cannot say
+           which. */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {finding && <StateChip verification={finding.verification} />}
+          <RiskChip level={finding?.riskLevel} />
         </div>
-        {/* Mirrors FindingCard's done-state Retry control: a Verification
-           only ever exists on a `done` finding, so re-running one — the
-           spec's rule that a re-run resets its verification — needs a
-           trigger reachable from a done cell, not just error/cancelled ones. */}
-        <button
-          onClick={(e) => { e.stopPropagation(); onRetry(); }}
-          className="p-1 hover:bg-white/10 rounded text-gray-500 hover:text-white shrink-0"
-          title="Re-run this clause"
-        >
-          <RotateCcw className="w-3 h-3" aria-hidden="true" />
-          <span className="sr-only">Retry</span>
-        </button>
+        <div className="flex items-start justify-between gap-1">
+          <div className="flex items-start gap-1 min-w-0">
+            {finding?.truncated && (
+              <TriangleAlert className="w-3 h-3 text-yellow-400 shrink-0 mt-0.5" aria-label="Document truncated to fit context budget" />
+            )}
+            {/* A readable sentence, not a truncated blob: wrapped shows the
+               summary in full, and the default (unwrapped) view clamps to
+               three lines rather than cutting a single line off mid-word. */}
+            <div className={`${wrapText ? 'whitespace-normal' : 'line-clamp-3'} text-gray-300 min-w-0`}>
+              {finding?.summary || <span className="text-gray-600 italic">Empty</span>}
+            </div>
+          </div>
+          {/* Mirrors FindingCard's done-state Retry control: a Verification
+             only ever exists on a `done` finding, so re-running one — the
+             spec's rule that a re-run resets its verification — needs a
+             trigger reachable from a done cell, not just error/cancelled ones. */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onRetry(); }}
+            className="p-1 hover:bg-white/10 rounded text-gray-500 hover:text-white shrink-0"
+            title="Re-run this clause"
+          >
+            <RotateCcw className="w-3 h-3" aria-hidden="true" />
+            <span className="sr-only">Retry</span>
+          </button>
+        </div>
       </div>
     </td>
+  );
+}
+
+/**
+ * A collection has one position per clause, however many documents fed it
+ * — there is nothing to compare across rows. Rendering the grid anyway
+ * would either show an empty table (misleading: the review isn't empty) or
+ * repeat the same synthesised answer under every member document's name
+ * (misleading the other way: implying a per-document disagreement that was
+ * never assessed). Neither is acceptable, so this explains instead.
+ */
+function CollectionNotComparable({
+  documentCount, onOpenCards,
+}: { documentCount: number; onOpenCards?: () => void }) {
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-4 bg-[#09090b] text-center p-10">
+      <Info className="w-10 h-10 text-gray-500" aria-hidden="true" />
+      <h2 className="font-bold text-white text-lg">No comparison grid for this review</h2>
+      <p className="text-sm text-gray-400 max-w-md">
+        This review targets a collection of {documentCount} linked documents. A collection
+        produces one position per clause, not one answer per document — there is nothing
+        to compare across rows, so the grid is not shown here.
+      </p>
+      {onOpenCards && (
+        <button
+          onClick={onOpenCards}
+          className="px-3 py-2 text-xs font-medium rounded bg-white/5 hover:bg-white/10 text-gray-300 transition-colors flex items-center gap-2 border border-white/10"
+        >
+          <LayoutList className="w-4 h-4" /> Open in review
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Every finding, for one clause, across every row of the grid — the
+ *  subset `verificationCounts` needs to summarise one column without this
+ *  component re-deriving its own tally (Task 10: reuse, don't recount
+ *  inline, so the grid and any report built from the same run can never
+ *  quote different numbers). Only entries that actually have a `Finding`
+ *  are included, matching `verificationCounts`' own iteration. */
+function columnFindingsFor(run: ReviewRun, clauseId: string): Review['findings'] {
+  const out: Review['findings'] = {};
+  for (const docId of run.documentIds) {
+    // `findingsKeyFor` is the one place a findings key is derived — this
+    // component only ever runs past the `isCollectionTarget` guard above,
+    // so this is always `docId` in practice, but going through it rather
+    // than indexing `run.findings[docId]` directly is what keeps this file
+    // from becoming an eighth copy of the document-key mistake this
+    // sub-project has already made six times.
+    const key = findingsKeyFor(run.target, docId);
+    const finding = run.findings[key]?.[clauseId];
+    if (finding) out[docId] = { [clauseId]: finding };
+  }
+  return out;
+}
+
+const RISK_BAR_ORDER: RiskLevel[] = ['High', 'Medium', 'Low', 'Info'];
+
+const RISK_BAR_CLASSES: Record<RiskLevel, string> = {
+  High: 'bg-red-500',
+  Medium: 'bg-yellow-500',
+  Low: 'bg-green-500',
+  Info: 'bg-blue-500',
+};
+
+/** One clause column header's risk-distribution mini-bar plus a
+ *  verification summary line, so a lawyer scanning the top of the grid can
+ *  see at a glance which clause is worth reading down before opening a
+ *  single cell. */
+function ColumnRiskBar({ run, clauseId }: { run: ReviewRun; clauseId: string }) {
+  const findings = columnFindingsFor(run, clauseId);
+  const counts = verificationCounts(findings);
+
+  const riskCounts: Record<RiskLevel, number> = { High: 0, Medium: 0, Low: 0, Info: 0 };
+  for (const byClause of Object.values(findings)) {
+    const level = byClause[clauseId]?.riskLevel;
+    if (level) riskCounts[level]++;
+  }
+  const riskTotal = RISK_BAR_ORDER.reduce((sum, level) => sum + riskCounts[level], 0);
+  const riskLabel = riskTotal === 0
+    ? 'No risk data yet'
+    : `Risk distribution: ${RISK_BAR_ORDER.map(level => `${riskCounts[level]} ${level}`).join(', ')}`;
+
+  return (
+    <div className="flex flex-col gap-1 normal-case font-normal">
+      <div className="h-1.5 w-full rounded-full overflow-hidden bg-white/10 flex" role="img" aria-label={riskLabel}>
+        {riskTotal > 0 && RISK_BAR_ORDER.map(level => (
+          riskCounts[level] > 0 && (
+            <span
+              key={level}
+              className={RISK_BAR_CLASSES[level]}
+              style={{ width: `${(riskCounts[level] / riskTotal) * 100}%` }}
+            />
+          )
+        ))}
+      </div>
+      {counts.total > 0 && (
+        <span className="text-[10px] text-gray-500">{counts.verified}/{counts.total} verified</span>
+      )}
+    </div>
   );
 }

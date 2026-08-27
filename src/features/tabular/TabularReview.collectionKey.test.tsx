@@ -9,6 +9,16 @@ import type { DocumentFile, ReviewRun, Template } from '../../types';
 // which for a collection review (findings keyed by the collection id, since
 // Task 6A) meant every cell rendered as if pending forever, no matter what
 // the run actually produced.
+//
+// Task 10 supersedes the first test below: a collection produces one
+// position per clause, not one per document, so rendering its (correctly
+// keyed, post-8A) finding as if it were a per-document comparison would
+// have been misleading in a different way — implying a row-by-row
+// disagreement across documents that the review never assessed. The grid
+// now refuses a collection target outright rather than rendering it, so
+// this test asserts the refusal instead of cell content. The regression
+// pin below (a standalone review) is untouched by Task 10 and still
+// exercises the original `findingsKeyFor` fix.
 
 function makeTemplate(): Template {
   return {
@@ -48,7 +58,7 @@ describe('TabularReview — reading a collection review\'s findings (Task 8A)', 
     };
   }
 
-  it('renders a collection review\'s cell, keyed by the collection id — not an empty/pending cell', () => {
+  it('a collection review is refused a grid (Task 10) rather than rendering its collection-keyed cell as a comparison', () => {
     const container = mount(
       <TabularReview
         run={makeCollectionRun()}
@@ -56,8 +66,8 @@ describe('TabularReview — reading a collection review\'s findings (Task 8A)', 
         onRetryCell={() => {}}
       />,
     );
-    expect(container.textContent).toContain('The notice period is now 6 months.');
-    expect(container.textContent).not.toContain('Pending');
+    expect(container.querySelector('table')).toBeFalsy();
+    expect(container.textContent).toMatch(/one position per clause/i);
   });
 
   it('a standalone (document-keyed) review still renders exactly as before (regression pin)', () => {
