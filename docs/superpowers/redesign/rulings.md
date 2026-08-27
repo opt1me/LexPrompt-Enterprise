@@ -59,3 +59,31 @@ The full execution ledger lives at `.superpowers/sdd/2026-08-27-redesign-b-verif
 - Both Criticals were found only by the **whole-branch** review; every task had passed its own. One was an *incomplete fix to a defect already diagnosed and believed closed*; the other existed because one rule ("is this finding verifiable?") lived in two places that diverged. That rule is now extracted as `isVerifiable`.
 - **Six tests passed against broken code** and were caught by mutation testing rather than by running them. A green suite was not evidence, exactly as `CLAUDE.md` says.
 - The plan's *source* code held up; its *test* code and *integration* assumptions did not — they were drafted from memory of conventional idioms rather than from the files they would touch. **For C, D, E and F: draft test bodies against the file they will be appended to.**
+
+---
+
+# Sub-project C — rulings made without owner review (2026-08-27)
+
+Execution ledger: `.superpowers/sdd/2026-08-27-redesign-c-collections-and-net-positions/progress.md` (gitignored, disposable).
+
+## Design decisions that still bind
+
+- **R-C1. `Review.target.documentIds` is re-derived from `Review.documentIds` on every read.** `Review` holds the document list twice, and two copies of one fact is this project's most repeated defect shape. Rebuilding on read means they cannot drift no matter what wrote them. *Cost if wrong: a stored target's document list is ignored, which is the intent.*
+- **R-C2. Collection membership is authoritative on the `Collection` record, never on `document.role`.** Grouping and ungrouping touch the record and the members' `role` as separate, non-atomic writes, so `role` is a denormalised convenience that can briefly disagree. *Cost if wrong: a stale `role` shows on a document chip.*
+- **R-C3. `documentDate` never sorts a collection.** The order amendments take effect is a legal judgement someone recorded when they built the collection, not something to re-derive from dates that can be missing, wrong, or ambiguous. The date is displayed, never obeyed. *Cost if wrong: a user must reorder by hand.*
+- **R-C4. `orderedMembers` and `buildCollectionPrompt` are generic over the document type.** Both were briefly forced through `as unknown as CollectionMember<DocumentRecord>[]` — an assertion true only because the function happened to read three shared fields, and one that would keep compiling the day someone read a field only one shape has. Widening the generic deleted the cast. *Cost if wrong: none; the cast was the risk.*
+- **R-C5. A collection review keys findings by the collection id, through `findingsKeyFor`.** One position per clause however many documents fed it; keying by a document would force an arbitrary choice of which one "owns" the answer. *Cost if wrong: it was wrong six times, see below.*
+- **R-C6. `extractCollectionClause` is a separate function from `extractClause`,** with its own prompt, schema and per-citation document resolution, so the single-document path cannot drift by sharing code that later special-cases collections. *Cost if wrong: two functions to keep honest instead of one.*
+
+## Rulings I made that were later overturned by evidence
+
+- **F-C7. The controller may revert a file while an agent is live.** It may not. I ran `git checkout -- src/lib/collectionPrompt.ts` to undo a mutation test while an implementer was working in the same tree, and took its prepared fix with it. **Standing rule: the controller runs no `git checkout --`, `git restore`, `git stash` or `git clean` while any agent is live.** Copy the file aside and back instead.
+- **F-C25. `git add` may be given a directory.** It may not. A fix agent's `git add` swept four files belonging to a concurrently-running agent. **Stage by name; verify with `git show --stat HEAD`.**
+- **A "focused tests only" policy is safe.** It stopped shared-tree contamination but removed the check that catches cross-suite regressions — a jsdom `scrollIntoView` gap broke 21 tests unnoticed. The controller must still run the full suite on a clean tree with nothing in flight.
+
+## The defect record, for whoever plans D
+
+- **Seven separate defects in C were one shape:** a correct mechanism with no path to it, or a key changed on the write side and not on the read side. Findings written under the collection id but read by document id produced an empty findings pane, human writes landing under a key nothing read, silently empty DOCX and CSV exports, and a retry that would have overwritten a synthesis with a one-document answer. **When you change how something is keyed, grep for every reader before you claim it is done.**
+- **Browser verification found four more defects that 800 passing unit tests did not**, and one was Critical: the review migration rebuilt a `Finding` field by field and had never been taught about `netPosition`, so every reopened collection review silently discarded the entire output of this sub-project while the record on disk stayed perfectly intact. **A field-by-field rebuild needs a test per field.** The others: a citation click that ignored the citation's own `documentId` and so reported "couldn't locate this quote" about a quote one tab away; a raw user id printed at the reader; and a retry on a reopened review that re-runs against view-hydrated documents carrying no page images.
+- **`documentFileForViewing` results are as unfit for extraction as raw `DocumentRecord`s** — both lack page images. The rule in CLAUDE.md named the type; it needed to name the hydration mode.
+- **One of my own tests was vacuous and was deleted rather than kept.** It asserted behaviour an unrelated effect already guaranteed, so it passed against the unguarded implementation too. Deleting it with a comment saying why is better than a green assertion that proves nothing.
