@@ -705,6 +705,15 @@ An earlier draft of this plan said to publish the migrated v1 lazily from `listP
 
 Use the mechanism that already exists for exactly this. `src/lib/db/migrate.ts` has `migrateIfNeeded()`: a one-time, startup-ordered migration guarded by a **durable flag** in IndexedDB (`readFlag`/`writeFlag`), which already reports failure by returning `{ status: 'failed' }` rather than rejecting. Read it in full before writing anything.
 
+Two facts verified against the code before this was written, so build on them rather than re-deriving them:
+
+- `migrateIfNeeded()` is awaited **once at App startup, before `AppShell` renders** (`src/App.tsx:2237`). It therefore runs before anything can read a playbook, which is precisely the ordering this needs.
+- Its flag is a **keyed** record in the `profile` store — `MIGRATION_FLAG_KEY = 'migration:v1-templates'` (`migrate.ts:15`). The `migration:<name>` convention already anticipates more than one, so add:
+
+```ts
+const PLAYBOOK_VERSIONS_FLAG_KEY = 'migration:d-playbook-versions';
+```
+
 Add a second, **separately flagged** step to it — do not reuse the v1-localStorage flag, or a user who migrated in sub-project A will skip this one entirely:
 
 ```ts
