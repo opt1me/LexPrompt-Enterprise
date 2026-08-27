@@ -665,7 +665,10 @@ Extend `src/lib/db/reviewMigration.test.ts` — it already has `legacyReview()` 
 Assert:
 - A stored review with `documentIds` and no `target` migrates to `{ kind: 'documents', documentIds }`.
 - `documentIds` is **retained** alongside `target` — every existing consumer reads it.
-- A review already carrying a `collection` target is left exactly as it is.
+- **`target.documentIds` is ALWAYS rebuilt from `Review.documentIds` on read**, even when a `target` is already stored. Assert this directly: a record whose stored `target.documentIds` disagrees with its `Review.documentIds` comes back with the two in agreement, taking `Review.documentIds` as authoritative.
+
+  This is ruling F-C1 and it is not decoration. `Review` now holds the document list twice — once at the top level and once inside `target` — and two copies of one fact is the defect shape this project has recorded six times. Rebuilding on every read means the two *cannot* drift no matter what writes them, and `targetDocumentIds()` stays a safe accessor. The alternative, trusting both to stay in step, is how the six became six.
+- A review already carrying a `collection` target keeps its `kind` and its `collectionId` — only its `documentIds` are re-derived.
 - A review with neither `target` nor `documentIds` gets `{ kind: 'documents', documentIds: [] }` rather than an absent target — an unreadable target must not crash the screen, and an empty document list is visibly empty.
 - **Idempotent**, and it **does not mutate** the input. Both already have precedents in that file; follow them.
 - A `DocumentRecord` with no `role` reads back as `'standalone'`, and one already in a collection keeps its role.
@@ -678,6 +681,7 @@ Extend the **existing** `migrateReviewRecord` — do not add a second migration 
 
 1. Drop `documentIds` when writing `target` — the retention test must fail.
 2. Overwrite an existing `collection` target with a `documents` one — that test must fail.
+2b. Trust a stored `target.documentIds` instead of rebuilding it from `Review.documentIds` — the F-C1 disagreement test must fail. This is the mutation that proves the two lists cannot drift.
 3. Default a missing `role` to `'base'` instead of `'standalone'` — the document test must fail. *(A document silently becoming a collection's base is not a cosmetic default.)*
 
 - [ ] **Step 4: Commit**
