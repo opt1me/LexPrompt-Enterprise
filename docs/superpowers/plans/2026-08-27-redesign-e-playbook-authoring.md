@@ -546,30 +546,75 @@ export interface DraftFormProps {
 
 - [ ] **Step 1: Failing tests**
 
+**Harness, checked at plan time.** `src/test/mount.tsx` exports `mount`, `mountOnce`, `buttons`, `buttonNamed`, `textbox`, `click`, `type`, `keyDown`, `keyDownOn`. There is **no** `text()` and no `inputValue()` — read `container.textContent`, and read an input's value by querying for it. These are all new test files, so they use the shared harness.
+
 ```ts
+import { mount, buttonNamed, click } from '../../test/mount';
+
+const valueOf = (c: HTMLElement, placeholderOrLabel: RegExp) =>
+  [...c.querySelectorAll('input, textarea')]
+    .find(el => placeholderOrLabel.test((el as HTMLInputElement).placeholder ?? ''))
+    ?.getAttribute('value') ?? (
+    [...c.querySelectorAll('textarea')]
+      .find(el => placeholderOrLabel.test(el.placeholder ?? ''))?.value ?? '');
+
 it('shows the learn-from-redlines route as present but not yet built (R-E6)', () => {
-  const el = mount(<RouteChooser learnFromRedlinesAvailable={false} … />);
-  expect(text(el)).toMatch(/redline/i);
-  expect(text(el)).toMatch(/not built yet/i);
+  const c = mount(<RouteChooser learnFromRedlinesAvailable={false}
+    onDraftWithAI={() => {}} onBuildByHand={() => {}} onClose={() => {}} />);
+  expect(c.textContent).toMatch(/redline/i);
+  expect(c.textContent).toMatch(/not built yet/i);
+});
+
+it('does not offer the redlines route as clickable while it is unavailable', () => {
+  // R-E6 keeps the card VISIBLE so the product is not misrepresented — but a
+  // visible card that silently does nothing is worse than one that says why.
+  const onLearn = vi.fn();
+  const c = mount(<RouteChooser learnFromRedlinesAvailable={false} onLearnFromRedlines={onLearn}
+    onDraftWithAI={() => {}} onBuildByHand={() => {}} onClose={() => {}} />);
+  const card = buttonNamed(c, /redline/i);
+  if (card) { click(card); }
+  expect(onLearn).not.toHaveBeenCalled();
 });
 
 it('discloses that selecting a matter sends its content to the model (R-E2)', () => {
   // Everything else in this app sends only the document under review. This
-  // sends OTHER matters' text. Spec S10 requires saying so at the point of
+  // sends OTHER matters' text. Spec §10 requires saying so at the point of
   // selection, not in a settings note.
-  const el = mount(<SourcePicker playbooks={[]} matters={[{ id: 'm1', name: 'Acme' }]} selected={[]} onChange={() => {}} />);
-  expect(text(el)).toMatch(/sent to the model|leaves your browser|other matters/i);
+  const c = mount(<SourcePicker playbooks={[]} matters={[{ id: 'm1', name: 'Acme' }]}
+    selected={[]} onChange={() => {}} />);
+  expect(c.textContent).toMatch(/sent to the model|leaves your browser|other matters/i);
 });
 
 it('says plainly in the form footer that nothing is saved yet', () => {
-  expect(text(mount(<DraftForm … />))).toMatch(/nothing is saved/i);
+  const c = mount(<DraftForm playbooks={[]} matters={[]} onSubmit={() => {}} onCancel={() => {}} />);
+  expect(c.textContent).toMatch(/nothing is saved/i);
 });
 
 it('keeps everything typed when generation fails', () => {
-  const el = mount(<DraftForm error="The model could not be reached."
-    initialValues={{ contractType: 'Lease', context: 'Acting for the tenant.' }} … />);
-  expect(text(el)).toContain('The model could not be reached.');
-  expect(inputValue(el, /context/i)).toBe('Acting for the tenant.');
+  const c = mount(<DraftForm playbooks={[]} matters={[]} onSubmit={() => {}} onCancel={() => {}}
+    error="The model could not be reached."
+    initialValues={{ contractType: 'Lease', context: 'Acting for the tenant.' }} />);
+  expect(c.textContent).toContain('The model could not be reached.');
+  // Losing a filled-in form to a 500 is the small betrayal that stops people
+  // using a feature (spec §7).
+  expect(c.innerHTML).toContain('Acting for the tenant.');
+});
+
+it('routes an auth failure to Settings instead of showing it in the form', () => {
+  const onAuthError = vi.fn();
+  mount(<DraftForm playbooks={[]} matters={[]} onSubmit={() => {}} onCancel={() => {}}
+    error="Your API key was rejected." authFailed onAuthError={onAuthError} />);
+  expect(onAuthError).toHaveBeenCalled();
+});
+
+it('does NOT route an ordinary failure to Settings', () => {
+  // Without this, every 502 sends the user to fix a key that is fine — the
+  // same class of wrong advice as telling someone to reload when reloading
+  // cannot help.
+  const onAuthError = vi.fn();
+  mount(<DraftForm playbooks={[]} matters={[]} onSubmit={() => {}} onCancel={() => {}}
+    error="502 Bad Gateway" onAuthError={onAuthError} />);
+  expect(onAuthError).not.toHaveBeenCalled();
 });
 ```
 
