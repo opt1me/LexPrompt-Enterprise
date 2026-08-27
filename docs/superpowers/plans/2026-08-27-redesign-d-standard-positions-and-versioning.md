@@ -551,6 +551,12 @@ The most invasive migration since sub-project A, and it touches playbooks the us
 **Files:**
 - Create: `src/lib/db/playbookMigration.ts`, `src/lib/db/playbookMigration.test.ts`
 - Modify: `src/lib/db/playbooks.ts`, `src/lib/db/reviewMigration.ts`, `src/types.ts` (remove `Template` and `mode`)
+- Modify: **`src/lib/db/migrate.ts` and `src/lib/db/migrate.test.ts`** — Step 5 (R-D7) adds a separately flagged conversion step to the existing `migrateIfNeeded()`. This entry was missing while R-D7 was being written and is easy to overlook, because the rest of this task lives in `playbookMigration.ts`.
+
+**Test helpers Step 5's snippets assume, which do NOT exist yet — write them:**
+- `savePlaybookRaw(record)` — put a pre-D shaped record straight into the `playbooks` store, bypassing `savePlaybook` (which would migrate it on the way in and defeat the test). Use a raw `db.put`.
+- `writeV1Flag(db, count)` — set sub-project A's `'migration:v1-templates'` flag, for the test that a user already migrated by A still runs D's conversion. `migrate.ts` has `writeFlag`; it is module-private, so either export it for tests or write the `db.put` directly in the helper.
+- `db` — the open handle, from `getDb()`.
 
 **Interfaces:**
 - Consumes: `publishVersion` (Task 2), `PlaybookDraft`, `PlaybookVersion`.
