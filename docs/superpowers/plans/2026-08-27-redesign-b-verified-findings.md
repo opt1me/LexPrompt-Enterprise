@@ -2591,6 +2591,163 @@ import { uid } from './lib/uid';
 
 `saveReview` and `getProfile` are already imported by `App.tsx` — check before adding a duplicate. `uid` comes from the new `src/lib/uid.ts` (Step 3b). There is **no** `userId` in scope; every write handler gets it from `await getProfile()`, per Step 3a.
 
+- [ ] **Step 3c: Stop a live run from overwriting a verification — `carryHumanState`**
+
+**This is a defect the plan originally shipped, found by re-reading `runReview` after Step 3 was written. Read this before implementing, because the handlers above are not sufficient on their own.**
+
+`runReview` holds its *own* copy of the run and calls `onUpdate` with a full snapshot roughly twice per cell — once when a cell starts, once when it resolves. A verification written by `handleVerify` lands in `latestRunRef` and React state, but `runReview` knows nothing about it. So the very next `onUpdate` — fired by some *other* cell finishing — carries a snapshot in which that finding is still `unchecked`, `setRun` applies it, and the debounced saver persists the loss.
+
+The user sees a finding go verified and then quietly un-verify itself. That is the exact failure mode this whole sub-project exists to remove, arriving through the back door.
+
+Create `src/lib/findingMerge.ts`:
+
+```ts
+import type { ReviewRun } from '../types';
+
+/**
+ * Re-applies the human-authored parts of a run — verification and notes —
+ * onto a snapshot produced by the run engine.
+ *
+ * `runReview` owns its own copy of the run and emits a full snapshot on
+ * every cell transition. It never sets a verification: every `Finding` it
+ * builds carries `unchecked()`. So without this, a verification made while
+ * a run is still going is overwritten by the next unrelated cell finishing,
+ * and the debounced save persists the loss — the user watches a finding go
+ * verified and then silently un-verify itself.
+ *
+ * Two different rules, because verification and notes are different claims:
+ *
+ * - **Verification carries over only while the status is unchanged.** A
+ *   verification is a judgement about specific output. If the status moved,
+ *   the cell was re-run or is new, so the output changed and the judgement
+ *   no longer applies — `unchecked` is then the honest answer.
+ * - **Notes always carry over.** A note is a human's own commentary
+ *   ("check this against the side letter"), not a claim about the current
+ *   output, and it stays useful across a re-run. This matches the rule in
+ *   Step 4, which clears verification on retry and deliberately keeps notes.
+ */
+export function carryHumanState(previous: ReviewRun | null, incoming: ReviewRun): ReviewRun {
+  if (!previous) return incoming;
+
+  let changed = false;
+  const findings: ReviewRun['findings'] = {};
+
+  for (const [docId, byClause] of Object.entries(incoming.findings)) {
+    findings[docId] = {};
+    for (const [clauseId, finding] of Object.entries(byClause)) {
+      const before = previous.findings[docId]?.[clauseId];
+      if (!before) {
+        findings[docId][clauseId] = finding;
+        continue;
+      }
+
+      const keepVerification =
+        before.status === finding.status && before.verification.state !== 'unchecked';
+      const keepNotes = before.notes.length > 0 && finding.notes.length === 0;
+
+      if (!keepVerification && !keepNotes) {
+        findings[docId][clauseId] = finding;
+        continue;
+      }
+
+      changed = true;
+      findings[docId][clauseId] = {
+        ...finding,
+        verification: keepVerification ? before.verification : finding.verification,
+        notes: keepNotes ? before.notes : finding.notes,
+      };
+    }
+  }
+
+  // Returning `incoming` unchanged when nothing was carried keeps React's
+  // identity check meaningful for the overwhelmingly common case.
+  return changed ? { ...incoming, findings } : incoming;
+}
+```
+
+Test it in `src/lib/findingMerge.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { carryHumanState } from './findingMerge';
+import type { Finding, ReviewRun } from '../types';
+
+function finding(over: Partial<Finding> = {}): Finding {
+  return { clauseId: 'c1', status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [], ...over };
+}
+
+function run(findings: ReviewRun['findings']): ReviewRun {
+  return { id: 'r', templateSnapshot: { clauses: [] } as never, documentIds: ['d1'], findings, startedAt: 1 };
+}
+
+describe('carryHumanState', () => {
+  it('keeps a verification when the status has not moved', () => {
+    const before = run({ d1: { c1: finding({ verification: { state: 'verified', byUserId: 'u', at: 1 } }) } });
+    const after = carryHumanState(before, run({ d1: { c1: finding() } }));
+    expect(after.findings.d1.c1.verification.state).toBe('verified');
+  });
+
+  it('drops a verification when the status moved — the output it judged is gone', () => {
+    const before = run({ d1: { c1: finding({ verification: { state: 'verified', byUserId: 'u', at: 1 } }) } });
+    const after = carryHumanState(before, run({ d1: { c1: finding({ status: 'running' }) } }));
+    expect(after.findings.d1.c1.verification).toEqual({ state: 'unchecked' });
+  });
+
+  it('keeps notes even when the status moved', () => {
+    const note = { id: 'n1', findingId: 'd1::c1', text: 'check the side letter', byUserId: 'u', at: 2 };
+    const before = run({ d1: { c1: finding({ notes: [note] }) } });
+    const after = carryHumanState(before, run({ d1: { c1: finding({ status: 'running' }) } }));
+    expect(after.findings.d1.c1.notes).toEqual([note]);
+  });
+
+  it('does not resurrect notes the incoming snapshot already has', () => {
+    const older = { id: 'n1', findingId: 'd1::c1', text: 'old', byUserId: 'u', at: 1 };
+    const newer = { id: 'n2', findingId: 'd1::c1', text: 'new', byUserId: 'u', at: 2 };
+    const before = run({ d1: { c1: finding({ notes: [older] }) } });
+    const after = carryHumanState(before, run({ d1: { c1: finding({ notes: [newer] }) } }));
+    expect(after.findings.d1.c1.notes).toEqual([newer]);
+  });
+
+  it('passes a finding through untouched when there is nothing human to carry', () => {
+    const incoming = run({ d1: { c1: finding() } });
+    expect(carryHumanState(run({ d1: { c1: finding() } }), incoming)).toBe(incoming);
+  });
+
+  it('passes the snapshot through when there is no previous run', () => {
+    const incoming = run({ d1: { c1: finding() } });
+    expect(carryHumanState(null, incoming)).toBe(incoming);
+  });
+
+  it('leaves a finding that is new in this snapshot alone', () => {
+    const before = run({ d1: { c1: finding() } });
+    const after = carryHumanState(before, run({ d1: { c1: finding(), c2: finding({ clauseId: 'c2' }) } }));
+    expect(after.findings.d1.c2.verification).toEqual({ state: 'unchecked' });
+  });
+});
+```
+
+Then in `App.tsx`'s `handleUpdate`, wrap the incoming snapshot:
+
+```tsx
+      const merged = carryHumanState(latestRunRef.current, updated);
+      latestRunRef.current = merged;
+      setRun(merged);
+      if (matterId && reviewSaver) {
+        reviewSaver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
+      }
+```
+
+(`userId` here is `handleStartRun`'s own local, which *does* exist in that closure — see Step 3a. It is only the new handlers that lack one.)
+
+Add a test to `src/App.verification.test.tsx`:
+
+```
+it('does not lose a verification to the next update from a live run', ...)
+// Arrange: a live run; verify a completed finding; then fire another onUpdate
+//          from runReview carrying an unchecked snapshot of that same finding.
+// Assert:  the finding is still verified on screen and in what was persisted.
+```
+
 - [ ] **Step 4: Reset verification on retry**
 
 In `handleRetryCell`, before it calls `retryCell`, clear the verification of the cell being re-run and tell the user:
@@ -2654,6 +2811,8 @@ Make each edit, run the two new suites, confirm a FAILURE, revert:
 2. Change `resetVerification` to return `current` unchanged — same test must fail.
 3. In `handleVerify`, move `setRun(updated)` above the `await saveReview(...)` — "does not show a verification the store rejected" must fail.
 4. In `handleVerify`, drop the `latestRunRef.current = updated` line — add a test if none fails: a mid-run verification must survive the next debounced auto-save.
+5. In `carryHumanState`, change `before.status === finding.status` to `true` so a verification survives a status change — the "drops a verification when the status moved" test must fail. This is the rule that stops a re-run inheriting a stale judgement, and it is the same rule Step 4 enforces from the other direction.
+6. In `handleUpdate`, remove the `carryHumanState` wrap — the "does not lose a verification to the next update from a live run" test must fail. If it does not, that test is not exercising a real `onUpdate`, and it needs rewriting rather than accepting.
 
 - [ ] **Step 8: Commit**
 
