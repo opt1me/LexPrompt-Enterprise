@@ -2,6 +2,10 @@ export type RiskLevel = 'High' | 'Medium' | 'Low' | 'Info';
 
 export type PositionOrigin = 'authored' | 'ai-drafted' | 'learned';
 
+/** The comparison result between a clause and its `StandardPosition`. Produced
+ *  ONLY by `normalisePositionOutcome` in `src/lib/positionOutcome.ts`. */
+export type PositionOutcome = 'meets' | 'deviates' | 'unclear';
+
 /** The firm's own answer to a clause — "we ask for a 6-month break notice,
  *  no conditions." Its presence is what turns a finding from a summary into
  *  a comparison; `Template.mode` used to decide that and has now been
@@ -207,6 +211,14 @@ export interface Finding {
    *  absence means "this question did not arise", where an empty net
    *  position would read as "we tried and found nothing". */
   netPosition?: NetPosition;
+  /** Present only when the clause carried a standard position. Absent means
+   *  "no position to compare against" — never `unclear`, which means "there
+   *  was a position and the model could not tell." The distinction is the
+   *  whole point: "we have no house rule here" and "we have one and could
+   *  not tell" are different facts. Produced only by
+   *  `normalisePositionOutcome` (`src/lib/positionOutcome.ts`). */
+  positionOutcome?: PositionOutcome;
+  positionRationale?: string;
 }
 
 export interface ReviewRun {
