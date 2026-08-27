@@ -34,3 +34,6 @@ test_docs/
 
 # SDD execution workspace (scratch)
 .superpowers/
+
+# Agent worktrees — transient, created by isolated subagents
+.claude/worktrees/
