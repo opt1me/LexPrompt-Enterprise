@@ -1712,7 +1712,29 @@ describe('FindingCard verification and evidence', () => {
 });
 ```
 
-`baseProps` and `doneFinding` must come from — or be added to — that file's existing fixtures; do not create a parallel set.
+**Checked against the file:** `FindingCard.test.tsx` has a `CLAUSE` const, its own `mount(node)` helper, and a `hasRetryButton(container)` helper. It has **no** `baseProps`, and its `doneFinding` is a local `const` inside one test, not a factory. Add both at module scope in that file, beside `CLAUSE`, and leave the existing tests untouched:
+
+```tsx
+function doneFinding(overrides: Partial<Finding> = {}): Finding {
+  return {
+    clauseId: 'c1',
+    status: 'done',
+    summary: 'The agreement is governed by English law.',
+    citations: [],
+    verification: { state: 'unchecked' },
+    notes: [],
+    ...overrides,
+  };
+}
+
+const baseProps = {
+  clause: CLAUSE,
+  onCiteClick: () => {},
+  onRetry: () => {},
+};
+```
+
+Keep that file's own `mount`, not the shared `src/test/mount.tsx` — the Task 6 rule is that existing test files keep the harness they already have. The existing local `const doneFinding` inside the interrupted-prop test will now shadow the module-scope factory; rename that local to `finding` so the two do not collide, and change nothing else about that test.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
