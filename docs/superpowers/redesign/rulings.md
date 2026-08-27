@@ -133,3 +133,90 @@ The owner ruled on all seven re-review findings directly. These are the sub-deci
 - **R-D8. `PlaybookVersion` and `Playbook` carry `schemaVersion`, which D's spec §4 interfaces omit.** Raised by Task 2's reviewer as brief-vs-spec drift, and it is drift — I added it when writing the plan without noting that the spec had not. Kept, because the spec itself bumps `SCHEMA_VERSION` 5 → 6 for this sub-project, and a version bump means nothing unless the records it governs record which version wrote them; the pre-D `Template` carried one, and every repair-on-read path in this codebase (`migrateReviewRecord`, `migrateDocumentRecord`, `migratePlaybookRecord`) exists to upgrade records that do. Omitting it would make D the first persisted shape with no way to tell when it was written, in the sub-project whose entire subject is knowing which version produced something. *Cost if wrong: one field per record that nothing reads until the next migration needs it.*
 - **R-D1 — CORRECTED during execution (Task 3).** As I wrote it, the migration gated `riskTolerance` on `t.mode === 'risk'`, treating a missing mode as extraction. But `migrateDraft` also repairs **post-D** records on read — drafts and published versions, which have no `mode` at all, because `mode` was retired. So the rule as specified would have silently stripped `riskTolerance` from every already-migrated playbook on every read, compounding on each one. The correct gate is `!hadMode || mode === 'risk'`: every pre-D record carries an explicit mode (the old `playbooks.ts` `migrate()` wrote one on every read), so modeless implies post-D implies keep. Caught by the implementer trusting the code over my brief. *Cost if wrong: as originally written, cumulative silent loss of a user's risk tolerance.*
 - **R-D9. The pre-D conversion is one readwrite transaction over BOTH stores, with the record re-read inside it.** R-D7 moved the conversion out of read paths to stop two concurrent reads publishing twice. That was necessary and insufficient: the implementer's browser verification showed two `migrateIfNeeded()` calls on the same tick — React StrictMode's double-invoked mount effect, or a second tab — both publishing, leaving one playbook holding v1 and v2 with identical content. The durable flag cannot defend this, because both calls read it before either writes. The transaction can. It also adopts an orphaned version left by an older build rather than publishing a second copy of the same content, and preserves `_seq`, `createdAt` and `updatedAt`, because converting a playbook is not the user editing it and must not reorder their library. Required splitting `publishVersion` into a store-handle form (`publishVersionIn`, the `seq.ts` pattern) so the allocation logic is not duplicated. *Cost if wrong: none identified; it is strictly stronger than the flag alone.*
+
+
+---
+
+# Sub-project D, Task 3 fix round — rulings made without owner review (2026-08-27)
+
+The owner ruled on eight of the ten review findings directly. These are the
+sub-decisions taken inside those rulings, plus the two left to my judgement.
+
+- **R-D1 — EXTENDED to `clause.riskCriteria` (M1).** The ruling cleared a stale
+  playbook-level `riskTolerance` on an `extraction`-mode record because the pre-D
+  editor hid that field without ever clearing it. The per-clause "Risk Scorer"
+  field sat inside the *same* `{isRiskMode && …}` guard and was never cleared
+  either, so the reasoning applies verbatim one level down. `migrateClause` now
+  takes the same `keepsRisk` decision, defaulting to KEEP so a modeless (post-D)
+  record is untouched. *Cost if wrong: an extraction playbook loses a per-clause
+  string that was never used in a prompt.*
+- **R-D10. The `'General commercial reasonableness.'` default is materialised at
+  migration, not restored as a fallback in `riskCriteriaBlock` (Minor 4).**
+  Pre-D the whole risk block was gated on `mode`, so a `mode: 'risk'` playbook
+  with no tolerance and no clause criteria still sent that generic block. It
+  cannot be a fallback in `riskCriteriaBlock`, because presence is what decides
+  post-D and a fallback there would switch the block on for every playbook
+  authored after `mode` retired. `migrateDraft` writes it onto the
+  `riskTolerance` of a record that carried an explicit `mode: 'risk'`, which
+  reproduces the pre-D prompt exactly — clause criteria still win, and a clause
+  without any gets the default. `DEFAULT_RISK_TOLERANCE` lives in `riskBlock.ts`,
+  where risk-block wording lives. *Cost if wrong: a migrated risk playbook that
+  genuinely wanted no criteria sends a generic sentence it did not ask for —
+  which is what it sent yesterday.*
+- **R-D11. `getPlaybookContent` throws rather than returning `null` for a record
+  still carrying pre-D content keys (M3).** `null` means "never published" and
+  the editor answers it with a blank draft, whose next Save publishes an empty
+  v1 and `put`s the real clauses away. The editor cannot tell that apart from
+  "has content that was never converted", so the store does:
+  `carriesUnconvertedContent` reads the RAW record (a migrated one has the
+  evidence stripped) and `UnconvertedPlaybookError` joins `DbBlockedError` on
+  `describeLoadError`'s pass-through side, because it names a specific
+  recoverable situation. Not reachable today — the conversion is atomic and
+  `migrateIfNeeded` failing blocks the app — but it is the one thing standing
+  between a mis-ordered statement in `migrate.ts` and a user's playbook being
+  silently emptied. *Cost if wrong: a playbook that somehow carries both a
+  version pointer and pre-D keys would still open, since the pointer wins the
+  guard.*
+- **R-D12. `publishAndPoint` is the one path that publishes a version (Minor 1,
+  Minor 2).** `publishVersion` then `savePlaybook` were two transactions in both
+  everyday paths, and for `importPlaybook` a failure between them left a version
+  with **no identity record at all** — permanently unreachable, since the only
+  thing that adopts orphans is the startup conversion and it only looks at
+  playbooks that exist. Extracted at two, not at three. `seq.ts`'s `SeqStore`
+  gained a `TxStores` parameter (defaulting to `[StoreName]`) so a `_seq` can be
+  allocated inside a two-store transaction — the same widening `publishVersionIn`
+  already carries; a readonly handle and a `db`-level wrapper are still compile
+  errors, checked. Publishing also CONSUMES `Playbook.draft`: dormant until Task
+  9 wires `saveDraft`, and live the moment it does. `publishVersion` is kept as
+  the unit the `playbookVersions` suite exercises for spec §9, with a docstring
+  sending app callers to `publishAndPoint`. *Cost if wrong: one more function on
+  the store, and a publish that also clears a draft nobody wrote yet.*
+- **R-D13. `deletePlaybook` cascades to the playbook's versions (Minor 6, left to
+  my judgement).** They were unreachable — nothing enumerates versions except
+  through a playbook that no longer exists — and unbounded. The cascade is
+  `deleteMatter`'s shape: one transaction, the record plus what only it owns. It
+  does not conflict with "never delete what you cannot read", which quarantines
+  data we cannot make sense of, not readable records whose owner the user
+  explicitly discarded; and it loses no review history, because a `Review`
+  carries its own `playbookSnapshot` — exactly what spec §5 means by "a review
+  whose playbook was deleted still opens on its snapshot", and why R-D4 makes
+  `Review.playbookVersionId` optional. *Cost if wrong: a future "restore a
+  deleted playbook" feature has nothing to restore, and Task 8's version history
+  cannot show versions of a playbook the user deleted.*
+- **R-D14. The migration-blocked screen names a store per failed step (Minor 5).**
+  `MigrationResult` gained `phase`. Step 1 reads v1's localStorage, which is
+  never deleted; step 2 converts records already in IndexedDB and is safe
+  because each conversion is one all-or-nothing transaction. With no phase — the
+  defensive catch around a rejecting `migrateIfNeeded` — the wording names no
+  store at all rather than guessing. *Cost if wrong: a user reads a slightly
+  vaguer reassurance in the one case where no step could be identified.*
+- **The M2 reset is keyed on LEAVING the route, not on reopening (M2).** The
+  owner asked for `handleOpenTemplate`'s old reset restored "in whatever form
+  suits the new routing". Putting it back on the open would have covered the
+  library card and nothing else; keying it on `playbookRouteId` becoming null
+  covers the Close control and the browser Back button, and both have a test.
+  The two route effects are mutually exclusive on that same value, so neither
+  can clobber the other however they are later reordered — the hazard CLAUDE.md
+  names. *Cost if wrong: an unsaved draft is dropped by a navigation the discard
+  prompt did not cover, which is the prompt's bug, not this one's.*
+
