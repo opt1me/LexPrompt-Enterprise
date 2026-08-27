@@ -1293,68 +1293,93 @@ Match their prop shape, sizing and Tailwind idiom exactly. Do not invent a third
 
 - [ ] **Step 2: Write the failing tests**
 
-`src/components/PositionChip.test.tsx`, using `src/test/mount.tsx`:
+**Two different harnesses, deliberately, per CLAUDE.md.** The two NEW test files import the shared harness at `src/test/mount.tsx` (`mount`, `click`). `FindingCard.test.tsx` is an EXISTING file that hand-rolled its own before that harness existed — it keeps it, and provides `mount(node) => HTMLDivElement`, `doneFinding(overrides)`, `baseProps` and `CLAUSE`. Do not rewrite it, and do not import the shared harness into it. There is no `text()`, `html()` or `card()` helper anywhere; read `container.textContent` and `container.innerHTML` directly.
+
+`src/components/PositionChip.test.tsx` (new — shared harness):
 
 ```ts
+import { mount } from '../test/mount';
+
 it('renders one label per outcome and never conflates two', () => {
-  expect(text(<PositionChip outcome="meets" />)).toMatch(/meets/i);
-  expect(text(<PositionChip outcome="deviates" />)).toMatch(/deviates/i);
-  expect(text(<PositionChip outcome="unclear" />)).toMatch(/unclear/i);
+  expect(mount(<PositionChip outcome="meets" />).textContent).toMatch(/meets/i);
+  expect(mount(<PositionChip outcome="deviates" />).textContent).toMatch(/deviates/i);
+  expect(mount(<PositionChip outcome="unclear" />).textContent).toMatch(/unclear/i);
 });
 
 it('renders nothing when there is no outcome', () => {
   // Absent means "no position to compare against". A chip here would put a
   // question on the card that was never asked.
-  expect(html(<PositionChip outcome={undefined} />)).toBe('');
+  expect(mount(<PositionChip outcome={undefined} />).innerHTML).toBe('');
 });
 ```
 
-`src/features/review/PositionComparison.test.tsx`:
+`src/features/review/PositionComparison.test.tsx` (new — shared harness):
 
 ```ts
+const pos: StandardPosition = {
+  text: 'We ask for a 6-month break notice.', origin: 'authored', reviewedByHuman: true,
+};
+const deviating: Finding = {
+  clauseId: 'c1', status: 'done', summary: 'The lease gives 9 months.',
+  citations: [], verification: { state: 'unchecked' }, notes: [],
+  positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+};
+
 it('shows we-ask-for against what the document says', () => {
-  const out = text(<PositionComparison position={pos} finding={deviatingFinding} />);
+  const out = mount(<PositionComparison position={pos} finding={deviating} />).textContent!;
   expect(out).toContain('We ask for');
-  expect(out).toContain('We ask for a 6-month break notice');
+  expect(out).toContain('We ask for a 6-month break notice.');
   expect(out).toContain('This document says');
   expect(out).toContain('The lease gives 9 months.');
 });
 
 it('shows the rationale', () => {
-  expect(text(<PositionComparison position={pos} finding={deviatingFinding} />))
+  expect(mount(<PositionComparison position={pos} finding={deviating} />).textContent)
     .toContain('Nine months, not six.');
 });
 
 it('says a position is only a suggestion when no human has reviewed it', () => {
-  const unreviewed = { ...pos, origin: 'ai-drafted' as const, reviewedByHuman: false };
-  const out = text(<PositionComparison position={unreviewed} finding={deviatingFinding} />);
   // An AI-drafted position nobody has read is not the firm's position.
+  const unreviewed = { ...pos, origin: 'ai-drafted' as const, reviewedByHuman: false };
+  const out = mount(<PositionComparison position={unreviewed} finding={deviating} />).textContent!;
   expect(out).toMatch(/not (yet )?reviewed|suggestion/i);
 });
 ```
 
-`FindingCard.test.tsx`:
+Append to `src/features/review/FindingCard.test.tsx` (existing — its OWN `mount`, `doneFinding`, `baseProps`, `CLAUSE`):
 
 ```ts
-it('shows the comparison above the evidence when the clause has a position', () => {
-  const out = html(card({ clause: { ...clause, standardPosition: pos }, finding: deviatingFinding }));
-  expect(out).toContain('We ask for');
-  expect(out.indexOf('We ask for')).toBeLessThan(out.indexOf(<the evidence list's real marker>));
-});
+describe('FindingCard — standard position comparison (Task 7)', () => {
+  const pos: StandardPosition = {
+    text: 'We ask for a 6-month break notice.', origin: 'authored', reviewedByHuman: true,
+  };
+  const withPos = { ...CLAUSE, standardPosition: pos };
+  const deviation = doneFinding({
+    summary: 'The lease gives 9 months.', riskLevel: 'Medium',
+    positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+    verification: { state: 'verified', byUserId: 'u1', at: 1 },
+  });
 
-it('shows no comparison block for a clause with no position', () => {
-  expect(html(card({ clause, finding: doneFinding }))).not.toContain('We ask for');
-});
+  it('shows the comparison for a clause that carries a position', () => {
+    const c = mount(<FindingCard {...baseProps} clause={withPos} finding={deviation} />);
+    expect(c.textContent).toContain('We ask for a 6-month break notice.');
+  });
 
-it('renders the position chip alongside the state and risk chips, not instead of them', () => {
-  const out = html(card({ clause: { ...clause, standardPosition: pos }, finding: verifiedDeviation }));
-  expect(out).toMatch(/deviates/i);
-  expect(out).toMatch(/verified/i);   // state chip survives
-  expect(out).toMatch(/medium/i);     // risk chip survives
+  it('shows no comparison block for a clause with no position', () => {
+    const c = mount(<FindingCard {...baseProps} finding={doneFinding()} />);
+    expect(c.textContent).not.toContain('We ask for');
+  });
+
+  it('renders the position chip ALONGSIDE the state and risk chips, not instead of them', () => {
+    // Three chips, three questions. The spec calls conflating any two a
+    // defect, and this is the assertion that catches a merge.
+    const c = mount(<FindingCard {...baseProps} clause={withPos} finding={deviation} />);
+    expect(c.textContent).toMatch(/deviates/i);
+    expect(c.textContent).toMatch(/verified/i);
+    expect(c.textContent).toMatch(/medium/i);
+  });
 });
 ```
-
-The third test is the one that catches a merge. **Read `FindingCard.tsx` for the real chip markup and the real evidence-list marker before writing these assertions** — do not invent a `data-testid` that does not exist. (A test written against assumed fixtures has bitten this project once already.)
 
 - [ ] **Step 3: Run, confirm failure. Step 4: Implement. Step 5: Run, confirm pass.**
 
