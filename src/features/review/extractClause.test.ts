@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractClause, buildClausePrompt, CLAUSE_SCHEMA } from './extractClause';
-import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings } from '../../types';
+import { extractClause, buildClausePrompt, clauseSchema, CLAUSE_SCHEMA } from './extractClause';
+import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings, StandardPosition } from '../../types';
 
 vi.mock('../../lib/openrouter', async () => {
   const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
@@ -37,6 +37,12 @@ const doc: DocumentFile = {
   file: new File([''], 'lease.pdf'),
 };
 
+const pos: StandardPosition = {
+  text: 'We ask for a 6-month break notice, no conditions.',
+  origin: 'authored',
+  reviewedByHuman: true,
+};
+
 beforeEach(() => vi.clearAllMocks());
 
 describe('buildClausePrompt', () => {
@@ -63,6 +69,44 @@ describe('buildClausePrompt', () => {
     const plain = { ...clause, riskCriteria: undefined };
     expect(buildClausePrompt(doc, plain, { ...template, clauses: [plain] }))
       .toContain('RISK CRITERIA: Conservative.');
+  });
+
+  // R-D1: `Template.mode` is gone. Presence of a criterion — the clause's
+  // own, else the playbook's tolerance — decides whether the block is
+  // emitted at all, so a migrated risk-mode playbook (which keeps its
+  // `riskTolerance`) still emits exactly today's block, and a migrated
+  // extraction-mode playbook (whose stale tolerance was cleared by the
+  // migration) emits none.
+  it('emits the risk block from riskCriteria or riskTolerance now that mode is gone (R-D1)', () => {
+    const versionNoTolerance: PlaybookVersion = { ...template, riskTolerance: undefined };
+
+    expect(buildClausePrompt(doc, { ...clause, riskCriteria: 'Must be unconditional' }, versionNoTolerance))
+      .toContain('RISK CRITERIA: Must be unconditional');
+    expect(buildClausePrompt(doc, { ...clause, riskCriteria: undefined }, { ...template, riskTolerance: 'Risk-averse' }))
+      .toContain('RISK CRITERIA: Risk-averse');
+    expect(buildClausePrompt(doc, { ...clause, riskCriteria: undefined }, versionNoTolerance))
+      .not.toContain('RISK CRITERIA');
+  });
+
+  // The `||` in `riskCriteriaBlock` is easy to invert by accident (e.g.
+  // `version.riskTolerance || clause.riskCriteria`), which would silently let
+  // a playbook-wide tolerance override a clause's own, more specific
+  // criterion. Both fixtures below have both set, so this only passes when
+  // the clause's own criterion wins.
+  it('prefers the clause\'s own risk criteria over the playbook tolerance when both are present (R-D1 precedence)', () => {
+    const prompt = buildClausePrompt(doc, clause, template);
+    expect(prompt).toContain('RISK CRITERIA: Must be England and Wales.');
+    expect(prompt).not.toContain('RISK CRITERIA: Conservative.');
+  });
+
+  it('asks for a position outcome only when the clause has a standard position', () => {
+    const withPos = buildClausePrompt(doc, { ...clause, standardPosition: pos }, template);
+    const without = buildClausePrompt(doc, clause, template);
+    expect(withPos).toContain('OUR STANDARD POSITION');
+    expect(withPos).toContain('We ask for a 6-month break notice');
+    expect(withPos).toContain('position_outcome');
+    expect(without).not.toContain('OUR STANDARD POSITION');
+    expect(without).not.toContain('position_outcome');
   });
 });
 
@@ -417,5 +461,73 @@ describe('extractClause citations and verification', () => {
     expect(finding.citations).toEqual([
       { quote: 'The Supplier shall deliver.', documentId: 'doc-7', page: 1 },
     ]);
+  });
+});
+
+// Task 6: evaluation against `clause.standardPosition` happens in this same
+// extraction call. `normalisePositionOutcome` (Task 5) owns the actual rules
+// for what counts as "unclear" or "no rationale" — these tests only check
+// that `extractClause` calls it with the right raw values and spreads its
+// result onto the right findings.
+describe('extractClause: standard position evaluation (Task 6)', () => {
+  it('records a deviation with its rationale', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      summary: 'The lease gives 9 months.', citations: [], risk_level: 'Medium',
+      risk_analysis: 'x', position_outcome: 'deviates', position_rationale: 'Nine months, not six.',
+    });
+    const f = await extractClause(doc, { ...clause, standardPosition: pos }, template, settings);
+    expect(f.status).toBe('done');
+    expect(f.positionOutcome).toBe('deviates');
+    expect(f.positionRationale).toBe('Nine months, not six.');
+  });
+
+  it('leaves the outcome absent for a clause with no position', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      summary: 'x', citations: [], risk_level: 'Low', risk_analysis: 'y',
+      position_outcome: 'meets', position_rationale: 'z',
+    });
+    const f = await extractClause(doc, clause, template, settings);
+    // The model volunteered an outcome for a clause with no house rule. It
+    // is dropped, not recorded: there was nothing to compare against.
+    expect('positionOutcome' in f).toBe(false);
+    expect('positionRationale' in f).toBe(false);
+  });
+
+  it('records unclear when the model omits the outcome', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 'x', citations: [], risk_level: 'Low', risk_analysis: 'y' });
+    const f = await extractClause(doc, { ...clause, standardPosition: pos }, template, settings);
+    expect(f.positionOutcome).toBe('unclear');
+  });
+
+  it('keeps the outcome on a no-content finding', async () => {
+    // A model that gave an outcome and an empty summary still gave an
+    // outcome; dropping it would lose the one thing it did say.
+    vi.mocked(chatJson).mockResolvedValue({
+      summary: '  ', citations: [], risk_level: 'Low', risk_analysis: 'y',
+      position_outcome: 'deviates', position_rationale: 'Nine months.',
+    });
+    const f = await extractClause(doc, { ...clause, standardPosition: pos }, template, settings);
+    expect(f.status).toBe('error');
+    expect(f.noContent).toBe(true);
+    expect(f.positionOutcome).toBe('deviates');
+    expect(f.positionRationale).toBe('Nine months.');
+  });
+
+  it('requires position_outcome/position_rationale in the schema only when the clause has a position', () => {
+    expect(clauseSchema(clause)).toBe(CLAUSE_SCHEMA);
+    const withPos = clauseSchema({ ...clause, standardPosition: pos });
+    expect(withPos).not.toBe(CLAUSE_SCHEMA);
+    expect(withPos.required).toContain('position_outcome');
+    expect(withPos.required).toContain('position_rationale');
+  });
+
+  it('sends the position-aware schema to the model when the clause has a standard position', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      summary: 'x', citations: [], position_outcome: 'meets', position_rationale: 'y',
+    });
+    await extractClause(doc, { ...clause, standardPosition: pos }, template, settings);
+    const sent = vi.mocked(chatJson).mock.calls[0][0].jsonSchema as { required: string[] };
+    expect(sent).not.toBe(CLAUSE_SCHEMA);
+    expect(sent.required).toContain('position_outcome');
   });
 });

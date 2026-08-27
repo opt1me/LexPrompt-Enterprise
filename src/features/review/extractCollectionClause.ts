@@ -5,6 +5,7 @@ import { repairCitations } from '../../lib/citationRepair';
 import { normalizeForMatch } from '../../lib/citations';
 import { unchecked } from '../../lib/verification';
 import { unconfirmedPosition } from '../../lib/netPosition';
+import { normalisePositionOutcome } from '../../lib/positionOutcome';
 import type { CollectionMember } from '../../lib/collectionOrder';
 import type { Citation, PlaybookClause, DocumentFile, Finding, Settings, PlaybookVersion, TrailStep } from '../../types';
 
@@ -33,6 +34,8 @@ interface RawTrailStep {
 interface RawCollectionFinding {
   trail?: RawTrailStep[];
   net_position?: string;
+  position_outcome?: unknown;
+  position_rationale?: unknown;
 }
 
 export const COLLECTION_CLAUSE_SCHEMA = {
@@ -74,6 +77,28 @@ export const COLLECTION_CLAUSE_SCHEMA = {
   required: ['trail', 'net_position'],
   additionalProperties: false,
 } as const;
+
+/**
+ * The schema sent for one collection clause's call. Built per call, mirroring
+ * `clauseSchema` in `extractClause.ts` exactly: `position_outcome`/
+ * `position_rationale` are `required` only when the clause carries a
+ * `standardPosition`, and the very same `COLLECTION_CLAUSE_SCHEMA` object is
+ * returned (not a structurally-equal copy) when there is none, so a caller
+ * comparing the schema it sent by reference sees no change for the common
+ * case.
+ */
+export function collectionClauseSchema(clause: PlaybookClause) {
+  if (!clause.standardPosition) return COLLECTION_CLAUSE_SCHEMA;
+  return {
+    ...COLLECTION_CLAUSE_SCHEMA,
+    properties: {
+      ...COLLECTION_CLAUSE_SCHEMA.properties,
+      position_outcome: { type: 'string', enum: ['meets', 'deviates', 'unclear'] },
+      position_rationale: { type: 'string' },
+    },
+    required: [...COLLECTION_CLAUSE_SCHEMA.required, 'position_outcome', 'position_rationale'],
+  };
+}
 
 /** One present member's readability, computed once and reused for both the
  *  pre-flight guard and image gathering — never recomputed with a different
@@ -454,7 +479,7 @@ export async function extractCollectionClause(
         system: `${template.systemPrompt}\n\nOUTPUT RULES: ${template.formatPrompt}`,
         user: documentsPrompt + imageNote,
         images: images.length > 0 ? images : undefined,
-        jsonSchema: modelSupportsStructuredOutput ? COLLECTION_CLAUSE_SCHEMA : undefined,
+        jsonSchema: modelSupportsStructuredOutput ? collectionClauseSchema(clause) : undefined,
         temperature: 0.1,
       },
       signal,
@@ -500,6 +525,14 @@ export async function extractCollectionClause(
 
     const netPositionText = typeof raw.net_position === 'string' ? raw.net_position.trim() : '';
 
+    // The only place a `positionOutcome` is produced for a collection — see
+    // `positionOutcome.ts`. Compared against the NET POSITION the model has
+    // just derived, not any one document, mirroring `extractClause`'s
+    // identical call.
+    const positionFields = normalisePositionOutcome(
+      clause.standardPosition, raw.position_outcome, raw.position_rationale,
+    );
+
     // A model with a genuine synthesis always writes something — mirrors
     // extractClause's identical empty-summary guard. An empty string is a
     // non-answer the schema happened to accept, not a real net position.
@@ -515,6 +548,9 @@ export async function extractCollectionClause(
         // explains why. Conditional, never `undefined`-valued, for the
         // `structuredClone` reason spelled out on the `done` return below.
         ...(truncated.length > 0 ? { truncated: true, truncatedDocuments: truncated } : {}),
+        // A model that gave an outcome and an empty synthesis still gave an
+        // outcome; dropping it here would lose the one thing it did say.
+        ...positionFields,
       };
     }
 
@@ -556,6 +592,7 @@ export async function extractCollectionClause(
       // reviewer whether the amendment they grouped the collection to ask
       // about is the one that was cut.
       ...(truncated.length > 0 ? { truncated: true, truncatedDocuments: truncated } : {}),
+      ...positionFields,
       netPosition: unconfirmedPosition(proposed, trail),
     };
   } catch (error) {

@@ -2,6 +2,7 @@ import { chatJson, isAuthError } from '../../lib/openrouter';
 import { assessDocument, contextBudgetChars } from '../../lib/modelContext';
 import { repairCitations } from '../../lib/citationRepair';
 import { unchecked } from '../../lib/verification';
+import { normalisePositionOutcome } from '../../lib/positionOutcome';
 import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, RiskLevel, Settings } from '../../types';
 import { riskCriteriaBlock } from '../../lib/riskBlock';
 
@@ -24,11 +25,35 @@ export const CLAUSE_SCHEMA = {
   additionalProperties: false,
 } as const;
 
+/**
+ * The schema sent for one clause's extraction call. Built per call, not a
+ * module constant, so `position_outcome`/`position_rationale` are `required`
+ * only when the clause actually carries a `standardPosition` — a clause with
+ * no house rule must not be forced to invent a comparison. Returns the very
+ * same `CLAUSE_SCHEMA` object (not a structurally-equal copy) when there is
+ * no position, so callers that compare the schema they sent by reference
+ * (existing tests do) see no change for the common case.
+ */
+export function clauseSchema(clause: PlaybookClause) {
+  if (!clause.standardPosition) return CLAUSE_SCHEMA;
+  return {
+    ...CLAUSE_SCHEMA,
+    properties: {
+      ...CLAUSE_SCHEMA.properties,
+      position_outcome: { type: 'string', enum: ['meets', 'deviates', 'unclear'] },
+      position_rationale: { type: 'string' },
+    },
+    required: [...CLAUSE_SCHEMA.required, 'position_outcome', 'position_rationale'],
+  };
+}
+
 interface RawFinding {
   summary?: string;
   citations?: unknown;
   risk_level?: string;
   risk_analysis?: string;
+  position_outcome?: unknown;
+  position_rationale?: unknown;
 }
 
 export interface BuildClausePromptOptions {
@@ -60,19 +85,35 @@ export function buildClausePrompt(
       'a point solely because it does not appear in the text shown.'
     : '';
 
+  // The evaluation happens IN this call, not a second pass: the model is
+  // already reading the clause text with the document in front of it, and a
+  // second call would compare a summary against the position rather than the
+  // document itself. Gated on `clause.standardPosition` alone — a clause with
+  // no house rule gets no block and no `position_outcome`/`position_rationale`
+  // ask, so `normalisePositionOutcome` has nothing to record and correctly
+  // records nothing (see `positionOutcome.ts`).
+  const positionBlock = clause.standardPosition
+    ? `\n\nOUR STANDARD POSITION ON THIS CLAUSE:\n${clause.standardPosition.text}\n\n` +
+      'Compare what the document says against that position.'
+    : '';
+  const positionReturnLines = clause.standardPosition
+    ? '\n- position_outcome: one of "meets", "deviates", "unclear". Use "unclear" if you cannot tell ' +
+      '— do not guess.\n- position_rationale: why. For "deviates", say what the difference is.'
+    : '';
+
   return `DOCUMENT: ${doc.name}
 
 DOCUMENT TEXT:
 ${text}${truncationNote}
 
 CLAUSE TO REVIEW: ${clause.title}
-INSTRUCTION: ${clause.extractPrompt}${riskBlock}
+INSTRUCTION: ${clause.extractPrompt}${riskBlock}${positionBlock}
 
 Return:
 - summary: what the document says on this point, or that it is silent.
 - citations: exact verbatim substrings from the document text supporting the summary.
 - risk_level: one of High, Medium, Low, Info.
-- risk_analysis: why that level.
+- risk_analysis: why that level.${positionReturnLines}
 
 If the document text above is empty and images are attached, read the images instead.`;
 }
@@ -147,7 +188,7 @@ export async function extractClause(
         system: `${template.systemPrompt}\n\nOUTPUT RULES: ${template.formatPrompt}`,
         user: buildClausePrompt(doc, clause, template, { text: textForPrompt, truncated }),
         images: readability.useImages ? doc.pageImages : undefined,
-        jsonSchema: modelSupportsStructuredOutput ? CLAUSE_SCHEMA : undefined,
+        jsonSchema: modelSupportsStructuredOutput ? clauseSchema(clause) : undefined,
         temperature: 0.1,
       },
       signal,
@@ -182,6 +223,13 @@ export async function extractClause(
     // survives a reload."
     const citations = repairCitations(raw.citations, doc.id, doc.text);
     const riskAnalysis = typeof raw.risk_analysis === 'string' ? raw.risk_analysis : undefined;
+    // The only place a `positionOutcome` is produced — see `positionOutcome.ts`.
+    // Returns `{}` when the clause has no `standardPosition`, so a model that
+    // volunteers an outcome anyway for a clause with no house rule is
+    // ignored: there is nothing to have compared it against.
+    const positionFields = normalisePositionOutcome(
+      clause.standardPosition, raw.position_outcome, raw.position_rationale,
+    );
 
     // A model with a genuine answer always writes something — even "the
     // agreement is silent on this point" for a clause that's genuinely
@@ -198,6 +246,9 @@ export async function extractClause(
         riskLevel: level,
         riskAnalysis,
         ...(truncated ? { truncated: true } : {}),
+        // A model that gave an outcome and an empty summary still gave an
+        // outcome; dropping it here would lose the one thing it did say.
+        ...positionFields,
         error: 'The model returned no content for this clause.',
         noContent: true,
       };
@@ -216,6 +267,7 @@ export async function extractClause(
       // check as "truncation was recorded here". Same spread in
       // `extractCollectionClause`, deliberately identical.
       ...(truncated ? { truncated: true } : {}),
+      ...positionFields,
       verification: unchecked(),
       notes: [],
     };

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractCollectionClause, COLLECTION_CLAUSE_SCHEMA } from './extractCollectionClause';
-import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings } from '../../types';
+import { extractCollectionClause, collectionClauseSchema, COLLECTION_CLAUSE_SCHEMA } from './extractCollectionClause';
+import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings, StandardPosition } from '../../types';
 import type { CollectionMember } from '../../lib/collectionOrder';
 
 vi.mock('../../lib/openrouter', async () => {
@@ -36,6 +36,12 @@ function docFile(id: string, name: string, text: string, overrides: Partial<Docu
 
 const leaseDoc = docFile('lease', 'Lease.pdf', '[Page 1]\nThe rent is reviewed every five years to open market value.\n\n');
 const dovDoc = docFile('dov', 'DoV.pdf', '[Page 1]\nRent review is now annual, capped at RPI.\n\n');
+
+const pos: StandardPosition = {
+  text: 'Rent review should not exceed RPI.',
+  origin: 'authored',
+  reviewedByHuman: true,
+};
 
 // `base`/`varies` default to the fixtures above; pass `null` explicitly to
 // simulate a missing member (the document was deleted from the matter).
@@ -825,5 +831,98 @@ describe('extractCollectionClause: truncation names the documents it cut', () =>
     // any `in` check as "truncation was recorded here".
     expect('truncatedDocuments' in finding).toBe(false);
     expect('truncated' in finding).toBe(false);
+  });
+});
+
+// Task 6 / R-D3: evaluation happens in this same call, against the NET
+// POSITION the model has just derived across the whole collection —
+// `normalisePositionOutcome` (Task 5) owns the actual rules, so these tests
+// only check that the collection extractor calls it with the right raw
+// values and spreads its result onto the right findings.
+describe('extractCollectionClause: standard position evaluation (Task 6 / R-D3)', () => {
+  const clauseWithPos: PlaybookClause = { ...clause, standardPosition: pos };
+
+  it('records a deviation with its rationale', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered(
+        { effect: 'The lease sets a 5-year rent review.', citations: [] },
+        { effect: 'The deed makes rent review annual, capped at RPI.', citations: [] },
+      ),
+      net_position: 'Rent is now reviewed annually, at CPI, not RPI.',
+      position_outcome: 'deviates',
+      position_rationale: 'CPI, not RPI as our position requires.',
+    });
+
+    const finding = await extractCollectionClause(members(), clauseWithPos, template, settings);
+
+    expect(finding.status).toBe('done');
+    expect(finding.positionOutcome).toBe('deviates');
+    expect(finding.positionRationale).toBe('CPI, not RPI as our position requires.');
+  });
+
+  it('leaves the outcome absent for a clause with no position', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
+      net_position: 'Now annual, capped at RPI.',
+      position_outcome: 'meets',
+      position_rationale: 'z',
+    });
+
+    const finding = await extractCollectionClause(members(), clause, template, settings);
+
+    // The model volunteered an outcome for a clause with no house rule. It
+    // is dropped, not recorded: there was nothing to compare against.
+    expect('positionOutcome' in finding).toBe(false);
+    expect('positionRationale' in finding).toBe(false);
+  });
+
+  it('records unclear when the model omits the outcome', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
+      net_position: 'Now annual, capped at RPI.',
+    });
+
+    const finding = await extractCollectionClause(members(), clauseWithPos, template, settings);
+
+    expect(finding.positionOutcome).toBe('unclear');
+  });
+
+  it('keeps the outcome on a no-content finding', async () => {
+    // A model that gave an outcome and an empty synthesis still gave an
+    // outcome; dropping it would lose the one thing it did say.
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
+      net_position: '   ',
+      position_outcome: 'deviates',
+      position_rationale: 'CPI, not RPI.',
+    });
+
+    const finding = await extractCollectionClause(members(), clauseWithPos, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.noContent).toBe(true);
+    expect(finding.positionOutcome).toBe('deviates');
+    expect(finding.positionRationale).toBe('CPI, not RPI.');
+  });
+
+  it('requires position_outcome/position_rationale in the schema only when the clause has a position', () => {
+    expect(collectionClauseSchema(clause)).toBe(COLLECTION_CLAUSE_SCHEMA);
+    const withPos = collectionClauseSchema(clauseWithPos);
+    expect(withPos).not.toBe(COLLECTION_CLAUSE_SCHEMA);
+    expect(withPos.required).toContain('position_outcome');
+    expect(withPos.required).toContain('position_rationale');
+  });
+
+  it('sends the position-aware schema to the model when the clause has a standard position', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
+      net_position: 'ok', position_outcome: 'meets', position_rationale: 'y',
+    });
+
+    await extractCollectionClause(members(), clauseWithPos, template, settings);
+
+    const sent = vi.mocked(chatJson).mock.calls[0][0].jsonSchema as { required: string[] };
+    expect(sent).not.toBe(COLLECTION_CLAUSE_SCHEMA);
+    expect(sent.required).toContain('position_outcome');
   });
 });

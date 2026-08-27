@@ -149,6 +149,20 @@ export function buildCollectionPrompt<
 
   const riskBlock = riskCriteriaBlock(clause, template);
 
+  // Task 6: evaluation happens in this same call, against the NET POSITION
+  // the model is about to derive — not the base document alone, and not a
+  // second call over a summary. Gated on `clause.standardPosition` alone, so
+  // a clause with no house rule gets no block and no
+  // `position_outcome`/`position_rationale` ask.
+  const positionBlock = clause.standardPosition
+    ? `\n\nOUR STANDARD POSITION ON THIS CLAUSE:\n${clause.standardPosition.text}\n\n` +
+      'Compare the NET POSITION you have just derived against our standard position.'
+    : '';
+  const positionReturnLines = clause.standardPosition
+    ? '\n- position_outcome: one of "meets", "deviates", "unclear". Use "unclear" if you cannot tell ' +
+      '— do not guess.\n- position_rationale: why. For "deviates", say what the difference is.'
+    : '';
+
   const truncationSummary = truncated.length > 0
     ? `\n\nNOTE: The following document(s) were cut short to fit the context budget and may be ` +
       `incomplete: ${truncated.join(', ')}.`
@@ -157,7 +171,7 @@ export function buildCollectionPrompt<
   const prompt = `${blocks.join('\n\n')}
 
 CLAUSE TO REVIEW: ${clause.title}
-INSTRUCTION: ${clause.extractPrompt}${riskBlock}${truncationSummary}
+INSTRUCTION: ${clause.extractPrompt}${riskBlock}${positionBlock}${truncationSummary}
 
 Return EXACTLY ${availableCount} trail entr${availableCount === 1 ? 'y' : 'ies'} — one per document above whose text
 was supplied — in reading order (base first, then each amendment as it takes effect). Do NOT return
@@ -171,7 +185,7 @@ the net_position that the set is incomplete instead. Each entry has:
   because you judged it silent — say that it is silent, in its own entry.
 - citations: exact verbatim substrings from that document's own text supporting its effect.
 - net_position: the proposed conclusion — what the documents, read together and in this order, say
-  NOW about this clause. It must follow from the effects above, not stand alone as a bare answer.`;
+  NOW about this clause. It must follow from the effects above, not stand alone as a bare answer.${positionReturnLines}`;
 
   return { prompt, truncated };
 }

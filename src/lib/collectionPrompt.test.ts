@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildCollectionPrompt } from './collectionPrompt';
 import type { CollectionMember } from './collectionOrder';
-import type { PlaybookClause, DocumentRecord, PlaybookVersion } from '../types';
+import type { PlaybookClause, DocumentRecord, PlaybookVersion, StandardPosition } from '../types';
 
 function doc(id: string, name: string, text: string, overrides: Partial<DocumentRecord> = {}): DocumentRecord {
   return {
@@ -28,6 +28,12 @@ const template: PlaybookVersion = {
 
 const riskTemplate: PlaybookVersion = {
   ...template, riskTolerance: 'Standard commercial risk.',
+};
+
+const pos: StandardPosition = {
+  text: 'We ask for a 6-month break notice, no conditions.',
+  origin: 'authored',
+  reviewedByHuman: true,
 };
 
 const BASE_TEXT = 'The rent is reviewed every five years to open market value.';
@@ -238,5 +244,24 @@ describe('buildCollectionPrompt', () => {
     const baseBlock = prompt.slice(baseBlockStart, amendmentBlockStart);
     // The base contributed some non-trivial amount of its own text, not zero.
     expect(baseBlock).toContain('B'.repeat(50));
+  });
+});
+
+// Task 6 / R-D3: evaluation happens in this same call, against the NET
+// POSITION the model is about to derive — never against any single member's
+// text, which is what makes the collection path a genuinely different
+// comparison from the standalone one in `extractClause.ts`.
+describe('buildCollectionPrompt: standard position evaluation (Task 6 / R-D3)', () => {
+  it('asks for a position outcome only when the clause has a standard position', () => {
+    const clauseWithPos: PlaybookClause = { ...clause, standardPosition: pos };
+    const withPos = buildCollectionPrompt(twoMemberCollection(), clauseWithPos, template, 100_000).prompt;
+    const without = buildCollectionPrompt(twoMemberCollection(), clause, template, 100_000).prompt;
+
+    expect(withPos).toContain('OUR STANDARD POSITION');
+    expect(withPos).toContain('We ask for a 6-month break notice');
+    expect(withPos).toMatch(/NET POSITION/);
+    expect(withPos).toContain('position_outcome');
+    expect(without).not.toContain('OUR STANDARD POSITION');
+    expect(without).not.toContain('position_outcome');
   });
 });
