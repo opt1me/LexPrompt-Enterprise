@@ -1,6 +1,7 @@
 import { mapWithConcurrency } from '../../lib/concurrency';
 import type { DocumentFile, Finding, ReviewRun, Settings, Template } from '../../types';
 import { extractClause } from './extractClause';
+import { unchecked } from '../../lib/verification';
 
 function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -11,7 +12,9 @@ export function emptyRun(template: Template, docs: DocumentFile[]): ReviewRun {
   for (const doc of docs) {
     findings[doc.id] = {};
     for (const clause of template.clauses) {
-      findings[doc.id][clause.id] = { clauseId: clause.id, status: 'pending', citations: [] };
+      findings[doc.id][clause.id] = {
+        clauseId: clause.id, status: 'pending', citations: [], verification: unchecked(), notes: [],
+      };
     }
   }
   return {
@@ -87,7 +90,9 @@ function cancelPendingCells(run: ReviewRun): ReviewRun {
   for (const [docId, byClause] of Object.entries(run.findings)) {
     for (const finding of Object.values(byClause)) {
       if (finding.status === 'pending') {
-        next = withFinding(next, docId, { clauseId: finding.clauseId, status: 'cancelled', citations: [] });
+        next = withFinding(next, docId, {
+          clauseId: finding.clauseId, status: 'cancelled', citations: [], verification: unchecked(), notes: [],
+        });
       }
     }
   }
@@ -112,7 +117,7 @@ export async function runReview(
       settings.concurrency,
       async ({ doc, clause }) => {
         current = withFinding(current, doc.id, {
-          clauseId: clause.id, status: 'running', citations: [],
+          clauseId: clause.id, status: 'running', citations: [], verification: unchecked(), notes: [],
         });
         onUpdate(current);
 
@@ -149,7 +154,9 @@ export async function retryCell(
   // triggers a pointless re-render.
   if (!clause) return run;
 
-  let current = withFinding(run, doc.id, { clauseId, status: 'running', citations: [] });
+  let current = withFinding(run, doc.id, {
+    clauseId, status: 'running', citations: [], verification: unchecked(), notes: [],
+  });
   onUpdate(current);
 
   const finding = await extractClause(doc, clause, run.templateSnapshot, settings);

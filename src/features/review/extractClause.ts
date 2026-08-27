@@ -1,5 +1,7 @@
 import { chatJson, isAuthError } from '../../lib/openrouter';
 import { assessDocument, contextBudgetChars } from '../../lib/modelContext';
+import { repairCitations } from '../../lib/citationRepair';
+import { unchecked } from '../../lib/verification';
 import type { Clause, DocumentFile, Finding, RiskLevel, Settings, Template } from '../../types';
 
 const RISK_LEVELS: RiskLevel[] = ['High', 'Medium', 'Low', 'Info'];
@@ -99,7 +101,13 @@ export async function extractClause(
   settings: Settings,
   signal?: AbortSignal,
 ): Promise<Finding> {
-  const base: Finding = { clauseId: clause.id, status: 'error', citations: [] };
+  const base: Finding = {
+    clauseId: clause.id,
+    status: 'error',
+    citations: [],
+    verification: unchecked(),
+    notes: [],
+  };
 
   if (doc.parseError) {
     return { ...base, error: `Could not read ${doc.name}: ${doc.parseError}` };
@@ -157,7 +165,24 @@ export async function extractClause(
       : undefined;
 
     const summary = typeof raw.summary === 'string' ? raw.summary : '';
-    const citations = Array.isArray(raw.citations) ? raw.citations.filter(c => typeof c === 'string') : [];
+    // `repairCitations` is shared with the read-time review migration
+    // (`src/lib/db/reviewMigration.ts`) precisely so fresh model output and
+    // migrated v1 output can never end up in different shapes. It also
+    // derives each quote's page from the document's `[Page N]` markers —
+    // and leaves `page` absent where the quote cannot be located, rather
+    // than guessing.
+    //
+    // Deliberately `doc.text`, not `readability.text`: `usableText` (the
+    // source of `readability.text`) unconditionally strips every `[Page N]`
+    // marker while joining surviving pages (see `modelContext.ts`,
+    // pinned by `modelContext.test.ts`), so a citation's page could never be
+    // derived if this passed `readability.text` instead — silently making
+    // "page where derivable" mean "page: never" for every live review. R-B5
+    // (redesign-b spec) already names `DocumentRecord.text` — this
+    // in-memory document's analogue is `doc.text` — as the intended source:
+    // "that text is what persists, what the model was shown, and what
+    // survives a reload."
+    const citations = repairCitations(raw.citations, doc.id, doc.text);
     const riskAnalysis = typeof raw.risk_analysis === 'string' ? raw.risk_analysis : undefined;
 
     // A model with a genuine answer always writes something — even "the
@@ -188,6 +213,8 @@ export async function extractClause(
       riskLevel: level,
       riskAnalysis,
       truncated: truncated || undefined,
+      verification: unchecked(),
+      notes: [],
     };
   } catch (error) {
     // A cancelled run is not a failure (see App.tsx's own AbortError
@@ -196,7 +223,7 @@ export async function extractClause(
     // message and a Retry button that will only abort again.
     if ((error instanceof DOMException && error.name === 'AbortError') ||
         (error as { name?: string } | null)?.name === 'AbortError') {
-      return { clauseId: clause.id, status: 'cancelled', citations: [] };
+      return { clauseId: clause.id, status: 'cancelled', citations: [], verification: unchecked(), notes: [] };
     }
     return {
       ...base,

@@ -70,7 +70,9 @@ describe('extractClause', () => {
     expect(finding.status).toBe('done');
     expect(finding.clauseId).toBe('c1');
     expect(finding.summary).toBe('England and Wales.');
-    expect(finding.citations).toEqual(['governed by the laws of England and Wales']);
+    expect(finding.citations).toEqual([
+      { quote: 'governed by the laws of England and Wales', documentId: 'd1' },
+    ]);
     expect(finding.riskLevel).toBe('Low');
   });
 
@@ -112,7 +114,10 @@ describe('extractClause', () => {
   it('drops non-string entries from a mixed-type citations array, keeping only the strings', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: ['ok', 42, null, 'fine'] });
     const finding = await extractClause(doc, clause, template, settings);
-    expect(finding.citations).toEqual(['ok', 'fine']);
+    expect(finding.citations).toEqual([
+      { quote: 'ok', documentId: 'd1' },
+      { quote: 'fine', documentId: 'd1' },
+    ]);
   });
 
   it('drops a risk level the model invented outside the allowed set', async () => {
@@ -178,7 +183,7 @@ describe('extractClause', () => {
       risk_analysis: 'stray analysis',
     });
     const finding = await extractClause(doc, clause, template, settings);
-    expect(finding.citations).toEqual(['stray quote']);
+    expect(finding.citations).toEqual([{ quote: 'stray quote', documentId: 'd1' }]);
     expect(finding.riskLevel).toBe('High');
     expect(finding.riskAnalysis).toBe('stray analysis');
   });
@@ -343,5 +348,60 @@ describe('extractClause: auth errors and cancellation (Important 4 & 5)', () => 
     const finding = await extractClause(doc, clause, template, settings);
     expect(finding.status).toBe('cancelled');
     expect(finding.error).toBeUndefined();
+  });
+});
+
+describe('extractClause citations and verification', () => {
+  it('attributes each citation to the document and pins a page where derivable', async () => {
+    const pagedDoc: DocumentFile = {
+      id: 'doc-42', name: 'doc42.pdf', kind: 'pdf',
+      text: '[Page 1]\nThe Supplier shall deliver.\n\n[Page 2]\nLiability is capped at the Charges.\n\n',
+      file: new File([''], 'doc42.pdf'),
+    };
+    vi.mocked(chatJson).mockResolvedValue({
+      summary: 'Liability is capped.',
+      citations: ['Liability is capped at the Charges.'],
+      risk_level: 'Medium',
+      risk_analysis: 'Standard cap.',
+    });
+
+    const finding = await extractClause(pagedDoc, clause, template, settings);
+
+    expect(finding.citations).toEqual([
+      { quote: 'Liability is capped at the Charges.', documentId: 'doc-42', page: 2 },
+    ]);
+  });
+
+  it('starts every finding unchecked with no notes', async () => {
+    vi.mocked(chatJson).mockResolvedValue({ summary: 'Found it.', citations: [], risk_level: 'Low', risk_analysis: 'Fine.' });
+    const finding = await extractClause(doc, clause, template, settings);
+    expect(finding.verification).toEqual({ state: 'unchecked' });
+    expect(finding.notes).toEqual([]);
+  });
+
+  it('starts an error finding unchecked too — a failure is not a judgement', async () => {
+    const broken: DocumentFile = { ...doc, parseError: 'corrupt' };
+    const finding = await extractClause(broken, clause, template, settings);
+    expect(finding.status).toBe('error');
+    expect(finding.verification).toEqual({ state: 'unchecked' });
+    expect(finding.notes).toEqual([]);
+  });
+
+  it('drops junk citation entries without dropping the good ones', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      summary: 'Found it.',
+      citations: ['', 'The Supplier shall deliver.', null],
+      risk_level: 'Low',
+      risk_analysis: 'Fine.',
+    });
+    const doc7: DocumentFile = {
+      id: 'doc-7', name: 'doc7.pdf', kind: 'pdf',
+      text: '[Page 1]\nThe Supplier shall deliver.\n\n',
+      file: new File([''], 'doc7.pdf'),
+    };
+    const finding = await extractClause(doc7, clause, template, settings);
+    expect(finding.citations).toEqual([
+      { quote: 'The Supplier shall deliver.', documentId: 'doc-7', page: 1 },
+    ]);
   });
 });

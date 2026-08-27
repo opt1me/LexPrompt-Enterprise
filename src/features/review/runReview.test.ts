@@ -222,3 +222,17 @@ describe('retryCell', () => {
     expect(same.findings).toEqual(run.findings);
   });
 });
+
+describe('runReview finding scaffolding', () => {
+  it('seeds every pending cell unchecked with no citations and no notes', () => {
+    const run = emptyRun(template, [doc('d1'), doc('d2')]);
+    for (const byClause of Object.values(run.findings)) {
+      for (const finding of Object.values(byClause)) {
+        expect(finding.status).toBe('pending');
+        expect(finding.citations).toEqual([]);
+        expect(finding.verification).toEqual({ state: 'unchecked' });
+        expect(finding.notes).toEqual([]);
+      }
+    }
+  });
+});
