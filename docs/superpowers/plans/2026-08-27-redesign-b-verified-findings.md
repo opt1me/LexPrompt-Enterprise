@@ -2750,25 +2750,51 @@ it('does not lose a verification to the next update from a live run', ...)
 
 - [ ] **Step 4: Reset verification on retry**
 
-In `handleRetryCell`, before it calls `retryCell`, clear the verification of the cell being re-run and tell the user:
+**Read `handleRetryCell` as it stands before writing anything.** It currently calls `retryCell(run, doc, clauseId, settings, setRun)` — passing `setRun` *directly* as the update callback. Two consequences follow, and both are traps:
+
+1. **`latestRunRef` is never updated during a retry.** Since `handleVerify` and `handleAddNote` read `latestRunRef.current ?? run`, a stale ref would win over fresh state, and a verification made just after a retry would be computed against the wrong run.
+2. **`retryCell` is given the `run` closure variable.** A `cleared` run built and passed to `setRun` would be immediately overwritten by `retryCell`'s first update, which is derived from the `run` it was handed. The reset would appear on screen for one frame and then vanish — worse than not resetting at all, because it would look like it worked.
+
+So the reset must be threaded *into* the call, not merely set alongside it. Rewrite the head of `handleRetryCell`:
 
 ```tsx
+    const current = latestRunRef.current ?? run;
+    const existing = current.findings[docId]?.[clauseId];
+
     // The single most important rule in this sub-project: a verification
     // describes a judgement about specific content, and re-running the
     // clause replaces that content. Keeping the verification would let an
     // export claim a human checked text they never saw.
-    const existing = current.findings[docId]?.[clauseId];
+    //
+    // `cleared` is what gets handed to `retryCell` — not just pushed into
+    // state alongside it. `retryCell` derives every snapshot it emits from
+    // the run it was given, so passing the un-cleared `run` here would let
+    // its first update restore the verification we just removed.
+    let cleared = current;
     if (existing && existing.verification.state !== 'unchecked') {
-      const cleared = withUpdatedFinding(current, docId, clauseId, {
+      cleared = withUpdatedFinding(current, docId, clauseId, {
         ...existing,
         verification: resetVerification(existing.verification),
       });
-      latestRunRef.current = cleared;
-      setRun(cleared);
       const clauseTitle = current.templateSnapshot.clauses.find(c => c.id === clauseId)?.title ?? 'This clause';
       notify(`${clauseTitle} is being re-run, so its verification was cleared.`);
     }
+
+    latestRunRef.current = cleared;
+    setRun(cleared);
+
+    // Was `setRun` passed directly. It must go through the ref as well, or
+    // `handleVerify`/`handleAddNote` read a stale `latestRunRef.current`
+    // for the rest of the session.
+    const onRetryUpdate = (updated: ReviewRun) => {
+      latestRunRef.current = updated;
+      setRun(updated);
+    };
+
+    retryCell(cleared, doc, clauseId, settings, onRetryUpdate)
 ```
+
+The rest of `handleRetryCell` — its `.then`, the deleted-matter guard, the `getProfile`/`saveReview` pair, the `.catch` — is unchanged. Note that `onRetryUpdate` does **not** call `carryHumanState`: `retryCell` was handed `cleared`, which already holds every other finding's verification, so its snapshots carry them correctly. Applying the merge here would additionally fight the reset this step just made.
 
 Notes are **not** cleared. A note is a human's own commentary — "check this against the side letter" — and stays useful across a re-run. A verification is a claim about output that no longer exists, and does not.
 
@@ -2812,6 +2838,7 @@ Make each edit, run the two new suites, confirm a FAILURE, revert:
 3. In `handleVerify`, move `setRun(updated)` above the `await saveReview(...)` — "does not show a verification the store rejected" must fail.
 4. In `handleVerify`, drop the `latestRunRef.current = updated` line — add a test if none fails: a mid-run verification must survive the next debounced auto-save.
 5. In `carryHumanState`, change `before.status === finding.status` to `true` so a verification survives a status change — the "drops a verification when the status moved" test must fail. This is the rule that stops a re-run inheriting a stale judgement, and it is the same rule Step 4 enforces from the other direction.
+7. In `handleRetryCell`, pass `current` (or `run`) to `retryCell` instead of `cleared` — the "resets a verified finding to unchecked" test must fail. This is the trap Step 4 describes: the reset lands in state and is then overwritten by retryCell first update.
 6. In `handleUpdate`, remove the `carryHumanState` wrap — the "does not lose a verification to the next update from a live run" test must fail. If it does not, that test is not exercising a real `onUpdate`, and it needs rewriting rather than accepting.
 
 - [ ] **Step 8: Commit**
