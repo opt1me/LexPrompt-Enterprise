@@ -49,6 +49,8 @@ Recorded here and to be copied into `docs/superpowers/redesign/rulings.md` by Ta
 
 **R-D5 — `Clause` is renamed to `PlaybookClause` with no back-compat alias.** A type alias left behind is exactly this project's "sibling drift" failure in slow motion. One mechanical sweep in Task 1, then the old name does not exist. Cost if wrong: a large but purely mechanical diff.
 
+**R-D7 — The pre-D playbook conversion runs once at startup via `migrateIfNeeded`, never lazily from a read path.** An earlier draft of this plan had `listPlaybooks`/`getPlaybook` publish the migrated v1 on first read. That races: two concurrent reads both see no `currentVersionId`, both publish, and the playbook gets v1 *and* v2 holding identical content — in the sub-project whose whole purpose is making "which version did this review run against" answerable. `migrate.ts` already provides a durable-flag, startup-ordered, never-rejecting migration; D adds a **separately flagged** step to it, so a user already migrated by sub-project A still runs D's. Read paths stay pure. Cost if wrong: the conversion runs at startup instead of on demand, costing one pass over the playbook store on the first load after upgrade.
+
 **R-D6 — `generateTemplate`'s wire schema keeps its `prompt` key; only the domain field is renamed.** `generateTemplate.ts:139` reads `generated.prompt` — that is the *model's* output field, described to the model in a JSON schema, not our domain type. Renaming it would change what the model is asked to produce, on a path whose output quality nothing in this plan tests. The rename stops at the boundary: the wire key stays `prompt` and is mapped to `extractPrompt` when the `PlaybookClause` is constructed. Cost if wrong: one field name is inconsistent between the wire format and the domain type, which is normal and is what a boundary is for.
 
 ---
@@ -688,9 +690,53 @@ export function migrateDraft(input: unknown, fallbackName: string): PlaybookDraf
 
 Run: `npx vitest run src/lib/db/playbookMigration.test.ts` — expect PASS.
 
-- [ ] **Step 5: Rewrite `playbooks.ts` around the split**
+- [ ] **Step 5: Run the conversion ONCE at startup — never from a read path (R-D7)**
 
-`listPlaybooks`/`getPlaybook` run `migratePlaybookRecord`; when it returns a non-null `version`, publish it via `publishVersion` and write the identity record back with `currentVersionId` set. Do this in the read path, mirroring how `reviewMigration.ts` is invoked today — read that file for the existing pattern and follow it rather than inventing a second migration framework (spec §5).
+An earlier draft of this plan said to publish the migrated v1 lazily from `listPlaybooks`/`getPlaybook`, "mirroring how `reviewMigration.ts` is invoked". **That was wrong, and it would have corrupted the user's own version history.** `reviewMigration` is a *pure repair applied on read that writes nothing*; publishing a version is a write. A read path that writes races itself: two components calling `listPlaybooks()` on the same tick both see no `currentVersionId`, both call `publishVersion`, and the playbook ends up with **v1 and v2 holding identical content** — in the one sub-project whose entire purpose is making "which version did this review run against" answerable.
+
+Use the mechanism that already exists for exactly this. `src/lib/db/migrate.ts` has `migrateIfNeeded()`: a one-time, startup-ordered migration guarded by a **durable flag** in IndexedDB (`readFlag`/`writeFlag`), which already reports failure by returning `{ status: 'failed' }` rather than rejecting. Read it in full before writing anything.
+
+Add a second, **separately flagged** step to it — do not reuse the v1-localStorage flag, or a user who migrated in sub-project A will skip this one entirely:
+
+```ts
+/** D: convert every pre-D playbook into an identity record plus one
+ *  published v1. Separately flagged from the v1-localStorage migration —
+ *  a user already migrated by sub-project A must still run this. */
+async function migratePlaybooksToVersions(db: IDBPDatabase<LexPromptDB>): Promise<number>
+```
+
+For each stored playbook, run the pure `migratePlaybookRecord`; where it returns a non-null draft, `publishVersion` it and write the identity record back with `currentVersionId` set. Follow `migrateIfNeeded`'s existing contract exactly: never reject, count what was converted, and report a partial count from a mid-loop failure.
+
+`listPlaybooks`/`getPlaybook` then stay **pure reads**. They still call `migratePlaybookRecord` defensively — a record can always be malformed — but they never write, so calling them twice concurrently is harmless.
+
+Requirements this adds to Step 1's tests:
+
+```ts
+it('converts a pre-D playbook exactly once, even if the migration runs twice', async () => {
+  await savePlaybookRaw(preD);
+  await migrateIfNeeded();
+  await migrateIfNeeded();
+  expect((await listVersions('pb1')).map(v => v.version)).toEqual([1]);
+});
+
+it('does not skip D\'s conversion for a user already migrated by sub-project A', async () => {
+  // Sub-project A's flag is set; D's is not. The playbook must still convert.
+  await writeV1Flag(db, 0);
+  await savePlaybookRaw(preD);
+  await migrateIfNeeded();
+  expect((await getPlaybook('pb1'))!.currentVersionId).toBeTruthy();
+});
+
+it('two concurrent listPlaybooks calls publish nothing', async () => {
+  // The read path must not write at all — this is the race the lazy design
+  // would have lost.
+  await savePlaybookRaw(preD);
+  await Promise.all([listPlaybooks(), listPlaybooks()]);
+  expect(await listVersions('pb1')).toEqual([]);
+});
+```
+
+Mutation-test the first and third: make the conversion unflagged (expect duplicate v1/v2), and make `getPlaybook` publish lazily (expect the concurrency test to fail).
 
 Add:
 - `getPlaybookContent(playbookId): Promise<PlaybookVersion | null>` — the current version.
