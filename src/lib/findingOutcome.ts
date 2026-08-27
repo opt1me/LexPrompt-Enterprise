@@ -1,4 +1,5 @@
 import type { Finding, Review } from '../types';
+import { positionText } from './netPosition';
 
 /**
  * The one place that decides what text represents a clause's outcome when
@@ -43,7 +44,18 @@ export function isVerifiable(finding: Finding | undefined): finding is Finding {
 }
 
 export function describeFindingOutcome(finding: Finding | undefined): string {
-  if (finding?.status === 'done') return finding.summary ?? '';
+  if (finding?.status === 'done') {
+    // A collection finding (`extractCollectionClause`) never sets `summary`
+    // — only `netPosition` — so this is the only place its exported text
+    // comes from. Without this, a done collection finding's outcome was
+    // `finding.summary ?? ''`, i.e. always the empty string: exactly the
+    // founding defect (an empty cell reading as "checked, nothing found"),
+    // independent of the Step 0 key bug. `positionText` already prefers a
+    // human's amendment over the model's proposal.
+    if (finding.summary) return finding.summary;
+    if (finding.netPosition) return positionText(finding.netPosition);
+    return finding.summary ?? '';
+  }
 
   const reason =
     finding?.status === 'error' ? (finding.error ?? 'unknown error') :
@@ -86,6 +98,76 @@ export function verificationLabel(finding: Finding | undefined): string | null {
     return `REJECTED: ${reason && reason !== '' ? reason : 'no reason recorded'}`;
   }
   return 'UNVERIFIED AI OUTPUT';
+}
+
+/**
+ * How an export names an unconfirmed net position — a synthesised "what the
+ * documents say now" that no human has yet read, the most dangerous output
+ * this app produces (see `netPosition.ts`). Mirrors `verificationLabel`'s
+ * shape and reasoning exactly, on a second, independent axis: a collection
+ * finding carries BOTH a `verification` (has a human checked this AI output
+ * at all) and a `netPosition.state` (has a human accepted THIS SPECIFIC
+ * synthesis), and either can be labelled without the other.
+ *
+ * The three return cases matter individually and must not collapse into each
+ * other:
+ *  - `'UNCONFIRMED NET POSITION'` — a human has not yet looked at this
+ *    synthesis. Exporting it unlabelled would let a reader mistake a
+ *    document nobody wrote for one a human stood behind.
+ *  - `null` for a CONFIRMED position (whether via `confirmPosition` or
+ *    `amendPosition` — both set `state: 'confirmed'`) — a label here would
+ *    contradict the human sign-off it just received, the same reason
+ *    `verificationLabel` returns `null` for `verified`.
+ *  - `null` when there is no net position AT ALL (a standalone-document
+ *    finding, or a collection clause the run never reached) — this is a
+ *    DIFFERENT case from "confirmed": no question of confirmation ever
+ *    arose. Both return `null`, but for a caller checking "is this raising a
+ *    caveat," which is all a label is for, that's the right answer either
+ *    way — see `netPositionAmendmentLabel` for the positive claim ("a person
+ *    wrote this") that a plain `null` here cannot carry.
+ */
+export function netPositionLabel(finding: Finding | undefined): string | null {
+  const state = finding?.netPosition?.state;
+  if (state === 'unconfirmed') return 'UNCONFIRMED NET POSITION';
+  return null;
+}
+
+/**
+ * The positive counterpart to `netPositionLabel`: says a PERSON rewrote this
+ * text, for exactly the one case that's true — `netPosition.amended` is set.
+ * An amended position is a STRONGER claim than a merely confirmed one (a
+ * person wrote every word a reader now sees, not just accepted the model's),
+ * and `netPositionLabel` alone cannot say that: it returns `null` for every
+ * confirmed position, amended or not, because neither needs a CAVEAT. This
+ * is not a caveat — it is provenance a reader is entitled to know, the
+ * export-side equivalent of `NetPositionPanel`'s "Amended by … on …" line.
+ *
+ * Not attributed to a specific person, for the same reason `noteLines`
+ * isn't: R1 means there is exactly one local user, and an opaque id would
+ * communicate nothing while implying multi-user collaboration this app does
+ * not deliver.
+ */
+export function netPositionAmendmentLabel(finding: Finding | undefined): string | null {
+  if (!finding?.netPosition?.amended) return null;
+  return 'AMENDED NET POSITION: this text was rewritten by a person, not the model';
+}
+
+/**
+ * The derivation behind a net position, one line per contributing document —
+ * mirrors `noteLines`'s shape exactly, and for the same reason it exists:
+ * the DOCX and CSV exports must not be able to disagree about what a trail
+ * step says once it leaves the app. A conclusion exported without this is an
+ * assertion, not the derivation `VariationTrailModal` shows on screen (spec:
+ * "a net position without its trail is an assertion").
+ */
+export function trailLines(finding: Finding | undefined): string[] {
+  const trail = finding?.netPosition?.trail ?? [];
+  return trail.map((step, i) => {
+    const kind = step.kind === 'original' ? 'Original' : 'Varies';
+    const quotes = step.citations.map(c => `"${c.quote}"`).join('; ');
+    const base = `${i + 1}. ${kind} (${step.documentId}): ${step.effect}`;
+    return quotes ? `${base} — ${quotes}` : base;
+  });
 }
 
 /**

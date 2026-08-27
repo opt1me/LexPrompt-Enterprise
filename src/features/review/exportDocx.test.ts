@@ -6,7 +6,8 @@ import { describe, it, expect, vi } from 'vitest';
 // silent wrong answer — and the fix is to add it to devDependencies then.
 import JSZip from 'jszip';
 import { buildReportRows, buildReportDocument, exportDocx } from './exportDocx';
-import type { Finding, ReviewRun, Template } from '../../types';
+import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
+import type { Finding, ReviewRun, Template, TrailStep } from '../../types';
 
 /** jsdom has no `Blob.prototype.arrayBuffer` — see vitest.setup.ts's
  *  `Blob.prototype.text` polyfill for the same gap on the text side. Needed
@@ -361,5 +362,102 @@ describe('buildReportRows / exportDocx — a collection review (Step 0)', () => 
   it('refuses to export a document with no findings at all, rather than producing an empty report', async () => {
     const run = collectionRun({}); // No key for 'coll-1' at all.
     await expect(exportDocx(run, 'lease', 'Lease.pdf')).rejects.toThrow(/no findings/i);
+  });
+});
+
+// Net positions (Task 9, Step 1 onwards): a net position is synthesised text
+// no single document contains, and the most dangerous output this app
+// produces — it must never leave the app looking as settled as a human-
+// checked answer, and its derivation (the trail) must travel with it, not
+// just its conclusion.
+describe('buildReportRows / exportDocx / buildReportDocument — net positions', () => {
+  const netPositionTemplate: Template = {
+    id: 'tnp', name: 'TNP', contractType: 'Lease', mode: 'risk',
+    systemPrompt: '', formatPrompt: '',
+    clauses: [{ id: 'break', title: 'Break clause', prompt: '' }],
+    createdAt: 0, updatedAt: 0, schemaVersion: 2,
+  };
+
+  const trail: TrailStep[] = [
+    { documentId: 'lease', kind: 'original', effect: 'Break on 12 months notice.', citations: [] },
+    { documentId: 'deed', kind: 'varies', effect: 'Notice cut to 6 months.', citations: [{ quote: 'reduced to six months', documentId: 'deed' }] },
+  ];
+
+  function runWithNetPosition(finding: Finding): ReviewRun {
+    return {
+      id: 'run-np',
+      templateSnapshot: netPositionTemplate,
+      documentIds: ['lease', 'deed'],
+      target: { kind: 'collection', collectionId: 'coll-np', documentIds: ['lease', 'deed'] },
+      findings: { 'coll-np': { break: finding } },
+      startedAt: 0,
+    };
+  }
+
+  function doneCollectionFinding(overrides: Partial<Finding> = {}): Finding {
+    return {
+      clauseId: 'break', status: 'done', citations: [],
+      verification: { state: 'unchecked' }, notes: [],
+      netPosition: unconfirmedPosition('Break on 6 months notice.', trail),
+      ...overrides,
+    };
+  }
+
+  async function docXml(run: ReviewRun, docId: string): Promise<string | undefined> {
+    const rows = buildReportRows(run, docId);
+    const doc = await buildReportDocument(rows, docId, 'stub summary line');
+    const { Packer } = await import('docx');
+    const buffer = await Packer.toBuffer(doc);
+    const zip = await JSZip.loadAsync(buffer);
+    return zip.file('word/document.xml')?.async('string');
+  }
+
+  it('carries an unconfirmed net position onto the row, distinctly from verification', () => {
+    const run = runWithNetPosition(doneCollectionFinding());
+    const [row] = buildReportRows(run, 'lease');
+    expect(row.netPositionLabel).toBe('UNCONFIRMED NET POSITION');
+    // Independent axis: this finding's AI output is also unverified.
+    expect(row.verificationLabel).toBe('UNVERIFIED AI OUTPUT');
+    expect(row.summary).toBe('Break on 6 months notice.');
+  });
+
+  it('drops the caveat once a human confirms the position, but not the verification label', () => {
+    const pos = confirmPosition(unconfirmedPosition('Break on 6 months notice.', trail), 'u1', 1);
+    const run = runWithNetPosition(doneCollectionFinding({ netPosition: pos }));
+    const [row] = buildReportRows(run, 'lease');
+    expect(row.netPositionLabel).toBeNull();
+  });
+
+  // The derivation is exported, not just the conclusion: each trail step's
+  // document and effect must reach the actual DOCX bytes.
+  it('carries every trail step\'s document and effect into the generated DOCX XML', async () => {
+    const run = runWithNetPosition(doneCollectionFinding());
+    const xml = await docXml(run, 'lease');
+    expect(xml).toContain('lease');
+    expect(xml).toContain('Break on 12 months notice.');
+    expect(xml).toContain('deed');
+    expect(xml).toContain('Notice cut to 6 months.');
+  });
+
+  it('carries the UNCONFIRMED NET POSITION label into the generated DOCX XML', async () => {
+    const run = runWithNetPosition(doneCollectionFinding());
+    const xml = await docXml(run, 'lease');
+    expect(xml).toContain('UNCONFIRMED NET POSITION');
+  });
+
+  // An amended position exports the HUMAN text, and says a person wrote it —
+  // not the model's original proposal, and not silently as though the model
+  // had written every word.
+  it('exports the human\'s amended text, and says it was amended by a person', async () => {
+    const pos = amendPosition(unconfirmedPosition('Break on 6 months notice (model draft).', trail), 'Break on 3 months notice.', 'u1', 1);
+    const run = runWithNetPosition(doneCollectionFinding({ netPosition: pos }));
+    const [row] = buildReportRows(run, 'lease');
+    expect(row.summary).toBe('Break on 3 months notice.');
+    expect(row.summary).not.toContain('model draft');
+
+    const xml = await docXml(run, 'lease');
+    expect(xml).toContain('Break on 3 months notice.');
+    expect(xml).not.toContain('model draft');
+    expect(xml).toMatch(/amend.*person|person.*amend/i);
   });
 });

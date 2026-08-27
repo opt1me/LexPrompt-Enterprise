@@ -1,5 +1,8 @@
 import type { Citation, ReviewRun, RiskLevel } from '../../types';
-import { describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines } from '../../lib/findingOutcome';
+import {
+  describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
+  netPositionLabel, netPositionAmendmentLabel, trailLines,
+} from '../../lib/findingOutcome';
 import { findingsKeyFor } from '../../lib/reviewTarget';
 
 export interface ReportRow {
@@ -14,6 +17,22 @@ export interface ReportRow {
    *  exporter via `findingOutcome.ts`'s `noteLines` so the two cannot
    *  disagree about what a note looks like once it leaves the app. */
   notes: string[];
+  /** Task 9: a caveat independent of `verificationLabel` — a collection
+   *  finding has BOTH a verification (has a human checked this AI output)
+   *  and a net position confirmation (has a human accepted THIS synthesis).
+   *  `null` for a standalone finding, a confirmed position, or a finding
+   *  with no net position at all — see `netPositionLabel`'s own doc comment
+   *  for why those last two both return `null` for different reasons. */
+  netPositionLabel: string | null;
+  /** Positive provenance, not a caveat: says a PERSON rewrote the position
+   *  text (`row.summary`), for exactly the case `netPositionLabel` cannot
+   *  say (a confirmed position is unlabelled either way it was confirmed).
+   *  `null` unless the position was amended. */
+  netPositionAmendmentLabel: string | null;
+  /** The derivation behind a net position — one line per contributing
+   *  document, in effect order. Empty for anything without a net position.
+   *  A conclusion exported without this is an assertion, not a derivation. */
+  trail: string[];
 }
 
 /**
@@ -36,24 +55,39 @@ export function buildReportRows(run: ReviewRun, docId: string): ReportRow[] {
   return run.templateSnapshot.clauses.map(clause => {
     const finding = findings[clause.id];
 
+    // `describeFindingOutcome` is the one place that decides what text
+    // represents a finding's outcome — including, since Task 9, preferring
+    // a net position's text (a collection finding's `summary` is always
+    // undefined) over the plain `finding.summary` this used to read
+    // directly. Calling it unconditionally, rather than only for the
+    // not-done branch below, is what keeps a `done` collection finding from
+    // exporting as the empty string it did before.
+    const summary = describeFindingOutcome(finding);
+
     if (!finding || finding.status !== 'done') {
       return {
         title: clause.title,
-        summary: describeFindingOutcome(finding),
+        summary,
         citations: [],
         verificationLabel: verificationLabel(finding),
         notes: noteLines(finding),
+        netPositionLabel: netPositionLabel(finding),
+        netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
+        trail: trailLines(finding),
       };
     }
 
     return {
       title: clause.title,
-      summary: finding.summary ?? '',
+      summary,
       riskLevel: finding.riskLevel,
       riskAnalysis: finding.riskAnalysis,
       citations: finding.citations,
       verificationLabel: verificationLabel(finding),
       notes: noteLines(finding),
+      netPositionLabel: netPositionLabel(finding),
+      netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
+      trail: trailLines(finding),
     };
   });
 }
@@ -142,6 +176,39 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
             children: [new Paragraph({ children: [new TextRun({ text: row.verificationLabel, bold: true })] })],
             columnSpan: 2,
             shading: { fill: 'FFF4CC' },
+            margins: cellMargins,
+          }),
+        ],
+      }));
+    }
+
+    // A second, independent caveat (Task 9): a collection finding can be
+    // unverified AND carry a net position nobody has confirmed — either can
+    // apply without the other, so this is its own row, not folded into
+    // `verificationLabel`'s.
+    if (row.netPositionLabel) {
+      tableRows.push(new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: row.netPositionLabel, bold: true })] })],
+            columnSpan: 2,
+            shading: { fill: 'EDE4FF' },
+            margins: cellMargins,
+          }),
+        ],
+      }));
+    }
+
+    // Positive provenance, not a caveat (Task 9): says a person rewrote the
+    // summary above, for the one case a `null` `netPositionLabel` cannot
+    // distinguish from "the model's synthesis, merely accepted as written."
+    if (row.netPositionAmendmentLabel) {
+      tableRows.push(new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: row.netPositionAmendmentLabel, italics: true })] })],
+            columnSpan: 2,
+            shading: { fill: 'EEF2FF' },
             margins: cellMargins,
           }),
         ],
@@ -255,6 +322,39 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
           }),
         ],
       }));
+    }
+
+    // Derivation (Task 9): the argument behind a net position, one row per
+    // contributing document. Only present when `trail` is non-empty — a
+    // standalone finding, or one with no net position, has none. A
+    // conclusion exported without this is an assertion, not a derivation.
+    if (row.trail.length > 0) {
+      tableRows.push(new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: 'Derivation', bold: true })] })],
+            columnSpan: 2,
+            shading: { fill: 'EEEEEE' },
+            margins: { top: 50, bottom: 50, left: 100, right: 100 },
+          }),
+        ],
+      }));
+      row.trail.forEach((line, idx) => {
+        tableRows.push(new TableRow({
+          children: [
+            new TableCell({
+              children: [new Paragraph({ children: [new TextRun({ text: `Step ${idx + 1}`, bold: true })] })],
+              width: { size: 15, type: WidthType.PERCENTAGE },
+              margins: { top: 50, bottom: 50, left: 50, right: 50 },
+            }),
+            new TableCell({
+              children: [new Paragraph({ text: line })],
+              width: { size: 85, type: WidthType.PERCENTAGE },
+              margins: { top: 50, bottom: 50, left: 50, right: 50 },
+            }),
+          ],
+        }));
+      });
     }
 
     children.push(new Table({

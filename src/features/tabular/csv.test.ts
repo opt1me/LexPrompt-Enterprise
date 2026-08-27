@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { escapeCsvField, buildTabularCsv } from './csv';
 import { buildReportRows } from '../review/exportDocx';
-import type { DocumentFile, Finding, ReviewRun, Template } from '../../types';
+import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
+import type { DocumentFile, Finding, ReviewRun, Template, TrailStep } from '../../types';
 
 function template(clauses: Template['clauses']): Template {
   return {
@@ -268,6 +269,46 @@ describe('buildTabularCsv', () => {
       if (label === null) continue;
       expect(csv).toContain(`[${label}]`);
     }
+  });
+
+  // Task 9: the net position labels must not drift between exporters any
+  // more than the verification labels above may.
+  const npTrail: TrailStep[] = [
+    { documentId: 'd1', kind: 'original', effect: 'Break on 12 months notice.', citations: [] },
+    { documentId: 'd2', kind: 'varies', effect: 'Notice cut to 6 months.', citations: [] },
+  ];
+
+  it('agrees with the DOCX exporter on the net position label', () => {
+    const run = runWith({ 'clause-1': doneFinding({ summary: undefined, netPosition: unconfirmedPosition('Break on 6 months notice.', npTrail) }) });
+    const label = buildReportRows(run, 'doc-1')[0].netPositionLabel;
+    expect(label).toBe('UNCONFIRMED NET POSITION');
+    const csv = buildTabularCsv(run, docs);
+    expect(csv).toContain(`[${label}]`);
+  });
+
+  it('does not label a confirmed net position in either exporter', () => {
+    const pos = confirmPosition(unconfirmedPosition('Break on 6 months notice.', npTrail), 'u1', 1);
+    const run = runWith({ 'clause-1': doneFinding({ summary: undefined, netPosition: pos }) });
+    expect(buildReportRows(run, 'doc-1')[0].netPositionLabel).toBeNull();
+    expect(buildTabularCsv(run, docs)).not.toContain('UNCONFIRMED NET POSITION');
+  });
+
+  it('carries the derivation trail into the CSV text', () => {
+    const run = runWith({ 'clause-1': doneFinding({ summary: undefined, netPosition: unconfirmedPosition('Break on 6 months notice.', npTrail) }) });
+    const csv = buildTabularCsv(run, docs);
+    expect(csv).toContain('d1');
+    expect(csv).toContain('Break on 12 months notice.');
+    expect(csv).toContain('d2');
+    expect(csv).toContain('Notice cut to 6 months.');
+  });
+
+  it('exports the human\'s amended text in the CSV, and says a person amended it', () => {
+    const pos = amendPosition(unconfirmedPosition('Model draft position.', npTrail), 'Break on 3 months notice.', 'u1', 1);
+    const run = runWith({ 'clause-1': doneFinding({ summary: undefined, netPosition: pos }) });
+    const csv = buildTabularCsv(run, docs);
+    expect(csv).toContain('Break on 3 months notice.');
+    expect(csv).not.toContain('Model draft position.');
+    expect(csv).toMatch(/amend.*person|person.*amend/i);
   });
 
   // Important 3 (spec §6: "a flagged finding carries its flag and any

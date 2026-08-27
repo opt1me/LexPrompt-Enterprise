@@ -1,5 +1,8 @@
 import type { DocumentFile, Finding, ReviewRun } from '../../types';
-import { describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines } from '../../lib/findingOutcome';
+import {
+  describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
+  netPositionLabel, netPositionAmendmentLabel, trailLines,
+} from '../../lib/findingOutcome';
 import { findingsKeyFor } from '../../lib/reviewTarget';
 
 // Characters that Excel/Google Sheets treat as the start of a formula when a
@@ -40,16 +43,26 @@ export function escapeCsvField(value: string): string {
  *  it was written for. */
 function cellText(finding: Finding | undefined): string {
   const outcome = describeFindingOutcome(finding);
-  const label = verificationLabel(finding);
-  const base = label ? `[${label}] ${outcome}` : outcome;
+  // Task 9: a net position caveat is a SECOND, independent label from the
+  // verification one — a collection finding can be unverified AND carry a
+  // net position nobody has confirmed, either without the other. Both are
+  // bracketed the same way, and in the same order every time, so a
+  // spreadsheet reader always meets them before the (possibly truncated)
+  // outcome text.
+  const labels = [verificationLabel(finding), netPositionLabel(finding), netPositionAmendmentLabel(finding)]
+    .filter((label): label is string => label !== null);
+  const base = labels.length > 0 ? `[${labels.join('] [')}] ${outcome}` : outcome;
   // Important 3 (spec §6: "a flagged finding carries its flag and any
   // note"): notes go at the END here, unlike the label — the label is a
   // caveat that must be seen before a truncated summary, a note is
   // supplementary detail a reader who opens the full cell should still find.
-  // `noteLines`/`verificationLabel` are both shared with exportDocx.ts via
-  // `findingOutcome.ts` so the two exporters cannot disagree about either.
-  const notes = noteLines(finding);
-  return notes.length > 0 ? `${base} | ${notes.join(' | ')}` : base;
+  // The derivation trail (Task 9) is exported the same way, for the same
+  // reason: a net position without it is an assertion, not a derivation.
+  // `noteLines`/`verificationLabel`/`trailLines` are all shared with
+  // exportDocx.ts via `findingOutcome.ts` so the two exporters cannot
+  // disagree about any of them.
+  const extras = [...noteLines(finding), ...trailLines(finding)];
+  return extras.length > 0 ? `${base} | ${extras.join(' | ')}` : base;
 }
 
 /**

@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines, isVerifiable } from './findingOutcome';
-import type { Finding, Verification } from '../types';
+import {
+  describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines, isVerifiable,
+  netPositionLabel, netPositionAmendmentLabel, trailLines,
+} from './findingOutcome';
+import { unconfirmedPosition, confirmPosition, amendPosition } from './netPosition';
+import type { Finding, TrailStep, Verification } from '../types';
 
 // Minor 3 (final fix round): `isVerifiable` replaces what used to be two
 // independent `status === 'done'` checks — `FindingCard`'s render and
@@ -162,5 +166,123 @@ describe('verificationCounts and exportSummaryLine', () => {
 
   it('handles an empty review without dividing by zero or saying nothing', () => {
     expect(exportSummaryLine({})).toBe('0 findings: 0 verified, 0 unverified, 0 flagged, 0 rejected.');
+  });
+});
+
+const trail: TrailStep[] = [
+  { documentId: 'lease', kind: 'original', effect: 'Break on 12 months notice.', citations: [] },
+  { documentId: 'deed', kind: 'varies', effect: 'Notice cut to 6 months.', citations: [{ quote: 'reduced to six months', documentId: 'deed' }] },
+];
+
+function collectionFinding(overrides: Partial<Finding> = {}): Finding {
+  return {
+    clauseId: 'break', status: 'done', citations: [],
+    verification: { state: 'unchecked' }, notes: [],
+    netPosition: unconfirmedPosition('Break on 6 months notice.', trail),
+    ...overrides,
+  };
+}
+
+// The three cases below are deliberately distinct, and each is asserted
+// against a genuinely different input — an unconfirmed net position, a
+// CONFIRMED one, and a finding with no net position at all — so a broken
+// implementation that collapsed "confirmed" and "no position" into the same
+// `null` (technically satisfying two of the three assertions) would still be
+// caught: this app must never let a synthesis nobody has read export as
+// though a human had already stood behind it, and must never claim a
+// question arose that never did.
+describe('netPositionLabel', () => {
+  it('labels an unconfirmed net position, distinctly from a settled one', () => {
+    const f = collectionFinding();
+    expect(netPositionLabel(f)).toBe('UNCONFIRMED NET POSITION');
+  });
+
+  it('returns null for a confirmed net position — a label there would contradict the human sign-off', () => {
+    const pos = confirmPosition(unconfirmedPosition('Break on 6 months notice.', trail), 'u1', 1);
+    const f = collectionFinding({ netPosition: pos });
+    expect(netPositionLabel(f)).toBeNull();
+  });
+
+  it('returns null when there is no net position at all — "no position" is not "confirmed"', () => {
+    const f: Finding = { clauseId: 'c', status: 'done', summary: 's', citations: [], verification: { state: 'unchecked' }, notes: [] };
+    expect(netPositionLabel(f)).toBeNull();
+    expect('netPosition' in f).toBe(false);
+  });
+
+  it('returns null for a missing finding — there is no question of a net position to raise', () => {
+    expect(netPositionLabel(undefined)).toBeNull();
+  });
+});
+
+describe('netPositionAmendmentLabel', () => {
+  it('says a human wrote the text for an amended position', () => {
+    const pos = amendPosition(unconfirmedPosition('model text', trail), 'human text', 'u1', 1);
+    const f = collectionFinding({ netPosition: pos });
+    expect(netPositionAmendmentLabel(f)).toMatch(/amend/i);
+    expect(netPositionAmendmentLabel(f)).toMatch(/person/i);
+  });
+
+  it('does not say a person wrote it for a merely confirmed (unamended) position', () => {
+    const pos = confirmPosition(unconfirmedPosition('model text', trail), 'u1', 1);
+    const f = collectionFinding({ netPosition: pos });
+    expect(netPositionAmendmentLabel(f)).toBeNull();
+  });
+
+  it('does not say a person wrote it for an unconfirmed position', () => {
+    expect(netPositionAmendmentLabel(collectionFinding())).toBeNull();
+  });
+
+  it('returns null for a finding with no net position at all', () => {
+    const f: Finding = { clauseId: 'c', status: 'done', summary: 's', citations: [], verification: { state: 'unchecked' }, notes: [] };
+    expect(netPositionAmendmentLabel(f)).toBeNull();
+  });
+});
+
+describe('trailLines — the derivation behind a net position', () => {
+  it('emits one line per contributing document, naming the document and its effect', () => {
+    const lines = trailLines(collectionFinding());
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('lease');
+    expect(lines[0]).toContain('Break on 12 months notice.');
+    expect(lines[1]).toContain('deed');
+    expect(lines[1]).toContain('Notice cut to 6 months.');
+  });
+
+  it('distinguishes the original document from a varying one', () => {
+    const lines = trailLines(collectionFinding());
+    expect(lines[0]).toMatch(/original/i);
+    expect(lines[1]).toMatch(/varies/i);
+  });
+
+  it('returns nothing for a finding with no net position', () => {
+    const f: Finding = { clauseId: 'c', status: 'done', summary: 's', citations: [], verification: { state: 'unchecked' }, notes: [] };
+    expect(trailLines(f)).toEqual([]);
+  });
+
+  it('returns nothing for a missing finding', () => {
+    expect(trailLines(undefined)).toEqual([]);
+  });
+});
+
+describe('describeFindingOutcome — a collection finding\'s net position', () => {
+  // A collection finding (`extractCollectionClause`) never sets `summary` —
+  // only `netPosition`. Before this, a done collection finding's outcome was
+  // `finding.summary ?? ''`, i.e. always the empty string: exactly the
+  // founding defect (an empty cell reading as "checked, nothing found") for
+  // every collection review, independent of the Step 0 key bug.
+  it('uses the proposed net position text when there is no summary', () => {
+    const f = collectionFinding();
+    expect(describeFindingOutcome(f)).toBe('Break on 6 months notice.');
+  });
+
+  it('prefers the human amendment over the model\'s proposal', () => {
+    const pos = amendPosition(unconfirmedPosition('model text', trail), 'human text', 'u1', 1);
+    const f = collectionFinding({ netPosition: pos });
+    expect(describeFindingOutcome(f)).toBe('human text');
+  });
+
+  it('still prefers an explicit summary when both are somehow present', () => {
+    const f = collectionFinding({ summary: 'Explicit summary.' });
+    expect(describeFindingOutcome(f)).toBe('Explicit summary.');
   });
 });
