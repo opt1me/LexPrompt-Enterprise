@@ -1853,14 +1853,41 @@ it('the DOCX and the CSV use the same wording for the same finding', () => {
 
 - [ ] **Step 1: Write the failing test**
 
-```ts
-it('counts deviations alongside the existing count chips', () => {
-  const out = text(mount(<TabularReview run={runWithTwoDeviations} … />));
-  expect(out).toMatch(/2\s*deviates/i);
-});
+**Against the real fixtures, checked at plan time.** `src/features/tabular/TabularReview.test.tsx` imports the shared harness (`mount`, `buttons`, `buttonNamed`, `click`) and provides `makeTemplate()`, `makeDoc(id)`, `doneFinding(overrides)` and `makeRun(findings, documentIds = ['d1'])`. There is no `text()`, no `runWithTwoDeviations` and no `plainRun` — read `container.textContent` and build runs with `makeRun`.
 
-it('shows no deviation count when no clause carries a position', () => {
-  expect(text(mount(<TabularReview run={plainRun} … />))).not.toMatch(/deviates/i);
+**The chip you are extending is at `TabularReview.tsx:452`**: `{counts.verified}/{counts.total} verified`. Follow that shape rather than inventing a second summary idiom, and derive the deviation count the same way the verified count is derived.
+
+```ts
+describe('TabularReview — the clause index counts deviations (Task 12)', () => {
+  it('counts the deviations across the run', () => {
+    const run = makeRun({ d1: {
+      c1: doneFinding({ positionOutcome: 'deviates', positionRationale: 'Nine months.' }),
+      c2: doneFinding({ positionOutcome: 'deviates', positionRationale: 'Uncapped.' }),
+      c3: doneFinding({ positionOutcome: 'meets' }),
+    } });
+    expect(mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />).textContent)
+      .toMatch(/2[^0-9]{0,3}deviat/i);
+  });
+
+  it('shows no deviation count when no clause carries a position', () => {
+    // Absent is not zero. A run where nobody set a house rule has not
+    // "0 deviations" — it has no comparison at all, and a 0 chip would
+    // report a clean result against a standard that was never applied.
+    const run = makeRun({ d1: { c1: doneFinding({ summary: 'x' }) } });
+    expect(mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />).textContent)
+      .not.toMatch(/deviat/i);
+  });
+
+  it('does not count an unclear outcome as a deviation', () => {
+    // `unclear` means the model could not tell. Counting it as a deviation
+    // would report a conflict with the house position that nobody found.
+    const run = makeRun({ d1: {
+      c1: doneFinding({ positionOutcome: 'deviates', positionRationale: 'x' }),
+      c2: doneFinding({ positionOutcome: 'unclear' }),
+    } });
+    expect(mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />).textContent)
+      .toMatch(/1[^0-9]{0,3}deviat/i);
+  });
 });
 ```
 
