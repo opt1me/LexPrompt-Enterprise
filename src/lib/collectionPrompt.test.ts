@@ -126,9 +126,35 @@ describe('buildCollectionPrompt', () => {
 
     expect(truncated.length).toBeGreaterThan(0);
     expect(truncated).toContain('Lease.pdf');
-    // Named BY NAME in the prompt text itself — not a generic "truncated" note.
-    expect(prompt).toContain('Lease.pdf');
-    expect(prompt).toMatch(/Lease\.pdf[^]*cut short|cut short[^]*Lease\.pdf/);
+
+    // Named BY NAME in the prompt text itself — not a generic "truncated"
+    // note. Asserted by pulling out only the lines that actually carry a
+    // "cut short" notice, rather than searching the whole prompt: a
+    // document's own header always names it, so a whole-prompt search
+    // passes even when the notice has been genericised to "the text was
+    // cut short". A review caught exactly that hole in this test.
+    const noticeText = prompt.split('\n').filter(line => /cut short/.test(line)).join('\n');
+    expect(noticeText).toContain('Lease.pdf');
+  });
+
+  it('names only the document it actually cut short, not every member', () => {
+    // The discriminating half of the rule. With a budget that forces the
+    // large base to be cut but leaves the small amendment whole, a generic
+    // notice — or one that names every member — is a notice a reviewer
+    // cannot act on. "The deed of variation was cut short" has to mean that
+    // document and no other.
+    const members: CollectionMember[] = [
+      member({ documentId: 'lease', kind: 'original', position: 1, document: doc('lease', 'Lease.pdf', 'B'.repeat(4000)) }),
+      member({ documentId: 'dov', kind: 'varies', position: 2, document: doc('dov', 'Deed of Variation.pdf', 'A'.repeat(40)) }),
+    ];
+    const { prompt, truncated } = buildCollectionPrompt(members, clause, template, 1000);
+
+    expect(truncated).toContain('Lease.pdf');
+    expect(truncated).not.toContain('Deed of Variation.pdf');
+
+    const noticeText = prompt.split('\n').filter(line => /cut short/.test(line)).join('\n');
+    expect(noticeText).toContain('Lease.pdf');
+    expect(noticeText).not.toContain('Deed of Variation.pdf');
   });
 
   it('does not report a document as truncated when the full budget covers it', () => {
