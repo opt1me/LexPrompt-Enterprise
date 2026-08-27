@@ -42,7 +42,7 @@ To be copied into `docs/superpowers/redesign/rulings.md` by the docs task.
 
 **R-E2 — The few-shot privacy disclosure sits on the picker, not in Settings.** Spec §10 requires it at the point of selection. Everything else in this app sends only the document under review; this sends *other matters'* content to the chosen model. The disclosure names that plainly, next to the checkboxes, and is not dismissible. Cost if wrong: one line of copy someone finds redundant.
 
-**R-E3 — `Save as v1` creates the `Playbook` identity record first, then publishes, and on a publish failure deletes the orphan.** Two writes cannot be one transaction across two stores here, so the order is chosen so the failure mode is recoverable: an identity with no version renders as a playbook with nothing in it, which is worse than nothing at all. Cost if wrong: a rare orphan record on a storage failure mid-save.
+**R-E3 — SUPERSEDED during execution. `Save as v1` calls D's atomic `publishAndPoint`.** The premise below was true when E was planned and is false now: sub-project D's Task 9 fix round made `publishAndPoint` a single readwrite transaction over both stores, so there is no window to orphan a version and nothing to clean up. Original reasoning, kept for the record: Two writes cannot be one transaction across two stores here, so the order is chosen so the failure mode is recoverable: an identity with no version renders as a playbook with nothing in it, which is worse than nothing at all. Cost if wrong: a rare orphan record on a storage failure mid-save.
 
 **R-E4 — Navigating away warns via an in-app guard, not `beforeunload` alone.** `beforeunload` covers a tab close and a reload; it does not fire on an in-app route change, which is the far likelier way to lose a draft. Both are wired. Cost if wrong: one confirm the user finds mildly annoying.
 
@@ -763,32 +763,49 @@ Make the save button ignore `canSaveDraft` and stay enabled. Expect "disables sa
 
 - [ ] **Step 1: Failing tests**
 
+**R-E3 IS SUPERSEDED — read this before writing anything.** It said "two writes cannot be one transaction across two stores here", so `Save as v1` should write the identity, publish, and delete the orphan on failure. That premise was true when E was planned and is **false now**: sub-project D's Task 9 fix round made `publishAndPoint` (`src/lib/db/playbooks.ts`) a single readwrite transaction spanning `playbooks` and `playbookVersions`, precisely so a failure between the two writes cannot orphan a version.
+
+So `Save as v1` **calls `publishAndPoint`**. It does not reimplement the sequence, and there is no orphan to clean up because the transaction cannot leave one. Reimplementing it would be both duplication — the sibling-drift shape this project pays for most often — and strictly weaker than the code already there.
+
 ```ts
 it('publishes a v1 whose clauses are the kept ones only', async () => {
-  await saveDraftAsV1(draftWithOneKeptOneCut, 'Commercial Lease');
-  const versions = await listVersions(newPlaybookId);
-  expect(versions).toHaveLength(1);
-  expect(versions[0].version).toBe(1);
-  expect(versions[0].clauses.map(c => c.id)).toEqual(['a']);
+  const { playbook, version } = await saveDraftAsV1(draftWithOneKeptOneCut, 'Commercial Lease');
+  expect(version.version).toBe(1);
+  expect(version.clauses.map(c => c.id)).toEqual(['a']);
+  expect(playbook.currentVersionId).toBe(version.id);
 });
 
-it('points the playbook at the version it just published', async () => {
+it('goes through publishAndPoint rather than writing the two records itself', async () => {
+  // Pins the R-E3 supersession. If a later refactor reintroduces a
+  // two-write sequence, the orphan window comes back with it.
+  const spy = vi.spyOn(playbooksModule, 'publishAndPoint');
   await saveDraftAsV1(draftAllKept, 'p');
-  expect((await getPlaybook(newPlaybookId))!.currentVersionId).toBe((await listVersions(newPlaybookId))[0].id);
+  expect(spy).toHaveBeenCalledTimes(1);
 });
 
-it('leaves no orphan playbook when publishing fails (R-E3)', async () => {
-  // An identity record with no version renders as a playbook with nothing in
-  // it — worse than no playbook at all, because it looks like work.
-  publishVersionMock.mockRejectedValueOnce(new Error('storage full'));
-  await expect(saveDraftAsV1(draftAllKept, 'p')).rejects.toThrow();
-  expect(await listPlaybooks()).toHaveLength(0);
-});
-
-it('refuses to save a draft the gate has not cleared', async () => {
-  // Defence in depth: the button is disabled, but the handler must not
-  // depend on the button being the only way in.
+it('refuses a draft the gate has not cleared', async () => {
+  // Defence in depth. The button is disabled, but the handler must not
+  // depend on the button being the only way in — that is the difference
+  // between a gate and a suggestion.
   await expect(saveDraftAsV1(draftWithUnreviewed, 'p')).rejects.toThrow(/review/i);
+});
+
+it('records provenance honestly on every saved position', async () => {
+  // An AI position a human kept reads reviewed; one they edited is still
+  // ai-drafted, because the model proposed it and calling it `authored`
+  // would erase where it came from.
+  const { version } = await saveDraftAsV1(draftWithKeptAiPosition, 'p');
+  expect(version.clauses[0].standardPosition).toEqual({
+    text: 'We ask for six months.', origin: 'ai-drafted', reviewedByHuman: true,
+  });
+});
+
+it('leaves no playbook behind when the publish fails', async () => {
+  // Not an orphan-cleanup test — publishAndPoint's transaction aborts both
+  // writes. This asserts the outcome, not a compensating action.
+  publishAndPointMock.mockRejectedValueOnce(new Error('storage full'));
+  await expect(saveDraftAsV1(draftAllKept, 'p')).rejects.toThrow();
+  expect(await listPlaybooks()).toEqual([]);
 });
 ```
 
