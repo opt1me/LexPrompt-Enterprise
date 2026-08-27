@@ -152,6 +152,7 @@ In `src/lib/db/playbooks.ts`:
 ```ts
 function migrateClause(input: unknown): PlaybookClause {
   const c = (input ?? {}) as Partial<PlaybookClause> & { prompt?: unknown };
+  const standardPosition = migratePosition(c.standardPosition);
   // Both names are read on migration; only the new one is written (spec §5).
   // A pre-D record has `prompt`; anything already migrated has
   // `extractPrompt`. Reading both is what makes this idempotent.
@@ -163,7 +164,14 @@ function migrateClause(input: unknown): PlaybookClause {
     title: typeof c.title === 'string' ? c.title : 'Untitled clause',
     extractPrompt,
     riskCriteria: typeof c.riskCriteria === 'string' ? c.riskCriteria : undefined,
-    standardPosition: migratePosition(c.standardPosition),
+    // CONDITIONAL SPREAD, not a plain assignment. `structuredClone` — how
+    // IndexedDB writes every record — PRESERVES an `undefined`-valued key,
+    // so `standardPosition: migratePosition(...)` would leave a dropped
+    // position's key lingering on the stored clause and the test below
+    // ("drops an empty-text standard position") would fail. This is the
+    // trap CLAUDE.md documents, and the first draft of this plan fell into
+    // it while carrying the very test written to catch it.
+    ...(standardPosition ? { standardPosition } : {}),
   };
 }
 
@@ -246,7 +254,7 @@ src/features/assistant/draftEmail.ts            src/features/templates/TemplateE
 src/features/assistant/suggestRevision.ts       src/features/assistant/RevisionModal.tsx
 ```
 
-Note the three `src/features/assistant/` files. That directory is on the **do-not-touch** list for behaviour — a type rename is not a behaviour change and is required for the build, so rename the type there and change nothing else in those files.
+~~Note the three `src/features/assistant/` files.~~ **Corrected during execution:** no file in `src/features/assistant/` imports or uses the `Clause` *type* — the word appears there only in UI copy, and a `Clause` grep matched that prose. Only `draftEmail.test.ts`'s fixture needed the mechanical rename. The general rule still stands for any file that does reference the type: a rename is not a behaviour change, so rename it and change nothing else.
 
 **Exactly 6 non-test sites read or write the clause's `prompt` field:**
 
