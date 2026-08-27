@@ -1,7 +1,7 @@
 # Redesign sub-project F — Learning from redlines, and changesets
 
 **Date:** 2026-08-27
-**Status:** Spec written; **the first two tasks are spikes and their outcomes may amend this document** (see §3)
+**Status:** Spec written; **both gating spikes are answered (see §3a) and neither narrowed the scope**. A prerequisite fix was split out ahead of this sub-project (§3b).
 **Builds on:** A, B, C, D (standard positions and versioning), E (playbook authoring — F reuses its draft-review gate)
 **Source handoff:** `design_handoff_lexprompt_redesign/` turns 3 and 4, digested to `docs/superpowers/redesign/`
 
@@ -32,6 +32,30 @@ The requirements digest flags three capabilities as **research-needed**, and it 
 **Spike 2 — PDF-pair diffing.** When there are no tracked changes, the fallback is diffing an earlier PDF against a later one. The spike establishes whether a text-level diff over `parsePdf`'s output is good enough to locate *which clause changed* (which is all that is needed — the model reads the clause text, the diff only has to point at it), and what the false-positive rate looks like on reflowed text. The output is a go/no-go plus a confidence label to attach to anything derived this way.
 
 **Both spikes' findings amend this spec before planning continues.** Sections 5 and 6 below are written against the assumption that tracked changes are reachable; if Spike 1 says otherwise, the scope narrows to what Spike 2 supports and this document is revised rather than quietly over-promised.
+
+### 3a. Spike outcomes (2026-08-27) — both closed, both go
+
+Full write-ups: `docs/superpowers/redesign/spike-1-docx-tracked-changes.md` and `spike-2-pdf-pair-diffing.md`.
+
+**Spike 1 — answered: `mammoth` cannot reach tracked changes; read the OOXML.** `mammoth` reads `<w:ins>` straight through so insertions arrive as ordinary unmarked text, and has `<w:del>` and `<w:commentRangeStart/End>` in its `ignoreElements` map — the list dropped *without* even the "unrecognised element was ignored" warning. Verified on a purpose-built `.docx`: deletions gone, insertions indistinguishable, comments absent, `messages: []`. It produces the accepted-changes view and says nothing.
+
+Reading the zip directly is the only route and is **more proportionate than it sounded**: F needs one function over `word/document.xml` plus `word/comments.xml`, not a general OOXML parser. `<w:ins>`/`<w:del>` are stable and carry `w:author`/`w:date` (which §4.2's chain detection and §5's basis list want anyway); deleted text lives in `<w:delText>` rather than `<w:t>`, so insertions and deletions separate trivially; and one pass yields both the original and the final text, which is exactly what §4.7's "the workings" view needs. **Sections 5 and 6 stand unchanged; scope does not narrow.**
+
+**Spike 2 — answered: PDF-pair diffing is viable, with two mandatory preprocessing steps.** Measured against the real extracted text of a 20-page AST.
+- `parsePdf` emits **61 lines for 20 pages** (median 217 chars, max 4,055), so a line-level diff is structurally useless — it would mark a whole page changed for a one-word amendment. **Sentence-level units, never line-level.**
+- **Recall was 1.00 in every scenario tested.** A text diff never misses a changed clause, which is the property that matters: the diff only has to point, and the model reads.
+- Precision depends entirely on normalisation. Collapsing whitespace is the predictable half; **de-hyphenating across line breaks is not** — hyphenation alone drops precision from 1.00 to 0.038. Anyone who normalises whitespace and stops will conclude PDF diffing does not work and will be wrong.
+- In the realistic case precision reads 0.30, but every residual flag was an inserted heading or a deleted sentence — real differences, not artefacts. Nothing identical in both documents was ever flagged.
+
+`RedlineEdit.source: 'tracked' | 'diff'` in §5 already carries the confidence distinction this requires and needs no change. Two additions to the implementation requirements:
+- A flagged unit with **no counterpart at all** (an inserted heading, a removed clause) is reported as a *structural* difference, not an amendment, so the model is never asked to explain a re-typesetting as if it were a negotiation.
+- A second version that is a **scan** has no diffable text. It yields **no positions at all** — never an empty set of changes, which would read as "nothing was negotiated". This is §2's "never guess a position from silence" rule, in its second concrete application.
+
+### 3b. One prerequisite this sub-project acquired, and does not own
+
+Spike 1 found a defect in the **shipped app**, unrelated to anything F builds: `src/lib/documents.ts` parses every `.docx` with `mammoth.extractRawText`, so **a marked-up draft uploaded today is reviewed with every deletion removed and every insertion treated as final, and the reader is never told.** Contract review is precisely where marked-up drafts live, so this is the normal case rather than an edge one, and it is this project's founding failure verbatim — worse than the scanned-PDF case it belongs beside, because a scan yields visibly empty text while this yields fluent, plausible, wrong text.
+
+**Detecting tracked changes at ingest and disclosing them is a prerequisite to F, and is being done ahead of and separately from it** (brief: `.superpowers/sdd/tracked-changes-detection-brief.md`). F assumed the existing DOCX path was neutral about markup; it is not, it actively discards it, and anything F builds on that path would inherit the problem. F's own work begins from a `.docx` reader that already knows markup is present.
 
 ## 4. Scope
 
