@@ -351,13 +351,24 @@ describe('buildTabularCsv', () => {
     }
   });
 
-  // Step 0: `buildTabularCsv` used to key `run.findings` by the raw document
-  // id in `run.documentIds`, same bug as `buildReportRows` — a collection
-  // review keys its findings under the COLLECTION id (`findingsKeyFor`), so
-  // every document row read `undefined` and rendered as though nothing had
-  // ever been reviewed, even though the collection genuinely produced an
-  // answer.
-  it('reads a collection review\'s findings from the COLLECTION key for every document row', () => {
+  // M1 (final review). Two defects, one test each way round:
+  //
+  //  - Step 0's: the CSV keyed `run.findings` by the raw document id, so a
+  //    collection review's cells all read "not yet reviewed" even though the
+  //    collection genuinely produced an answer. Findings live under the
+  //    COLLECTION key (`findingsKeyFor`).
+  //  - M1's: the fix above was applied per document row, so the same single
+  //    synthesised position was emitted once per member document, under that
+  //    member's own name in the Document column. `TabularReview` refuses to
+  //    render exactly that and says why in its own doc comment — "repeat the
+  //    same synthesised answer under every member document's name
+  //    (misleading ... implying a per-document disagreement that was never
+  //    assessed)" — and the CSV must not do what its sibling declares
+  //    unacceptable. THE DUPLICATION WAS THE DEFECT: a reader filtering this
+  //    sheet by document read a synthesis as a per-document finding, saying
+  //    of the deed of variation something only the lease and the deed
+  //    together say. Do not "restore" the per-document rows.
+  describe('a collection review', () => {
     const collectionRun: ReviewRun = {
       id: 'run-coll',
       templateSnapshot: tmpl,
@@ -371,18 +382,46 @@ describe('buildTabularCsv', () => {
       },
       startedAt: 0,
     };
+    const collectionDocs: DocumentFile[] = [doc('lease', 'Lease.pdf'), doc('deed', 'Deed of Variation.pdf')];
 
-    const csv = buildTabularCsv(collectionRun, [
-      { id: 'lease', name: 'Lease.pdf', text: '', file: new File([], 'Lease.pdf'), kind: 'txt' },
-      { id: 'deed', name: 'Deed of Variation.pdf', text: '', file: new File([], 'Deed of Variation.pdf'), kind: 'txt' },
-    ]);
-    const [, , leaseLine, deedLine] = csv.split('\r\n');
+    it('reads its findings from the COLLECTION key rather than each document id', () => {
+      const csv = buildTabularCsv(collectionRun, collectionDocs);
+      expect(csv).toContain('Break on 6 months notice, as amended.');
+      expect(csv).not.toContain('not yet reviewed');
+    });
 
-    // Before the fix: both rows would read "not yet reviewed" for every
-    // clause, even though the collection genuinely produced an answer.
-    expect(leaseLine).toContain('Break on 6 months notice, as amended.');
-    expect(leaseLine).not.toContain('not yet reviewed');
-    expect(deedLine).toContain('Break on 6 months notice, as amended.');
-    expect(deedLine).not.toContain('not yet reviewed');
+    it('emits ONE row, not one per member document', () => {
+      const csv = buildTabularCsv(collectionRun, collectionDocs);
+      const [, , ...body] = csv.split('\r\n');
+      expect(body).toHaveLength(1);
+    });
+
+    it("labels that row with the collection, never with a member document's name", () => {
+      const csv = buildTabularCsv(collectionRun, collectionDocs);
+      const [, , row] = csv.split('\r\n');
+      // The identity of what was reviewed — both members named, as a
+      // collection, so the row cannot be read as one document's answer.
+      expect(row.startsWith('"Collection: Lease.pdf + Deed of Variation.pdf"')).toBe(true);
+    });
+
+    it('names an unresolvable member in words rather than printing its raw id', () => {
+      const csv = buildTabularCsv(collectionRun, [doc('lease', 'Lease.pdf')]);
+      const [, , row] = csv.split('\r\n');
+      expect(row).toContain('Lease.pdf');
+      expect(row).not.toContain('deed"');
+      expect(row).toMatch(/unavailable/i);
+    });
+
+    it('agrees with its own summary line about how many findings there are', () => {
+      const csv = buildTabularCsv(collectionRun, collectionDocs);
+      const [summary, , ...body] = csv.split('\r\n');
+      // The summary counts the collection key once per clause (2). The body
+      // must contain that many clause cells — one row of 2, not two rows of
+      // 2. This is the tell that caught M1: "5 findings" over a 10-cell
+      // table.
+      expect(summary).toContain('2 findings');
+      const cells = body.length * tmpl.clauses.length;
+      expect(cells).toBe(2);
+    });
   });
 });

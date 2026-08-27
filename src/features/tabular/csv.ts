@@ -3,7 +3,7 @@ import {
   describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
 } from '../../lib/findingOutcome';
-import { findingsKeyFor } from '../../lib/reviewTarget';
+import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
 // Characters that Excel/Google Sheets treat as the start of a formula when a
 // cell is opened, regardless of the field being quoted — quoting only
@@ -69,6 +69,24 @@ function cellText(
 }
 
 /**
+ * What the Document column says on a collection's single row: the identity
+ * of the collection, spelled out as its member documents read together.
+ *
+ * Named, never keyed by `collectionId`. A raw internal id in a cell a reader
+ * meets says nothing to them while looking like it should — the same defect
+ * `trailLines` carries a long comment about, and the one `cd89c27` fixed for
+ * a user id. A member whose `DocumentFile` isn't in hand is described in
+ * words for the same reason, rather than falling back to its id: "an
+ * unavailable document" is at least true and readable.
+ */
+function collectionLabel(run: ReviewRun, documents: DocumentFile[]): string {
+  const names = run.documentIds.map(
+    id => documents.find(d => d.id === id)?.name ?? 'an unavailable document',
+  );
+  return names.length > 0 ? `Collection: ${names.join(' + ')}` : 'Collection';
+}
+
+/**
  * Row 0 is a single-field verification summary (Ruling R-B4); row 1 is the
  * header of clause titles; one row per document follows, one column per
  * clause (in template order). A clause that is pending, running, cancelled
@@ -96,21 +114,37 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
   const summary = escapeCsvField(exportSummaryLine(run.findings));
   const header = ['Document', ...clauses.map(c => c.title)].map(escapeCsvField).join(',');
 
-  const rows = run.documentIds.map(docId => {
-    const doc = documents.find(d => d.id === docId);
-    // Same bug `buildReportRows` had (Step 0 of Task 9): a collection
-    // review's findings live under the COLLECTION id, not each document's
-    // own id, so every document row must resolve through `findingsKeyFor`
-    // rather than indexing `run.findings` by `docId` directly.
-    const key = findingsKeyFor(run.target, docId);
-    const fields = [
-      doc?.name ?? docId,
-      ...clauses.map(c => cellText(run.findings[key]?.[c.id], documentNames)),
-    ];
-    return fields.map(escapeCsvField).join(',');
-  });
+  const clauseCells = (key: string) =>
+    clauses.map(c => cellText(run.findings[key]?.[c.id], documentNames));
 
-  return [summary, header, ...rows].join('\r\n');
+  const rows = isCollectionTarget(run.target)
+    // ONE row for a collection, whatever its member count. A collection
+    // review produces one synthesised position per clause however many
+    // documents fed it (`findingsKeyFor`), and this used to emit that one
+    // position once per member document, under that member's own name in
+    // the Document column. `TabularReview` refuses to draw exactly that and
+    // gives its reasons in its own doc comment — repeating one synthesised
+    // answer under every member's name implies "a per-document disagreement
+    // that was never assessed" — and the CSV must not do what its sibling
+    // declares unacceptable. It also made the summary line ("5 findings")
+    // disagree with the body (10 cells), because the summary counts the
+    // collection key once and the body multiplied it by document count.
+    //
+    // A reader's whole reason to filter or sort this sheet by document is
+    // to attribute an answer to a document; a synthesis attributes to none
+    // of them individually, so the row says so.
+    ? [[collectionLabel(run, documents), ...clauseCells(run.target.collectionId)]]
+    : run.documentIds.map(docId => {
+      const doc = documents.find(d => d.id === docId);
+      // Same bug `buildReportRows` had (Step 0 of Task 9): resolve the key
+      // through `findingsKeyFor` rather than indexing `run.findings` by
+      // `docId` directly.
+      return [doc?.name ?? docId, ...clauseCells(findingsKeyFor(run.target, docId))];
+    });
+
+  const body = rows.map(fields => fields.map(escapeCsvField).join(','));
+
+  return [summary, header, ...body].join('\r\n');
 }
 
 /**
