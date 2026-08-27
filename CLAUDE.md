@@ -54,11 +54,25 @@ When you are deciding how something should behave on failure, that list is the p
 
 **Verification and note writes are await-then-apply.** The UI updates its own state only after the store confirms the write, never optimistically — the reviewer must never see a state the store did not actually take.
 
+**A net position is synthesised text no document contains.** It describes what a collection's documents, read in order, say now — not what any one of them literally says — so it is the most dangerous output this app produces, and starts unconfirmed for the same reason a finding starts `unchecked()`. Only a human confirms it, or amends it (a stronger claim than confirming: a person wrote every word).
+
+**Re-running a clause resets its net position, exactly as it resets a verification.** The confirmation described a specific synthesis; once the clause is re-derived, that synthesis no longer exists, so keeping the old confirmation would let an export present text a person never saw as accepted. `resetPosition` mirrors `resetVerification` for the same reason, and both are mutation-tested.
+
+**`findingsKeyFor` is the only place a findings key is derived.** A collection review keys its findings by the *collection* id, not by a document — it produces one position per clause however many documents fed it, and keying by a document would force an arbitrary choice of which one "owns" the answer. Six separate defects in sub-project C came from code that keyed by document id directly instead: an empty findings pane, human writes (a verification, a note) landing under a key nothing read, a silently empty DOCX and CSV export, and a retry that would have re-run the single-document extractor and overwritten a synthesised net position with a one-document answer. If you are reading `run.findings[...]`, go through `findingsKeyFor`.
+
+**`orderedMembers` is the only place collection reading order is decided, and `documentDate` never sorts it.** A date can be missing, wrong, or ambiguous; the order in which amendments take effect is a legal judgement someone recorded when they built the collection, not something to re-derive on every render. `documentDate` is displayed to the reader — it never governs order.
+
+**Collection extraction is a separate function from `extractClause`.** `extractCollectionClause` has its own prompt, its own schema, and its own per-citation document resolution, so the standalone single-document path can't drift by sharing code that later has to special-case a collection.
+
+**Collection membership is read from the collection record, not from `document.role`.** The two are written non-atomically — grouping and ungrouping touch the collection record and the member documents' `role` as separate writes — so `role` can briefly disagree with the record and is treated as a denormalised convenience; `Collection.baseDocumentId`/`variesDocumentIds` is authoritative.
+
+**Extraction takes hydrated `DocumentFile`s, never persisted `DocumentRecord`s.** A `DocumentRecord` carries no page images by design — they're derived data, regenerated on demand, never stored. Reviewing a collection from records would review a scanned amendment as though it said nothing: this project's founding defect, reopened one level up.
+
 ## Sibling drift — the recurring failure
 
 Six separate findings in this project came from two implementations of the same idea drifting apart. Once, `matters.ts` reproduced `playbooks.ts`'s sequence-allocation *without* its transaction scoping, while its docstring claimed to mirror it.
 
-**When you find yourself writing a second copy of something, extract it then.** Not after the third. Existing extractions: `seq.ts` (type-enforced so a wrong-mode store fails to compile), `pageSegments.ts`, `findingOutcome.ts`, `modelContext.ts`, `describeLoadError`, `verification.ts`, `citationRepair.ts`, `citationPage.ts`, `reviewProgress.ts`, `findingMerge.ts`, `uid.ts`, `src/test/mount.tsx`.
+**When you find yourself writing a second copy of something, extract it then.** Not after the third. Existing extractions: `seq.ts` (type-enforced so a wrong-mode store fails to compile), `pageSegments.ts`, `findingOutcome.ts`, `modelContext.ts`, `describeLoadError`, `verification.ts`, `citationRepair.ts`, `citationPage.ts`, `reviewProgress.ts`, `findingMerge.ts`, `uid.ts`, `src/test/mount.tsx`, `reviewTarget.ts`, `netPosition.ts`, `collectionOrder.ts`, `collectionPrompt.ts`, `collectionSuggest.ts`, `db/collections.ts`.
 
 `uid()` is the cautionary case: it was extracted only after the same four lines turned up **seven** byte-identical times across the codebase. That is not a success story for the rule above — it's what it looks like when nobody follows it. Treat "not after the third" as a real number, not a rhetorical one.
 
@@ -80,6 +94,7 @@ Six separate findings in this project came from two implementations of the same 
 - **`retryCell` derives every snapshot from the run it is handed, not from ambient state.** Mutating component state alongside the call does not survive — the changed run has to be passed *into* `retryCell`, or the retry silently reverts it.
 - **`usableText` strips `[Page N]` markers and drops sparse pages** (it's tuned for model readability, not page fidelity). Anything that needs real page numbers — `derivePage`, citation repair — must read `doc.text`, never the readability-filtered text.
 - **jsdom has no `Element.prototype.scrollIntoView`.** Calling it un-stubbed throws `TypeError: ... is not a function` in any component test that scrolls a citation into view. Stubbed once, globally, in `vitest.setup.ts` — call sites are not expected to guard against its absence themselves.
+- **React runs effects in declaration order.** An effect that resets state on mount will silently undo an earlier effect that set it, because the earlier effect's set is applied and then immediately clobbered by the later one in the same commit. Guard a "the run changed" effect on the id actually changing rather than relying on where it sits in the file — the next person to reorder two effects would otherwise break something with no test failing near their change.
 
 ## Verify UI work in a browser
 
