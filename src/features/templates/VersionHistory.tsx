@@ -12,6 +12,11 @@ export interface VersionHistoryProps {
    *  A string rather than the raw error because every other load site in
    *  this app classifies through `describeLoadError` before rendering. */
   error?: string;
+  /** Optional, but its ABSENCE no longer suppresses the error: the branch
+   *  below turns on `error` alone. `error && onRetry` meant a caller that
+   *  had a failure and no retry rendered "Nothing published yet" over a
+   *  playbook with four versions — empty-versus-broken, inverted by the
+   *  guard meant to enforce it. */
   onRetry?: () => void;
   onClose: () => void;
   loading?: boolean;
@@ -37,7 +42,7 @@ export interface VersionHistoryProps {
 export function VersionHistory({ versions, error, onRetry, onClose, loading }: VersionHistoryProps) {
   return (
     <Modal isOpen title="Version history" onClose={onClose} size="lg">
-      {error && onRetry ? (
+      {error ? (
         <LoadErrorPanel message={error} onRetry={onRetry} compact />
       ) : loading ? (
         <p className="text-sm text-gray-500">Loading versions…</p>

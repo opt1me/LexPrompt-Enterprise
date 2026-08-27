@@ -470,6 +470,13 @@ describe('TemplateEditor — standard positions', () => {
   // An empty map renders as no chips at all, which reads as "we asked and
   // there is nothing" — and a defaulted one would read as UNTESTED, which
   // is a claim about the firm's positions rather than about the app.
+  //
+  // The `health` prop is supplied DELIBERATELY, and is the whole test. The
+  // rule being asserted is "instead of the chips, never alongside them",
+  // and a caller that passed no map at all could not render a chip however
+  // broken the guard was — which is why this test proved nothing until the
+  // map went in. A partial scan that errored after building some entries is
+  // also the realistic shape of the failure.
   it('says the review scan failed rather than quietly showing no health at all', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
@@ -478,8 +485,29 @@ describe('TemplateEditor — standard positions', () => {
         draft={undefined}
         onDraftChange={noop}
         {...wiring}
+        health={{ c1: { kind: 'held', supporting: 3, total: 4 } }}
         healthError="Your reviews could not be read, so position health is unknown. Try again."
         onRetryHealth={noop}
+      />,
+    );
+    expect(c.textContent).toMatch(/could not be read/i);
+    expect(c.textContent).not.toMatch(/untested|held|conceded/i);
+  });
+
+  // Same defect as `VersionHistory`'s: `healthError && onRetryHealth` meant
+  // a caller with a failure and no retry rendered the chips as though the
+  // scan had succeeded and found nothing — the empty-versus-broken
+  // confusion, produced by the guard written to prevent it.
+  it('still says the scan failed when the caller offers no retry', () => {
+    const published = version({ clauses: structuredClone(twoClauses) });
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={undefined}
+        onDraftChange={noop}
+        {...wiring}
+        health={{ c1: { kind: 'held', supporting: 3, total: 4 } }}
+        healthError="Your reviews could not be read."
       />,
     );
     expect(c.textContent).toMatch(/could not be read/i);

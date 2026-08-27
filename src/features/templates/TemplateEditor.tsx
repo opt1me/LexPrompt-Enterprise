@@ -303,7 +303,7 @@ export function TemplateEditor({
                fell back to an empty map would render every position as
                having no evidence, which reads as a finding about the
                playbook rather than a failure of the app. */}
-            {healthError && onRetryHealth && (
+            {healthError && (
               <LoadErrorPanel message={healthError} onRetry={onRetryHealth} compact />
             )}
             {working.clauses.map((clause, idx) => {

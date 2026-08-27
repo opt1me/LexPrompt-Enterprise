@@ -64,6 +64,17 @@ describe('VersionHistory', () => {
     expect(onRetry).toHaveBeenCalled();
   });
 
+  // The guard used to be `error && onRetry`, so a caller with a failure and
+  // no retry handler fell through to the empty state and told the reader
+  // "nothing published yet" about a playbook with two published versions.
+  // A dead end that says what went wrong beats a lie that reads as a fact.
+  it('still says the load failed when the caller offers no retry', () => {
+    const el = mount(<VersionHistory versions={[]} error="Versions could not be read." onClose={noop} />);
+    expect(el.textContent).toMatch(/could not be read/i);
+    expect(el.textContent).not.toMatch(/nothing published yet/i);
+    expect(buttonNamed(el, /retry/i)).toBeUndefined();
+  });
+
   it('says plainly when a playbook has no published version yet', () => {
     const out = mount(<VersionHistory versions={[]} onClose={noop} />).textContent!;
     expect(out).toMatch(/nothing published yet/i);
