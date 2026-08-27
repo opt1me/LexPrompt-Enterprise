@@ -1207,7 +1207,22 @@ Three chips, three questions, never merged (spec §11).
 
 **Interfaces:**
 - Consumes: `PositionOutcome`, `StandardPosition`, `Finding`.
-- Produces: `<PositionChip outcome={…} />`, `<PositionComparison position={…} finding={…} />`.
+- Produces:
+
+```ts
+export interface PositionChipProps {
+  /** Absent renders nothing at all — "no position to compare against" is not
+   *  a question, so it gets no chip. */
+  outcome?: PositionOutcome;
+}
+
+export interface PositionComparisonProps {
+  position: StandardPosition;
+  finding: Finding;
+}
+```
+
+`PositionComparison` reads the document's side from `finding.summary` (or `positionText(finding.netPosition)` for a collection finding, exactly as `describeFindingOutcome` does — do not re-derive that precedence here, call it) and the rationale from `finding.positionRationale`.
 
 - [ ] **Step 1: Read `src/components/StateChip.tsx` and `src/components/RiskChip.tsx` first**
 
@@ -1378,8 +1393,52 @@ git show --stat HEAD
 - Modify: `src/features/templates/TemplateEditor.tsx` + test, `src/features/templates/CreateTemplateDialog.tsx`, `generateTemplate.ts`, `buildMegaPrompt.ts`, `MegaPromptModal.tsx`, `src/App.tsx`
 
 **Interfaces:**
-- Consumes: `publishVersion`, `saveDraft`, `positionHealth`, `PlaybookDraft`.
-- Produces: an editor that edits a **draft** and publishes versions.
+- Consumes: `publishVersion`, `saveDraft`, `positionHealth`, `PlaybookDraft`, `PlaybookVersion`, `StandardPosition`.
+- Produces:
+
+```ts
+export interface StandardPositionFieldProps {
+  /** Absent means the clause has no house rule — the field renders empty with
+   *  its "optional — enables deviation flagging" note. */
+  position?: StandardPosition;
+  onChange: (position: StandardPosition | undefined) => void;
+  /** Clearing the text removes the position entirely rather than storing an
+   *  empty one — `migratePosition` drops those on read anyway, and a position
+   *  reading "we ask for: (nothing)" is worse than none. */
+  disabled?: boolean;
+}
+
+export interface PublishDialogProps {
+  /** Shown in the header ("Publish v2") and used for the summary rule: a
+   *  change summary is required for every version after the first. */
+  nextVersion: number;
+  onPublish: (changeSummary: string) => Promise<void>;
+  onCancel: () => void;
+  busy?: boolean;
+}
+
+/** `TemplateEditor`'s props CHANGE in this task. It no longer takes a
+ *  mutable `template`; it takes the published version for reference and the
+ *  draft it actually edits. */
+export interface TemplateEditorProps {
+  /** The current published version, or `undefined` for a playbook that has
+   *  never been published. Read-only here — editing produces a draft. */
+  version?: PlaybookVersion;
+  /** The working copy. Absent means there are no unpublished edits yet; the
+   *  first edit creates one from `version`. */
+  draft?: PlaybookDraft;
+  onSaveDraft: (draft: PlaybookDraft) => void;
+  onPublish: () => void;
+  onExport: () => void;
+  onShowMegaPrompt: () => void;
+  onClose: () => void;
+  /** Per-clause health, keyed by clause id — computed by the caller via
+   *  `positionHealth` (R-D2 keeps that function pure and store-free). */
+  health?: Record<string, PositionHealth>;
+}
+```
+
+The old `TemplateEditorProps` (`template`, `onChange`, `onSave`) is replaced, not extended. Every caller in `App.tsx` moves with it.
 
 - [ ] **Step 1: Remove the mode toggle**
 
@@ -1472,6 +1531,30 @@ git show --stat HEAD
 **Files:**
 - Create: `src/features/templates/VersionHistory.tsx` + test
 - Modify: `src/features/templates/TemplateLibrary.tsx`, `src/features/review/ResultsView.tsx` (header link), `src/App.tsx`
+
+**Interfaces:**
+- Consumes: `listVersions` (Task 2), `PlaybookVersion`, `describeLoadError`/`LoadErrorPanel`.
+- Produces:
+
+```ts
+export interface VersionHistoryProps {
+  /** Newest first, as `listVersions` returns them. */
+  versions: PlaybookVersion[];
+  /** Version id to the names of the matters whose reviews ran against it.
+   *  Built by the caller from `listReviews()` + `Review.playbookVersionId`
+   *  (Task 4). A version absent from this map has not been used yet, which
+   *  the row says in words — a blank cell reads as a rendering failure. */
+  matterNamesByVersion: Record<string, string[]>;
+  /** Set when the load failed. Renders the error branch INSTEAD of the list,
+   *  never an empty list — CLAUDE.md's rule that every IndexedDB-backed
+   *  screen distinguishes "empty" from "broken" and offers a retry. */
+  error?: unknown;
+  onRetry?: () => void;
+  onClose: () => void;
+}
+```
+
+There is deliberately no `onEdit`. A published version is immutable, so offering an edit affordance would promise something the store refuses.
 
 - [ ] **Step 1: Write the failing tests**
 
