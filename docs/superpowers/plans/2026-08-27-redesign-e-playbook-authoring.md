@@ -539,6 +539,15 @@ export interface DraftFormProps {
   error?: string;
   /** Retains everything typed when generation fails (spec S7). */
   initialValues?: DraftFormValues;
+  /** True when `error` was a 401/403. Computed by the CALLER via
+   *  `isAuthError` — the split `ChatPanel`, `ResultsView` and `extractClause`
+   *  already use — so this component never re-derives "was this an auth
+   *  failure" from a message string. */
+  authFailed?: boolean;
+  /** Called instead of rendering the error inline, when `authFailed`. An
+   *  ordinary 502 must NOT reach this, or the user is sent to fix a key
+   *  that is fine. */
+  onAuthError?: () => void;
   onSubmit: (form: DraftFormValues, sources: FewShotSource[]) => void;
   onCancel: () => void;
 }
@@ -648,61 +657,90 @@ export interface ClauseRailProps {
 
 - [ ] **Step 1: Failing tests**
 
+**Harness, checked at plan time.** `src/test/mount.tsx` exports `mount`, `mountOnce`, `buttons`, `buttonNamed`, `textbox`, `click`, `type`, `keyDown`, `keyDownOn`. There is **no** `text()`, `buttonMatching()`, `activeClauseTitle()` or `fieldMatching()` — read `container.textContent`, use `buttonNamed`, and write small local selectors for the rest.
+
+**Use `mountOnce` for any test that mounts twice.** `mount` accumulates trees and only tears them down in its shared `afterEach`, so two live `mount()`s leave two competing `window` listeners — and `keyDown` dispatches globally. CLAUDE.md records this being found the hard way: a keyboard test that looked like it proved movement stops at a list's end was actually being answered by a stale listener from the first mount. The `J`-at-the-end test below is exactly that shape.
+
 ```ts
+import { act } from 'react';
+import { mount, mountOnce, buttonNamed, click, type, keyDown } from '../../test/mount';
+
+const flush = () => act(async () => { await Promise.resolve(); });
+const activeTitle = (c: HTMLElement) =>
+  c.querySelector('[data-active-clause]')?.textContent?.trim() ?? '';
+const fieldFor = (c: HTMLElement, label: RegExp) =>
+  [...c.querySelectorAll('textarea')].find(t => label.test(t.closest('div')?.textContent ?? ''));
+
 it('says UNSAVED DRAFT the whole time', () => {
-  expect(text(mount(<DraftReview draft={twoUnreviewed} … />))).toMatch(/unsaved draft/i);
+  expect(mount(<DraftReview draft={twoUnreviewed} onChange={() => {}} onSave={() => {}} onDiscard={() => {}} />).textContent)
+    .toMatch(/unsaved draft/i);
 });
 
 it('disables save while a clause is unreviewed, and says how many remain', () => {
-  const el = mount(<DraftReview draft={twoUnreviewed} … />);
-  const save = buttonMatching(el, /left to review|save as v1/i);
+  const c = mount(<DraftReview draft={twoUnreviewed} onChange={() => {}} onSave={() => {}} onDiscard={() => {}} />);
+  const save = buttonNamed(c, /left to review|save as v1/i)!;
   expect(save.hasAttribute('disabled')).toBe(true);
   expect(save.textContent).toMatch(/2 clauses left to review/);
 });
 
 it('enables save once every clause is decided', () => {
-  const el = mount(<DraftReview draft={allKept} … />);
-  const save = buttonMatching(el, /save as v1/i);
-  expect(save.hasAttribute('disabled')).toBe(false);
+  const c = mount(<DraftReview draft={allKept} onChange={() => {}} onSave={() => {}} onDiscard={() => {}} />);
+  expect(buttonNamed(c, /save as v1/i)!.hasAttribute('disabled')).toBe(false);
 });
 
 it('shows kept / cut / unreviewed counts in the rail', () => {
-  const out = text(mount(<ClauseRail clauses={mixed} activeId="a" onSelect={() => {}} />));
+  const out = mount(<ClauseRail clauses={mixed} activeId="a" onSelect={() => {}} />).textContent!;
   expect(out).toMatch(/1[^0-9]*kept/i);
   expect(out).toMatch(/1[^0-9]*cut/i);
   expect(out).toMatch(/1[^0-9]*unreviewed/i);
 });
 
 it('J moves to the next UNREVIEWED clause, skipping decided ones', () => {
-  const el = mount(<DraftReview draft={firstKeptSecondCutThirdUnreviewed} … />);
+  const c = mount(<DraftReview draft={firstKeptSecondCutThirdUnreviewed} onChange={() => {}} onSave={() => {}} onDiscard={() => {}} />);
   keyDown({ key: 'j' });
-  expect(activeClauseTitle(el)).toBe('Clause c');
+  expect(activeTitle(c)).toBe('Clause c');
 });
 
 it('J at the last unreviewed clause stays put rather than wrapping', () => {
-  // Wrapping would make a reviewer think they had already seen a clause
-  // they had not. Read CLAUDE.md's note about two live mount()s before
-  // writing a before/after comparison here — use mountOnce.
-  const el = mountOnce(<DraftReview draft={onlyLastUnreviewed} … />);
+  // mountOnce, deliberately: keyDown dispatches on window, and a second live
+  // tree from a plain mount would answer with a stale listener. Wrapping
+  // would make a reviewer believe they had already seen a clause they had not.
+  const { container, unmount } = mountOnce(
+    <DraftReview draft={onlyLastUnreviewed} onChange={() => {}} onSave={() => {}} onDiscard={() => {}} />);
   keyDown({ key: 'j' });
   keyDown({ key: 'j' });
-  expect(activeClauseTitle(el)).toBe('Clause c');
+  expect(activeTitle(container)).toBe('Clause c');
+  unmount();
 });
 
 it('shows an AI-proposed position as not yet reviewed', () => {
-  const el = mount(<DraftReview draft={withAiPosition} … />);
-  expect(text(el)).toMatch(/drafted by AI/i);
-  expect(text(el)).not.toMatch(/reviewed by you/i);
+  expect(mount(<DraftReview draft={withAiPosition} onChange={() => {}} onSave={() => {}} onDiscard={() => {}} />).textContent)
+    .toMatch(/drafted by AI/i);
 });
 
-it('marks a clause edited when a field was changed before keeping', () => {
+it('marks a clause edited when a field was changed before keeping', async () => {
   const onChange = vi.fn();
-  const el = mount(<DraftReview draft={oneUnreviewed} onChange={onChange} … />);
-  type(fieldMatching(el, /extraction/i), 'A different instruction.');
-  click(buttonMatching(el, /keep/i));
+  const c = mount(<DraftReview draft={oneUnreviewed} onChange={onChange} onSave={() => {}} onDiscard={() => {}} />);
+  type(fieldFor(c, /extraction/i)!, 'A different instruction.');
+  click(buttonNamed(c, /^\s*keep\s*$/i));
+  await flush();
   expect(onChange.mock.calls.at(-1)![0].clauses[0].edited).toBe(true);
 });
+
+it('does NOT mark a clause edited when it was only kept unchanged', async () => {
+  // R-E5: `edited` is a claim about how much a person engaged, and it feeds
+  // the provenance on every saved position. The positive test above passes
+  // just as well if `edited` were hardcoded true; this is the one that makes
+  // the rule real.
+  const onChange = vi.fn();
+  const c = mount(<DraftReview draft={oneUnreviewed} onChange={onChange} onSave={() => {}} onDiscard={() => {}} />);
+  click(buttonNamed(c, /^\s*keep\s*$/i));
+  await flush();
+  expect(onChange.mock.calls.at(-1)![0].clauses[0].edited).toBe(false);
+});
 ```
+
+`activeTitle` reads a `data-active-clause` attribute — add one to the active clause's heading if the component does not already expose the active clause in a queryable way. A test that cannot name what it asserts on is a test that will drift.
 
 - [ ] **Steps 2–4: Run / implement / run.**
 
