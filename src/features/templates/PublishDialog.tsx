@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { UploadCloud } from 'lucide-react';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
@@ -26,17 +26,36 @@ export interface PublishDialogProps {
 export function PublishDialog({ nextVersion, onPublish, onCancel, busy }: PublishDialogProps) {
   const [changeSummary, setChangeSummary] = useState('');
   const [refusal, setRefusal] = useState<string | null>(null);
+  /** A REF, not state: two clicks in one tick both read the same render's
+   *  state, so only something written synchronously can refuse the second.
+   *  `busy` cannot do this job — it is a prop, so it is still false for the
+   *  whole tick in which both clicks land, and `Button` already refuses a
+   *  click once it has arrived. A guard on `busy` here therefore covered
+   *  nothing, which is why it is gone. */
+  const inFlight = useRef(false);
 
   const summaryRequired = nextVersion > 1;
 
   const handlePublish = async () => {
-    if (busy) return;
+    if (inFlight.current) return;
     if (summaryRequired && changeSummary.trim() === '') {
       setRefusal(`Say what changed in v${nextVersion} before publishing it — a version history that does not is a list of dates.`);
       return;
     }
     setRefusal(null);
-    await onPublish(changeSummary.trim());
+    inFlight.current = true;
+    try {
+      await onPublish(changeSummary.trim());
+    } catch (e) {
+      // Today's caller reports its own failures and never rejects, so this
+      // is latent — but a caller that does reject would otherwise leave an
+      // unhandled rejection and a dialog stuck in flight with no way to try
+      // again. Stated in the dialog rather than swallowed: a publish that
+      // failed silently is indistinguishable from one that worked.
+      setRefusal(e instanceof Error ? e.message : 'The publish failed. Try again.');
+    } finally {
+      inFlight.current = false;
+    }
   };
 
   return (
@@ -64,7 +83,12 @@ export function PublishDialog({ nextVersion, onPublish, onCancel, busy }: Publis
         </label>
         <AutoResizeTextarea
           value={changeSummary}
-          onChange={(e) => setChangeSummary(e.target.value)}
+          onChange={(e) => {
+            setChangeSummary(e.target.value);
+            // The refusal describes an empty box. Leaving it up beside a
+            // filled one reports a problem the author has already fixed.
+            if (refusal) setRefusal(null);
+          }}
           aria-label="Change summary"
           placeholder="e.g. Tightened the break-notice position and added a rent-review clause."
           className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 min-h-[80px]"
