@@ -499,4 +499,23 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
       expect(texts).toContain('Second note added mid-retry.');
     });
   });
+
+  // Minor 4 (final fix round): `handleRetryCell` used to pass
+  // `createdByUserIdRef.current` with no fallback, unlike its two siblings
+  // (`handleVerify`/`handleAddNote`, which fall back to `profile.id`). A
+  // stored review that predates the `createdByUserId` field (or was
+  // corrupted) would leave `createdByUserIdRef.current` falsy, and a retry's
+  // save would then write an author-less review.
+  it('Minor 4: falls back to the profile id when createdByUserId was never set, matching handleVerify/handleAddNote', async () => {
+    getReviewMock.mockResolvedValue({ ...makeReview(), createdByUserId: undefined });
+    getProfileMock.mockResolvedValue({ id: 'u9', name: 'Someone Else', initials: 'SE' });
+
+    await openReview();
+    retryC1(container);
+    await flush();
+
+    expect(saveReviewMock).toHaveBeenCalled();
+    const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
+    expect(persisted.createdByUserId).toBe('u9');
+  });
 });

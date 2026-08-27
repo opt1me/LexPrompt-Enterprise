@@ -8,6 +8,7 @@ import { Button } from '../../components/Button';
 import { EvidenceList } from './EvidenceList';
 import { VerificationControls } from './VerificationControls';
 import { NotesPanel } from './NotesPanel';
+import { isVerifiable } from '../../lib/findingOutcome';
 
 export interface FindingCardProps {
   clause: Clause;
@@ -225,7 +226,13 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
           />
         )}
 
-        {finding && onVerify && (
+        {/* `isVerifiable` (shared with `ResultsView`'s keyboard-shortcut gate
+           — see its own doc comment in `findingOutcome.ts`) is the same
+           `status === 'done'` rule this branch already reaches only by
+           elimination; naming it here, rather than leaving it implicit in
+           the switch above, is what keeps the two sites from being able to
+           drift apart the way they did before (Critical 2). */}
+        {isVerifiable(finding) && onVerify && (
           <VerificationControls
             verification={finding.verification}
             busy={verifyBusy}

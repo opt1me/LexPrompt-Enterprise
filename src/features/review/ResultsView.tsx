@@ -5,6 +5,7 @@ import { isAuthError } from '../../lib/openrouter';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
+import { isVerifiable } from '../../lib/findingOutcome';
 import { FindingCard } from './FindingCard';
 import { DocumentViewer } from './DocumentViewer';
 import { RejectReasonModal } from './RejectReasonModal';
@@ -200,7 +201,17 @@ export function ResultsView({
       // verified" — the thing this sub-project exists to prevent. Silently
       // ignoring the keypress here (rather than surfacing a notice) matches
       // how the mouse path behaves: there is simply no control to press.
-      if (findings[clause.id]?.status !== 'done') return;
+      // `isVerifiable` (shared with `FindingCard`'s own gate on the same
+      // rule — see its doc comment) replaces what used to be this file's own
+      // inline `status !== 'done'` copy of the check.
+      if (!isVerifiable(findings[clause.id])) return;
+      // Minor 5: the mouse path (`VerificationControls`) disables itself
+      // while `verifyBusyKey` names the finding currently being written —
+      // the keyboard path had no equivalent, so a fast repeat keypress
+      // (`v` then `v`, or `v` then `f`) could start a second write before
+      // the first was known to have persisted, with the second racing the
+      // first's read-modify-write on `latestRunRef`. Gate it the same way.
+      if (verifyBusyKey === findingKey(activeDocId, clause.id)) return;
       if (change.state === 'rejected') { setRejectClauseId(clause.id); return; }
       void onVerify(activeDocId, clause.id, change);
     },

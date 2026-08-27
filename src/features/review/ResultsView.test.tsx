@@ -81,35 +81,44 @@ function renderResultsView(onVerify: ReturnType<typeof vi.fn>, run: ReviewRun = 
 }
 
 describe('ResultsView — keyboard verify loop gated on status (Critical 2)', () => {
-  it('does not call onVerify for v/f/r on a pending finding', () => {
+  it('does not call onVerify for v/f/r on a pending finding, and r does not open the reject dialog', () => {
     const onVerify = vi.fn();
-    renderResultsView(onVerify);
+    const container = renderResultsView(onVerify);
     // Focus starts at index 0 (c1, pending).
     keyDown({ key: 'v' });
     keyDown({ key: 'f' });
     keyDown({ key: 'r' });
     expect(onVerify).not.toHaveBeenCalled();
+    // `r` never calls `onVerify` directly on ANY finding — it opens
+    // `RejectReasonModal` instead, which then calls `onVerify` once a reason
+    // is submitted. So an ungated ("2 calls, not 3") ok-and-onVerify-was-
+    // never-called assertion alone cannot tell "the gate blocked `r`" apart
+    // from "`r` opened the dialog and nobody submitted it yet" — this is the
+    // assertion that actually distinguishes them.
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it('does not call onVerify for v/f/r on an error finding', () => {
+  it('does not call onVerify for v/f/r on an error finding, and r does not open the reject dialog', () => {
     const onVerify = vi.fn();
-    renderResultsView(onVerify);
+    const container = renderResultsView(onVerify);
     keyDown({ key: 'j' }); // move to c2, error
     keyDown({ key: 'v' });
     keyDown({ key: 'f' });
     keyDown({ key: 'r' });
     expect(onVerify).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it('does not call onVerify for v/f/r on a cancelled finding', () => {
+  it('does not call onVerify for v/f/r on a cancelled finding, and r does not open the reject dialog', () => {
     const onVerify = vi.fn();
-    renderResultsView(onVerify);
+    const container = renderResultsView(onVerify);
     keyDown({ key: 'j' }); // c2
     keyDown({ key: 'j' }); // c3, cancelled
     keyDown({ key: 'v' });
     keyDown({ key: 'f' });
     keyDown({ key: 'r' });
     expect(onVerify).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it('still calls onVerify on a done finding, proving the gate is on status and not a blanket no-op', () => {
@@ -172,8 +181,61 @@ describe('ResultsView — keyboard reject dialog prefills an existing reason (Mi
     keyDown({ key: 'j' }); keyDown({ key: 'j' }); keyDown({ key: 'j' }); // c4
     keyDown({ key: 'r' });
 
-    const textarea = container.querySelector('textarea') as HTMLTextAreaElement | null;
+    // Scoped to the dialog, not a bare `textarea`: `FindingCard`'s own
+    // `NotesPanel` renders a `textarea` too (for adding a note), and an
+    // unscoped query can match that one and pass even if the reject dialog
+    // never opened at all.
+    const textarea = container.querySelector('[role="dialog"] textarea') as HTMLTextAreaElement | null;
     expect(textarea).not.toBeNull();
     expect(textarea!.value).toBe('');
+  });
+});
+
+// Minor 5: the mouse path (`VerificationControls`) disables its own buttons
+// while `verifyBusy` is true for that finding; the keyboard path had no
+// equivalent, so a fast `v`-then-`v` (or `v`-then-`f`) could fire a second
+// write before the first write's `onVerify` promise even settled.
+describe('ResultsView — keyboard verify loop gated on verifyBusyKey (Minor 5)', () => {
+  it('does not call onVerify for the finding currently being written', () => {
+    const onVerify = vi.fn().mockResolvedValue(undefined);
+    const container = mount(
+      <ResultsView
+        run={makeRun()}
+        documents={documents}
+        settings={settings}
+        onRetryCell={() => {}}
+        onVerify={onVerify}
+        verifyBusyKey="d1::c4"
+      />,
+    );
+    keyDown({ key: 'j' }); // c2
+    keyDown({ key: 'j' }); // c3
+    keyDown({ key: 'j' }); // c4, done — but busy
+    keyDown({ key: 'v' });
+    expect(onVerify).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('still calls onVerify for a different finding while another is busy', () => {
+    const onVerify = vi.fn().mockResolvedValue(undefined);
+    const run = makeRun();
+    // c4 is the only `done` finding in `makeRun()` by default — mark c1
+    // done too so a second, non-busy verifiable finding exists to prove the
+    // gate is scoped to the busy key, not a blanket freeze.
+    run.findings.d1.c1 = makeFinding('c1', 'done');
+    const container = mount(
+      <ResultsView
+        run={run}
+        documents={documents}
+        settings={settings}
+        onRetryCell={() => {}}
+        onVerify={onVerify}
+        verifyBusyKey="d1::c4"
+      />,
+    );
+    // Focus starts at c1 (index 0), which is done and not the busy key.
+    keyDown({ key: 'v' });
+    expect(onVerify).toHaveBeenCalledWith('d1', 'c1', { state: 'verified' });
+    expect(container.textContent).toContain('Governing Law');
   });
 });

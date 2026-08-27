@@ -1104,8 +1104,14 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           // retry's save must not reattribute the review to whoever
           // triggered the retry either. `getProfile()` was only ever
           // fetched here to feed this one field, so it's dropped rather
-          // than kept around unused.
-          await saveReview(reviewFromRun(toPersist, matterId, settings.modelId, createdByUserIdRef.current));
+          // than kept around unused. The fallback for the case
+          // `createdByUserIdRef` was never set — which the other two writers
+          // guard with `|| profile.id` from their own fresh `getProfile()`
+          // call — uses the component's render-time `profile` state instead
+          // of awaiting a new one purely for this: this call has no other
+          // need of a fresh profile, and the three sites are meant to agree
+          // on having SOME fallback, not on how each happens to obtain it.
+          await saveReview(reviewFromRun(toPersist, matterId, settings.modelId, createdByUserIdRef.current || profile?.id || ''));
           loadMatterReviews(matterId);
         } catch (e) {
           notify(e instanceof Error ? e.message : 'Could not save this retry.', 'error');

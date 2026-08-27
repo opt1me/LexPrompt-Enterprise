@@ -17,6 +17,31 @@ import type { Finding, Review } from '../types';
  * extracted, the DOCX export got this right and the CSV export did not
  * (Critical 3), and the CSV is the one that opens directly in Excel.
  */
+/**
+ * Whether a finding is in a state a human can attach a verification to.
+ * Today that's exactly `status === 'done'`: a `Verification` is a judgement
+ * about specific model output, and `pending`/`running`/`error`/`cancelled`
+ * findings have no settled output yet for a judgement to be about.
+ *
+ * Extracted because this rule used to be hardcoded twice — `FindingCard`'s
+ * render decided whether to show `VerificationControls` from its own
+ * `status === 'done'` fallthrough, and `ResultsView`'s keyboard-shortcut
+ * handler repeated the same comparison inline to decide whether `v`/`f`/`r`
+ * were allowed to act. Two copies of one rule is this project's most
+ * frequently repeated defect (CLAUDE.md's "sibling drift"), and it is
+ * exactly what let the keyboard path's own gate go missing in the first
+ * place (Critical 2): the mouse path's rule changed shape, in one file,
+ * without the keyboard path's copy of it changing to match. Both now call
+ * this.
+ *
+ * A type guard (not a plain `boolean`) so a caller that only needs the
+ * narrowing — `FindingCard` already has `finding` in scope and wants
+ * TypeScript to know it's defined past this check — gets it for free.
+ */
+export function isVerifiable(finding: Finding | undefined): finding is Finding {
+  return finding?.status === 'done';
+}
+
 export function describeFindingOutcome(finding: Finding | undefined): string {
   if (finding?.status === 'done') return finding.summary ?? '';
 

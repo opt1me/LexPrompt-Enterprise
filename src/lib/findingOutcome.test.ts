@@ -1,6 +1,26 @@
 import { describe, it, expect } from 'vitest';
-import { describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines } from './findingOutcome';
+import { describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines, isVerifiable } from './findingOutcome';
 import type { Finding, Verification } from '../types';
+
+// Minor 3 (final fix round): `isVerifiable` replaces what used to be two
+// independent `status === 'done'` checks — `FindingCard`'s render and
+// `ResultsView`'s keyboard-shortcut gate. This file tests the rule directly;
+// `FindingCard.test.tsx` and `ResultsView.test.tsx` cover each consumer.
+describe('isVerifiable', () => {
+  it('is true for a done finding', () => {
+    const finding: Finding = { clauseId: 'c1', status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [] };
+    expect(isVerifiable(finding)).toBe(true);
+  });
+
+  it.each(['pending', 'running', 'error', 'cancelled'] as const)('is false for a %s finding', (status) => {
+    const finding: Finding = { clauseId: 'c1', status, citations: [], verification: { state: 'unchecked' }, notes: [] };
+    expect(isVerifiable(finding)).toBe(false);
+  });
+
+  it('is false for a missing finding', () => {
+    expect(isVerifiable(undefined)).toBe(false);
+  });
+});
 
 describe('describeFindingOutcome', () => {
   it('returns the summary for a done finding', () => {
