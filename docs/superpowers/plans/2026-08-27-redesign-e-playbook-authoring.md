@@ -825,6 +825,42 @@ Order per R-E3: `savePlaybook(identity)` → `publishVersion(...)` → `savePlay
 - Create: `useUnsavedDraftGuard.ts` + test
 - Modify: `src/App.tsx`
 
+### Part 0 — Wire the route, because nothing else does (added during execution)
+
+**This part exists because I scoped it out of two consecutive tasks and it fell through the gap.** Task 3's dispatch said "do not wire the route in — that's Task 5/6's job"; Task 5's dispatch scoped it to the save mechanism's correctness. So `RouteChooser`, `SourcePicker`, `DraftForm`, `DraftReview` and `saveDraftAsV1` all exist, are all tested, and **nothing in the running app can reach any of them.**
+
+That is the same defect as sub-project D's DoD #7 — a correct mechanism with no path to it — and it is the eleventh instance in this redesign. Task 6 owns it because Task 6 already touches `App.tsx` for the navigation guard, so the route and its lifecycle live together.
+
+Wire, end to end:
+
+- `TemplateLibrary`'s `Create Template` opens the **route chooser**, not the old create dialog.
+- `Draft with AI` → the draft form → `generateDraft` → the draft review screen → `Save as v1` → `saveDraftAsV1` → the published playbook opens in D's editor.
+- `Build by hand` → D's editor on a new empty playbook. **If nothing implements this route, say so and leave the card disabled with an honest label** rather than wiring a button that goes nowhere — R-E6's rule applied to the route it names.
+- The **learn-from-redlines** card stays visible and disabled ("not built yet") until sub-project F lands.
+
+```ts
+it('reaches the draft review screen from the library, and back to a published playbook', async () => {
+  // The end-to-end path that no test covered before this part: every screen
+  // in this sub-project was verified in isolation and none of them was
+  // reachable.
+  const c = mount(<App />);
+  await flush();
+  click(buttonNamed(c, /create template/i));
+  click(buttonNamed(c, /draft with ai/i));
+  // …fill the form, submit, review the clauses, save…
+  expect(c.textContent).toMatch(/unsaved draft/i);
+});
+
+it('Build by hand either opens the editor or says it is not built', () => {
+  // A visible card that silently no-ops is worse than one that says why —
+  // the same rule R-E6 applies to the redlines card.
+  const c = mount(<App />);
+  const byHand = buttonNamed(c, /build by hand/i)!;
+  expect(byHand.hasAttribute('disabled') || /not built/i.test(byHand.textContent ?? '')
+    || opensTheEditor(byHand)).toBe(true);
+});
+```
+
 - [ ] **Step 1: Failing tests**
 
 ```ts
