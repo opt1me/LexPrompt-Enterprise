@@ -18,6 +18,7 @@ const discardDraftMock = vi.fn();
 const listMattersMock = vi.fn();
 const listReviewsMock = vi.fn();
 const migrateIfNeededMock = vi.fn();
+const listVersionsMock = vi.fn();
 
 // App's startup migration gate (Task 14) runs before any of the mocks below
 // are ever reached. Mocking it — rather than letting the real
@@ -66,6 +67,12 @@ vi.mock('./lib/db/reviews', () => ({
   listReviews: (...args: unknown[]) => listReviewsMock(...args),
 }));
 
+// Task 9A: the editor's cross-matter position-health scan reads every
+// version of the open playbook.
+vi.mock('./lib/db/playbookVersions', () => ({
+  listVersions: (...args: unknown[]) => listVersionsMock(...args),
+}));
+
 import App from './App';
 import { UnconvertedPlaybookError } from './lib/db/playbookMigration';
 
@@ -78,6 +85,7 @@ getPlaybookContentMock.mockImplementation(
 );
 // Task 9A. Defaults so a describe that never touches drafts is unaffected;
 // the suites below reset and re-arm them.
+listVersionsMock.mockResolvedValue([]);
 saveDraftMock.mockImplementation(async (playbook: unknown) => playbook);
 discardDraftMock.mockResolvedValue(undefined);
 
@@ -832,5 +840,143 @@ describe('App — editing a draft and publishing a version (Task 9)', () => {
     expect(container.textContent).toMatch(/unpublished changes/i);
     expect((container.querySelector('[aria-label="Change summary"]') as HTMLTextAreaElement).value)
       .toBe('Renamed it.');
+  });
+});
+
+// Task 9A Part 2 / M1. `positionHealth` was built in Task 8 and given a prop
+// in Task 9, and nothing wired it — DoD #7 would have shipped unmet with
+// nothing in the plan to catch it. The scan is cross-matter because
+// `listReviews` is matter-scoped and a playbook's positions are tested
+// wherever it has been run.
+describe('App — position health in the playbook editor (Task 9A)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const originalPath = window.location.pathname;
+
+  const clauseWithPosition = {
+    id: 'c1',
+    title: 'Break notice',
+    extractPrompt: 'What notice is required?',
+    standardPosition: { text: 'Six months.', origin: 'authored', reviewedByHuman: true },
+  };
+
+  const v1 = {
+    id: 'v1',
+    playbookId: 'pb1',
+    version: 1,
+    name: 'Lease Review',
+    contractType: 'Lease',
+    systemPrompt: 'You are an expert.',
+    formatPrompt: 'Quote verbatim.',
+    clauses: [clauseWithPosition],
+    changeSummary: '',
+    publishedAt: 1000,
+    publishedByUserId: 'u1',
+    schemaVersion: 6,
+  };
+
+  const identity = {
+    id: 'pb1', name: 'Lease Review', createdAt: 1, updatedAt: 2,
+    currentVersionId: 'v1', schemaVersion: 6,
+  };
+
+  const verifiedMeets = {
+    clauseId: 'c1',
+    status: 'done',
+    summary: 'Six months, as asked.',
+    citations: [],
+    verification: { state: 'verified', byUserId: 'u1', at: 1500 },
+    notes: [],
+    positionOutcome: 'meets',
+  };
+
+  function reviewAgainst(versionId: string | undefined, matterId: string) {
+    const r: Record<string, unknown> = {
+      id: `r-${matterId}`,
+      matterId,
+      playbookSnapshot: v1,
+      documentIds: ['d1'],
+      target: { kind: 'documents', documentIds: ['d1'] },
+      findings: { d1: { c1: verifiedMeets } },
+      modelId: 'm',
+      startedAt: 1,
+      createdByUserId: 'u1',
+    };
+    if (versionId !== undefined) r.playbookVersionId = versionId;
+    return r;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    listPlaybooksMock.mockReset().mockResolvedValue([identity]);
+    getPlaybookMock.mockReset().mockResolvedValue(identity);
+    getPlaybookContentMock.mockImplementation(async () => v1);
+    listVersionsMock.mockReset().mockResolvedValue([v1]);
+    listMattersMock.mockReset().mockResolvedValue([
+      { id: 'm1', name: 'Acme HQ lease', ownerId: 'u1', createdAt: 1, updatedAt: 1 },
+      { id: 'm2', name: 'Beta sublease', ownerId: 'u1', createdAt: 1, updatedAt: 1 },
+    ]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.replaceState(null, '', originalPath);
+    getPlaybookContentMock.mockImplementation(
+      async (id: string) => (await listPlaybooksMock()).find((p: { id: string }) => p.id === id) ?? null,
+    );
+  });
+
+  async function openEditor() {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+    await flush();
+  }
+
+  it('shows HELD n of m from verified findings across every matter', async () => {
+    listReviewsMock.mockImplementation(async (matterId: string) => [reviewAgainst('v1', matterId)]);
+    await openEditor();
+    // One verified `meets` in each of the two matters. A matter-scoped scan
+    // would have found one.
+    expect(container.textContent).toContain('HELD 2 of 2');
+  });
+
+  it('renders an error state, never an empty map, when the review scan fails', async () => {
+    listReviewsMock.mockRejectedValue(new Error('disk'));
+    await openEditor();
+    expect(container.textContent).toMatch(/could not be read/i);
+    expect(container.textContent).toMatch(/retry/i);
+    // "No verified findings yet" is a fact about the position; "we could not
+    // read your reviews" is a fact about the app, and they must not look
+    // alike. UNTESTED here would be the app inventing the first.
+    expect(container.textContent).not.toMatch(/untested/i);
+  });
+
+  it('recovers when the retry succeeds', async () => {
+    // A persistent rejection, not `…Once`: the matters list's own
+    // review-count load runs on mount and would eat a one-shot queue.
+    listReviewsMock.mockRejectedValue(new Error('disk'));
+    await openEditor();
+    expect(container.textContent).toMatch(/could not be read/i);
+
+    listReviewsMock.mockImplementation(async (matterId: string) => [reviewAgainst('v1', matterId)]);
+    const retry = Array.from(container.querySelectorAll('button'))
+      .find(b => /^retry$/i.test((b.textContent || '').trim())) as HTMLButtonElement;
+    act(() => { retry.click(); });
+    await flush();
+    await flush();
+    expect(container.textContent).not.toMatch(/could not be read/i);
+    expect(container.textContent).toContain('HELD 2 of 2');
+  });
+
+  it('says UNTESTED when the scan succeeded and found no verified findings', async () => {
+    await openEditor();
+    expect(container.textContent).toContain('UNTESTED');
   });
 });

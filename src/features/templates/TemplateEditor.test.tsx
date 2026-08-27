@@ -437,6 +437,43 @@ describe('TemplateEditor — standard positions', () => {
     expect(c.textContent).toContain('HELD 3 of 4');
   });
 
+  // CLAUDE.md: a load failure renders an error state, never an empty map.
+  // An empty map renders as no chips at all, which reads as "we asked and
+  // there is nothing" — and a defaulted one would read as UNTESTED, which
+  // is a claim about the firm's positions rather than about the app.
+  it('says the review scan failed rather than quietly showing no health at all', () => {
+    const published = version({ clauses: structuredClone(twoClauses) });
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={undefined}
+        onDraftChange={noop}
+        {...wiring}
+        healthError="Your reviews could not be read, so position health is unknown. Try again."
+        onRetryHealth={noop}
+      />,
+    );
+    expect(c.textContent).toMatch(/could not be read/i);
+    expect(c.textContent).not.toMatch(/untested|held|conceded/i);
+  });
+
+  it('offers a retry for the failed review scan', () => {
+    const onRetryHealth = vi.fn();
+    const published = version({ clauses: structuredClone(twoClauses) });
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={undefined}
+        onDraftChange={noop}
+        {...wiring}
+        healthError="Your reviews could not be read."
+        onRetryHealth={onRetryHealth}
+      />,
+    );
+    click(buttonNamed(c, /retry/i));
+    expect(onRetryHealth).toHaveBeenCalled();
+  });
+
   it('claims nothing about health the caller has not supplied', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(

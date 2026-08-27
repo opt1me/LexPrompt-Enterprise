@@ -23,6 +23,8 @@ import {
 import { getProfile } from './lib/db/profile';
 import { migrateIfNeeded, type MigrationPhase } from './lib/db/migrate';
 import { describeLoadError } from './lib/loadError';
+import { listVersions } from './lib/db/playbookVersions';
+import { buildPositionHealthMap } from './lib/positionHealthMap';
 import {
   listCollections, getCollection, saveCollection, deleteCollection, newCollection,
 } from './lib/db/collections';
@@ -698,6 +700,39 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [playbookNotFound, setPlaybookNotFound] = useState(false);
   const [playbookLoading, setPlaybookLoading] = useState(false);
 
+  // DoD #7. What a standard position has actually been tested against, read
+  // from VERIFIED findings only. The raw inputs are held here and the map is
+  // derived at render (`positionHealthMap`, below) so that editing a
+  // position re-answers the question without another store read.
+  //
+  // The scan is CROSS-MATTER: `listReviews` is matter-scoped and a
+  // playbook's positions are tested wherever it has been run. It therefore
+  // gets its own error state — a failure must never resolve to an empty
+  // list of reviews, which renders as `UNTESTED` and is a claim about the
+  // firm's positions rather than about the app.
+  const [healthVersions, setHealthVersions] = useState<PlaybookVersion[]>([]);
+  const [healthReviews, setHealthReviews] = useState<Review[]>([]);
+  const [healthLoaded, setHealthLoaded] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
+
+  const loadPositionHealth = (playbookId: string) => {
+    setHealthError(null);
+    setHealthLoaded(false);
+    return Promise.all([listVersions(playbookId), listMatters()])
+      .then(async ([versions, allMatters]) => {
+        const perMatter = await Promise.all(allMatters.map(m => listReviews(m.id)));
+        setHealthVersions(versions);
+        setHealthReviews(perMatter.flat());
+        setHealthLoaded(true);
+      })
+      .catch((e) => {
+        setHealthError(describeLoadError(
+          e,
+          'Your reviews could not be read, so position health is unknown. Try again.',
+        ));
+      });
+  };
+
   const loadPlaybookForEdit = (id: string) => {
     setPlaybookLoadError(null);
     setPlaybookNotFound(false);
@@ -730,6 +765,22 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       })
       .finally(() => setPlaybookLoading(false));
   };
+
+  /** Per-clause position health for the editor, or `undefined` when the
+   *  scan has not answered yet. `undefined` renders as NOTHING — an unasked
+   *  question and a question answered "no evidence" are different facts, and
+   *  a defaulted `UNTESTED` would state the second having only established
+   *  the first. A FAILED scan is `healthError`, which the editor renders
+   *  instead of the chips. Derived from the working copy's clauses, so a
+   *  position edited on screen is judged on the words the author can see. */
+  const positionHealthMap = useMemo(
+    () => (healthLoaded && editorContent
+      ? buildPositionHealthMap({
+          clauses: editorContent.clauses, versions: healthVersions, reviews: healthReviews,
+        })
+      : undefined),
+    [healthLoaded, editorContent, healthVersions, healthReviews],
+  );
 
   const playbookRouteId = route.name === 'playbook' ? route.playbookId : null;
   useEffect(() => {
@@ -771,6 +822,22 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setActiveVersion(null);
     setActiveDraft(null);
     setSavedTemplateSnapshot(null);
+  }, [playbookRouteId]);
+
+  // One effect with both branches, keyed on the same value as the two above
+  // — the editor is the only screen that asks this question, so entering
+  // the route asks it and leaving forgets the answer. Splitting it in two
+  // would reopen the effect-ordering hazard CLAUDE.md names.
+  useEffect(() => {
+    if (!playbookRouteId) {
+      setHealthLoaded(false);
+      setHealthError(null);
+      setHealthVersions([]);
+      setHealthReviews([]);
+      return;
+    }
+    loadPositionHealth(playbookRouteId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playbookRouteId]);
 
   // Keeps `view` in step with the URL for the routes an existing screen
@@ -2351,6 +2418,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onExport={() => handleExportTemplate(editorContent)}
               onShowMegaPrompt={() => setMegaPromptOpen(true)}
               onClose={() => { if (confirmDiscardIfDirty()) navigate({ name: 'playbooks' }); }}
+              health={positionHealthMap}
+              healthError={healthError ?? undefined}
+              onRetryHealth={() => { if (playbookRouteId) loadPositionHealth(playbookRouteId); }}
             />
           ) : (
             <div className="p-8 text-gray-500">No template selected.</div>

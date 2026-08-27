@@ -8,6 +8,7 @@ import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
 import { draftFromVersion, newPlaybookDraft } from '../../lib/db/playbooks';
 import { positionHealthLabel, type PositionHealth } from '../../lib/positionHealth';
 import { StandardPositionField } from './StandardPositionField';
+import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { uid } from '../../lib/uid';
 
 export interface TemplateEditorProps {
@@ -43,6 +44,14 @@ export interface TemplateEditorProps {
    *  nothing at all rather than as `UNTESTED`: an unasked question and a
    *  question answered "no evidence" are different facts. */
   health?: Record<string, PositionHealth>;
+  /** Set when the cross-matter review scan that feeds `health` FAILED.
+   *  Rendered instead of the chips, never alongside an empty map: an empty
+   *  scan renders as `UNTESTED`, which is a claim about the firm's
+   *  positions, and "we could not read your reviews" is a fact about the
+   *  app. CLAUDE.md's rule that every IndexedDB-backed screen distinguishes
+   *  "empty" from "broken" applies to a section of a screen too. */
+  healthError?: string;
+  onRetryHealth?: () => void;
 }
 
 /**
@@ -83,7 +92,7 @@ export function hasUnpublishedContent(version?: PlaybookVersion, draft?: Playboo
 
 export function TemplateEditor({
   version, draft, onDraftChange, onPersistDraft, unsavedChanges = false, savingDraft = false,
-  onPublish, onExport, onShowMegaPrompt, onClose, health,
+  onPublish, onExport, onShowMegaPrompt, onClose, health, healthError, onRetryHealth,
 }: TemplateEditorProps) {
   // Memoised: without it this re-CLONES the published version on every
   // render for as long as there is no draft, and the editor's copy drifts
@@ -274,6 +283,13 @@ export function TemplateEditor({
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+            {/* Instead of the chips, never beside them. A failed scan that
+               fell back to an empty map would render every position as
+               having no evidence, which reads as a finding about the
+               playbook rather than a failure of the app. */}
+            {healthError && onRetryHealth && (
+              <LoadErrorPanel message={healthError} onRetry={onRetryHealth} compact />
+            )}
             {working.clauses.map((clause, idx) => {
               const clauseHealth = health?.[clause.id];
               return (
@@ -350,7 +366,12 @@ export function TemplateEditor({
                         position={clause.standardPosition}
                         onChange={(position) => setPosition(idx, position)}
                       />
-                      {clauseHealth && (
+                      {/* Nothing at all when the caller supplied no map,
+                         and nothing when the scan failed — the panel above
+                         says why. A defaulted `UNTESTED` here would be the
+                         app inventing an answer to a question it could not
+                         ask. */}
+                      {clauseHealth && !healthError && (
                         <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500">
                           {positionHealthLabel(clauseHealth)}
                         </p>
