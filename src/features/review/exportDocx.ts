@@ -415,10 +415,16 @@ export async function exportDocx(
   docId: string,
   docName: string,
   /** documentId → display name, so a derivation trail names the document
-   *  that varied a clause rather than printing its internal id. Optional so
-   *  the existing tests and any caller without the map still compile;
-   *  `trailLines` falls back to the id when a name is genuinely missing. */
-  documentNames: Record<string, string> = {},
+   *  that varied a clause rather than printing its internal id.
+   *
+   *  REQUIRED, deliberately. It was optional so early callers could compile,
+   *  but since `collectionExportLabel` began deriving a collection's name
+   *  from this map, omitting it no longer degrades to "an id instead of a
+   *  name" — it produces a report headed "Collection: an unavailable
+   *  document + …", which is a statement about the documents rather than a
+   *  missing nicety. A default that quietly changes what a report CLAIMS is
+   *  not a convenience. */
+  documentNames: Record<string, string>,
 ): Promise<void> {
   const rows = buildReportRows(run, docId, documentNames);
   // A collection is not one of its members. `docName` is whichever document

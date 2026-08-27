@@ -263,7 +263,7 @@ describe('exportDocx — header summary is scoped to the exported document (Impo
     });
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     try {
-      await exportDocx(run, docId, docName);
+      await exportDocx(run, docId, docName, { [docId]: docName });
       expect(capturedBlob).toBeDefined();
       const buf = await blobToArrayBuffer(capturedBlob!);
       const zip = await JSZip.loadAsync(buf);
@@ -348,7 +348,7 @@ describe('buildReportRows / exportDocx — a collection review (Step 0)', () => 
     });
     const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
     try {
-      await exportDocx(run, 'lease', 'Lease.pdf');
+      await exportDocx(run, 'lease', 'Lease.pdf', { lease: 'Lease.pdf', deed: 'Deed of Variation.pdf' });
       expect(capturedBlob).toBeDefined();
       const buf = await blobToArrayBuffer(capturedBlob!);
       const zip = await JSZip.loadAsync(buf);
@@ -366,7 +366,7 @@ describe('buildReportRows / exportDocx — a collection review (Step 0)', () => 
   // document a lawyer could send without ever noticing it says nothing.
   it('refuses to export a document with no findings at all, rather than producing an empty report', async () => {
     const run = collectionRun({}); // No key for 'coll-1' at all.
-    await expect(exportDocx(run, 'lease', 'Lease.pdf')).rejects.toThrow(/no findings/i);
+    await expect(exportDocx(run, 'lease', 'Lease.pdf', { lease: 'Lease.pdf' })).rejects.toThrow(/no findings/i);
   });
 });
 
