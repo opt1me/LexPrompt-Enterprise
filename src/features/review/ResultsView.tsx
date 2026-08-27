@@ -13,6 +13,7 @@ import { DocumentViewer } from './DocumentViewer';
 import { RejectReasonModal } from './RejectReasonModal';
 import { useVerifyKeys } from './useVerifyKeys';
 import { exportDocx } from './exportDocx';
+import { downloadTabularCsv } from '../tabular/csv';
 import { draftEmail } from '../assistant/draftEmail';
 import { suggestRevision } from '../assistant/suggestRevision';
 import { RevisionModal, type RevisionData } from '../assistant/RevisionModal';
@@ -418,6 +419,19 @@ export function ResultsView({
                   className="p-2 bg-violet-600 rounded hover:bg-violet-500 transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {exportLoading ? <Loader className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                </button>
+                {/* Beside the DOCX export, deliberately. The tabular grid was
+                    the only place that offered a CSV, and it refuses to render
+                    for a collection review — so a collection could not be
+                    exported to CSV at all, though C's spec requires it (§3.8,
+                    DoD §10.7). Keeping both exporters in one place is also the
+                    reachability half of the rule that stops them drifting. */}
+                <button
+                  onClick={() => downloadTabularCsv(run, documents)}
+                  title="Export CSV"
+                  className="p-2 bg-white/5 rounded hover:bg-white/10 transition-colors text-white"
+                >
+                  <Table className="w-4 h-4" />
                 </button>
               </div>
             </div>

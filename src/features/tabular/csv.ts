@@ -112,3 +112,32 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
 
   return [summary, header, ...rows].join('\r\n');
 }
+
+/**
+ * Builds the CSV and hands it to the browser as a download.
+ *
+ * Extracted the moment there was a second caller, per this project's rule
+ * about doing it then rather than after the third. Two copies of "build a
+ * blob, mint an object URL, click a synthetic anchor, revoke" is a
+ * `revokeObjectURL` that goes missing in one of them.
+ *
+ * There are two callers because there have to be. The tabular grid is the
+ * natural home for a CSV, but the grid deliberately does not render at all
+ * for a collection review (`CollectionNotComparable` — a collection has one
+ * position per clause, so there is nothing to compare across rows), and it
+ * took the only export control with it. C's spec requires a collection's
+ * unconfirmed net position and its derivation to reach the CSV (§3.8, DoD
+ * §10.7), so the findings view offers it too, beside the DOCX export — which
+ * is also where the two exporters belong relative to each other, given they
+ * have silently disagreed once before.
+ */
+export function downloadTabularCsv(run: ReviewRun, documents: DocumentFile[]): void {
+  const csv = buildTabularCsv(run, documents);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${run.templateSnapshot.name || 'tabular-review'}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}

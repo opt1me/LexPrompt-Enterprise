@@ -8,7 +8,7 @@ import { verificationCounts } from '../../lib/findingOutcome';
 import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';
 import { CellDetail } from './CellDetail';
-import { buildTabularCsv } from './csv';
+import { downloadTabularCsv } from './csv';
 
 export interface TabularReviewProps {
   run: ReviewRun;
@@ -76,16 +76,7 @@ export function TabularReview({
 
   const docName = (docId: string) => documents.find(d => d.id === docId)?.name ?? docId;
 
-  const handleExport = () => {
-    const csv = buildTabularCsv(run, documents);
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${run.templateSnapshot.name || 'tabular-review'}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+  const handleExport = () => downloadTabularCsv(run, documents);
 
   const selectedDoc = selected ? documents.find(d => d.id === selected.docId) ?? null : null;
   const selectedClause = selected ? clauses.find(c => c.id === selected.clauseId) ?? null : null;

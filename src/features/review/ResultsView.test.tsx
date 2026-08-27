@@ -380,6 +380,51 @@ describe('ResultsView — a citation opens its own document, not the active one'
   // here passes against broken code, which is worse than no test at all.
 });
 
+// C's spec requires CSV export to label an unconfirmed net position and carry
+// its derivation (§3.8, §9's `export` row, DoD §10.7). `buildTabularCsv` does
+// both, and is well tested — but the ONLY control that called it lived in the
+// tabular grid's header, and the grid deliberately refuses to render at all
+// for a collection target (`CollectionNotComparable`), taking its header and
+// that button with it. So a collection review could not be exported to CSV by
+// any route, and the fix Task 9 made to `buildTabularCsv` for exactly this
+// case was unreachable.
+//
+// Eighth instance of this sub-project's signature shape: a correct mechanism
+// with no path to it. Found by driving the app, not by a test — every CSV
+// test calls `buildTabularCsv` directly.
+describe('ResultsView — CSV export is reachable for every review, collections included', () => {
+  /** The export controls are icon-only buttons labelled by `title`, so that
+   *  is what a user (and a screen reader) actually reads. */
+  const labelled = (container: HTMLElement, re: RegExp) =>
+    Array.from(container.querySelectorAll('button'))
+      .find(b => re.test(b.getAttribute('title') || '') || re.test(b.textContent || ''));
+
+  it('offers a CSV export on a collection review, which the grid cannot', () => {
+    const run: ReviewRun = {
+      id: 'r1',
+      templateSnapshot: makeTemplate(),
+      documentIds: ['d1', 'd2'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] },
+      findings: { 'coll-1': { c1: makeFinding('c1', 'done') } },
+      startedAt: 1,
+    };
+    const container = mount(
+      <ResultsView run={run} documents={documents} settings={settings} onRetryCell={() => {}} />,
+    );
+    expect(labelled(container, /csv/i)).toBeTruthy();
+  });
+
+  it('offers it on a standalone review too, beside the DOCX export', () => {
+    const container = mount(
+      <ResultsView run={makeRun()} documents={documents} settings={settings} onRetryCell={() => {}} />,
+    );
+    expect(labelled(container, /csv/i)).toBeTruthy();
+    // The two exporters have drifted before; they are reachable from the same
+    // place so a reader cannot get one without knowing the other exists.
+    expect(labelled(container, /docx/i)).toBeTruthy();
+  });
+});
+
 describe('ResultsView — the comparison grid\'s "Open in review" handoff', () => {
   it('lands the keyboard cursor on the clause the reader clicked, not clause 1', () => {
     // The grid is a triage surface: its whole value is that you scan a
