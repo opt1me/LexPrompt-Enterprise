@@ -3615,7 +3615,7 @@ export function useVerifyKeys({ enabled, count, index, onIndexChange, onVerify }
 In `ResultsView`:
 
 - `const [focusIndex, setFocusIndex] = useState(0);`
-- Reset it to `0` in the effect that already runs on `activeDocId` change.
+- **Reset it to `0` in two places — checked against the file.** There is no effect keyed on `activeDocId`; the existing `useEffect` is keyed on `run.id` (it re-points a stale `activeDocId` when a fresh run replaces this one), and the document switch happens in `handleSwitchDoc`. Add `setFocusIndex(0)` to **both**: `handleSwitchDoc`, beside its existing `setHighlights([])`, and the `run.id` effect. Missing the first leaves the keyboard cursor pointing at clause 12 of a document the user just switched away from.
 - Call the hook, enabled only on the findings tab with a handler that routes `rejected` to the card's dialog rather than persisting directly:
 
 ```tsx
