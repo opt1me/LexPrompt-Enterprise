@@ -215,16 +215,53 @@ export async function publishAndPoint(
   }
 }
 
-/** Stores unpublished edits against the playbook's identity record.
+/**
+ * Stores unpublished edits against the playbook's identity record.
  *
- *  Loud rather than quiet on a missing playbook: silently creating one
- *  would hide a deleted playbook behind a draft nothing can publish. */
-export async function saveDraft(playbookId: string, draft: PlaybookDraft): Promise<void> {
+ * Takes the identity as a VALUE rather than an id, exactly as
+ * `publishAndPoint` does and for the same reason: a playbook created in
+ * this session has no store record yet, so Save draft is its FIRST write.
+ * The id-only form this replaces rejected precisely that case — the most
+ * valuable draft in the app, the one that has just cost a ~30s paid AI
+ * generation — with "that playbook no longer exists". Its guard was aimed
+ * at a playbook deleted elsewhere, but the objection it recorded ("a draft
+ * nothing can publish") no longer holds: `publishAndPoint` takes the
+ * identity as a value too, so a recreated record publishes normally.
+ *
+ * Written only on explicit intent, never per keystroke (R-D16) — the
+ * editor's Save draft control and the Keep branch of its leave prompt are
+ * the only callers.
+ */
+export async function saveDraft(playbook: Playbook, draft: PlaybookDraft): Promise<Playbook> {
+  return savePlaybook({ ...playbook, draft });
+}
+
+/**
+ * Clears a playbook's stored draft — the counterpart `saveDraft` did not
+ * have while nothing wrote one.
+ *
+ * Without it, "discard" could only forget the edits IN MEMORY: the rejected
+ * draft stayed durable and `loadPlaybookForEdit` prefers a stored draft
+ * over the published version, so the next open would resurrect exactly the
+ * edits the user had just rejected. That is the defect Task 3's M2 fixed
+ * one layer up, reopened by making drafts persistent (R-D16).
+ *
+ * The key is DELETED, not set to `undefined`, for the same reason
+ * `publishAndPoint` deletes it: `structuredClone` — how IndexedDB writes
+ * every record — preserves an `undefined`-valued key, and
+ * `'draft' in playbook` is how "has unpublished changes" gets asked.
+ *
+ * Resolves rather than throwing when there is no such playbook, or no
+ * draft on it: this runs as the user LEAVES the editor, and there is
+ * nothing they could do about the news. A genuine storage failure still
+ * rejects, through `savePlaybook`.
+ */
+export async function discardDraft(playbookId: string): Promise<void> {
   const playbook = await getPlaybook(playbookId);
-  if (!playbook) {
-    throw new Error('That playbook no longer exists, so the draft could not be saved.');
-  }
-  await savePlaybook({ ...playbook, draft });
+  if (!playbook || !('draft' in playbook)) return;
+  const cleared: Playbook = { ...playbook };
+  delete cleared.draft;
+  await savePlaybook(cleared);
 }
 
 /**

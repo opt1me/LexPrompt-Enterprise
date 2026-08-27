@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   listPlaybooks, getPlaybook, savePlaybook, deletePlaybook,
-  newPlaybook, newPlaybookDraft, draftFromVersion, getPlaybookContent, saveDraft,
+  newPlaybook, newPlaybookDraft, draftFromVersion, getPlaybookContent, saveDraft, discardDraft,
   exportPlaybook, importPlaybook, publishAndPoint,
 } from './playbooks';
 import { publishVersion, listVersions } from './playbookVersions';
@@ -246,7 +246,7 @@ describe('content and drafts', () => {
     const { playbook } = await published('Lease', {
       clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }],
     });
-    await saveDraft(playbook.id, { ...newPlaybookDraft('Lease'), changeSummary: 'wip' });
+    await saveDraft(playbook, { ...newPlaybookDraft('Lease'), changeSummary: 'wip' });
     expect((await getPlaybookContent(playbook.id))!.version).toBe(1);
   });
 
@@ -271,15 +271,22 @@ describe('content and drafts', () => {
 
   it('a draft is stored against the identity and read back', async () => {
     const { playbook } = await published('Lease');
-    await saveDraft(playbook.id, { ...newPlaybookDraft('Lease'), changeSummary: 'added a clause' });
+    await saveDraft(playbook, { ...newPlaybookDraft('Lease'), changeSummary: 'added a clause' });
     expect((await getPlaybook(playbook.id))!.draft!.changeSummary).toBe('added a clause');
     // A draft never changes what the published version says.
     expect((await getPlaybookContent(playbook.id))!.changeSummary).toBe('');
   });
 
-  it('saveDraft fails loudly for a playbook that no longer exists', async () => {
-    await expect(saveDraft('gone', newPlaybookDraft('X'))).rejects.toThrow(/no longer exists/i);
-  });
+  // DELETED (Task 9A): "saveDraft fails loudly for a playbook that no longer
+  // exists". `saveDraft` now takes the identity record as a value, the way
+  // `publishAndPoint` does, because a playbook created in this session has
+  // no store record yet and Save draft is its first write — so there is no
+  // longer a "no such playbook" case for it to be loud about. The guard's
+  // stated worry ("a draft nothing can publish") does not survive that
+  // change either: `publishAndPoint` also takes the identity as a value, so
+  // a record written back by Save draft publishes normally. The replacement
+  // behaviour is asserted by "saves the draft of a playbook that has never
+  // been written to the store", below.
 
   it('draftFromVersion does not carry the previous version\'s change summary', async () => {
     const { version } = await published('Lease');
@@ -341,7 +348,7 @@ describe('publishAndPoint', () => {
   it('consumes the draft: publishing clears it from the identity record', async () => {
     const identity = newPlaybook('Drafted');
     const { playbook } = await publishAndPoint(identity, newPlaybookDraft('Drafted'), 'u1');
-    await saveDraft(playbook.id, { ...newPlaybookDraft('Drafted'), changeSummary: 'wip' });
+    await saveDraft(playbook, { ...newPlaybookDraft('Drafted'), changeSummary: 'wip' });
     expect((await getPlaybook(playbook.id))!.draft).toBeTruthy();
 
     const withDraft = (await getPlaybook(playbook.id))!;
@@ -354,6 +361,58 @@ describe('publishAndPoint', () => {
     // Absent, not present-and-undefined: structuredClone preserves the key,
     // and `'draft' in playbook` is how "has unpublished changes" is asked.
     expect('draft' in after).toBe(false);
+  });
+});
+
+// Task 9A / R-D16. Before this, `saveDraft` had no caller anywhere in the
+// app and `Playbook.draft` could never be set: the library's "Unpublished
+// changes" badge, `loadPlaybookForEdit`'s draft preference and
+// `publishAndPoint`'s draft consumption were all mechanisms with no writer.
+describe('drafts are persisted on explicit intent, and discardable', () => {
+  // A playbook created in this session has no store record yet — Save draft
+  // is its FIRST write, exactly as Publish used to be. Taking the identity
+  // as a value (as `publishAndPoint` does) is what makes that work; an
+  // id-only form would reject the most valuable draft in the app, the one
+  // that just cost a ~30s paid AI generation.
+  it('saves the draft of a playbook that has never been written to the store', async () => {
+    const identity = newPlaybook('Brand new');
+    await saveDraft(identity, { ...newPlaybookDraft('Brand new'), name: 'Half typed' });
+    expect((await getPlaybook(identity.id))!.draft?.name).toBe('Half typed');
+  });
+
+  // Otherwise "discard" leaves the rejected edits durable and the next open
+  // resurrects them — the defect Task 3's M2 fixed in memory, one layer down.
+  it('discarding clears the STORED draft, not just the in-memory one', async () => {
+    const { playbook } = await published('Lease');
+    await saveDraft(playbook, { ...newPlaybookDraft('Lease'), name: 'Rejected' });
+    await discardDraft(playbook.id);
+    expect((await getPlaybook(playbook.id))!.draft).toBeUndefined();
+
+    // Asserted on the RAW STORED RECORD, not on `getPlaybook`'s output.
+    // `migratePlaybookRecord` omits an `undefined` draft on the way out, so
+    // reading through it cannot tell `delete` from `= undefined` — checked
+    // by mutation, and the read-path assertion above stayed green under it.
+    // The stored record is what another tab, a future migration and every
+    // raw-record guard actually see, and `structuredClone` (how IndexedDB
+    // writes every record) PRESERVES an `undefined`-valued key.
+    const db = await getDb();
+    const raw = (await db.get(STORES.playbooks, playbook.id))!;
+    expect('draft' in raw).toBe(false);
+  });
+
+  it('leaves the published version alone when a draft is discarded', async () => {
+    const { playbook, version } = await published('Lease', {
+      clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'p' }],
+    });
+    await saveDraft(playbook, { ...draftFromVersion(version), clauses: [] });
+    await discardDraft(playbook.id);
+    expect((await getPlaybookContent(playbook.id))!.clauses.map(c => c.id)).toEqual(['c1']);
+  });
+
+  it('discarding a draft that is not there is a no-op, not a failure', async () => {
+    const { playbook } = await published('Lease');
+    await expect(discardDraft(playbook.id)).resolves.toBeUndefined();
+    await expect(discardDraft('no-such-playbook')).resolves.toBeUndefined();
   });
 });
 

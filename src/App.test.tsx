@@ -13,6 +13,8 @@ const listPlaybooksMock = vi.fn();
 const getPlaybookMock = vi.fn();
 const getPlaybookContentMock = vi.fn();
 const publishAndPointMock = vi.fn();
+const saveDraftMock = vi.fn();
+const discardDraftMock = vi.fn();
 const listMattersMock = vi.fn();
 const listReviewsMock = vi.fn();
 const migrateIfNeededMock = vi.fn();
@@ -44,6 +46,8 @@ vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   getPlaybookContent: (...args: unknown[]) => getPlaybookContentMock(...args),
   savePlaybook: vi.fn(),
   publishAndPoint: (...args: unknown[]) => publishAndPointMock(...args),
+  saveDraft: (...args: unknown[]) => saveDraftMock(...args),
+  discardDraft: (...args: unknown[]) => discardDraftMock(...args),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),
   exportPlaybook: vi.fn(),
@@ -72,6 +76,10 @@ import { UnconvertedPlaybookError } from './lib/db/playbookMigration';
 getPlaybookContentMock.mockImplementation(
   async (id: string) => (await listPlaybooksMock()).find((p: { id: string }) => p.id === id) ?? null,
 );
+// Task 9A. Defaults so a describe that never touches drafts is unaffected;
+// the suites below reset and re-arm them.
+saveDraftMock.mockImplementation(async (playbook: unknown) => playbook);
+discardDraftMock.mockResolvedValue(undefined);
 
 async function flush() {
   // App now runs a startup migration gate ahead of everything else (Task
@@ -452,6 +460,8 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     listReviewsMock.mockReset().mockResolvedValue([]);
     listPlaybooksMock.mockReset().mockResolvedValue([playbook]);
     getPlaybookMock.mockReset().mockResolvedValue(playbook);
+    saveDraftMock.mockReset().mockImplementation(async (playbook: unknown) => playbook);
+    discardDraftMock.mockReset().mockResolvedValue(undefined);
     confirmSpy = vi.spyOn(window, 'confirm');
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -465,7 +475,10 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     confirmSpy.mockRestore();
   });
 
-  it('blocks Back and restores the URL when the editor is dirty and confirm() is declined', async () => {
+  // R-D16: the prompt is now three-way. The FIRST confirm offers to keep the
+  // changes; declining it offers to discard them; declining that too is
+  // Cancel, and Cancel is what must veto the navigation.
+  it('blocks Back and restores the URL when the editor is dirty and both prompts are declined', async () => {
     window.history.replaceState(null, '', '/playbooks/pb1');
     confirmSpy.mockReturnValue(false);
     act(() => { root.render(<App />); });
@@ -477,7 +490,11 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     simulateBrowserBack('/playbooks');
     await flush();
 
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
+    // Nothing was written either way — Cancel means the edits stay exactly
+    // where they are, in memory and nowhere else.
+    expect(saveDraftMock).not.toHaveBeenCalled();
+    expect(discardDraftMock).not.toHaveBeenCalled();
     // Vetoed: the address bar must be restored to the editor's own URL...
     expect(window.location.pathname).toBe('/playbooks/pb1');
     // ...and the unsaved edit must still be showing, not discarded.
@@ -485,9 +502,9 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     expect(stillThere?.value).toBe('NDA Review EDITED');
   });
 
-  it('allows Back and discards the unsaved edit when the editor is dirty and confirm() is accepted', async () => {
+  it('allows Back and discards the unsaved edit when Discard is chosen', async () => {
     window.history.replaceState(null, '', '/playbooks/pb1');
-    confirmSpy.mockReturnValue(true);
+    confirmSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
     act(() => { root.render(<App />); });
     await flush();
 
@@ -497,7 +514,7 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     simulateBrowserBack('/playbooks');
     await flush();
 
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
     expect(window.location.pathname).toBe('/playbooks');
     // Navigated away from the editor entirely — the edited input is gone,
     // not merely reverted in place.
@@ -518,7 +535,7 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
   // the user explicitly rejected.
   it('reopening a playbook after a confirmed discard shows the stored content, not the discarded edits', async () => {
     window.history.replaceState(null, '', '/playbooks/pb1');
-    confirmSpy.mockReturnValue(true);
+    confirmSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
     act(() => { root.render(<App />); });
     await flush();
 
@@ -530,7 +547,7 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
       .find(b => /^close$/i.test(b.textContent || '')) as HTMLButtonElement;
     act(() => { closeButton.click(); });
     await flush();
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy).toHaveBeenCalledTimes(2);
     expect(window.location.pathname).toBe('/playbooks');
 
     const card = Array.from(container.querySelectorAll('h3'))
@@ -547,7 +564,7 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
   // the Close control — a different code path into "left the editor".
   it('reopening after a confirmed discard via browser Back also shows the stored content', async () => {
     window.history.replaceState(null, '', '/playbooks/pb1');
-    confirmSpy.mockReturnValue(true);
+    confirmSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
     act(() => { root.render(<App />); });
     await flush();
 
@@ -563,6 +580,97 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     await flush();
 
     expect((container.querySelector('input') as HTMLInputElement).value).toBe('NDA Review');
+  });
+
+  // Task 9A / M2 / R-D16. Until this, `App.tsx` wired the editor's draft
+  // callback to `setActiveDraft` and nothing else — so `saveDraft`,
+  // `Playbook.draft`, `loadPlaybookForEdit`'s draft preference,
+  // `publishAndPoint`'s draft consumption and the library's "Unpublished
+  // changes" badge were five shipped mechanisms with no writer between them.
+  it('the Save draft control stores the working copy, and leaves the editor clean', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+
+    setInputValue(container.querySelector('input') as HTMLInputElement, 'NDA Review EDITED');
+    await flush();
+
+    const save = Array.from(container.querySelectorAll('button'))
+      .find(b => /save draft/i.test(b.textContent || '')) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+    act(() => { save.click(); });
+    await flush();
+
+    expect(saveDraftMock).toHaveBeenCalledTimes(1);
+    const [identity, draft] = saveDraftMock.mock.calls[0]!;
+    expect((identity as { id: string }).id).toBe('pb1');
+    expect((draft as { name: string }).name).toBe('NDA Review EDITED');
+    // Saving a draft is not publishing: no version is minted.
+    expect(publishAndPointMock).not.toHaveBeenCalled();
+
+    // ...and the editor is clean afterwards, so leaving asks nothing.
+    simulateBrowserBack('/playbooks');
+    await flush();
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/playbooks');
+  });
+
+  it('keeping the unpublished changes on the way out stores them as a draft', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    // The FIRST confirm is "Keep your unpublished changes?".
+    confirmSpy.mockReturnValue(true);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    setInputValue(container.querySelector('input') as HTMLInputElement, 'NDA Review EDITED');
+    simulateBrowserBack('/playbooks');
+    await flush();
+
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe('/playbooks');
+    expect(saveDraftMock).toHaveBeenCalledTimes(1);
+    expect((saveDraftMock.mock.calls[0]![1] as { name: string }).name).toBe('NDA Review EDITED');
+    expect(discardDraftMock).not.toHaveBeenCalled();
+  });
+
+  // R-D16. Discard has to clear the STORED draft as well as the in-memory
+  // one. Otherwise the rejected edits stay durable and
+  // `loadPlaybookForEdit` prefers a stored draft over the published version
+  // — so the next open would resurrect exactly what was just rejected,
+  // which is the defect Task 3's M2 fixed one layer up.
+  it('discarding clears the STORED draft, not just the in-memory one', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    confirmSpy.mockReturnValueOnce(false).mockReturnValueOnce(true);
+    act(() => { root.render(<App />); });
+    await flush();
+
+    setInputValue(container.querySelector('input') as HTMLInputElement, 'NDA Review EDITED');
+    simulateBrowserBack('/playbooks');
+    await flush();
+
+    expect(discardDraftMock).toHaveBeenCalledWith('pb1');
+    expect(saveDraftMock).not.toHaveBeenCalled();
+  });
+
+  // The other half of the same rule: once a draft IS stored, opening the
+  // playbook must show it rather than the published version underneath.
+  it('reopening a playbook with a stored draft shows the draft, not the published version', async () => {
+    getPlaybookMock.mockResolvedValue({
+      ...playbook,
+      draft: {
+        name: 'Work in progress',
+        contractType: 'NDA',
+        systemPrompt: 'You are an expert.',
+        formatPrompt: 'Quote verbatim.',
+        clauses: [],
+        changeSummary: '',
+      },
+    });
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect((container.querySelector('input') as HTMLInputElement).value).toBe('Work in progress');
   });
 
   it('never prompts on Back when the editor has no unsaved changes', async () => {

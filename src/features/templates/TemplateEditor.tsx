@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Cpu, FileOutput, ShieldAlert, Plus, ChevronUp, ChevronDown, X, UploadCloud, Download, Copy,
-  Settings, GripVertical,
+  Settings, GripVertical, Save,
 } from 'lucide-react';
 import type { PlaybookClause, PlaybookDraft, PlaybookVersion, StandardPosition } from '../../types';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
@@ -17,7 +17,22 @@ export interface TemplateEditorProps {
   /** The working copy. Absent means there are no unpublished edits yet; the
    *  first edit creates one from `version`. */
   draft?: PlaybookDraft;
-  onSaveDraft: (draft: PlaybookDraft) => void;
+  /** Called with the new working copy on EVERY edit. In-memory only — the
+   *  editor never persists per keystroke (R-D16), which is why this is
+   *  `onDraftChange` and the persisting one below is not. */
+  onDraftChange: (draft: PlaybookDraft) => void;
+  /** Persists the working copy as `Playbook.draft`. REQUIRED, not optional:
+   *  an optional callback is how five draft mechanisms — `saveDraft`,
+   *  `Playbook.draft`, the load-time draft preference, publish-consumes-
+   *  draft, and the library's "Unpublished changes" badge — came to ship
+   *  with no writer at all. */
+  onPersistDraft: () => void;
+  /** True when the working copy differs from what is STORED (a different
+   *  question from `hasUnpublishedContent`, which compares against the
+   *  published version). Disables Save draft when false. */
+  unsavedChanges?: boolean;
+  /** A save is in flight. */
+  savingDraft?: boolean;
   onPublish: () => void;
   onExport: () => void;
   onShowMegaPrompt: () => void;
@@ -67,7 +82,8 @@ export function hasUnpublishedContent(version?: PlaybookVersion, draft?: Playboo
 }
 
 export function TemplateEditor({
-  version, draft, onSaveDraft, onPublish, onExport, onShowMegaPrompt, onClose, health,
+  version, draft, onDraftChange, onPersistDraft, unsavedChanges = false, savingDraft = false,
+  onPublish, onExport, onShowMegaPrompt, onClose, health,
 }: TemplateEditorProps) {
   // Memoised: without it this re-CLONES the published version on every
   // render for as long as there is no draft, and the editor's copy drifts
@@ -85,7 +101,7 @@ export function TemplateEditor({
    * `TemplateEditor.test.tsx`.
    */
   const updateDraft = (patch: Partial<PlaybookDraft>) => {
-    onSaveDraft({ ...working, ...patch });
+    onDraftChange({ ...working, ...patch });
   };
 
   /** The ONE reordering path. Both affordances go through it — the chevrons
@@ -178,6 +194,20 @@ export function TemplateEditor({
         <div className="flex flex-wrap gap-2 md:gap-3 w-full md:w-auto justify-end items-center">
           <button onClick={onShowMegaPrompt} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors border border-blue-500/30 text-xs md:text-sm"><Copy className="h-4 w-4" /> DIY Mode</button>
           <button onClick={onExport} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm"><Download className="h-4 w-4" /> Export</button>
+          {/* R-D16. Drafts are persisted on EXPLICIT INTENT — this control
+             and the Keep branch of the leave prompt — never per keystroke:
+             per-keystroke writes would contradict the in-memory discard
+             semantics Task 3's fix round established. Until this existed,
+             nothing in the app ever wrote a `Playbook.draft`, so the
+             library's "Unpublished changes" badge could not appear. */}
+          <button
+            onClick={onPersistDraft}
+            disabled={!unsavedChanges || savingDraft}
+            title={unsavedChanges ? 'Save these edits as a draft you can come back to.' : 'Nothing unsaved — this is what is stored.'}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Save className="h-4 w-4" /> {savingDraft ? 'Saving…' : 'Save draft'}
+          </button>
           {/* Disabled unless the draft actually SAYS something the published
              version does not: republishing unchanged content produces two
              byte-identical versions minutes apart, which a version history

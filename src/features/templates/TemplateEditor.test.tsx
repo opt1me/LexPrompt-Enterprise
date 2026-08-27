@@ -57,6 +57,7 @@ function editedDraftOf(v: PlaybookVersion): PlaybookDraft {
 
 const noop = () => {};
 const wiring = {
+  onPersistDraft: noop,
   onPublish: noop,
   onExport: noop,
   onShowMegaPrompt: noop,
@@ -65,31 +66,31 @@ const wiring = {
 
 describe('TemplateEditor — a published version is never edited in place', () => {
   it('edits into the draft, never into the published version', async () => {
-    const onSaveDraft = vi.fn();
+    const onDraftChange = vi.fn();
     const publishedV1 = version();
     // A COPY, so "the version was not mutated" is checked against a
     // known-good value rather than against the object the component holds.
     const published: PlaybookVersion = { ...publishedV1 };
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={onSaveDraft} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={onDraftChange} {...wiring} />,
     );
 
     type(nameInput(c), 'Renamed');
     await flush();
 
-    expect(onSaveDraft).toHaveBeenCalled();
-    expect(onSaveDraft.mock.calls.at(-1)![0].name).toBe('Renamed');
+    expect(onDraftChange).toHaveBeenCalled();
+    expect(onDraftChange.mock.calls.at(-1)![0].name).toBe('Renamed');
     // The published version object handed in is untouched — this is the
     // assertion the whole immutability rule rests on.
     expect(published.name).toBe(publishedV1.name);
   });
 
   it('reordering clauses writes into the draft, not the published version', async () => {
-    const onSaveDraft = vi.fn();
+    const onDraftChange = vi.fn();
     const twoClauseV1 = version({ clauses: structuredClone(twoClauses) });
     const published: PlaybookVersion = { ...twoClauseV1 };
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={onSaveDraft} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={onDraftChange} {...wiring} />,
     );
 
     // The chevrons are icon-only; they are found by the accessible name a
@@ -97,7 +98,7 @@ describe('TemplateEditor — a published version is never edited in place', () =
     click(buttonNamed(c, /move .*down|down/i));
     await flush();
 
-    expect(onSaveDraft.mock.calls.at(-1)![0].clauses.map((cl: PlaybookClause) => cl.id))
+    expect(onDraftChange.mock.calls.at(-1)![0].clauses.map((cl: PlaybookClause) => cl.id))
       .toEqual(['c2', 'c1']);
     expect(published.clauses.map(cl => cl.id)).toEqual(['c1', 'c2']);
   });
@@ -106,7 +107,7 @@ describe('TemplateEditor — a published version is never edited in place', () =
   // the same reorder path, never a replacement for the chevrons, which are
   // the only one a keyboard can reach.
   it('dragging a clause reorders through the same path, into the draft', async () => {
-    const onSaveDraft = vi.fn();
+    const onDraftChange = vi.fn();
     const threeClauseV1 = version({
       clauses: [
         ...structuredClone(twoClauses),
@@ -115,7 +116,7 @@ describe('TemplateEditor — a published version is never edited in place', () =
     });
     const published: PlaybookVersion = { ...threeClauseV1 };
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={onSaveDraft} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={onDraftChange} {...wiring} />,
     );
 
     const handles = [...c.querySelectorAll('[draggable="true"]')];
@@ -128,33 +129,33 @@ describe('TemplateEditor — a published version is never edited in place', () =
     act(() => { rows[2]!.dispatchEvent(new Event('drop', { bubbles: true })); });
     await flush();
 
-    expect(onSaveDraft.mock.calls.at(-1)![0].clauses.map((cl: PlaybookClause) => cl.id))
+    expect(onDraftChange.mock.calls.at(-1)![0].clauses.map((cl: PlaybookClause) => cl.id))
       .toEqual(['c2', 'c3', 'c1']);
     expect(published.clauses.map(cl => cl.id)).toEqual(['c1', 'c2', 'c3']);
   });
 
   it('editing a clause writes into the draft, not the published version', async () => {
-    const onSaveDraft = vi.fn();
+    const onDraftChange = vi.fn();
     const twoClauseV1 = version({ clauses: structuredClone(twoClauses) });
     const published: PlaybookVersion = { ...twoClauseV1 };
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={onSaveDraft} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={onDraftChange} {...wiring} />,
     );
 
     const titleInputs = [...c.querySelectorAll('input')] as HTMLInputElement[];
     type(titleInputs[1]!, 'Term (edited)');
     await flush();
 
-    expect(onSaveDraft.mock.calls.at(-1)![0].clauses[0].title).toBe('Term (edited)');
+    expect(onDraftChange.mock.calls.at(-1)![0].clauses[0].title).toBe('Term (edited)');
     expect(published.clauses[0]!.title).toBe('Term');
   });
 
   it('edits an existing draft rather than starting a new one from the version', async () => {
-    const onSaveDraft = vi.fn();
+    const onDraftChange = vi.fn();
     const published = version({ name: 'Lease Review' });
     const draft = { ...draftOf(published), name: 'Half-typed name' };
     const c = mount(
-      <TemplateEditor version={published} draft={draft} onSaveDraft={onSaveDraft} {...wiring} />,
+      <TemplateEditor version={published} draft={draft} onDraftChange={onDraftChange} {...wiring} />,
     );
 
     expect(nameInput(c).value).toBe('Half-typed name');
@@ -162,8 +163,8 @@ describe('TemplateEditor — a published version is never edited in place', () =
     await flush();
 
     // The name the user had already typed survives the next edit.
-    expect(onSaveDraft.mock.calls.at(-1)![0].name).toBe('Half-typed name');
-    expect(onSaveDraft.mock.calls.at(-1)![0].systemPrompt).toBe('A different persona.');
+    expect(onDraftChange.mock.calls.at(-1)![0].name).toBe('Half-typed name');
+    expect(onDraftChange.mock.calls.at(-1)![0].systemPrompt).toBe('A different persona.');
   });
 });
 
@@ -171,7 +172,7 @@ describe('TemplateEditor — publish state', () => {
   it('shows an unpublished-changes state when the draft differs from the version', () => {
     const published = version();
     const c = mount(
-      <TemplateEditor version={published} draft={editedDraftOf(published)} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={published} draft={editedDraftOf(published)} onDraftChange={noop} {...wiring} />,
     );
     expect(c.textContent).toMatch(/unpublished changes/i);
   });
@@ -184,7 +185,7 @@ describe('TemplateEditor — publish state', () => {
   it('offers no publish for a draft byte-identical to the published version', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
-      <TemplateEditor version={published} draft={draftOf(published)} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={published} draft={draftOf(published)} onDraftChange={noop} {...wiring} />,
     );
     expect(buttonNamed(c, /publish/i)?.disabled).toBe(true);
     expect(c.textContent).not.toMatch(/unpublished changes/i);
@@ -192,7 +193,7 @@ describe('TemplateEditor — publish state', () => {
 
   it('shows no unpublished-changes state when the version is what is on screen', () => {
     const c = mount(
-      <TemplateEditor version={version()} draft={undefined} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={version()} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect(c.textContent).not.toMatch(/unpublished changes/i);
     expect(c.textContent).toContain('v1');
@@ -200,7 +201,7 @@ describe('TemplateEditor — publish state', () => {
 
   it('says a playbook with no published version has never been published', () => {
     const c = mount(
-      <TemplateEditor version={undefined} draft={undefined} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={undefined} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect(c.textContent).toMatch(/not published yet/i);
   });
@@ -210,7 +211,7 @@ describe('TemplateEditor — publish state', () => {
   // library, which the version history then cannot explain.
   it('offers no publish when there is nothing unpublished to publish', () => {
     const c = mount(
-      <TemplateEditor version={version()} draft={undefined} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={version()} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect(buttonNamed(c, /publish/i)?.disabled).toBe(true);
   });
@@ -222,7 +223,7 @@ describe('TemplateEditor — publish state', () => {
       <TemplateEditor
         version={published}
         draft={editedDraftOf(published)}
-        onSaveDraft={noop}
+        onDraftChange={noop}
         {...wiring}
         onPublish={onPublish}
       />,
@@ -239,7 +240,7 @@ describe('TemplateEditor — publish state', () => {
   it('no longer asks what changed in the header', () => {
     const published = version();
     const c = mount(
-      <TemplateEditor version={published} draft={editedDraftOf(published)} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={published} draft={editedDraftOf(published)} onDraftChange={noop} {...wiring} />,
     );
     expect(c.querySelector('[aria-label="What changed?"]')).toBeNull();
     expect(c.textContent).not.toMatch(/required after v1/i);
@@ -260,7 +261,7 @@ describe('TemplateEditor — added clauses get distinct ids', () => {
         <TemplateEditor
           version={published}
           draft={draft}
-          onSaveDraft={(d) => { seen.push(d); setDraft(d); }}
+          onDraftChange={(d) => { seen.push(d); setDraft(d); }}
           {...wiring}
         />
       );
@@ -281,11 +282,70 @@ describe('TemplateEditor — added clauses get distinct ids', () => {
   });
 });
 
+// Task 9A / R-D16. Persistence is on EXPLICIT INTENT, never per keystroke:
+// per-keystroke writes contradict the in-memory discard semantics Task 3's
+// fix round established, which five App tests cover.
+describe('TemplateEditor — saving a draft is an explicit act', () => {
+  it('offers a Save draft control that asks the caller to persist the working copy', () => {
+    const onPersistDraft = vi.fn();
+    const published = version();
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={editedDraftOf(published)}
+        onDraftChange={noop}
+        {...wiring}
+        onPersistDraft={onPersistDraft}
+        unsavedChanges
+      />,
+    );
+    const save = buttonNamed(c, /save draft/i)!;
+    expect(save.disabled).toBe(false);
+    click(save);
+    expect(onPersistDraft).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not write per keystroke: typing asks for a draft change, never a save', async () => {
+    const onPersistDraft = vi.fn();
+    const onDraftChange = vi.fn();
+    const published = version();
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={undefined}
+        onDraftChange={onDraftChange}
+        {...wiring}
+        onPersistDraft={onPersistDraft}
+      />,
+    );
+    type(nameInput(c), 'Renamed');
+    await flush();
+    expect(onDraftChange).toHaveBeenCalled();
+    expect(onPersistDraft).not.toHaveBeenCalled();
+  });
+
+  // Nothing unsaved means nothing to save. A control that is always live
+  // invites a write that stores what is already stored.
+  it('disables Save draft when there is nothing unsaved', () => {
+    const published = version();
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={undefined}
+        onDraftChange={noop}
+        {...wiring}
+        unsavedChanges={false}
+      />,
+    );
+    expect(buttonNamed(c, /save draft/i)?.disabled).toBe(true);
+  });
+});
+
 describe('TemplateEditor — the mode toggle is gone (R-D1)', () => {
   it('offers no Standard/Risk mode toggle', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect(buttons(c).some(b => /risk mode|standard mode/i.test(b.textContent || ''))).toBe(false);
   });
@@ -295,7 +355,7 @@ describe('TemplateEditor — the mode toggle is gone (R-D1)', () => {
   it('always shows the risk fields, and says that their content is what decides', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect(fieldFor(c, /risk tolerance/i)).toBeTruthy();
     expect(fieldFor(c, /risk scorer/i)).toBeTruthy();
@@ -308,17 +368,17 @@ describe('TemplateEditor — standard positions', () => {
   it('shows a standard-position field per clause', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect([...c.querySelectorAll('textarea')].filter(t =>
       /standard position/i.test(t.closest('div')?.textContent ?? '')).length).toBe(2);
   });
 
   it('writes a typed position into the draft as an authored one', async () => {
-    const onSaveDraft = vi.fn();
+    const onDraftChange = vi.fn();
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={onSaveDraft} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={onDraftChange} {...wiring} />,
     );
 
     const positionFields = [...c.querySelectorAll('textarea')].filter(t =>
@@ -326,7 +386,7 @@ describe('TemplateEditor — standard positions', () => {
     type(positionFields[0] as HTMLTextAreaElement, 'A 6-month break notice.');
     await flush();
 
-    expect(onSaveDraft.mock.calls.at(-1)![0].clauses[0].standardPosition).toEqual({
+    expect(onDraftChange.mock.calls.at(-1)![0].clauses[0].standardPosition).toEqual({
       text: 'A 6-month break notice.',
       origin: 'authored',
       reviewedByHuman: true,
@@ -339,7 +399,7 @@ describe('TemplateEditor — standard positions', () => {
   // `undefined` would leave a clause that still answers yes to
   // `'standardPosition' in clause`.
   it('clearing a position deletes the key rather than setting it undefined', async () => {
-    const onSaveDraft = vi.fn();
+    const onDraftChange = vi.fn();
     const clauses: PlaybookClause[] = [
       {
         id: 'c1',
@@ -349,7 +409,7 @@ describe('TemplateEditor — standard positions', () => {
       },
     ];
     const c = mount(
-      <TemplateEditor version={version({ clauses })} draft={undefined} onSaveDraft={onSaveDraft} {...wiring} />,
+      <TemplateEditor version={version({ clauses })} draft={undefined} onDraftChange={onDraftChange} {...wiring} />,
     );
 
     const positionField = [...c.querySelectorAll('textarea')].find(t =>
@@ -357,7 +417,7 @@ describe('TemplateEditor — standard positions', () => {
     type(positionField, '');
     await flush();
 
-    const saved = onSaveDraft.mock.calls.at(-1)![0] as PlaybookDraft;
+    const saved = onDraftChange.mock.calls.at(-1)![0] as PlaybookDraft;
     expect('standardPosition' in saved.clauses[0]!).toBe(false);
   });
 
@@ -369,7 +429,7 @@ describe('TemplateEditor — standard positions', () => {
       <TemplateEditor
         version={published}
         draft={undefined}
-        onSaveDraft={noop}
+        onDraftChange={noop}
         {...wiring}
         health={{ c1: { kind: 'held', supporting: 3, total: 4 } }}
       />,
@@ -380,7 +440,7 @@ describe('TemplateEditor — standard positions', () => {
   it('claims nothing about health the caller has not supplied', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
-      <TemplateEditor version={published} draft={undefined} onSaveDraft={noop} {...wiring} />,
+      <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect(c.textContent).not.toMatch(/untested|held|conceded/i);
   });

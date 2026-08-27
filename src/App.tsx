@@ -10,7 +10,7 @@ import { uid } from './lib/uid';
 import {
   listPlaybooks as listTemplates, getPlaybook as getTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
-  getPlaybookContent, newPlaybookDraft, publishAndPoint,
+  getPlaybookContent, newPlaybookDraft, publishAndPoint, saveDraft, discardDraft,
 } from './lib/db/playbooks';
 import {
   listMatters, getMatter, saveMatter, newMatter, deleteMatter,
@@ -411,6 +411,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // definition, even before the user touches anything: closing it right
   // after a ~30s paid AI generation is exactly the loss this guards.
   const [savedTemplateSnapshot, setSavedTemplateSnapshot] = useState<string | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
   const isTemplateDirty =
     view === 'editor' && activeDraft !== null &&
     (savedTemplateSnapshot === null || JSON.stringify(activeDraft) !== savedTemplateSnapshot);
@@ -854,12 +855,94 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     return false;
   };
 
-  /** Important 7: leaving the editor with unsaved changes needs a chance to
-   *  back out, rather than silently discarding a paid AI generation or a
-   *  half-finished edit. */
+  /**
+   * Writes the working copy to `Playbook.draft`, or says why it could not.
+   *
+   * The ONE place `saveDraft` is called from, so the in-editor Save and the
+   * Keep branch of the leave prompt cannot drift on what a save means. It
+   * deliberately touches no editor state: the leave path calls it after the
+   * route effect has already torn the editor down, and re-seeding
+   * `activePlaybook` from under that would leave a stale playbook in state
+   * off-route — which then makes reopening the same card skip its own
+   * fetch and render "No template selected". `handlePersistDraft` applies
+   * the state on top, where there is still an editor to apply it to.
+   */
+  const saveDraftOrReport = async (
+    playbook: Playbook, draft: PlaybookDraft,
+  ): Promise<Playbook | null> => {
+    try {
+      const saved = await saveDraft(playbook, draft);
+      // The save succeeded; a library row that is briefly stale is not that
+      // failure and must not be reported as it.
+      await refreshTemplates().catch(() => {});
+      return saved;
+    } catch (e) {
+      notify(
+        e instanceof Error ? e.message : 'Your unpublished changes could not be saved.',
+        'error',
+      );
+      return null;
+    }
+  };
+
+  /** The editor's explicit `Save draft` (R-D16: on intent, never per
+   *  keystroke). await-then-apply, like every other human-authored write in
+   *  this app — the editor is marked saved only once the store has taken
+   *  the write, never optimistically. */
+  const handlePersistDraft = async () => {
+    if (!activePlaybook || !activeDraft) return;
+    setSavingDraft(true);
+    const saved = await saveDraftOrReport(activePlaybook, activeDraft);
+    setSavingDraft(false);
+    if (!saved) return;
+    setActivePlaybook(saved);
+    setSavedTemplateSnapshot(JSON.stringify(activeDraft));
+    notify('Draft saved.');
+  };
+
+  /**
+   * Important 7 / R-D16: leaving the editor with unsaved changes is a
+   * THREE-way choice — Keep them, Discard them, or stay.
+   *
+   * Two native confirms rather than a modal, because this is also
+   * `useRoute`'s popstate guard: a Back press has already moved the address
+   * bar by the time it runs, so the answer has to be synchronous and there
+   * is no await to be had. One implementation serves the Close control, a
+   * nav click and Back alike; splitting it so the two async-capable paths
+   * could use a modal would be two guards to keep honest.
+   *
+   * DISCARD CLEARS THE STORED DRAFT, not just the in-memory one. Without
+   * that, "discard" would leave the rejected edits durable and
+   * `loadPlaybookForEdit` prefers a stored draft over the published
+   * version, so the next open would show exactly the edits the user had
+   * just rejected — the defect Task 3's M2 fixed in memory, one layer down.
+   *
+   * Both writes are fired without being awaited, because the guard cannot
+   * await: a failure is reported by its own toast rather than silently.
+   */
   const confirmDiscardIfDirty = () => {
     if (!isTemplateDirty) return true;
-    return window.confirm('This template has unsaved changes. Discard them?');
+    const playbook = activePlaybook;
+    const draft = activeDraft;
+    if (window.confirm(
+      'Keep your unpublished changes?\n\n'
+      + 'OK saves them as a draft you can come back to. Cancel offers to discard them.',
+    )) {
+      if (playbook && draft) void saveDraftOrReport(playbook, draft);
+      return true;
+    }
+    if (window.confirm(
+      'Discard your unpublished changes? They cannot be recovered.\n\n'
+      + 'Cancel to stay in the editor.',
+    )) {
+      if (playbook) {
+        void discardDraft(playbook.id)
+          .then(() => refreshTemplates().catch(() => {}))
+          .catch(() => notify('Your unpublished changes could not be discarded.', 'error'));
+      }
+      return true;
+    }
+    return false;
   };
 
   const requestView = (next: View) => {
@@ -2260,7 +2343,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             <TemplateEditor
               version={activeVersion ?? undefined}
               draft={activeDraft ?? undefined}
-              onSaveDraft={setActiveDraft}
+              onDraftChange={setActiveDraft}
+              onPersistDraft={handlePersistDraft}
+              unsavedChanges={isTemplateDirty}
+              savingDraft={savingDraft}
               onPublish={() => setPublishOpen(true)}
               onExport={() => handleExportTemplate(editorContent)}
               onShowMegaPrompt={() => setMegaPromptOpen(true)}
