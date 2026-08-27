@@ -843,6 +843,55 @@ git commit -m "feat(c): net position on the finding, and the variation trail"
 
 ---
 
+### Task 8A: Reading a collection review — the other half of the key
+
+**This task exists because the plan had a fourth hole**, found by Task 8's implementer and confirmed by the controller.
+
+Task 6A fixed the **write** side: a collection run seeds and stores findings under `findingsKeyFor(target)` — the collection id. The **read** side was never changed. Verified against the files:
+
+- `ResultsView.tsx:131` — `run.findings[activeDocId]`
+- `TabularReview.tsx:74,148` — `run.findings[selected.docId]`, `run.findings[docId]`
+- `App.tsx:89` — `withUpdatedFinding` keys by `docId`
+- `runReview.ts` — `retryCell` calls `withFinding(run, doc.id, …)` **and re-runs `extractClause`**, the single-document extractor
+
+So a collection review currently shows an empty findings pane, and every human write — verify, note, confirm, amend — would land under a document key nothing reads. **Everything Tasks 1–8 built is unreachable end-to-end until this lands.**
+
+This is the same failure the last two holes were: a correct mechanism with no path to it. Sub-project B shipped one of these and only its final whole-branch review caught it.
+
+**Files:** `src/features/review/ResultsView.tsx`, `src/features/review/runReview.ts`, `src/App.tsx`, `src/features/tabular/TabularReview.tsx`, plus their tests.
+
+- [ ] **Step 1: Write the failing tests**
+
+Assert, against the fixtures in each file you extend:
+
+- **`ResultsView` renders a collection review's findings.** With a run whose target is a collection and findings under the collection id, the clause list shows them — not an empty pane. Today this fails.
+- **A standalone review is unchanged.** Regression pin: findings keyed by document still render exactly as now.
+- **`withUpdatedFinding` writes under the same key the view reads.** A verification on a collection finding must be readable back. Assert the round trip, not just the write.
+- **`retryCell` on a collection run re-runs the COLLECTION extractor**, not `extractClause`, and writes under the collection key. Assert the collection extractor was called and `extractClause` was not — a single-document re-run of a collection clause would silently replace a synthesised net position with a one-document answer, which is a confidently wrong result of exactly the kind this project exists to prevent.
+- **A retry on a collection clause resets its net position**, consistent with Task 8.
+
+- [ ] **Step 2: Implement**
+
+Thread the target through so every read and write goes via `findingsKeyFor`. `ReviewRun` already carries `target` (Task 6A), so nothing needs a new parameter to know which kind it is — **use that rather than adding a prop**.
+
+`retryCell` needs the collection's members to re-run a collection clause. Give it the same optional `CollectionRunInput` shape `runReview` already takes, so the two agree; when absent, behaviour is exactly as today.
+
+`TabularReview` is refused a grid for a collection review in Task 10 — for now, make its lookups key correctly so it cannot show stale or empty cells in the meantime.
+
+- [ ] **Step 3: Mutation-test**
+
+1. Key `ResultsView`'s read by `activeDocId` again — the collection-render test must fail.
+2. Key `withUpdatedFinding` by `docId` again — the round-trip test must fail.
+3. Make `retryCell` call `extractClause` for a collection run — the extractor test must fail.
+
+- [ ] **Step 4: Commit**, staging by name.
+
+```bash
+git commit -m "fix(c): read a collection review's findings under the collection key"
+```
+
+---
+
 ### Task 9: Export honesty for net positions
 
 **Files:**
