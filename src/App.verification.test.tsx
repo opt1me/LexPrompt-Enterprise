@@ -486,4 +486,191 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     const finalSaved = saveNowMock.mock.calls[saveNowMock.mock.calls.length - 1][0];
     expect(finalSaved.findings['live-doc'].c1.verification.state).toBe('verified');
   });
+
+  it('Important 1: handleVerify does not lose a run update that lands while its own save is in flight', async () => {
+    // Three clauses so the run stays live throughout: c1 resolves
+    // immediately (so it can be verified while live), c2 resolves INSIDE
+    // the verify write's own await window (reproducing the exact race —
+    // `handleVerify` reads `latestRunRef`, then crosses `getProfile()` and
+    // `saveReview()`, before ever writing it back), and c3 never resolves,
+    // so the run itself does not complete and dispose its saver out from
+    // under this test's assertions on it.
+    let resolveC2: ((finding: unknown) => void) | undefined;
+    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => {
+      if (clause.id === 'c1') {
+        return Promise.resolve({
+          clauseId: 'c1',
+          status: 'done',
+          citations: [{ quote: 'x', documentId: 'live-doc' }],
+          summary: 'Governed by NY law.',
+          verification: { state: 'unchecked' },
+          notes: [],
+        });
+      }
+      if (clause.id === 'c2') {
+        return new Promise((resolve) => { resolveC2 = resolve; });
+      }
+      return new Promise(() => { /* c3: never resolves, keeps the run live. */ });
+    });
+
+    const threeClauseTemplate: Template = {
+      ...makeTemplate(),
+      clauses: [...makeTemplate().clauses, { id: 'c3', title: 'Indemnity', prompt: 'Extract the indemnity clause.' }],
+    };
+
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    listPlaybooksMock.mockResolvedValue([threeClauseTemplate]);
+    listMattersMock.mockResolvedValue([makeMatter()]);
+
+    // Holds the verify write's own `saveReview` open, so c2's onUpdate can
+    // land on `latestRunRef` before `handleVerify` writes it back.
+    let resolveSave: (() => void) | undefined;
+    saveReviewMock.mockImplementation(() => new Promise<void>(resolve => { resolveSave = () => resolve(); }));
+
+    act(() => { root.render(<App />); });
+    await flush();
+    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    await flush();
+    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
+    await flush();
+
+    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+    expect(chips()[0].textContent).toBe('Unverified');
+
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+    expect(saveReviewMock).toHaveBeenCalled();
+
+    // c2 finishes INSIDE the write's await window — the run's own onUpdate,
+    // which the old code let clobber `latestRunRef` once the write's own
+    // await resolved.
+    act(() => { resolveC2!({
+      clauseId: 'c2',
+      status: 'done',
+      citations: [],
+      summary: 'Term is 12 months.',
+      verification: { state: 'unchecked' },
+      notes: [],
+    }); });
+    await flush();
+
+    // Now let the verification's own write resolve.
+    resolveSave!();
+    await flush();
+
+    // Both must survive: this write's own verification, and c2's newer,
+    // unrelated status. The old code overwrote `latestRunRef` here with the
+    // pre-await snapshot, which still had c2 `running` — reverting an
+    // already-finished clause back to a skeleton card on screen.
+    expect(chips()[0].textContent).toBe('Verified');
+    expect(container.textContent).toContain('Term is 12 months.');
+
+    // Item 2: the merged, post-race state is reasserted through the run's
+    // own debounced saver, not just local state — closing the gap where a
+    // stale, already-armed `scheduleSave` payload (from before this write)
+    // could otherwise fire afterward and silently reassert the older data
+    // in storage even though the screen shows the new one.
+    const lastScheduled = scheduleSaveMock.mock.calls[scheduleSaveMock.mock.calls.length - 1][0];
+    expect(lastScheduled.findings['live-doc'].c1.verification.state).toBe('verified');
+    expect(lastScheduled.findings['live-doc'].c2.status).toBe('done');
+    // c3 never resolved — the run is genuinely still live here, so this
+    // assertion is exercising an armed saver, not a leftover from a
+    // completed run's final save.
+    expect(lastScheduled.findings['live-doc'].c3.status).not.toBe('done');
+  });
+
+  it('Item 2: a post-completion write does not reassert through, or re-arm, the run\'s (now-disposed) saver', async () => {
+    // Ordinary two-clause template: both clauses resolve immediately, so the
+    // run completes and `persistFinal` disposes its saver and clears
+    // `activeRunSaverRef` before this test ever verifies anything.
+    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => Promise.resolve({
+      clauseId: clause.id,
+      status: 'done',
+      citations: clause.id === 'c1' ? [{ quote: 'x', documentId: 'live-doc' }] : [],
+      summary: clause.id === 'c1' ? 'Governed by NY law.' : 'Term is 12 months.',
+      verification: { state: 'unchecked' },
+      notes: [],
+    }));
+
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    listPlaybooksMock.mockResolvedValue([makeTemplate()]);
+    listMattersMock.mockResolvedValue([makeMatter()]);
+    saveReviewMock.mockResolvedValue(undefined);
+
+    act(() => { root.render(<App />); });
+    await flush();
+    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    await flush();
+    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
+    await flush();
+
+    // The run has already completed and disposed its saver.
+    expect(saveNowMock).toHaveBeenCalled();
+    const scheduleCallsBefore = scheduleSaveMock.mock.calls.length;
+
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+
+    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+    expect(chips()[0].textContent).toBe('Verified');
+    // The direct write itself still happens...
+    expect(saveReviewMock).toHaveBeenCalled();
+    // ...but `activeRunSaverRef` is null by now, so the reschedule added by
+    // Item 2 is the no-op it has to be: no new call, and (implicitly, since
+    // nothing here ever throws) no timer armed against a saver nothing will
+    // ever dispose again.
+    expect(scheduleSaveMock.mock.calls.length).toBe(scheduleCallsBefore);
+  });
+
+  it('Critical 1 (abort path): a cancelled run\'s completion save still holds a verification made during it', async () => {
+    // c1 resolves immediately (so it can be verified while the run is still
+    // live); c2 hangs until the run's own AbortController fires, then
+    // rejects the way a real in-flight fetch would (the same pattern
+    // App.matterDelete.test.tsx uses to reach this same `persistFinal` call
+    // site from a different trigger). The re-review's own gap: the success
+    // path above is covered, but nothing exercised the abort path's use of
+    // `latestRunRef.current` in `persistFinal`.
+    extractClauseMock.mockImplementation(
+      (_doc: unknown, clause: { id: string }, _template: unknown, _settings: unknown, signal?: AbortSignal) => {
+        if (clause.id === 'c1') {
+          return Promise.resolve({
+            clauseId: 'c1',
+            status: 'done',
+            citations: [{ quote: 'x', documentId: 'live-doc' }],
+            summary: 'Governed by NY law.',
+            verification: { state: 'unchecked' },
+            notes: [],
+          });
+        }
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+        });
+      },
+    );
+
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    listPlaybooksMock.mockResolvedValue([makeTemplate()]);
+    listMattersMock.mockResolvedValue([makeMatter()]);
+    saveReviewMock.mockResolvedValue(undefined);
+
+    act(() => { root.render(<App />); });
+    await flush();
+    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    await flush();
+    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
+    await flush();
+
+    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+    expect(chips()[0].textContent).toBe('Verified');
+
+    // Cancel the run while c2 is still stuck — this is the abort path.
+    act(() => { findButton(container, /^Cancel$/, 0).click(); });
+    await flush();
+
+    expect(saveNowMock).toHaveBeenCalled();
+    const finalSaved = saveNowMock.mock.calls[saveNowMock.mock.calls.length - 1][0];
+    expect(finalSaved.findings['live-doc'].c1.verification.state).toBe('verified');
+  });
 });

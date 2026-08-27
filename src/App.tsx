@@ -885,6 +885,21 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * debounced saver reads from it — without this, the next mid-run
    * auto-save would write a snapshot taken before this verification and
    * silently undo it.
+   *
+   * Important 1 fix: this function reads `latestRunRef.current` once, then
+   * crosses two `await`s (`getProfile()`, `saveReview()`) before ever
+   * writing it back. A live run's `onUpdate` can land in that window — it
+   * writes `latestRunRef.current` unconditionally (see `handleUpdate`
+   * above) — and the old code then overwrote the ref with a run built from
+   * the PRE-await snapshot, discarding whatever the run completed while this
+   * write was in flight, on screen and in the next persisted save. The fix
+   * re-reads `latestRunRef.current` after both awaits and re-applies just
+   * this finding's verification onto it, rather than replacing the whole
+   * ref with the stale `updated`. The merge direction is asymmetric on
+   * purpose: this call's own write must win for `docId`/`clauseId` — it is
+   * the reason this function is running — while every other finding must
+   * come from whichever run snapshot is freshest, since that's the one a
+   * live run (or another concurrent human write) has had the last say over.
    */
   const handleVerify = async (docId: string, clauseId: string, change: VerificationChange) => {
     const current = latestRunRef.current ?? run;
@@ -915,9 +930,30 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // `|| profile.id` only covers the defensive case where the ref was
       // never set (should not happen: reaching here requires either
       // `openReview` or `handleStartRun` to have run first).
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, createdByUserIdRef.current || profile.id));
-      latestRunRef.current = updated;
-      setRun(updated);
+      const userId = createdByUserIdRef.current || profile.id;
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      // Important 1 fix (see doc comment above): re-read the ref rather than
+      // trusting `current`/`updated`, which were captured before the two
+      // awaits above and may already be stale.
+      const latest = latestRunRef.current ?? updated;
+      const latestExisting = latest.findings[docId]?.[clauseId] ?? existing;
+      const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, verification });
+      latestRunRef.current = merged;
+      setRun(merged);
+      // Item 2 fix: a live run's own debounced saver (`activeRunSaverRef`)
+      // may have a stale, pre-verification payload already armed —
+      // `scheduleSave` was called by the run's last `onUpdate`, before this
+      // write landed. Left alone, that stale timer fires after this direct
+      // write and reasserts the older state, silently undoing it in
+      // storage even though the screen still shows it verified. Rescheduling
+      // with the freshly merged run here closes that: `scheduleSave` is
+      // latest-payload-wins and does not push its timer back (see
+      // `createDebouncedReviewSaver`'s doc comment), so this cannot extend
+      // the debounce, and it is a no-op once no run is active — `persistFinal`
+      // and `handleDeleteMatter` both clear `activeRunSaverRef` before that
+      // can happen, so there is nothing here for a lingering timer to attach
+      // to.
+      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
     } catch (e) {
       notify(
         e instanceof Error
@@ -930,6 +966,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     }
   };
 
+  // Important 1 / Item 2 fix: same shape and same reasoning as `handleVerify`
+  // above — re-read `latestRunRef.current` after the awaits and merge this
+  // note onto whichever run snapshot is freshest, then reassert that merged
+  // run through the live run's debounced saver, rather than overwriting
+  // `latestRunRef` with the pre-await snapshot and leaving a stale
+  // `scheduleSave` free to reassert it in storage afterward.
   const handleAddNote = async (docId: string, clauseId: string, text: string) => {
     const current = latestRunRef.current ?? run;
     const matterId = activeMatterId;
@@ -950,9 +992,17 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // Minor 2: same reasoning as `handleVerify` above — preserve the
       // review's original creator rather than reattributing to whoever
       // just added a note.
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, createdByUserIdRef.current || profile.id));
-      latestRunRef.current = updated;
-      setRun(updated);
+      const userId = createdByUserIdRef.current || profile.id;
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      const latest = latestRunRef.current ?? updated;
+      const latestExisting = latest.findings[docId]?.[clauseId] ?? existing;
+      const merged = withUpdatedFinding(latest, docId, clauseId, {
+        ...latestExisting,
+        notes: [...latestExisting.notes, note],
+      });
+      latestRunRef.current = merged;
+      setRun(merged);
+      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
     } catch (e) {
       notify(e instanceof Error ? `This note was not saved: ${e.message}` : 'This note was not saved.', 'error');
     } finally {
