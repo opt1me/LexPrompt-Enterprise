@@ -11,6 +11,7 @@ No backend. No accounts. The user supplies their own OpenRouter API key.
 This app tells lawyers what is in contracts. A visible error costs someone a retry; a confident wrong answer costs them a mistake in advice. Nearly every serious defect found in this codebase has been a variant of the same thing — something incorrect, incomplete or stale presented as if it were correct and complete:
 
 - A scanned PDF reviewed by a text-only model returning "the agreement is silent on this point" for every clause.
+- A marked-up DOCX reviewed as though every tracked change had been accepted, with the deletions silently gone — the counterparty's redline read back as the contract. Worse than the scan above in one respect: a scan yields visibly empty text, this yields fluent, plausible, wrong text.
 - The chat panel answering questions about a document whose text it never received.
 - An SSE parser silently dropping the last token of every streamed answer, and returning *nothing* on servers using CRLF.
 - A CSV export writing unreviewed clauses as blank cells — which reads in a spreadsheet as "checked, nothing found".
