@@ -3672,7 +3672,11 @@ They pass at runtime, because Vitest does not typecheck. But `npm run build` is 
 npx tsc --noEmit 2>&1 | grep "error TS" | grep -oE "^src/[^(]+" | sort | uniq -c
 ```
 
-Write the list into your report *before* changing anything. Tasks 7 and 10-13 should already have cleared `FindingCard.test.tsx`, `ResultsView.tsx`, `exportDocx.ts`, `exportDocx.test.ts`, `csv.test.ts` and `findingOutcome.test.ts`. Anything still listed from those is a **regression to report, not to quietly patch here** — say so in your report rather than absorbing it.
+Write the list into your report *before* changing anything.
+
+**Expected to be clear by now, because a task owned them:** `ResultsView.tsx`, `exportDocx.ts`, `exportDocx.test.ts`, `csv.test.ts`, `findingOutcome.test.ts`. Anything still listed from those is a **regression to report, not to quietly patch here** — say so in your report rather than absorbing it.
+
+**Expected to still be listed, and yours to fix:** `FindingCard.test.tsx`. Task 7 cleared `FindingCard.tsx` (the component) and repaired the three literals that would otherwise have crashed at runtime once `StateChip` started reading `finding.verification`. Its brief scoped it to the component, not that file's remaining `pending`/`running`/`error`/`cancelled` fixtures, so roughly four errors there are expected. This paragraph exists because Task 7's implementer spotted the two briefs disagreeing and flagged it rather than guessing — the disagreement is resolved in favour of the sweep owning them.
 
 - [ ] **Step 2: Fix each stale fixture**
 
