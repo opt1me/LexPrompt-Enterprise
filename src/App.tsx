@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
-import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification } from './types';
+import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
 import { applyVerification, findingKey, makeNote, resetVerification } from './lib/verification';
 import type { VerificationChange } from './lib/verification';
+import { confirmPosition, amendPosition, resetPosition, NetPositionError } from './lib/netPosition';
 import { carryHumanState } from './lib/findingMerge';
 import { uid } from './lib/uid';
 import {
@@ -1064,6 +1065,105 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     }
   };
 
+  /**
+   * Accepts a collection clause's synthesised net position as written.
+   * Follows `handleVerify`'s path exactly — build the updated run with
+   * `withUpdatedFinding`, `await saveReview(...)`, and only then `setRun`
+   * and update `latestRunRef`, re-reading `latestRunRef.current` after the
+   * awaits so a live run's own `onUpdate` landing during them is not
+   * discarded (Important 1, same reasoning as `handleVerify`). This call's
+   * own write is the only thing forced to win for `docId`/`clauseId`;
+   * everything else comes from whichever run snapshot is freshest.
+   *
+   * There is nothing here that separately calls `carryHumanState` — a
+   * confirmation is protected from the LIVE run's next `onUpdate` by
+   * `handleUpdate` (in `handleStartRun`), which already routes every
+   * engine snapshot through `carryHumanState`, now that it (and
+   * `findingMerge.ts`) know how to carry a net position the same way they
+   * carry a verification. Reuse those helpers; this is not a third copy of
+   * that pattern.
+   */
+  const handleConfirmNetPosition = async (docId: string, clauseId: string) => {
+    const current = latestRunRef.current ?? run;
+    const matterId = activeMatterId;
+    if (!current || !matterId) return;
+
+    const existing = current.findings[docId]?.[clauseId];
+    if (!existing?.netPosition) return;
+
+    const profile = await getProfile();
+    const netPosition = confirmPosition(existing.netPosition, profile.id, Date.now());
+    const updated = withUpdatedFinding(current, docId, clauseId, { ...existing, netPosition });
+
+    setVerifyBusyKey(findingKey(docId, clauseId));
+    try {
+      const userId = createdByUserIdRef.current || profile.id;
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      // Re-read the ref rather than trusting `current`/`updated`, which were
+      // captured before the two awaits above and may already be stale.
+      const latest = latestRunRef.current ?? updated;
+      const latestExisting = latest.findings[docId]?.[clauseId] ?? existing;
+      const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
+      latestRunRef.current = merged;
+      setRun(merged);
+      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
+    } catch (e) {
+      notify(
+        e instanceof Error ? `This confirmation was not saved: ${e.message}` : 'This confirmation was not saved.',
+        'error',
+      );
+    } finally {
+      setVerifyBusyKey(null);
+    }
+  };
+
+  /** Records the human's rewritten net position. Same shape as
+   *  `handleConfirmNetPosition` above; the only difference is building the
+   *  new `NetPosition` through `amendPosition`, which throws on empty text
+   *  the same way `applyVerification` throws on a reasonless rejection —
+   *  the amend dialog already disables its own confirm button on
+   *  whitespace, so this catch is a backstop, not the user's experience of
+   *  the rule. */
+  const handleAmendNetPosition = async (docId: string, clauseId: string, text: string) => {
+    const current = latestRunRef.current ?? run;
+    const matterId = activeMatterId;
+    if (!current || !matterId) return;
+
+    const existing = current.findings[docId]?.[clauseId];
+    if (!existing?.netPosition) return;
+
+    const profile = await getProfile();
+
+    let netPosition: NetPosition;
+    try {
+      netPosition = amendPosition(existing.netPosition, text, profile.id, Date.now());
+    } catch (e) {
+      notify(e instanceof NetPositionError ? e.message : 'That amendment is not valid.', 'error');
+      return;
+    }
+
+    const updated = withUpdatedFinding(current, docId, clauseId, { ...existing, netPosition });
+
+    setVerifyBusyKey(findingKey(docId, clauseId));
+    try {
+      const userId = createdByUserIdRef.current || profile.id;
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      const latest = latestRunRef.current ?? updated;
+      const latestExisting = latest.findings[docId]?.[clauseId] ?? existing;
+      const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
+      latestRunRef.current = merged;
+      setRun(merged);
+      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
+    } catch (e) {
+      notify(
+        e instanceof Error ? `This amendment was not saved: ${e.message}` : 'This amendment was not saved.',
+        'error',
+      );
+    } finally {
+      setVerifyBusyKey(null);
+    }
+  };
+
   const handleRetryCell = (docId: string, clauseId: string) => {
     const current = latestRunRef.current ?? run;
     if (!current) return;
@@ -1093,14 +1193,28 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // as `unchecked` — nothing to reset — is the honest reading and keeps
     // this from crashing on data the type declares can't happen but that
     // can still show up at runtime.
+    // Same rule, same reason, for a net position: `confirmPosition`/
+    // `amendPosition` are a human's judgement about a specific synthesis,
+    // and re-running the clause replaces that synthesis. `existing.netPosition`
+    // is guarded the same way `existing.verification` is above — a
+    // standalone-document finding never has one at all.
+    const needsVerificationReset = Boolean(existing?.verification && existing.verification.state !== 'unchecked');
+    const needsPositionReset = Boolean(existing?.netPosition && existing.netPosition.state !== 'unconfirmed');
+
     let cleared = current;
-    if (existing?.verification && existing.verification.state !== 'unchecked') {
+    if (needsVerificationReset || needsPositionReset) {
       cleared = withUpdatedFinding(current, docId, clauseId, {
-        ...existing,
-        verification: resetVerification(existing.verification),
+        ...existing!,
+        ...(needsVerificationReset ? { verification: resetVerification(existing!.verification) } : {}),
+        ...(needsPositionReset ? { netPosition: resetPosition(existing!.netPosition!) } : {}),
       });
       const clauseTitle = current.templateSnapshot.clauses.find(c => c.id === clauseId)?.title ?? 'This clause';
-      notify(`${clauseTitle} is being re-run, so its verification was cleared.`);
+      const clearedDescription = needsVerificationReset && needsPositionReset
+        ? 'verification and net position were'
+        : needsPositionReset
+        ? 'net position was'
+        : 'verification was';
+      notify(`${clauseTitle} is being re-run, so its ${clearedDescription} cleared.`);
     }
 
     latestRunRef.current = cleared;
@@ -1565,6 +1679,15 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     }
   };
 
+  // documentId -> documentDate, for the variation trail's "date where known"
+  // (Task 8). `documents` (the in-session `DocumentFile`s a run reviews)
+  // carries no date at all — only `DocumentRecord` does — so this is built
+  // from `matterDocuments`, which is already loaded for the current matter.
+  const documentDates: Record<string, number> = {};
+  for (const doc of matterDocuments) {
+    if (doc.documentDate !== undefined) documentDates[doc.id] = doc.documentDate;
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-surface">
       <Toast toast={toast} />
@@ -1780,6 +1903,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     onAddNote={handleAddNote}
                     verifyBusyKey={verifyBusyKey}
                     authorInitials={profile?.initials ?? 'ME'}
+                    onConfirmNetPosition={handleConfirmNetPosition}
+                    onAmendNetPosition={handleAmendNetPosition}
+                    documentDates={documentDates}
                   />
                 ) : (
                   <TabularReview

@@ -1,4 +1,4 @@
-import type { ReviewRun } from '../types';
+import type { Finding, ReviewRun } from '../types';
 import { unchecked } from './verification';
 
 /**
@@ -12,12 +12,23 @@ import { unchecked } from './verification';
  * and the debounced save persists the loss — the user watches a finding go
  * verified and then silently un-verify itself.
  *
- * Two different rules, because verification and notes are different claims:
+ * Three different rules, because verification, a net position, and notes are
+ * different claims:
  *
  * - **Verification carries over only while the status is unchanged.** A
  *   verification is a judgement about specific output. If the status moved,
  *   the cell was re-run or is new, so the output changed and the judgement
  *   no longer applies — `unchecked` is then the honest answer.
+ * - **A net position's confirmation carries over the same way, for the same
+ *   reason**: `confirmPosition`/`amendPosition` are a judgement about a
+ *   specific synthesis, and `extractCollectionClause` (like `extractClause`)
+ *   never writes anything but `unconfirmedPosition`. Without this, a
+ *   confirmation made mid-run — sub-project C's own `handleConfirmNetPosition`
+ *   / `handleAmendNetPosition`, App.tsx — would be silently overwritten the
+ *   next time an unrelated clause's cell finished, exactly as an unguarded
+ *   verification was before this function existed. Carried wholesale (not
+ *   field by field) because `amended`/`proposed`/`byUserId`/`at` are one
+ *   human decision, not independent facts to recombine.
  * - **Notes carry over whenever `before` is a strict superset of
  *   `incoming`'s.** Notes are never removed by anything in this app — only
  *   added, by `handleAddNote` — so `before` (which may include a write made
@@ -64,24 +75,41 @@ export function carryHumanState(previous: ReviewRun | null, incoming: ReviewRun)
       const beforeVerification = before.verification?.state ?? 'unchecked';
       const beforeNotes = before.notes ?? [];
       const findingNotes = finding.notes ?? [];
+      // `before.netPosition` is guarded for the same reason as above: a
+      // standalone-document finding never has one at all, and this must not
+      // treat that absence as anything to carry.
+      const beforeNetPosition = before.netPosition;
 
       const keepVerification =
         before.status === finding.status && beforeVerification !== 'unchecked';
       const keepNotes =
         beforeNotes.length > findingNotes.length &&
         findingNotes.every(n => beforeNotes.some(b => b.id === n.id));
+      const keepNetPosition =
+        before.status === finding.status &&
+        beforeNetPosition !== undefined &&
+        beforeNetPosition.state !== 'unconfirmed';
 
-      if (!keepVerification && !keepNotes) {
+      if (!keepVerification && !keepNotes && !keepNetPosition) {
         findings[docId][clauseId] = finding;
         continue;
       }
 
       changed = true;
-      findings[docId][clauseId] = {
+      const merged: Finding = {
         ...finding,
         verification: keepVerification ? before.verification! : (finding.verification ?? unchecked()),
         notes: keepNotes ? beforeNotes : findingNotes,
       };
+      // Set only when actually carrying it: `finding.netPosition` is
+      // optional, and assigning it explicitly here even as `undefined` would
+      // leave an `undefined`-valued key on the merged object — which
+      // `structuredClone` (how IndexedDB writes every record) preserves,
+      // unlike a key that was simply never set. `...finding` above already
+      // carries whatever presence/absence `finding` itself had when this
+      // branch does not override it.
+      if (keepNetPosition) merged.netPosition = beforeNetPosition;
+      findings[docId][clauseId] = merged;
     }
   }
 

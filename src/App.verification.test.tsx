@@ -2,7 +2,8 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Matter, Review, DocumentRecord, Template } from './types';
+import type { Matter, Review, DocumentRecord, Template, TrailStep } from './types';
+import { unconfirmedPosition } from './lib/netPosition';
 
 // No @testing-library/react in this project — see App.interrupted.test.tsx /
 // App.reviewSaveError.test.tsx for the precedent this follows: drive a real
@@ -218,6 +219,210 @@ function makeReview(): Review {
     createdByUserId: 'u1',
   };
 }
+
+const TRAIL: TrailStep[] = [
+  { documentId: 'd1', kind: 'original', effect: 'Break on 12 months notice.', citations: [] },
+];
+
+/** Same shape as `makeReview()`, but c1's finding also carries an
+ *  unconfirmed net position — the case sub-project C's `handleConfirmNetPosition`
+ *  / `handleAmendNetPosition` (Task 8) act on. A standalone-document review
+ *  never actually produces one (only `extractCollectionClause` does), but
+ *  App.tsx's own persistence plumbing for it is target-agnostic — it reads
+ *  and writes whatever `Finding.netPosition` it's given — so this fixture
+ *  exercises that plumbing directly without needing a full collection-review
+ *  rig. */
+function makeReviewWithNetPosition(): Review {
+  const review = makeReview();
+  return {
+    ...review,
+    findings: {
+      d1: {
+        ...review.findings.d1,
+        c1: {
+          ...review.findings.d1.c1,
+          netPosition: unconfirmedPosition('Notice is now 6 months.', TRAIL),
+        },
+      },
+    },
+  };
+}
+
+describe('App — persisting a net position (Task 8)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    localStorage.clear();
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    listPlaybooksMock.mockReset().mockResolvedValue([]);
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    getMatterMock.mockReset().mockResolvedValue(makeMatter());
+    listDocumentsMock.mockReset().mockResolvedValue([]);
+    getDocumentMock.mockReset().mockResolvedValue(makeDocumentRecord());
+    getDocumentBlobMock.mockReset().mockResolvedValue(null);
+    getReviewMock.mockReset().mockResolvedValue(makeReviewWithNetPosition());
+    saveReviewMock.mockReset().mockResolvedValue(undefined);
+    getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
+    extractClauseMock.mockReset();
+    createDebouncedReviewSaverMock.mockClear();
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.pushState(null, '', '/');
+  });
+
+  async function openReview() {
+    window.history.pushState(null, '', '/matters/m1/reviews/r1');
+    act(() => { root.render(<App />); });
+    await flush();
+  }
+
+  it('confirms a net position and shows it only after the write resolves', async () => {
+    let resolveSave: (() => void) | undefined;
+    saveReviewMock.mockImplementation(() => new Promise<void>(resolve => { resolveSave = () => resolve(); }));
+
+    await openReview();
+
+    expect(container.textContent).toMatch(/unconfirmed/i);
+
+    act(() => { findButton(container, /^Confirm$/, 0).click(); });
+    await flush();
+
+    // The write is in flight — the badge must NOT have flipped yet
+    // (await-then-apply).
+    expect(saveReviewMock).toHaveBeenCalled();
+    const persisted = saveReviewMock.mock.calls[0][0];
+    expect(persisted.findings.d1.c1.netPosition.state).toBe('confirmed');
+    expect(container.textContent).toMatch(/unconfirmed/i);
+
+    resolveSave!();
+    await flush();
+
+    expect(container.textContent).not.toMatch(/unconfirmed/i);
+    expect(container.textContent).toMatch(/\bconfirmed\b/i);
+  });
+
+  it('does not show a confirmation the store rejected, and says so', async () => {
+    saveReviewMock.mockRejectedValue(new Error('Storage quota exceeded'));
+
+    await openReview();
+
+    act(() => { findButton(container, /^Confirm$/, 0).click(); });
+    await flush();
+
+    expect(container.textContent).toMatch(/unconfirmed/i);
+    expect(container.textContent).not.toMatch(/\bconfirmed\b/i);
+    expect(container.textContent).toContain('Storage quota exceeded');
+  });
+
+  it('records the local profile id and a timestamp against the confirmation', async () => {
+    getProfileMock.mockResolvedValue({ id: 'u42', name: 'Someone Else', initials: 'SE' });
+
+    await openReview();
+
+    const before = Date.now();
+    act(() => { findButton(container, /^Confirm$/, 0).click(); });
+    await flush();
+
+    const persisted = saveReviewMock.mock.calls[0][0];
+    const netPosition = persisted.findings.d1.c1.netPosition;
+    expect(netPosition.byUserId).toBe('u42');
+    expect(typeof netPosition.at).toBe('number');
+    expect(netPosition.at).toBeGreaterThanOrEqual(before);
+  });
+
+  it('amends a net position with the human\'s text, marked stronger than a plain confirmation', async () => {
+    await openReview();
+
+    act(() => { findButton(container, /^Amend$/, 0).click(); });
+    await flush();
+
+    const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
+    const textarea = dialog.querySelector('textarea') as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
+    act(() => {
+      setter.call(textarea, 'Notice is actually 3 months.');
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => { findButton(container, /confirm amendment/i, 0).click(); });
+    await flush();
+
+    const persisted = saveReviewMock.mock.calls[0][0];
+    const netPosition = persisted.findings.d1.c1.netPosition;
+    expect(netPosition.amended).toBe('Notice is actually 3 months.');
+    expect(netPosition.state).toBe('confirmed');
+    expect(container.textContent).toContain('Notice is actually 3 months.');
+    expect(container.textContent).toMatch(/amended/i);
+  });
+
+  // Mutation test 3 (task-8-brief step 3): dropping `carryHumanState`'s new
+  // net-position awareness must make this fail. c1 resolves immediately (so
+  // it can be confirmed while the run is still live); c2 stays pending until
+  // released, standing in for "some other cell finishing" after the
+  // confirmation has already been written — `runReview`'s own onUpdate,
+  // which knows nothing about it and would otherwise silently revert it.
+  it('does not lose a net position confirmation to the next update from a live run', async () => {
+    let resolveC2: ((finding: unknown) => void) | undefined;
+    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => {
+      if (clause.id === 'c1') {
+        return Promise.resolve({
+          clauseId: 'c1',
+          status: 'done',
+          citations: [],
+          summary: 'irrelevant',
+          verification: { state: 'unchecked' },
+          notes: [],
+          netPosition: unconfirmedPosition('Notice is now 6 months.', TRAIL),
+        });
+      }
+      return new Promise((resolve) => { resolveC2 = resolve; });
+    });
+
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    listPlaybooksMock.mockResolvedValue([makeTemplate()]);
+    listMattersMock.mockResolvedValue([makeMatter()]);
+
+    act(() => { root.render(<App />); });
+    await flush();
+    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    await flush();
+    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
+    await flush();
+
+    expect(container.textContent).toMatch(/unconfirmed/i);
+
+    act(() => { findButton(container, /^Confirm$/, 0).click(); });
+    await flush();
+
+    expect(container.textContent).not.toMatch(/unconfirmed/i);
+    expect(container.textContent).toMatch(/\bconfirmed\b/i);
+
+    // c2 finishes — the run's own onUpdate, carrying a snapshot in which c1
+    // has no net position at all (a plain finding, per `extractClauseMock`'s
+    // default shape for c2 above). Without `carryHumanState` knowing about
+    // `netPosition`, this would silently overwrite the confirmation.
+    act(() => { resolveC2!({
+      clauseId: 'c2',
+      status: 'done',
+      citations: [],
+      summary: 'irrelevant',
+      verification: { state: 'unchecked' },
+      notes: [],
+    }); });
+    await flush();
+
+    expect(container.textContent).not.toMatch(/unconfirmed/i);
+    expect(container.textContent).toMatch(/\bconfirmed\b/i);
+  });
+});
 
 describe('App — persisting a verification (Task 10, spec section 9)', () => {
   let container: HTMLDivElement;

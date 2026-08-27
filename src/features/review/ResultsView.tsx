@@ -7,6 +7,7 @@ import type { VerificationChange } from '../../lib/verification';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { isVerifiable } from '../../lib/findingOutcome';
 import { FindingCard } from './FindingCard';
+import type { TrailDocumentInfo } from './VariationTrailModal';
 import { DocumentViewer } from './DocumentViewer';
 import { RejectReasonModal } from './RejectReasonModal';
 import { useVerifyKeys } from './useVerifyKeys';
@@ -52,11 +53,24 @@ export interface ResultsViewProps {
    *  reasoning as `onVerify`. */
   onAddNote?: (docId: string, clauseId: string, text: string) => Promise<void>;
   /** Key (`findingKey(docId, clauseId)`) of the one finding whose
-   *  verification or note write is currently in flight — see `App.tsx`'s
-   *  `verifyBusyKey`. `null`/omitted means nothing is in flight. */
+   *  verification, note, or net position write is currently in flight — see
+   *  `App.tsx`'s `verifyBusyKey`. `null`/omitted means nothing is in flight.
+   *  Net position writes share this key with verification/notes: they all
+   *  mutate the same `Finding` record, and a second concurrent write to it
+   *  is exactly what this key exists to prevent. */
   verifyBusyKey?: string | null;
   /** The local profile's initials, for a note's author placeholder. */
   authorInitials?: string;
+  /** Persists the human's acceptance of a collection clause's synthesised
+   *  net position (Task 8). Same optionality reasoning as `onVerify`. */
+  onConfirmNetPosition?: (docId: string, clauseId: string) => Promise<void>;
+  /** Persists the human's rewritten net position text. */
+  onAmendNetPosition?: (docId: string, clauseId: string, text: string) => Promise<void>;
+  /** documentId to documentDate, for the variation trail's "date where
+   *  known" (`DocumentFile`, unlike `DocumentRecord`, carries no date at
+   *  all). Optional: omitted, a trail step simply shows no date rather than
+   *  guessing one. */
+  documentDates?: Record<string, number>;
 }
 
 type Tab = 'findings' | 'chat';
@@ -75,6 +89,7 @@ type Tab = 'findings' | 'chat';
 export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, authorInitials,
+  onConfirmNetPosition, onAmendNetPosition, documentDates,
 }: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
@@ -123,6 +138,18 @@ export function ResultsView({
   const documentNames = useMemo(
     () => Object.fromEntries(documents.map(d => [d.id, d.name])),
     [documents],
+  );
+
+  // What the variation trail needs about each document — same document set
+  // as `documentNames` above, with whatever date `documentDates` knows for
+  // it. Built here, once, rather than in `FindingCard` per clause: every
+  // card on this screen shares the same document set.
+  const documentInfo = useMemo(
+    () => Object.fromEntries(documents.map(d => [d.id, {
+      name: d.name,
+      documentDate: documentDates?.[d.id],
+    } satisfies TrailDocumentInfo])),
+    [documents, documentDates],
   );
 
   const reportError = (fallback: string, error: unknown) => {
@@ -327,6 +354,10 @@ export function ResultsView({
                   noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
                   documentNames={documentNames}
                   authorInitials={authorInitials}
+                  onConfirmNetPosition={onConfirmNetPosition ? () => onConfirmNetPosition(activeDocId, clause.id) : undefined}
+                  onAmendNetPosition={onAmendNetPosition ? (text) => onAmendNetPosition(activeDocId, clause.id, text) : undefined}
+                  netPositionBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                  documentInfo={documentInfo}
                 />
               </div>
             ))}

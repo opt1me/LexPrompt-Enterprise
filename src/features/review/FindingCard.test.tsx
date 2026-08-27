@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Clause, Finding } from '../../types';
 import { FindingCard } from './FindingCard';
+import { unconfirmedPosition } from '../../lib/netPosition';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -161,5 +162,67 @@ describe('FindingCard verification and evidence', () => {
     expect(button).toBeTruthy();
     act(() => { (button as HTMLButtonElement).click(); });
     expect(onCiteClick).toHaveBeenCalledWith(['a quote here']);
+  });
+});
+
+describe('FindingCard — net position (Task 8)', () => {
+  it('renders nothing for a net position when the finding has none', () => {
+    const container = mount(<FindingCard {...baseProps} finding={doneFinding()} />);
+    expect(container.textContent).not.toMatch(/net position/i);
+  });
+
+  it('renders the net position ABOVE the evidence when present', () => {
+    const finding = doneFinding({
+      citations: [{ quote: 'Evidence quote here', documentId: 'doc-1' }],
+      netPosition: unconfirmedPosition('The break notice is now 6 months.', [
+        { documentId: 'doc-1', kind: 'original', effect: 'Sets a 12 month notice.', citations: [] },
+      ]),
+    });
+    const container = mount(<FindingCard {...baseProps} finding={finding} />);
+    const text = container.textContent || '';
+    expect(text).toContain('The break notice is now 6 months.');
+    expect(text.indexOf('Net position')).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf('Net position')).toBeLessThan(text.indexOf('Evidence quote here'));
+  });
+
+  it('calls onConfirmNetPosition/onAmendNetPosition, and reflects netPositionBusy', () => {
+    const onConfirmNetPosition = vi.fn();
+    const finding = doneFinding({
+      netPosition: unconfirmedPosition('x', [{ documentId: 'doc-1', kind: 'original', effect: 'e', citations: [] }]),
+    });
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={finding}
+        onConfirmNetPosition={onConfirmNetPosition}
+        onAmendNetPosition={() => {}}
+        netPositionBusy
+      />,
+    );
+    const confirmButton = Array.from(container.querySelectorAll('button'))
+      .find(b => /^\s*confirm\s*$/i.test(b.textContent || ''));
+    expect(confirmButton).toBeTruthy();
+    expect((confirmButton as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('opens the variation trail from the card, showing every trail step', () => {
+    const finding = doneFinding({
+      netPosition: unconfirmedPosition('The break notice is now 6 months.', [
+        { documentId: 'doc-1', kind: 'original', effect: 'Sets a 12 month notice.', citations: [] },
+        { documentId: 'doc-2', kind: 'varies', effect: 'Cuts notice to 6 months.', citations: [] },
+      ]),
+    });
+    const container = mount(<FindingCard {...baseProps} finding={finding} />);
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+
+    const trailButton = Array.from(container.querySelectorAll('button'))
+      .find(b => /variation trail/i.test(b.textContent || ''));
+    expect(trailButton).toBeTruthy();
+    act(() => { (trailButton as HTMLButtonElement).click(); });
+
+    const dialog = container.querySelector('[role="dialog"]');
+    expect(dialog).toBeTruthy();
+    expect(dialog!.textContent).toContain('Sets a 12 month notice.');
+    expect(dialog!.textContent).toContain('Cuts notice to 6 months.');
   });
 });

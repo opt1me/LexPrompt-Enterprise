@@ -2,7 +2,8 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { Matter, Review, DocumentRecord, Template } from './types';
+import type { Matter, Review, DocumentRecord, Template, TrailStep } from './types';
+import { unconfirmedPosition, confirmPosition } from './lib/netPosition';
 
 // No @testing-library/react in this project — see App.interrupted.test.tsx
 // for the precedent this follows: drive a real react-dom root directly,
@@ -519,5 +520,102 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
     expect(saveReviewMock).toHaveBeenCalled();
     const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
     expect(persisted.createdByUserId).toBe('u9');
+  });
+
+  // Task 8, Step 4 / mutation 1: removing the net-position reset from
+  // `handleRetryCell` must make this fail. c1 carries a CONFIRMED net
+  // position alongside its verified verification — re-running it must clear
+  // both, exactly as `resetVerification` and `resetPosition` say: the human
+  // judgement described specific output that a retry replaces.
+  describe('re-running a clause also resets its net position (Task 8)', () => {
+    const TRAIL: TrailStep[] = [
+      { documentId: 'd1', kind: 'original', effect: 'Break on 12 months notice.', citations: [] },
+    ];
+
+    function makeReviewWithNetPosition(): Review {
+      const review = makeReview();
+      const confirmed = confirmPosition(unconfirmedPosition('Notice is now 6 months.', TRAIL), 'u1', 100);
+      return {
+        ...review,
+        findings: {
+          d1: {
+            ...review.findings.d1,
+            c1: { ...review.findings.d1.c1, netPosition: confirmed },
+          },
+        },
+      };
+    }
+
+    beforeEach(() => {
+      getReviewMock.mockReset().mockResolvedValue(makeReviewWithNetPosition());
+    });
+
+    // `retryCellMock`'s default implementation (top-level `beforeEach`) —
+    // mirroring the real `retryCell`/`extractClause`, which never write a
+    // `netPosition` at all for a document-target review — builds its 'done'
+    // finding with no `netPosition` key whatsoever. So the run this test's
+    // clause ENDS UP with (after `retryCell` "completes") has no
+    // `netPosition` on c1 either way, whether or not `handleRetryCell`'s own
+    // reset ran: that end state cannot tell the two apart, exactly the
+    // reason the existing verification test above checks
+    // `retryCellMock.mock.calls[0][0]` (the `cleared` run `handleRetryCell`
+    // computed and handed to `retryCell`) rather than the final persisted
+    // state. That is the assertion this test relies on too.
+    it('resets a confirmed net position to unconfirmed BEFORE handing the run to retryCell', async () => {
+      await openReview();
+
+      expect(container.textContent).toMatch(/\bconfirmed\b/i);
+
+      retryC1(container);
+      await flush();
+
+      expect(retryCellMock).toHaveBeenCalled();
+      const clearedRunPassedIn = retryCellMock.mock.calls[0][0] as ReviewRun;
+      const clearedPosition = clearedRunPassedIn.findings.d1.c1.netPosition;
+      expect(clearedPosition?.state).toBe('unconfirmed');
+      expect(clearedPosition && 'amended' in clearedPosition).toBe(false);
+      expect(clearedPosition && 'byUserId' in clearedPosition).toBe(false);
+
+      // The old confirmation's own text/attribution must be gone from
+      // screen once the retry completes — whatever replaces it (here,
+      // nothing at all, since this mock's fresh finding carries no
+      // `netPosition`), it must not still read "Confirmed by u1".
+      expect(container.textContent).not.toMatch(/confirmed by u1/i);
+    });
+
+    it('resets both verification and net position, and says so, when a clause carries both', async () => {
+      // makeReviewWithNetPosition() starts from makeReview(), whose c1 is
+      // already `verified` — so this clause carries both a human
+      // verification AND a confirmed net position, and retrying it must
+      // clear both together.
+      await openReview();
+
+      const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+      expect(chips()[0].textContent).toBe('Verified');
+
+      retryC1(container);
+      await flush();
+
+      // The notify banner fires synchronously as part of `handleRetryCell`
+      // itself, before `retryCell` is even called — unaffected by whatever
+      // the (mocked) `retryCell` later does.
+      expect(container.textContent).toMatch(/verification and net position were cleared/i);
+
+      const clearedRunPassedIn = retryCellMock.mock.calls[0][0] as ReviewRun;
+      expect(clearedRunPassedIn.findings.d1.c1.verification).toEqual({ state: 'unchecked' });
+      expect(clearedRunPassedIn.findings.d1.c1.netPosition?.state).toBe('unconfirmed');
+    });
+
+    it('leaves an unrelated clause\'s net position alone', async () => {
+      // c2 has no net position at all in this fixture — retrying c1 must not
+      // invent one for it.
+      await openReview();
+
+      retryC1(container);
+      await flush();
+
+      const clearedRunPassedIn = retryCellMock.mock.calls[0][0] as ReviewRun;
+      expect('netPosition' in clearedRunPassedIn.findings.d1.c2).toBe(false);
+    });
   });
 });

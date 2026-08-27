@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { Clause, Finding } from '../../types';
 import type { VerificationChange } from '../../lib/verification';
@@ -8,6 +8,8 @@ import { Button } from '../../components/Button';
 import { EvidenceList } from './EvidenceList';
 import { VerificationControls } from './VerificationControls';
 import { NotesPanel } from './NotesPanel';
+import { NetPositionPanel } from './NetPositionPanel';
+import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
 import { isVerifiable } from '../../lib/findingOutcome';
 
 export interface FindingCardProps {
@@ -57,6 +59,21 @@ export interface FindingCardProps {
    *  write. Defaults to 'ME' when omitted (ruling R1: attribution is real
    *  but local — there is one user). */
   authorInitials?: string;
+  /** Reports the human's intent to accept a collection clause's synthesised
+   *  net position as written. Optional, same reasoning as `onVerify`: a card
+   *  with no way to persist (a preview) shows the position and its state
+   *  but no controls. */
+  onConfirmNetPosition?: () => void;
+  /** Reports the human's rewritten net position text. */
+  onAmendNetPosition?: (text: string) => void;
+  /** True while this card's net position write is in flight. */
+  netPositionBusy?: boolean;
+  /** documentId to what the variation trail needs to show about it — see
+   *  `VariationTrailModal`. Optional: a caller with nothing to show for a
+   *  document (or no trail to show at all) simply omits it, and any trail
+   *  step naming an id absent here renders as unavailable rather than
+   *  crashing. */
+  documentInfo?: Record<string, TrailDocumentInfo>;
 }
 
 // Written fresh, not ported: the corresponding classes in the deleted
@@ -75,8 +92,13 @@ const CARD_SHELL = 'bg-[#1a1a1a] rounded-xl border';
  * for a review reopened after an abandoned run rather than one actually
  * in flight.
  */
-export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames, onVerify, verifyBusy, onAddNote, noteBusy, authorInitials }: FindingCardProps) {
+export function FindingCard({
+  clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames,
+  onVerify, verifyBusy, onAddNote, noteBusy, authorInitials,
+  onConfirmNetPosition, onAmendNetPosition, netPositionBusy, documentInfo,
+}: FindingCardProps) {
   const status = finding?.status ?? 'pending';
+  const [trailOpen, setTrailOpen] = useState(false);
 
   if (status === 'pending') {
     return (
@@ -218,6 +240,16 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
           </div>
         )}
 
+        {/* Above the evidence, deliberately: the reader meets the position
+           and its confirmation state before the quotes that argue for it. */}
+        <NetPositionPanel
+          netPosition={finding?.netPosition}
+          busy={netPositionBusy}
+          onConfirm={onConfirmNetPosition}
+          onAmend={onAmendNetPosition}
+          onOpenTrail={() => setTrailOpen(true)}
+        />
+
         {finding && (
           <EvidenceList
             citations={finding.citations}
@@ -249,6 +281,18 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
           />
         )}
       </div>
+
+      {finding?.netPosition && (
+        <VariationTrailModal
+          open={trailOpen}
+          onClose={() => setTrailOpen(false)}
+          netPosition={finding.netPosition}
+          documents={documentInfo ?? {}}
+          busy={netPositionBusy}
+          onConfirm={onConfirmNetPosition}
+          onAmend={onAmendNetPosition}
+        />
+      )}
     </div>
   );
 }

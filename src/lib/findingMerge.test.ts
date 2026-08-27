@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { carryHumanState } from './findingMerge';
-import type { Finding, ReviewRun } from '../types';
+import { unconfirmedPosition, confirmPosition, amendPosition } from './netPosition';
+import type { Finding, ReviewRun, TrailStep } from '../types';
+
+const TRAIL: TrailStep[] = [{ documentId: 'd1', kind: 'original', effect: 'e', citations: [] }];
 
 function finding(over: Partial<Finding> = {}): Finding {
   return { clauseId: 'c1', status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [], ...over };
@@ -91,5 +94,48 @@ describe('carryHumanState', () => {
     const before = run({ d1: { c1: finding({ notes: [a, b] }) } });
     const after = carryHumanState(before, run({ d1: { c1: finding({ notes: [c] }) } }));
     expect(after.findings.d1.c1.notes).toEqual([c]);
+  });
+
+  // Sub-project C, Task 8: a net position's confirmation is the same kind of
+  // human judgement as a verification, made against a specific synthesis
+  // `extractCollectionClause` produced. Without this, `handleConfirmNetPosition`
+  // (App.tsx) would have its write silently undone the next time an
+  // unrelated clause in a live run finished — the exact failure this
+  // function exists to prevent for verifications.
+  describe('a net position\'s confirmation', () => {
+    it('keeps a confirmed net position when the status has not moved', () => {
+      const confirmed = confirmPosition(unconfirmedPosition('model text', TRAIL), 'u1', 1);
+      const before = run({ d1: { c1: finding({ netPosition: confirmed }) } });
+      const after = carryHumanState(before, run({ d1: { c1: finding({ netPosition: unconfirmedPosition('model text', TRAIL) }) } }));
+      expect(after.findings.d1.c1.netPosition).toEqual(confirmed);
+    });
+
+    it('keeps an amended net position the same way', () => {
+      const amended = amendPosition(unconfirmedPosition('model text', TRAIL), 'human text', 'u1', 1);
+      const before = run({ d1: { c1: finding({ netPosition: amended }) } });
+      const after = carryHumanState(before, run({ d1: { c1: finding({ netPosition: unconfirmedPosition('model text', TRAIL) }) } }));
+      expect(after.findings.d1.c1.netPosition).toEqual(amended);
+    });
+
+    it('drops it when the status moved — the synthesis it judged is gone', () => {
+      const confirmed = confirmPosition(unconfirmedPosition('model text', TRAIL), 'u1', 1);
+      const before = run({ d1: { c1: finding({ netPosition: confirmed }) } });
+      const incoming = run({ d1: { c1: finding({ status: 'running' }) } });
+      const after = carryHumanState(before, incoming);
+      expect('netPosition' in after.findings.d1.c1).toBe(false);
+    });
+
+    it('does not invent a net position on a finding that never had one', () => {
+      const before = run({ d1: { c1: finding() } });
+      const after = carryHumanState(before, run({ d1: { c1: finding() } }));
+      expect('netPosition' in after.findings.d1.c1).toBe(false);
+    });
+
+    it('does not resurrect an unconfirmed net position (nothing human to protect)', () => {
+      const before = run({ d1: { c1: finding({ netPosition: unconfirmedPosition('old', TRAIL) }) } });
+      const incoming = unconfirmedPosition('new', TRAIL);
+      const after = carryHumanState(before, run({ d1: { c1: finding({ netPosition: incoming }) } }));
+      expect(after.findings.d1.c1.netPosition).toBe(incoming);
+    });
   });
 });
