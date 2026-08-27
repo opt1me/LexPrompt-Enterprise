@@ -312,6 +312,43 @@ taken inside them, plus the ones the fixes required.
   came to ship with nothing behind them. *Cost if wrong: a mechanical
   rename across one component and its tests.*
 
+## Task 9A re-review fixes (2026-08-27)
+
+- **R-D25. A finding counts towards a standard position only if BOTH the
+  version its review ran against carried that exact wording AND the
+  verification is dated at or after the wording was published.** Spec §7
+  states the second half only, and `buildPositionHealthMap` shipped with the
+  first half missing: it filtered reviews by playbook membership alone, so a
+  reviewer who opened an old review and verified a finding produced under
+  v1's "Six months." passed both filters after v2 published "Nine months.",
+  and the editor reported **HELD 1 of 1** for a sentence no document had ever
+  been measured against. R-D17 closed the false-`UNTESTED` direction
+  (evidence wrongly discarded); this is the opposite one, and it is worse —
+  evidence wrongly *counted* is the app stating a confident falsehood about
+  the firm's own standard, on the screen whose whole purpose is answering
+  "has this position ever been tested". Neither filter subsumes the other:
+  the wording filter catches a verification made LATE against superseded
+  text, the date filter catches one made EARLY against text since reverted
+  to, and each has a test that fails when the other is removed. *Cost if
+  wrong: one `find` per clause per relevant review on each editor open; and
+  in the conservative direction only — a review whose version cannot be
+  resolved counts for nothing, which reads `UNTESTED`, which is true.*
+- **R-D26. `LoadErrorPanel.onRetry` is optional, and the MESSAGE is the
+  invariant part.** Two call sites guarded their error branch on
+  `error && onRetry`, so a caller with a failure and no retry handler fell
+  through to its EMPTY state — "Nothing published yet" over a playbook with
+  published versions, and health chips as though the scan had succeeded and
+  found nothing. That is the empty-versus-broken confusion produced by the
+  guard written to prevent it. Rather than making the callback required at
+  each site (R-D24's remedy, which does not survive a caller passing
+  `undefined` and does not generalise to the next component), the shared
+  panel now renders its Retry only when there is something to retry, and
+  every error branch turns on the error alone. Every call site in the app
+  today still passes a retry. *Cost if wrong: a load error somewhere could
+  render as a dead end with no retry button — visible, specific and
+  recoverable by reloading, where the behaviour it replaces was an empty
+  state that read as a fact.*
+
 ## Known, recorded, not closed here
 
 - **A stored draft comes back from `migrateDraft` with `changeSummary` set
@@ -321,9 +358,41 @@ taken inside them, plus the ones the fixes required.
   The visible effect is small — a reopened draft compares as differing from
   its version even if the user undid every edit, so Publish stays enabled —
   and changing `migrateDraft` touches the pre-D conversion, so it is
-  recorded rather than fixed at the end of a fix round. *Cost if wrong: the
-  m2 guard does not catch the undo-everything case for a draft that has
-  been through a reload.*
+  recorded rather than fixed at the end of a fix round.
+
+  **It reaches export, which this entry originally missed. Task 11 owns the
+  fix at the latest.** `handleExportTemplate` serialises the draft verbatim
+  (`exportPlaybook`), so a playbook with a stored draft exports
+  `"changeSummary": "Imported from before versioning."`, and `importPlaybook`
+  keeps any non-empty summary — so an export→import round trip publishes a
+  **v1 whose change summary claims a provenance that never happened**, in the
+  sub-project built to make version history trustworthy. Still Minor: v1's
+  summary is optional and cosmetic, and `handlePublishTemplate` overrides the
+  draft's summary with the dialog's, so the string can never reach a
+  published version by any path inside this browser. *Cost if wrong: a
+  reopened draft compares as differing from its version even after the user
+  undoes every edit, so Publish stays enabled; and an imported playbook's v1
+  states a false origin.*
+- **`discardDraft` bumps `updatedAt`, so discarding a draft reorders the
+  library.** The row then reads "Updated <today>" over content published
+  weeks ago. Kept deliberately: the alternative is a second writer
+  duplicating `savePlaybook`'s transaction-scoped `_seq` allocation, which is
+  precisely the sibling drift CLAUDE.md names (`matters.ts` reproducing
+  `playbooks.ts`'s sequence allocation *without* its transaction scoping is
+  the recorded example). A discard IS a write to that playbook, so the
+  timestamp is not false — only uninformative. *Cost if wrong: a library row
+  sorts a few places higher than the reader expects; nothing about the
+  playbook's content is misstated.*
+- **`positionHealth`'s `no-position` kind is unreachable from the UI, and
+  stays.** `buildPositionHealthMap` omits a clause with no standard position
+  from the map entirely rather than giving it a `no-position` entry: the
+  editor renders a chip per entry, and "we have no house rule here" is the
+  absence of the question rather than an answer to it — a `NO POSITION` chip
+  on every unpositioned clause would be noise. The union member is NOT
+  deleted. It is the honest fourth state, `positionHealthLabel` must stay
+  exhaustive for the type to compile, and a later surface (a firm-wide
+  positions report, say) may well need to say it out loud. *Cost if wrong: a
+  union member and two unit tests that no screen currently reaches.*
 - **Nothing in this round was verified in a browser.** Draft persistence,
   the three-way leave prompt, the health chips and the version-history modal
   are unit-tested only. Task 13's browser checklist gains steps for all of

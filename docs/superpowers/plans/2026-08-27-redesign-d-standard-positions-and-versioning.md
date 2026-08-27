@@ -1726,29 +1726,50 @@ full; the documented fallback was not needed.
 
 ## Task 10: Version history
 
+**THE FILE ALREADY EXISTS — EXTEND IT, DO NOT CREATE IT.** Task 9A shipped
+`src/features/templates/VersionHistory.tsx` and its tests, wired to the
+editor's `Version history` control, because R-D20 refused to ship a link with
+no destination. Following the original brief literally would overwrite that
+file and its tests, or widen a prop and break App's call site. The interface
+below is corrected to what ships; the deltas from the original brief are:
+
+- `error?: string`, **not** `error?: unknown` — R-D20: every load site in this
+  app classifies through `describeLoadError` before rendering, and the
+  component takes the classified message.
+- `matterNamesByVersion` is **not a prop yet**. App does not pass it. Task 10
+  adds it, and it must be **optional** or every existing call site and test
+  breaks — a version absent from it still says so in words.
+- `onRetry` is optional, but its absence no longer suppresses the error
+  branch: that guard was `error && onRetry` and rendered the EMPTY state on a
+  failure with no retry. Do not reintroduce the conjunction.
+- `loading?: boolean` exists and has its own branch, between error and empty.
+
 **Files:**
-- Create: `src/features/templates/VersionHistory.tsx` + test
+- Extend: `src/features/templates/VersionHistory.tsx` + its existing test file
 - Modify: `src/features/templates/TemplateLibrary.tsx`, `src/features/review/ResultsView.tsx` (header link), `src/App.tsx`
 
 **Interfaces:**
 - Consumes: `listVersions` (Task 2), `PlaybookVersion`, `describeLoadError`/`LoadErrorPanel`.
-- Produces:
+- Produces (the shipped shape, plus what Task 10 adds):
 
 ```ts
 export interface VersionHistoryProps {
   /** Newest first, as `listVersions` returns them. */
   versions: PlaybookVersion[];
-  /** Version id to the names of the matters whose reviews ran against it.
-   *  Built by the caller from `listReviews()` + `Review.playbookVersionId`
-   *  (Task 4). A version absent from this map has not been used yet, which
-   *  the row says in words — a blank cell reads as a rendering failure. */
-  matterNamesByVersion: Record<string, string[]>;
+  /** ADDED BY TASK 10, and OPTIONAL: version id to the names of the matters
+   *  whose reviews ran against it. Built by the caller from `listReviews()` +
+   *  `Review.playbookVersionId` (Task 4). A version absent from this map has
+   *  not been used yet, which the row says in words — a blank cell reads as a
+   *  rendering failure. Absent map, same words: the editor's call site does
+   *  not gather reviews. */
+  matterNamesByVersion?: Record<string, string[]>;
   /** Set when the load failed. Renders the error branch INSTEAD of the list,
    *  never an empty list — CLAUDE.md's rule that every IndexedDB-backed
    *  screen distinguishes "empty" from "broken" and offers a retry. */
-  error?: unknown;
+  error?: string;
   onRetry?: () => void;
   onClose: () => void;
+  loading?: boolean;
 }
 ```
 
@@ -1756,7 +1777,7 @@ There is deliberately no `onEdit`. A published version is immutable, so offering
 
 - [ ] **Step 1: Write the failing tests**
 
-**Two harness notes, checked at plan time.** `src/test/mount.tsx` exports `mount`, `mountOnce`, `buttons`, `buttonNamed`, `textbox`, `click`, `type`, `keyDown`, `keyDownOn` — there is no `text()` or `html()`; read `container.textContent` and `container.innerHTML`. And this is a NEW test file, so it uses the shared harness rather than hand-rolling one.
+**Two harness notes, checked at plan time.** `src/test/mount.tsx` exports `mount`, `mountOnce`, `buttons`, `buttonNamed`, `textbox`, `click`, `type`, `keyDown`, `keyDownOn` — there is no `text()` or `html()`; read `container.textContent` and `container.innerHTML`. `VersionHistory.test.tsx` already exists (Task 9A) and already uses that harness: add to it, and keep its eight tests — they cover the error, loading and empty branches this task must not regress.
 
 **R-D15 — the header must distinguish THREE cases, not two.** The id can be absent (the review predates versioning, or its playbook never existed), present-and-resolvable, or **present but dangling** (Task 3 made deleting a playbook cascade to its versions, so a review that ran against a deleted playbook's v3 keeps an id that now resolves to nothing). Rendering "Ran against v3" from the id's presence alone is exactly what R-D15 forbids: the version must be fetched and a miss stated honestly.
 

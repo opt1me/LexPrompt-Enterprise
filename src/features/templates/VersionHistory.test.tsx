@@ -75,6 +75,14 @@ describe('VersionHistory', () => {
     expect(buttonNamed(el, /retry/i)).toBeUndefined();
   });
 
+  // Third state, and the third way to get "empty" wrong: a load still in
+  // flight must not read as a playbook with no history.
+  it('says it is still loading rather than showing the empty state', () => {
+    const out = mount(<VersionHistory versions={[]} loading onClose={noop} />).textContent!;
+    expect(out).toMatch(/loading/i);
+    expect(out).not.toMatch(/nothing published yet/i);
+  });
+
   it('says plainly when a playbook has no published version yet', () => {
     const out = mount(<VersionHistory versions={[]} onClose={noop} />).textContent!;
     expect(out).toMatch(/nothing published yet/i);
