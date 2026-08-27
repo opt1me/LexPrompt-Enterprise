@@ -2509,12 +2509,12 @@ describe('verificationCounts and exportSummaryLine', () => {
 
   it('summarises in one line naming how many were verified', () => {
     expect(exportSummaryLine(findings)).toBe(
-      '6 findings — 2 verified, 2 unverified, 1 flagged, 1 rejected.',
+      '6 findings: 2 verified, 2 unverified, 1 flagged, 1 rejected.',
     );
   });
 
   it('handles an empty review without dividing by zero or saying nothing', () => {
-    expect(exportSummaryLine({})).toBe('0 findings — 0 verified, 0 unverified, 0 flagged, 0 rejected.');
+    expect(exportSummaryLine({})).toBe('0 findings: 0 verified, 0 unverified, 0 flagged, 0 rejected.');
   });
 });
 ```
@@ -2570,7 +2570,7 @@ Append to `src/features/tabular/csv.test.ts`:
 it('opens with a one-field summary row naming how many findings were verified', () => {
   const csv = buildTabularCsv(runWith({ 'clause-1': doneFinding({ verification: { state: 'verified' } }) }), docs);
   const [first] = csv.split('\r\n');
-  expect(first).toBe('"1 findings — 1 verified, 0 unverified, 0 flagged, 0 rejected."');
+  expect(first).toBe('"1 findings: 1 verified, 0 unverified, 0 flagged, 0 rejected."');
 });
 
 it('prefixes an unverified cell so a spreadsheet cannot read it as checked', () => {
@@ -2682,10 +2682,16 @@ export function verificationCounts(findings: Review['findings']): VerificationCo
 }
 
 /** The one-line header every export carries. Reading it should be enough to
- *  know how much of the report a human has actually stood behind. */
+ *  know how much of the report a human has actually stood behind.
+ *
+ *  Deliberately ASCII-only. This same string goes into the CSV, which is
+ *  written with no byte-order mark, and Excel's default import on Windows
+ *  reads a BOM-less file as ANSI — so an em-dash here would arrive as
+ *  mojibake in the first thing a reader sees. The line has to survive its
+ *  most fragile consumer, and typography is not worth a garbled export. */
 export function exportSummaryLine(findings: Review['findings']): string {
   const c = verificationCounts(findings);
-  return `${c.total} findings — ${c.verified} verified, ${c.unchecked} unverified, ${c.flagged} flagged, ${c.rejected} rejected.`;
+  return `${c.total} findings: ${c.verified} verified, ${c.unchecked} unverified, ${c.flagged} flagged, ${c.rejected} rejected.`;
 }
 ```
 
