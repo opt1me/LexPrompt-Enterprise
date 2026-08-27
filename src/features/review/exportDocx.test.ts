@@ -1,4 +1,9 @@
 import { describe, it, expect } from 'vitest';
+// `jszip` is a transitive dependency (pulled in via `docx`, not declared in
+// this project's own package.json) used only here, to unzip the generated
+// .docx buffer so a test can read its raw XML. If a future `docx` version
+// bump drops it, this import fails loudly at test collection time — not a
+// silent wrong answer — and the fix is to add it to devDependencies then.
 import JSZip from 'jszip';
 import { buildReportRows, buildReportDocument } from './exportDocx';
 import type { Finding, ReviewRun, Template } from '../../types';
@@ -145,5 +150,29 @@ describe('buildReportRows', () => {
     const xml = await zip.file('word/document.xml')?.async('string');
 
     expect(xml).toContain('UNVERIFIED AI OUTPUT');
+  });
+
+  // A rejection is the one label that carries human-authored text (the
+  // reason) into a document that leaves the building — spec section 6: a
+  // rejected finding is exported WITH its reason, never omitted. Asserting
+  // on the reason string itself, not just the "REJECTED:" prefix, is the
+  // point: a bug that renders the prefix but drops the reason would pass a
+  // prefix-only check while still failing the actual requirement.
+  it('carries a rejection reason from a row into the generated docx XML', async () => {
+    const run = runWith({
+      'clause-1': doneFinding({
+        verification: { state: 'rejected', reason: 'Cites the indemnity, not the cap' },
+      }),
+    });
+    const rows = buildReportRows(run, 'doc-1');
+
+    const doc = await buildReportDocument(rows, 'doc-1', 'stub summary line');
+    const { Packer } = await import('docx');
+    const buffer = await Packer.toBuffer(doc);
+    const zip = await JSZip.loadAsync(buffer);
+    const xml = await zip.file('word/document.xml')?.async('string');
+
+    expect(xml).toContain('REJECTED:');
+    expect(xml).toContain('Cites the indemnity, not the cap');
   });
 });
