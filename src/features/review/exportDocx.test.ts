@@ -461,3 +461,60 @@ describe('buildReportRows / exportDocx / buildReportDocument — net positions',
     expect(xml).toMatch(/amend.*person|person.*amend/i);
   });
 });
+
+// Found by the fix agent for C's final review, outside its own round: a
+// collection's DOCX report was titled, filenamed and error-messaged after
+// whichever document the viewer happened to be showing. That asserts that a
+// synthesis drawn across every member belongs to one member — the same "a
+// collection is not one of its members" shape as the CSV defect (M1) that
+// emitted one identical row per document.
+describe('exportDocx — a collection report is named after the collection', () => {
+  function collectionRun(): ReviewRun {
+    return {
+      id: 'r1',
+      templateSnapshot: { ...run.templateSnapshot, name: 'Lease Review' },
+      documentIds: ['lease', 'deed'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['lease', 'deed'] },
+      findings: {
+        'coll-1': {
+          [run.templateSnapshot.clauses[0].id]: {
+            clauseId: run.templateSnapshot.clauses[0].id, status: 'done',
+            summary: 'The notice period is six months.',
+            citations: [], verification: { state: 'unchecked' }, notes: [],
+          },
+        },
+      },
+      startedAt: 1,
+    };
+  }
+
+  /** Mirrors this file's existing download-capture idiom (see the
+   *  `vi.stubGlobal('URL', …)` blocks above) rather than inventing a second
+   *  one — jsdom has no `URL.createObjectURL`. */
+  async function capturedDownloadName(r: ReviewRun, docId: string, docName: string): Promise<string> {
+    let name = '';
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:stub', revokeObjectURL: () => {} });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(function (this: HTMLAnchorElement) { name = this.download; });
+    try {
+      await exportDocx(r, docId, docName, { lease: 'Lease.pdf', deed: 'Deed.pdf', d1: 'MSA.pdf' });
+    } finally {
+      clickSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+    return name;
+  }
+
+  it('does not name the report after a member document', async () => {
+    const name = await capturedDownloadName(collectionRun(), 'lease', 'Lease.pdf');
+    expect(name).not.toMatch(/^Lease_Report/);
+    expect(name).toContain('Lease Review');
+    expect(name).toContain('collection');
+  });
+
+  it('still names a single-document report after its document', async () => {
+    // The regression pin: the collection rule must not leak into the ordinary
+    // path, which has always been named after the document it reports on.
+    expect(await capturedDownloadName(run, 'd1', 'MSA.pdf')).toBe('MSA_Report.docx');
+  });
+});

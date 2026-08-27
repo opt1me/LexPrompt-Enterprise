@@ -3,7 +3,7 @@ import {
   describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
 } from '../../lib/findingOutcome';
-import { findingsKeyFor } from '../../lib/reviewTarget';
+import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
 export interface ReportRow {
   title: string;
@@ -395,6 +395,16 @@ export async function exportDocx(
   documentNames: Record<string, string> = {},
 ): Promise<void> {
   const rows = buildReportRows(run, docId, documentNames);
+  // A collection is not one of its members. `docName` is whichever document
+  // the viewer happened to be showing, and titling a collection's report
+  // after it — in the heading, the filename and the no-findings error —
+  // asserts that a synthesis drawn across every member belongs to that one
+  // document. Same shape as the CSV defect that emitted one identical row
+  // per member (M1): the report covers the collection, so it is named after
+  // the collection's review, not after a member of it.
+  const reportName = isCollectionTarget(run.target)
+    ? `${run.templateSnapshot.name} - collection of ${run.documentIds.length} linked documents`
+    : docName;
   // Fail-loudly rule, applied to the surface where the whole app's founding
   // defect was first learned (CLAUDE.md): a review that genuinely has no
   // findings for this document/collection must say so, rather than handing
@@ -402,7 +412,7 @@ export async function exportDocx(
   // clause tables — a document a lawyer could send without ever noticing it
   // says nothing.
   if (rows.length === 0) {
-    throw new Error(`No findings to export for ${docName}. This review has no results to report yet.`);
+    throw new Error(`No findings to export for ${reportName}. This review has no results to report yet.`);
   }
   // Important 4: this report covers ONE document (`buildReportRows(run,
   // docId)` above), so its header summary must count only that document's
@@ -411,7 +421,7 @@ export async function exportDocx(
   // document, so its whole-run summary is correct as-is; scoping only
   // belongs here, at the one place that reports on a single document.
   const docSummary = exportSummaryLine({ [docId]: run.findings[findingsKeyFor(run.target, docId)] ?? {} });
-  const doc = await buildReportDocument(rows, docName, docSummary);
+  const doc = await buildReportDocument(rows, reportName, docSummary);
 
   const { Packer } = await import('docx');
   const blob = await Packer.toBlob(doc);
@@ -419,7 +429,7 @@ export async function exportDocx(
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${stripExtension(docName)}_Report.docx`;
+  a.download = `${stripExtension(reportName)}_Report.docx`;
   a.click();
   URL.revokeObjectURL(url);
 }
