@@ -1769,42 +1769,78 @@ The review header gains "Ran against v1" linking to this screen, read from `run.
 
 - [ ] **Step 1: Write the failing tests**
 
+**Against the real fixtures, checked at plan time.** `src/features/tabular/csv.test.ts` provides `template(clauses)` (returns a `PlaybookVersion`), `doc(id, name)`, `doneFinding(overrides)` and — inside the export-summary describe — `runWith(findings)`, which builds a one-document run keyed by `'doc-1'`. Use those; there is no `runWithDeviation` fixture and you should not add a parallel one.
+
+In `src/lib/findingOutcome.test.ts` (read it for its own `Finding` factory; if it has none, build one inline rather than importing a test helper across modules):
+
 ```ts
-describe('positionOutcomeLabel', () => {
-  it('labels a deviation', () => {
-    expect(positionOutcomeLabel({ …, positionOutcome: 'deviates' }))
-      .toBe('DEVIATES FROM OUR STANDARD POSITION');
-  });
-  it('labels an unclear outcome as unclear, never as met', () => {
-    expect(positionOutcomeLabel({ …, positionOutcome: 'unclear' }))
-      .toBe('UNCLEAR AGAINST OUR STANDARD POSITION');
-  });
-  it('returns null for meets — a label there would be a caveat where there is none', () => {
-    expect(positionOutcomeLabel({ …, positionOutcome: 'meets' })).toBeNull();
-  });
-  it('returns null when there is no position at all', () => {
-    expect(positionOutcomeLabel({ … })).toBeNull();
-  });
+const deviating: Finding = {
+  clauseId: 'c1', status: 'done', summary: 'The lease gives 9 months.',
+  citations: [], verification: { state: 'unchecked' }, notes: [],
+  positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+};
+
+it('labels a deviation', () => {
+  expect(positionOutcomeLabel(deviating)).toBe('DEVIATES FROM OUR STANDARD POSITION');
 });
 
-it('the CSV carries the label and the rationale', () => {
-  const csv = buildTabularCsv(runWithDeviation, docs);
+it('labels an unclear outcome as unclear, never as met', () => {
+  expect(positionOutcomeLabel({ ...deviating, positionOutcome: 'unclear' }))
+    .toBe('UNCLEAR AGAINST OUR STANDARD POSITION');
+});
+
+it('returns null for meets — a label there would be a caveat where there is none', () => {
+  expect(positionOutcomeLabel({ ...deviating, positionOutcome: 'meets' })).toBeNull();
+});
+
+it('returns null when there was no position to compare against', () => {
+  const { positionOutcome: _o, positionRationale: _r, ...noPosition } = deviating;
+  expect(positionOutcomeLabel(noPosition as Finding)).toBeNull();
+});
+
+it('returns null for a missing finding, rather than throwing', () => {
+  expect(positionOutcomeLabel(undefined)).toBeNull();
+});
+```
+
+In `csv.test.ts`, inside the describe that already has `runWith`:
+
+```ts
+it('carries the deviation label and its rationale into the cell', () => {
+  const csv = buildTabularCsv(
+    runWith({ 'clause-1': doneFinding({
+      summary: 'The lease gives 9 months.',
+      positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+    }) }),
+    [doc('doc-1', 'Lease.pdf')],
+  );
   expect(csv).toContain('DEVIATES FROM OUR STANDARD POSITION');
   expect(csv).toContain('Nine months, not six.');
 });
 
-it('the DOCX and the CSV use the same wording for the same finding', () => {
-  // They disagreed once before, and the CSV is the one that opens straight
-  // into Excel.
-  const label = positionOutcomeLabel(f)!;
-  expect(buildTabularCsv(runWithDeviation, docs)).toContain(label);
-  expect(buildReportRows(runWithDeviation, docs).flat().join(' ')).toContain(label);
+it('adds no position caveat to a clause that never had a position', () => {
+  const csv = buildTabularCsv(runWith({ 'clause-1': doneFinding({ summary: 'x' }) }), [doc('doc-1', 'Lease.pdf')]);
+  expect(csv).not.toMatch(/STANDARD POSITION/);
 });
 ```
 
-Wire the label into `cellText`'s existing label array in `csv.ts` (it already joins `verificationLabel`, `netPositionLabel`, `netPositionAmendmentLabel`) and into the DOCX's equivalent, so all four caveats appear in one bracketed run **in a fixed order** before the possibly-truncated summary. The rationale joins the `extras` list beside `noteLines` and `trailLines`.
+And the drift guard — the two exporters have silently disagreed before, which is why `findingOutcome.ts` exists:
 
-`positionOutcomeLabel` is ASCII-only, for the same reason `exportSummaryLine` is: the CSV is written with no BOM and Excel's default Windows import reads it as ANSI.
+```ts
+it('the DOCX and the CSV use the same wording for the same finding', () => {
+  const finding = doneFinding({
+    summary: 'The lease gives 9 months.',
+    positionOutcome: 'deviates', positionRationale: 'Nine months, not six.',
+  });
+  const label = positionOutcomeLabel(finding)!;
+  const r = runWith({ 'clause-1': finding });
+  expect(buildTabularCsv(r, [doc('doc-1', 'Lease.pdf')])).toContain(label);
+  expect(buildReportRows(r, 'doc-1', { 'doc-1': 'Lease.pdf' }).flatMap(row => Object.values(row)).join(' '))
+    .toContain(label);
+});
+```
+
+`positionOutcomeLabel` is ASCII-only, for the same reason `exportSummaryLine` is: the CSV is written with no BOM and Excel's default Windows import reads it as ANSI, so an em-dash arrives as mojibake in the first thing a reader sees.
 
 - [ ] **Steps 2–4: Run / implement / run. Step 5: Gates and commit.**
 
