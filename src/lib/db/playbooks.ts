@@ -5,7 +5,7 @@ import {
   carriesUnconvertedContent, migrateDraft, migratePlaybookRecord, migrateVersionRecord,
   UnconvertedPlaybookError,
 } from './playbookMigration';
-import { getVersion, publishVersion } from './playbookVersions';
+import { getVersion, publishVersionIn } from './playbookVersions';
 import { SCHEMA_VERSION, type Playbook, type PlaybookDraft, type PlaybookVersion } from '../../types';
 import { uid } from '../uid';
 
@@ -150,6 +150,71 @@ export async function savePlaybook(playbook: Playbook): Promise<Playbook> {
   return saved;
 }
 
+/**
+ * Publishes `draft` as the playbook's next version AND points the identity
+ * record at it, in ONE readwrite transaction spanning both stores.
+ *
+ * `publishVersion` then `savePlaybook` — two transactions — is what this
+ * replaces. A failure in the window between them left an orphaned version
+ * and a gap in the version numbering, and for an import an orphan with no
+ * identity record at all: permanently unreachable, since the only thing in
+ * the app that adopts orphans is the startup conversion, and that only
+ * looks at playbooks that exist. The one-time migration went to
+ * considerable trouble to be atomic (R-D9) and the two everyday paths doing
+ * the same pair of writes did not follow it; this is the shared form, so
+ * there is one implementation rather than a third copy.
+ *
+ * It takes the identity as a value rather than an id so it serves both
+ * callers: the editor's Save has the record in hand, and an import mints
+ * one that is not in the store yet.
+ *
+ * PUBLISHING CONSUMES THE DRAFT. The edits are now IN the version, so a
+ * surviving `Playbook.draft` would make the library read "unpublished
+ * changes" forever and make `loadPlaybookForEdit` prefer the stale draft
+ * over the version just published. The key is DELETED, not set to
+ * `undefined`: `structuredClone` (how IndexedDB writes every record)
+ * preserves an `undefined`-valued key, and `'draft' in playbook` is how
+ * "has unpublished changes" gets asked.
+ *
+ * Nothing non-IDB is awaited inside the transaction, which is what keeps
+ * IndexedDB from auto-committing it early — `publishVersionIn` and
+ * `nextSeq` are both store-handle forms for exactly this reason.
+ */
+export async function publishAndPoint(
+  playbook: Playbook,
+  draft: PlaybookDraft,
+  byUserId: string,
+): Promise<{ playbook: Playbook; version: PlaybookVersion }> {
+  const db = await getDb();
+  const identity: Playbook = { ...playbook };
+  delete identity.draft;
+  try {
+    const tx = db.transaction([STORES.playbooks, STORES.playbookVersions], 'readwrite');
+    const playbooks = tx.objectStore(STORES.playbooks);
+    const versions = tx.objectStore(STORES.playbookVersions);
+    const version = await publishVersionIn(versions, playbook.id, draft, byUserId);
+    const seq = await nextSeq(playbooks);
+    const saved: Playbook = {
+      ...identity,
+      // The identity mirrors the current version's name so the library can
+      // list playbooks without reading a version per row.
+      name: version.name,
+      currentVersionId: version.id,
+      updatedAt: Date.now(),
+      schemaVersion: SCHEMA_VERSION,
+    };
+    await playbooks.put({ ...saved, _seq: seq } as StoredPlaybook);
+    await tx.done;
+    return { playbook: saved, version };
+  } catch (error) {
+    // Same rule as `publishVersion`: the change-summary rejection is a
+    // caller error, and rethrowing it as "storage is full" would send the
+    // user off to delete data to fix a missing text field.
+    if (error instanceof Error && /change summary/i.test(error.message)) throw error;
+    throw new Error(STORAGE_FULL_MESSAGE);
+  }
+}
+
 /** Stores unpublished edits against the playbook's identity record.
  *
  *  Loud rather than quiet on a missing playbook: silently creating one
@@ -193,7 +258,5 @@ export async function importPlaybook(json: string, byUserId = ''): Promise<{ pla
   const draft = migrateDraft(parsed, 'Untitled playbook');
   // Fresh id so importing a playbook you already have does not overwrite it.
   const identity = { ...newPlaybook(draft.name), id: uid() };
-  const version = await publishVersion(identity.id, draft, byUserId);
-  const playbook = await savePlaybook({ ...identity, currentVersionId: version.id });
-  return { playbook, version };
+  return publishAndPoint(identity, draft, byUserId);
 }

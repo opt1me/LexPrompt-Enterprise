@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   listPlaybooks, getPlaybook, savePlaybook, deletePlaybook,
   newPlaybook, newPlaybookDraft, draftFromVersion, getPlaybookContent, saveDraft,
-  exportPlaybook, importPlaybook,
+  exportPlaybook, importPlaybook, publishAndPoint,
 } from './playbooks';
 import { publishVersion } from './playbookVersions';
 import { getDb, closeDb } from './open';
@@ -259,6 +259,63 @@ describe('content and drafts', () => {
   });
 });
 
+describe('publishAndPoint', () => {
+  it('publishes the version and points the identity at it in one transaction', async () => {
+    const db = await getDb();
+    const identity = newPlaybook('Atomic');
+    const txSpy = vi.spyOn(db, 'transaction');
+    const { playbook, version } = await publishAndPoint(identity, {
+      ...newPlaybookDraft('Atomic'),
+      clauses: [{ id: 'c1', title: 'T', extractPrompt: 'p' }],
+    }, 'u1');
+    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(txSpy).toHaveBeenCalledWith([STORES.playbooks, STORES.playbookVersions], 'readwrite');
+    txSpy.mockRestore();
+    expect(playbook.currentVersionId).toBe(version.id);
+    expect((await getPlaybookContent(playbook.id))!.version).toBe(1);
+  });
+
+  it('numbers versions monotonically across successive publishes', async () => {
+    const identity = newPlaybook('Versioned');
+    const first = await publishAndPoint(identity, newPlaybookDraft('Versioned'), 'u1');
+    const second = await publishAndPoint(first.playbook, {
+      ...newPlaybookDraft('Versioned'), changeSummary: 'added a clause',
+    }, 'u1');
+    expect(second.version.version).toBe(2);
+    expect(second.playbook.currentVersionId).toBe(second.version.id);
+  });
+
+  it('surfaces the change-summary rule as itself, not as "storage is full"', async () => {
+    const identity = newPlaybook('Versioned');
+    const first = await publishAndPoint(identity, newPlaybookDraft('Versioned'), 'u1');
+    await expect(publishAndPoint(first.playbook, newPlaybookDraft('Versioned'), 'u1'))
+      .rejects.toThrow(/change summary/i);
+  });
+
+  // Minor 2 (fix round 1). Dormant until Task 9 wires `saveDraft` into the
+  // editor, and live the moment it does: a draft that survives its own
+  // publish makes the library read "Unpublished changes" forever, and
+  // `loadPlaybookForEdit` prefers `t.draft` over the version just
+  // published — so the editor would keep reopening the stale copy.
+  it('consumes the draft: publishing clears it from the identity record', async () => {
+    const identity = newPlaybook('Drafted');
+    const { playbook } = await publishAndPoint(identity, newPlaybookDraft('Drafted'), 'u1');
+    await saveDraft(playbook.id, { ...newPlaybookDraft('Drafted'), changeSummary: 'wip' });
+    expect((await getPlaybook(playbook.id))!.draft).toBeTruthy();
+
+    const withDraft = (await getPlaybook(playbook.id))!;
+    await publishAndPoint(withDraft, {
+      ...newPlaybookDraft('Drafted'), changeSummary: 'published the draft',
+    }, 'u1');
+
+    const after = (await getPlaybook(playbook.id))!;
+    expect(after.draft).toBeUndefined();
+    // Absent, not present-and-undefined: structuredClone preserves the key,
+    // and `'draft' in playbook` is how "has unpublished changes" is asked.
+    expect('draft' in after).toBe(false);
+  });
+});
+
 describe('import / export', () => {
   it('round-trips through export and import', async () => {
     const draft = {
@@ -284,6 +341,40 @@ describe('import / export', () => {
     }));
     expect(playbook.currentVersionId).toBeTruthy();
     expect((await getPlaybookContent(playbook.id))!.clauses[0].title).toBe('T');
+  });
+
+  // Minor 1 (fix round 1). The one-time migration went to considerable
+  // trouble to be atomic (R-D9) and the two everyday paths that do the same
+  // pair of writes did not follow it: `publishVersion` then `savePlaybook`,
+  // two transactions, with a window between them. For `importPlaybook` the
+  // orphan is the worse half — a version with NO identity record at all,
+  // permanently unreachable, since nothing but the migration adopts orphans
+  // and the migration only looks at playbooks that exist.
+  it('importPlaybook publishes and points in ONE transaction over both stores', async () => {
+    const db = await getDb();
+    const txSpy = vi.spyOn(db, 'transaction');
+    await importPlaybook(JSON.stringify({
+      name: 'Atomic import', clauses: [{ id: 'c1', title: 'T', extractPrompt: 'p' }],
+    }));
+    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(txSpy).toHaveBeenCalledWith([STORES.playbooks, STORES.playbookVersions], 'readwrite');
+    txSpy.mockRestore();
+  });
+
+  it('a failed import leaves no orphaned version behind', async () => {
+    const db = await getDb();
+    const spy = vi.spyOn(db, 'transaction').mockImplementation((() => {
+      throw new Error('quota exceeded');
+    }) as typeof db.transaction);
+    try {
+      await expect(importPlaybook(JSON.stringify({
+        name: 'Doomed', clauses: [{ id: 'c1', title: 'T', extractPrompt: 'p' }],
+      }))).rejects.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await listPlaybooks()).toEqual([]);
+    expect(await db.getAll(STORES.playbookVersions)).toEqual([]);
   });
 
   it('rejects malformed JSON', async () => {

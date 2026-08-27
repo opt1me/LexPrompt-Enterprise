@@ -10,9 +10,8 @@ import { uid } from './lib/uid';
 import {
   listPlaybooks as listTemplates, getPlaybook as getTemplate, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
-  getPlaybookContent, newPlaybookDraft, draftFromVersion,
+  getPlaybookContent, newPlaybookDraft, draftFromVersion, publishAndPoint,
 } from './lib/db/playbooks';
-import { publishVersion } from './lib/db/playbookVersions';
 import {
   listMatters, getMatter, saveMatter, newMatter, deleteMatter,
 } from './lib/db/matters';
@@ -1881,21 +1880,19 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * version, so a draft nothing publishes never reaches a run — the
    * reviewer would save, run, and quietly get the previous clauses. Task 9
    * adds the draft/publish split properly, with a publish dialog; until
-   * then Save is a publish, and `publishVersion`'s own change-summary rule
+   * then Save is a publish, and `publishAndPoint`'s own change-summary rule
    * is surfaced as the loud error it already throws.
+   *
+   * `publishAndPoint` rather than `publishVersion` + `savePlaybook`: those
+   * were two transactions, and a failure in the window between them left an
+   * orphaned version and a gap in the version numbering (Minor 1). It also
+   * clears any stored draft, which the two-call form did not.
    */
   const handleSaveTemplate = async () => {
     if (!activePlaybook || !activeDraft) return;
     try {
       const profile = await getProfile();
-      const version = await publishVersion(activePlaybook.id, activeDraft, profile.id);
-      const saved = await saveTemplate({
-        ...activePlaybook,
-        // The identity mirrors the current version's name so the library can
-        // list playbooks without reading a version per row.
-        name: version.name,
-        currentVersionId: version.id,
-      });
+      const { playbook: saved, version } = await publishAndPoint(activePlaybook, activeDraft, profile.id);
       const nextDraft = draftFromVersion(version);
       setActivePlaybook(saved);
       setActiveDraft(nextDraft);

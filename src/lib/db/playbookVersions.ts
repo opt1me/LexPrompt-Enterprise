@@ -10,6 +10,13 @@ const STORAGE_FULL_MESSAGE =
 /**
  * Freezes a draft into an immutable published version.
  *
+ * NOTE for app code: publishing a version WITHOUT pointing the identity
+ * record at it is what left an orphan (Minor 1, fix round 1). Every caller
+ * that means "save the user's edits" goes through `playbooks.ts`'s
+ * `publishAndPoint`, which does both writes in one transaction. This
+ * remains the unit the `playbookVersions` suite exercises for spec 9's
+ * immutability, monotonicity and change-summary rules.
+ *
  * The read of the current max version number and the write of the new
  * record share ONE readwrite transaction — the same discipline
  * `playbooks.ts`'s `savePlaybook` uses for `_seq`, and for the same reason:

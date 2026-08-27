@@ -36,20 +36,34 @@ import type { LexPromptDB } from './schema';
  *  type, scoped to a single store and `'readwrite'` mode, makes passing
  *  any of those a compile error instead of a runtime race. */
 
-/** An object store handle from a `db.transaction(name, 'readwrite')` call
- *  on a single store name — i.e. exactly what `tx.store` is typed as at
- *  each of this function's three call sites. Deliberately not satisfiable
- *  by a `db`-level wrapper (missing `put`/`transaction`/etc.) or by a
- *  `'readonly'` store (wrong `Mode`). */
-export type SeqStore<StoreName extends StoreNames<LexPromptDB> = StoreNames<LexPromptDB>> =
-  IDBPObjectStore<LexPromptDB, [StoreName], StoreName, 'readwrite'>;
+/** An object store handle from an open `'readwrite'` transaction — i.e.
+ *  exactly what `tx.store` / `tx.objectStore(name)` is typed as at this
+ *  function's call sites. Deliberately not satisfiable by a `db`-level
+ *  wrapper (missing `put`/`transaction`/etc.) or by a `'readonly'` store
+ *  (wrong `Mode`), which is the whole point.
+ *
+ *  `TxStores` is a parameter rather than the single-store `[StoreName]` it
+ *  started as because `publishAndPoint` allocates a `_seq` inside a
+ *  transaction spanning BOTH `playbooks` and `playbookVersions` — the same
+ *  widening `publishVersionIn` carries, and for the same reason. It
+ *  defaults to `[StoreName]`, so the single-store call sites read
+ *  unchanged, and it loosens nothing that matters: the mode and the
+ *  "handle from an already-open transaction" shape are what enforce
+ *  atomicity, not the arity of the store list. */
+export type SeqStore<
+  StoreName extends StoreNames<LexPromptDB> = StoreNames<LexPromptDB>,
+  TxStores extends ArrayLike<StoreNames<LexPromptDB>> = [StoreName],
+> = IDBPObjectStore<LexPromptDB, TxStores, StoreName, 'readwrite'>;
 
 export function seqOf(record: { _seq?: unknown } | null | undefined): number {
   return typeof record?._seq === 'number' ? record._seq : 0;
 }
 
-export async function nextSeq<StoreName extends StoreNames<LexPromptDB>>(
-  store: SeqStore<StoreName>,
+export async function nextSeq<
+  StoreName extends StoreNames<LexPromptDB>,
+  TxStores extends ArrayLike<StoreNames<LexPromptDB>>,
+>(
+  store: SeqStore<StoreName, TxStores>,
 ): Promise<number> {
   const existing = await store.getAll();
   return existing.reduce<number>((max, r) => Math.max(max, seqOf(r as { _seq?: unknown })), 0) + 1;
