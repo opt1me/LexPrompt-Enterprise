@@ -32,6 +32,33 @@ Every task's requirements implicitly include this section. Values are copied ver
 - **Gates:** `npx tsc --noEmit` clean, `npm test` green, `npm run build` clean.
 - **Not to be touched:** `src/lib/citations.ts`'s matcher, `src/lib/openrouter.ts`, `src/lib/concurrency.ts`, `src/lib/db/*` except where a field is added, `PdfCanvas.tsx`, and `src/features/assistant/`.
 
+### Component tests: this project has no `@testing-library/react`
+
+**Read this before writing any component test in Tasks 6, 7, 8, 9 or 13.**
+
+Those tasks' test bodies were drafted using `render` / `screen` / `fireEvent` from `@testing-library/react`. **That library is not a dependency of this project and is not going to become one.** Five existing test files carry the comment *"No @testing-library/react in this project — see Toast.test.tsx for the precedent this follows: drive a real react-dom root directly."* That is a deliberate, repeated, documented convention, and adding a second testing style beside it is exactly the sibling-drift pattern that has produced six findings in this codebase already.
+
+**The assertions in those task bodies are correct and are what you must assert. Only the mechanism changes.** Task 6 Step 0 creates one shared harness, `src/test/mount.tsx`, and every component test in this sub-project uses it. Translate mechanically:
+
+| Drafted as | Write instead |
+|---|---|
+| `render(<X />)` | `const c = mount(<X />)` |
+| `screen.getByText(/foo/i)` | `expect(c.textContent).toMatch(/foo/i)` |
+| `screen.queryByText(/foo/i)` is null | `expect(c.textContent).not.toMatch(/foo/i)` |
+| `screen.getByRole('button', { name: /verify/i })` | `buttonNamed(c, /verify/i)` |
+| `screen.getAllByRole('button')` | `buttons(c)` |
+| `fireEvent.click(el)` | `click(el)` |
+| `screen.getByRole('textbox')` | `textbox(c)` |
+| `fireEvent.change(el, { target: { value: 'x' } })` | `type(el, 'x')` |
+| `screen.getByRole('status')` | `c.querySelector('[role="status"]')` |
+| `screen.getByRole('dialog')` | `c.querySelector('[role="dialog"]')` |
+| `screen.getAllByTestId('note-text')` | `Array.from(c.querySelectorAll('[data-testid="note-text"]'))` |
+| `expect(el.hasAttribute('disabled')).toBe(true)` | unchanged |
+| `unmount()` / `cleanup()` | handled by the harness's own `afterEach`; use `mountOnce` where a test needs to unmount mid-test |
+| `rerender(<X ... />)` | `mount` a fresh tree — these components are stateless enough that re-mounting asserts the same thing |
+
+`Harness` wrappers used in Task 13's hook tests keep their shape; only `render` becomes `mount` and `fireEvent.keyDown(window, {...})` becomes `keyDown({...})` from the harness.
+
 ### Standing rulings (made without owner review, per the spec's authorisation)
 
 - **R-B1 — `runReview.ts` may be touched, minimally.** The spec lists `runReview`'s *orchestration* as unchanged. `Finding` gains two required fields, so the five `Finding` object literals inside `runReview.ts` will not compile without them. Task 4 adds `verification: unchecked()` and `notes: []` to those literals and changes nothing else. Cost if wrong: a trivial diff to revert.
@@ -1331,9 +1358,123 @@ git commit -m "feat(b): migrate pre-B reviews on read, repairing rather than dro
 
 The spec requires these be distinct components because "verification state and risk level must never be conflated in one badge." They are separate today only by accident of naming; naming them as a pair now is cheaper than renaming after sub-projects C, D and E reference them — the same reasoning that renamed `Template` to `Playbook` in sub-project A.
 
+- [ ] **Step 0: Create the shared component-test harness**
+
+Every component test in this sub-project uses this. It is extracted rather than copied because five existing test files have each hand-rolled the same `mount` function already — this project's own rule is to extract on the second copy, and this is the sixth.
+
+The five existing files are **not** rewritten to use it. They work, they are the thing that catches regressions, and sweeping them for no behavioural gain is churn with real risk. New tests use the shared harness; old ones stay as they are.
+
+Create `src/test/mount.tsx`:
+
+```tsx
+import React from 'react';
+import { act } from 'react';
+import { createRoot, type Root } from 'react-dom/client';
+import { afterEach } from 'vitest';
+
+// The precedent this follows is Toast.test.tsx: there is no
+// @testing-library/react in this project, so component tests drive a real
+// react-dom root directly. This module is that pattern extracted, after
+// five separate test files had each written their own copy of it.
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+const mounted: { container: HTMLDivElement; root: Root }[] = [];
+
+/** Mounts a tree and returns its container. Unmounted automatically after
+ *  the test — a leaked root keeps rendering into a detached DOM and turns
+ *  a later test's failure into a mystery. */
+export function mount(node: React.ReactElement): HTMLDivElement {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => { root.render(node); });
+  mounted.push({ container, root });
+  return container;
+}
+
+/** Same, but hands back an explicit unmount for a test that needs to prove
+ *  something about teardown (e.g. that a global listener was removed). */
+export function mountOnce(node: React.ReactElement): { container: HTMLDivElement; unmount: () => void } {
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  act(() => { root.render(node); });
+  return {
+    container,
+    unmount: () => { act(() => { root.unmount(); }); container.remove(); },
+  };
+}
+
+afterEach(() => {
+  while (mounted.length > 0) {
+    const { container, root } = mounted.pop()!;
+    act(() => { root.unmount(); });
+    container.remove();
+  }
+});
+
+export function buttons(container: ParentNode): HTMLButtonElement[] {
+  return Array.from(container.querySelectorAll('button'));
+}
+
+/** The button whose visible text matches. Also checks `aria-label`, so an
+ *  icon-only button is findable by the name a screen reader would announce
+ *  — which is the name it should be findable by. */
+export function buttonNamed(container: ParentNode, name: RegExp): HTMLButtonElement | undefined {
+  return buttons(container).find(b =>
+    name.test(b.textContent || '') || name.test(b.getAttribute('aria-label') || ''));
+}
+
+export function textbox(container: ParentNode): HTMLTextAreaElement | HTMLInputElement | null {
+  return container.querySelector('textarea, input[type="text"]');
+}
+
+export function click(element: Element | null | undefined): void {
+  if (!element) throw new Error('click() was given nothing to click — the query above it found no element.');
+  act(() => { (element as HTMLElement).click(); });
+}
+
+/**
+ * Types into a controlled React input.
+ *
+ * Setting `.value` directly does not work: React installs its own value
+ * setter on the element instance and reads from its internal tracker, so a
+ * plain assignment updates the DOM but leaves React believing nothing
+ * changed, and the `input` event is then treated as a no-op. Going through
+ * the prototype's setter is what makes React see the change — this is the
+ * standard workaround and the reason this helper exists rather than each
+ * test doing it by hand.
+ */
+export function type(element: HTMLTextAreaElement | HTMLInputElement | null, value: string): void {
+  if (!element) throw new Error('type() was given nothing to type into.');
+  const proto = element instanceof HTMLTextAreaElement
+    ? HTMLTextAreaElement.prototype
+    : HTMLInputElement.prototype;
+  const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+  if (!setter) throw new Error('No value setter on the element prototype.');
+  act(() => {
+    setter.call(element, value);
+    element.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+/** A keydown on `window`, for hooks that bind global shortcuts. */
+export function keyDown(init: KeyboardEventInit): void {
+  act(() => { window.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ...init })); });
+}
+
+/** A keydown on a specific element, for proving a shortcut is ignored while
+ *  the user is typing. */
+export function keyDownOn(element: Element, init: KeyboardEventInit): void {
+  act(() => { element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ...init })); });
+}
+```
+
+Verify it works before relying on it: `npx vitest run src/features/review/FindingCard.test.tsx` must still pass (it uses its own harness and must be unaffected), and the `StateChip` tests below are the harness's first real exercise.
+
 - [ ] **Step 1: Write the failing test**
 
-Create `src/components/StateChip.test.tsx`:
+Create `src/components/StateChip.test.tsx`, using the harness from Step 0 and the translation table in Global Constraints:
 
 ```tsx
 import { describe, it, expect } from 'vitest';
