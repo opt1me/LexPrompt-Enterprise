@@ -225,6 +225,11 @@ export function migratePosition(input: unknown): StandardPosition | undefined {
     // `readStatus` in sub-project B: the safe default is the one that
     // prompts a human to look.
     reviewedByHuman: p.reviewedByHuman === true,
-    provenance: typeof p.provenance === 'string' ? p.provenance : undefined,
+    // Omitted, never assigned as `undefined` — see the notes in
+    // `migratePlaybookRecord` and `migrateClause`. `toEqual` cannot tell the
+    // two apart, but `structuredClone` (how IndexedDB writes every record)
+    // preserves the key, so an `in` check on a stored position would say a
+    // provenance is there when there is none.
+    ...(typeof p.provenance === 'string' ? { provenance: p.provenance } : {}),
   };
 }

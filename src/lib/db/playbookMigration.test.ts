@@ -120,6 +120,36 @@ describe('migratePlaybookRecord', () => {
     expect(version!.clauses[0].riskCriteria).toBe('Must be capped');
   });
 
+  it('keeps the riskTolerance on a post-D PUBLISHED VERSION repaired on read (R-D1, fourth case)', () => {
+    // R-D1's gate has four inputs: a pre-D risk record, a pre-D extraction
+    // record, a post-D draft, and a post-D published version repaired on
+    // read. The last was covered only transitively, through `migrateDraft`'s
+    // modeless test. It is the one where getting it wrong compounds — the
+    // repair runs on EVERY read, so a wrong gate would strip the tolerance
+    // and then keep stripping it.
+    const v = migrateVersionRecord({
+      id: 'v2', playbookId: 'pb1', version: 2, name: 'Lease', contractType: 'Lease',
+      systemPrompt: 's', formatPrompt: 'f', riskTolerance: 'Averse to uncapped liability',
+      clauses: [{ id: 'c1', title: 'Cap', extractPrompt: 'x', riskCriteria: 'Must be capped' }],
+      changeSummary: 'tightened the cap', publishedAt: 9, publishedByUserId: 'u1', schemaVersion: 6,
+    });
+    expect(v.riskTolerance).toBe('Averse to uncapped liability');
+    expect(v.clauses[0].riskCriteria).toBe('Must be capped');
+  });
+
+  it('keeps the riskTolerance on a post-D DRAFT stored against the identity (R-D1, third case)', () => {
+    const { playbook } = migratePlaybookRecord({
+      id: 'pb1', name: 'Lease', currentVersionId: 'v1', schemaVersion: 6,
+      draft: {
+        name: 'Lease', contractType: 'Lease', systemPrompt: 's', formatPrompt: 'f',
+        riskTolerance: 'Averse', changeSummary: 'wip',
+        clauses: [{ id: 'c1', title: 'Cap', extractPrompt: 'x', riskCriteria: 'Must be capped' }],
+      },
+    });
+    expect(playbook.draft!.riskTolerance).toBe('Averse');
+    expect(playbook.draft!.clauses[0].riskCriteria).toBe('Must be capped');
+  });
+
   it('invents no standard position from a risk tolerance', () => {
     const { version } = migratePlaybookRecord(preD);
     expect('standardPosition' in version!.clauses[0]).toBe(false);
@@ -179,8 +209,22 @@ describe('migrateClause (moved here from playbooks.ts)', () => {
       standardPosition: { text: 'We ask for 6 months', origin: 'nonsense', reviewedByHuman: 'yes' },
     });
     expect(c.standardPosition).toEqual({
-      text: 'We ask for 6 months', origin: 'authored', reviewedByHuman: false, provenance: undefined,
+      text: 'We ask for 6 months', origin: 'authored', reviewedByHuman: false,
     });
+    // `toEqual` treats an absent key and an `undefined`-valued one as equal,
+    // so the assertion above cannot see the difference — and structuredClone
+    // (how IndexedDB writes every record) PRESERVES the key. Asserted
+    // explicitly, per this file's own comments about omitting rather than
+    // assigning `undefined`.
+    expect('provenance' in c.standardPosition!).toBe(false);
+  });
+
+  it('keeps a readable provenance string', () => {
+    const c = migrateClause({
+      id: 'c1', title: 'T', extractPrompt: 'x',
+      standardPosition: { text: 'We ask for 6 months', origin: 'learned', reviewedByHuman: true, provenance: 'Lease v4' },
+    });
+    expect(c.standardPosition!.provenance).toBe('Lease v4');
   });
 });
 
