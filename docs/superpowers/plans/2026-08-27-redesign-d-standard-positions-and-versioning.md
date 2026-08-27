@@ -855,6 +855,25 @@ it('an empty index leaves every review unbound rather than guessing', () => {
 });
 ```
 
+**R-D15 — the id may DANGLE, not merely be absent.** Task 3 made deleting a playbook cascade to its versions, so a review that ran against a deleted playbook's v3 still carries an id that resolves to nothing. Nothing may render "ran against v4" from the id's presence alone; the version must be fetched and a miss handled honestly. Add:
+
+```ts
+it('a review whose version was deleted still opens, and says the version is gone', async () => {
+  const v1 = await publishVersion('pb-1', draftFrom(makePlaybook()), 'u1');
+  const review = await saveReview(makeReview({ playbookVersionId: v1.id }));
+  await deletePlaybook('pb-1');           // cascades to its versions (Task 3, R-D13)
+
+  const reopened = await getReview(review.id);
+  // The id is still there — it is a record of what ran, not a live handle —
+  // but it no longer resolves, and the caller must not present it as one.
+  expect(reopened!.playbookVersionId).toBe(v1.id);
+  expect(await getVersion(v1.id)).toBeNull();
+  // and the review is still readable, on its snapshot, exactly as a review
+  // whose DOCUMENT was deleted still opens (spec §9's reasoning, one level up)
+  expect(reopened!.playbookSnapshot.clauses).toBeDefined();
+});
+```
+
 Append to `src/lib/db/reviews.test.ts`, using its own `makePlaybook`/`makeReview`:
 
 ```ts
