@@ -39,7 +39,7 @@ The same rule, at its sharpest yet: **nothing the model produced is treated as t
 
 1. **The route chooser** — draft with AI, build by hand, and a link out to F's learn-from-redlines flow once it exists. Presented as three parallel routes, not a fork.
 2. **The AI draft form** — contract type, acting-for, free-text context, a "learn from" picker over existing playbooks and completed matters, clause-count and answer-length controls.
-3. **`PlaybookDraft`** — a non-persisted working object holding proposed clauses and each one's review disposition.
+3. **`AuthoringDraft`** — a non-persisted working object holding proposed clauses and each one's review disposition.
 4. **The draft review screen** — per clause: the extract prompt, the risk criteria, the proposed standard position with its provenance, optional extra sub-questions to add or dismiss, and keep / edit-then-keep / cut. A clause rail with kept/cut/unreviewed counts and progress, and keyboard next.
 5. **Save as v1** — turns a fully-reviewed draft into a published `PlaybookVersion` through D's existing publish path, with the cut clauses genuinely absent and the kept ones carrying honest provenance.
 6. **By-hand authoring** — add clauses one at a time; per field, a "draft this for me" that calls a small independent completion and renders the result as an unaccepted suggestion.
@@ -67,7 +67,7 @@ interface DraftClause extends PlaybookClause {
   suggestions: string[];
 }
 
-interface PlaybookDraft {
+interface AuthoringDraft {
   /** Session-only. Never written to IndexedDB — a draft that survives a
    *  reload is a playbook nobody agreed to. */
   contractType: string;
@@ -81,7 +81,9 @@ interface PlaybookDraft {
 }
 ```
 
-`PlaybookDraft` is held in React state and lost on reload, on purpose. The handoff's own footer copy says it: *nothing is saved until you have been through the draft.* Persisting a draft would make that false, and would leave half-reviewed model output sitting in the store looking like work.
+**Named `AuthoringDraft`, not `PlaybookDraft` (ruling R-E1).** Sub-project D already claims `PlaybookDraft` for a different type with the *opposite* persistence rule: D's is the mutable working copy stored on `Playbook.draft` **in IndexedDB**, holding unpublished edits to an existing playbook's content. This one is a session-only authoring workspace that must never be persisted. Two types with one name would be a compile error at best; two types with one name and contradictory persistence rules is how someone ends up writing a half-reviewed model draft into the store while believing the type forbids it. D's name stays because D is planned and its usage — a draft *of a version* — is the accurate reading.
+
+`AuthoringDraft` is held in React state and lost on reload, on purpose. The handoff's own footer copy says it: *nothing is saved until you have been through the draft.* Persisting a draft would make that false, and would leave half-reviewed model output sitting in the store looking like work.
 
 This is the one place in the redesign where **not** persisting is the correct answer, and it is worth being explicit that it is a decision rather than an omission.
 
