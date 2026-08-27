@@ -1632,6 +1632,91 @@ git show --stat HEAD
 
 ---
 
+## Task 9A: Close what the editor promises but does not deliver
+
+**Added during execution**, after Task 9's review found that three things this sub-project's spec and DoD require are owned by *no task in the plan*. That is a planning defect, not an implementation one: Task 8 built `positionHealth`, Task 9 added the prop, and nothing in Tasks 10–13 wires it — so on the plan as written, D would have shipped with DoD #7 unmet and nothing scheduled to catch it. The same is true of spec §8's version-history link.
+
+**Files:**
+- Modify: `src/App.tsx`, `src/features/templates/TemplateEditor.tsx`, `src/features/templates/TemplateLibrary.tsx`, `src/lib/db/playbooks.ts` (+ their tests)
+
+### Part 1 — Draft persistence, so five shipped mechanisms stop lying (M2)
+
+`saveDraft`, `Playbook.draft`, `loadPlaybookForEdit`'s draft preference, the publish-consumes-draft logic, and `TemplateLibrary`'s "Unpublished changes" badge all exist and **none of them has a writer**. The badge in particular can never appear — a UI element promising a state the app cannot reach, which is this project's most repeated defect shape. `playbooks.test.ts:336` already says in writing: "Dormant until Task 9 wires `saveDraft` into the editor."
+
+**Do NOT persist per keystroke.** Task 3's fix round established in-memory discard semantics that five App tests cover, and per-keystroke writes would contradict them. Persist on **explicit intent** instead:
+
+- an explicit `Save draft` control in the editor, and
+- when leaving the editor with unsaved changes, the existing confirm becomes a three-way choice: **Keep them** (persist the draft), **Discard** (clear `Playbook.draft` and leave), **Cancel**.
+
+```ts
+it('an explicit Save draft persists it, and reopening prefers the draft over the version', async () => {
+  await saveDraft('pb-1', draftWith({ name: 'Work in progress' }));
+  const loaded = await loadPlaybookForEdit('pb-1');
+  expect(loaded.draft?.name).toBe('Work in progress');
+});
+
+it('the library badge appears only when a draft is actually stored', () => {
+  // Before this task the badge could never appear at all.
+  expect(mount(<TemplateLibrary playbooks={[withStoredDraft]} />).textContent)
+    .toMatch(/unpublished changes/i);
+  expect(mount(<TemplateLibrary playbooks={[noDraft]} />).textContent)
+    .not.toMatch(/unpublished changes/i);
+});
+
+it('discarding clears the STORED draft, not just the in-memory one', async () => {
+  // Otherwise "discard" leaves the rejected edits durable and the next open
+  // resurrects them — the defect Task 3's M2 fixed in memory, one layer down.
+  await saveDraft('pb-1', draftWith({ name: 'Rejected' }));
+  await discardDraft('pb-1');
+  expect('draft' in (await getPlaybook('pb-1'))!).toBe(false);
+});
+
+it('publishing consumes the draft', async () => {
+  // Task 3 built this; nothing exercised it end to end because nothing
+  // ever wrote a draft for it to consume.
+  await saveDraft('pb-1', draftWith({ changeSummary: 'x' }));
+  await publishAndPoint(identity, draftWith({ changeSummary: 'x' }), 'u1');
+  expect((await getPlaybook('pb-1'))!.draft).toBeUndefined();
+});
+```
+
+### Part 2 — Wire position health (DoD #7, M1)
+
+`positionHealth(publishedAt, findings, opts?)` exists and is pure (R-D2). The editor needs a `health` map keyed by clause id.
+
+Two things the wiring must get right:
+
+- **`listReviews` is matter-scoped; a playbook's health spans matters.** The scan is therefore cross-matter and needs **its own load-error branch** — per CLAUDE.md a failure must render an error state, never an empty map that reads as `UNTESTED`. "No verified findings yet" is a fact about the position; "we could not read your reviews" is a fact about the app, and they must not look alike.
+- **Which `publishedAt` dates a position?** `positionHealth` discards verifications older than the date it is given. Dating a position from the version it was last *republished* in would report `UNTESTED` for a position tested for months, because publishing v5 for an unrelated clause resets every other clause's window. **Date each position from the version in which that clause's `standardPosition.text` last changed.** If that proves expensive, fall back to the earliest version containing the current text and say so — but do not silently use the current version's date.
+
+```ts
+it('shows HELD n of m from verified findings across every matter', async () => { /* … */ });
+
+it('renders an error state, never an empty map, when the review scan fails', () => {
+  listReviewsMock.mockRejectedValueOnce(new Error('disk'));
+  expect(mount(<TemplateEditor />).textContent).toMatch(/could not|try again/i);
+});
+
+it('does not reset a position history when an UNRELATED clause is republished', async () => {
+  // The bug this part exists to avoid: publish v5 changing clause B, and
+  // clause A — untouched, verified for months — suddenly reads UNTESTED.
+  expect(healthFor('clause-a')).toMatch(/HELD/);
+});
+```
+
+### Part 3 — The editor's link to version history (spec §8, M3)
+
+Spec §8 says the editor gains "a link to version history". It is absent. Task 10 builds the `VersionHistory` screen; this adds the editor's route into it, and **R-D15 applies** — never render a version claim from an id alone.
+
+### Steps
+
+- [ ] **Step 1:** Write the failing tests above; confirm each fails for its stated reason.
+- [ ] **Step 2:** Implement Parts 1–3.
+- [ ] **Step 3: Mutation-test.** Remove the draft write (the badge test must fail); make the failed review scan return `{}` (the error-state test must fail); date positions from the current version's `publishedAt` (the unrelated-republish test must fail). Report each observed failure — **a mutation that does not bite means that test proves nothing.**
+- [ ] **Step 4:** Gates (`tsc --noEmit`, `npm test`, `npm run build` — all clean, no externalization warning) and commit, staged by name.
+
+---
+
 ## Task 10: Version history
 
 **Files:**
