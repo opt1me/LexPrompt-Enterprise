@@ -2417,9 +2417,38 @@ Write these out fully against the real component tree — the comments above are
 Run: `npx vitest run src/App.verification.test.tsx src/App.rerunResets.test.tsx`
 Expected: FAIL — no handlers exist yet.
 
+- [ ] **Step 3a: Facts about `App.tsx` this task depends on — checked against the file**
+
+These were verified before this task was dispatched. Do not re-derive them, and do not write code that assumes otherwise:
+
+- **There is no component-scoped `userId` or `profile`.** `userId` is a `let` local inside `handleStartRun`, assigned from `await getProfile()`. The established pattern for a handler that needs an id is `const profile = await getProfile();` then `profile.id` — that is exactly what `handleRetryCell` and `handleAddMatterDocuments` already do. Both new handlers are `async`, so follow it.
+- **`notify`'s signature is `(message: string, variant: ToastVariant = 'success')` and `ToastVariant` is `'success' | 'error'` only.** There is no `'info'`. For the re-run notice, call `notify(message)` with no variant.
+- **There is no `uid()` in `App.tsx`.** See Step 3b.
+- **`authorInitials` needs a render-time profile**, and an `await` cannot supply one. Add `const [profile, setProfile] = useState<UserProfile | null>(null);` and load it in the existing bootstrap effect that already runs `migrateIfNeeded`. Use `profile?.initials ?? 'ME'` for display. Keep using `await getProfile()` inside the write handlers — display can tolerate a null for one frame; a write must not.
+
+- [ ] **Step 3b: Extract `uid()` — it exists seven times, byte-identical**
+
+`uid()` is defined separately in `runReview.ts`, `generateTemplate.ts`, `matters.ts`, `migrate.ts`, `playbooks.ts`, `profile.ts` and `documents.ts`. All seven bodies are byte-identical (verified by hashing each). This project's own rule is to extract on the *second* copy; this is the seventh, and this task needs an eighth caller for note ids.
+
+Create `src/lib/uid.ts`:
+
+```ts
+/** A short, collision-resistant-enough id for a local-only app: random
+ *  suffix plus a timestamp, so ids are unique within a session and roughly
+ *  ordered across them. Extracted after the same four lines had been
+ *  written out seven times in this codebase, byte-identical each time. */
+export function uid(): string {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+```
+
+Then replace all seven local definitions with `import { uid } from '<relative path>/lib/uid';`. The bodies are identical, so this is a pure move with no behavioural change — but run the full suite afterwards anyway, because "no behavioural change" is a claim and the suite is how it gets checked.
+
+Test-local `uid()` helpers inside `*.test.ts` files are left alone; a test's own fixture helper is not production duplication.
+
 - [ ] **Step 3: Add the verification handler to App.tsx**
 
-Near `handleRetryCell`, add:
+Near `handleRetryCell`, add (note `profile` comes from `await getProfile()`, per Step 3a):
 
 ```tsx
   /** Key of the finding whose verification or note write is in flight, as
@@ -2448,9 +2477,11 @@ Near `handleRetryCell`, add:
     const existing = current.findings[docId]?.[clauseId];
     if (!existing) return;
 
+    const profile = await getProfile();
+
     let verification: Verification;
     try {
-      verification = applyVerification(existing.verification, change, userId, Date.now());
+      verification = applyVerification(existing.verification, change, profile.id, Date.now());
     } catch (e) {
       notify(e instanceof Error ? e.message : 'That verification is not valid.', 'error');
       return;
@@ -2460,7 +2491,7 @@ Near `handleRetryCell`, add:
 
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, profile.id));
       latestRunRef.current = updated;
       setRun(updated);
     } catch (e) {
@@ -2483,7 +2514,8 @@ Near `handleRetryCell`, add:
     const existing = current.findings[docId]?.[clauseId];
     if (!existing) return;
 
-    const note = makeNote(docId, clauseId, text, userId, Date.now(), uid());
+    const profile = await getProfile();
+    const note = makeNote(docId, clauseId, text, profile.id, Date.now(), uid());
     const updated = withUpdatedFinding(current, docId, clauseId, {
       ...existing,
       notes: [...existing.notes, note],
@@ -2491,7 +2523,7 @@ Near `handleRetryCell`, add:
 
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      await saveReview(reviewFromRun(updated, matterId, settings.modelId, profile.id));
       latestRunRef.current = updated;
       setRun(updated);
     } catch (e) {
@@ -2532,9 +2564,10 @@ import { applyVerification, findingKey, makeNote, resetVerification } from './li
 import type { VerificationChange } from './lib/verification';
 import type { Finding, Verification } from './types';
 import { saveReview } from './lib/db/reviews';
+import { uid } from './lib/uid';
 ```
 
-(`saveReview` may already be imported; check before adding a duplicate. `uid` and `userId` both already exist in this file — find them rather than re-declaring.)
+`saveReview` and `getProfile` are already imported by `App.tsx` — check before adding a duplicate. `uid` comes from the new `src/lib/uid.ts` (Step 3b). There is **no** `userId` in scope; every write handler gets it from `await getProfile()`, per Step 3a.
 
 - [ ] **Step 4: Reset verification on retry**
 
@@ -2554,7 +2587,7 @@ In `handleRetryCell`, before it calls `retryCell`, clear the verification of the
       latestRunRef.current = cleared;
       setRun(cleared);
       const clauseTitle = current.templateSnapshot.clauses.find(c => c.id === clauseId)?.title ?? 'This clause';
-      notify(`${clauseTitle} is being re-run, so its verification was cleared.`, 'info');
+      notify(`${clauseTitle} is being re-run, so its verification was cleared.`);
     }
 ```
 
