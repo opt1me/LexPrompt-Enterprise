@@ -113,7 +113,7 @@ describe('noteLines (Important 3 — spec section 6: "a flagged finding carries 
       ...finding('flagged'),
       notes: [{ id: 'n1', findingId: 'x', text: 'Check this against the side letter.', byUserId: 'u1', at: 1 }],
     };
-    expect(noteLines(f)).toEqual(['Note (u1): Check this against the side letter.']);
+    expect(noteLines(f)).toEqual(['Note: Check this against the side letter.']);
   });
 
   it('formats every note on a finding, not just the first', () => {
@@ -125,8 +125,8 @@ describe('noteLines (Important 3 — spec section 6: "a flagged finding carries 
       ],
     };
     expect(noteLines(f)).toEqual([
-      'Note (u1): First note.',
-      'Note (u1): Second note.',
+      'Note: First note.',
+      'Note: Second note.',
     ]);
   });
 
@@ -135,7 +135,7 @@ describe('noteLines (Important 3 — spec section 6: "a flagged finding carries 
       ...finding('verified'),
       notes: [{ id: 'n1', findingId: 'x', text: 'Confirmed against the executed copy.', byUserId: 'u1', at: 1 }],
     };
-    expect(noteLines(f)).toEqual(['Note (u1): Confirmed against the executed copy.']);
+    expect(noteLines(f)).toEqual(['Note: Confirmed against the executed copy.']);
   });
 });
 

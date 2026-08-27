@@ -98,14 +98,21 @@ export function verificationLabel(finding: Finding | undefined): string | null {
  * regardless of its verification state, and the spec's honesty rule ("say
  * what a human has and has not confirmed") applies just as much there.
  *
- * Attribution uses the raw `byUserId` rather than a display name: this
- * module only sees a `Finding`/`Review`, not the profile store, and R1's
- * "schema-ready but not multi-user" posture means there is exactly one
- * local user today regardless.
+ * Deliberately NOT attributed in the exported line. An earlier version
+ * printed the raw `byUserId`, reasoning that this module cannot see the
+ * profile store and that R1 means there is one local user anyway. Driving
+ * the real app showed where that lands: a client-facing report containing
+ * `Note (vzcsj71fs7mtalycwr): …`. That is worse than both alternatives —
+ * it communicates nothing to the reader, and an opaque per-person id
+ * *implies* the multi-user product R1 says this app must not pretend to
+ * be. With exactly one local author, the author is not the information;
+ * the note is. `Note.byUserId` is still recorded on the finding, so
+ * attribution can be rendered the day there is more than one person to
+ * attribute to.
  */
 export function noteLines(finding: Finding | undefined): string[] {
   const notes = finding?.notes ?? [];
-  return notes.map(note => `Note (${note.byUserId}): ${note.text}`);
+  return notes.map(note => `Note: ${note.text}`);
 }
 
 export interface VerificationCounts {

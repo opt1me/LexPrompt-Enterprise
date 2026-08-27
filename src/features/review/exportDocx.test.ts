@@ -201,7 +201,7 @@ describe('buildReportRows', () => {
       }),
     });
     const rows = buildReportRows(run, 'doc-1');
-    expect(rows[0].notes).toEqual(['Note (u1): Confirm against the side letter.']);
+    expect(rows[0].notes).toEqual(['Note: Confirm against the side letter.']);
 
     const doc = await buildReportDocument(rows, 'doc-1', 'stub summary line');
     const { Packer } = await import('docx');

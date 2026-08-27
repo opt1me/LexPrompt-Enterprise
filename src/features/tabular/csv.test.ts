@@ -294,7 +294,7 @@ describe('buildTabularCsv', () => {
     });
     const docxNotes = buildReportRows(run, 'doc-1')[0].notes;
     const csv = buildTabularCsv(run, docs);
-    expect(docxNotes).toEqual(['Note (u1): Cross-check clause 14.2.']);
+    expect(docxNotes).toEqual(['Note: Cross-check clause 14.2.']);
     for (const noteLine of docxNotes) {
       expect(csv).toContain(noteLine);
     }
