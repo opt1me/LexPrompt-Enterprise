@@ -154,14 +154,18 @@ describe('FindingCard verification and evidence', () => {
     expect(container.textContent).toMatch(/Liability is capped at the Charges\./);
   });
 
-  it('still drives the viewer highlight from a click', () => {
+  it('still drives the viewer highlight from a click, and says which document the quote came from', () => {
     const onCiteClick = vi.fn();
-    const finding = doneFinding({ citations: [{ quote: 'a quote here', documentId: 'doc-1' }] });
+    // `doc-2`, deliberately not the first document a caller would guess:
+    // a collection review's single finding carries citations from across the
+    // collection, and the viewer cannot find a quote it is told to look for
+    // in the wrong document.
+    const finding = doneFinding({ citations: [{ quote: 'a quote here', documentId: 'doc-2' }] });
     const container = mount(<FindingCard {...baseProps} finding={finding} onCiteClick={onCiteClick} />);
     const button = Array.from(container.querySelectorAll('button')).find(b => /a quote here/i.test(b.textContent || ''));
     expect(button).toBeTruthy();
     act(() => { (button as HTMLButtonElement).click(); });
-    expect(onCiteClick).toHaveBeenCalledWith(['a quote here']);
+    expect(onCiteClick).toHaveBeenCalledWith(['a quote here'], 'doc-2');
   });
 });
 

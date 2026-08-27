@@ -7,10 +7,22 @@ export interface EvidenceListProps {
   /** documentId to display name. A review can span several documents, so a
    *  quote's own document has to be named on the quote. */
   documentNames: Record<string, string>;
-  /** Unchanged from the previous citation buttons: hands the viewer the one
-   *  quote to highlight and scroll to. `findQuoteRects` takes plain strings
-   *  and is not being changed, so this stays `string[]`. */
-  onCiteClick: (quotes: string[]) => void;
+  /** Hands the viewer the one quote to highlight and scroll to, together
+   *  with the id of the document that quote actually came from.
+   *  `findQuoteRects` takes plain strings and is not being changed, so the
+   *  quotes stay `string[]`.
+   *
+   *  The document id is not decoration. A collection review produces ONE
+   *  finding per clause whose citations can belong to several different
+   *  documents, so a quote alone does not say where to look — and a viewer
+   *  handed a quote with no document searches whichever document happens to
+   *  be on screen. Driving the real app, that reported "Couldn't locate this
+   *  quote in the document ... the wording may not match exactly" about a
+   *  quote sitting verbatim in the tab next door: the evidence-cannot-be-
+   *  found message is the one thing worse than no message, because a reader
+   *  believes it. The id is already on the `Citation` and already rendered
+   *  in `pinLabel`; it simply travels with the click now. */
+  onCiteClick: (quotes: string[], documentId?: string) => void;
 }
 
 /** "MSA.pdf - p. 2 - cl. 14.2", with each part omitted when it is not known.
@@ -49,7 +61,7 @@ export function EvidenceList({ citations, documentNames, onCiteClick }: Evidence
         <button
           key={`${citation.documentId}-${i}`}
           type="button"
-          onClick={() => onCiteClick([citation.quote])}
+          onClick={() => onCiteClick([citation.quote], citation.documentId)}
           className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/15 rounded-lg p-2.5 transition-colors group"
         >
           <p className="text-[11px] text-gray-300 leading-relaxed italic">&ldquo;{citation.quote}&rdquo;</p>

@@ -192,6 +192,7 @@ export function TabularReview({
         {selected && selectedClause && (
           <CellDetail
             doc={selectedDoc}
+            documents={documents}
             clause={selectedClause}
             finding={selectedFinding}
             onClose={() => setSelected(null)}

@@ -15,7 +15,7 @@ import { isVerifiable } from '../../lib/findingOutcome';
 export interface FindingCardProps {
   clause: Clause;
   finding: Finding | undefined;
-  onCiteClick: (quotes: string[]) => void;
+  onCiteClick: (quotes: string[], documentId?: string) => void;
   onRetry: (clauseId: string) => void;
   /** Optional: wired in Task 18. Renders "Suggest Fix" on High/Medium risk
    *  findings only. Omitted entirely (e.g. in the tabular cell detail panel)

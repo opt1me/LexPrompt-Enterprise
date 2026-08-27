@@ -225,3 +225,96 @@ describe('migrateReviewRecord', () => {
     });
   });
 });
+
+// Found by driving the real app in sub-project C's browser verification.
+// `migrateFinding` rebuilds a persisted `Finding` field by field, and it was
+// never taught about `netPosition` — so every reopened collection review
+// silently lost the whole output of sub-project C while the record on disk
+// stayed perfectly intact. On screen that read as a review that had produced
+// no position at all: evidence and verify controls, no synthesis, no trail,
+// indistinguishable from an ordinary single-document finding.
+//
+// This is the founding failure mode in a new place ("a failed storage
+// migration rendering an empty library, indistinguishable from a fresh
+// install") and the reason a field-by-field rebuild needs a test per field.
+describe('reviewMigration — a collection review keeps its net position', () => {
+  function collectionReview(netPosition: unknown) {
+    return {
+      id: 'rev-c', matterId: 'm1',
+      playbookSnapshot: { id: 'pb', name: 'PB', contractType: 'NDA', mode: 'extraction', systemPrompt: '', formatPrompt: '', clauses: [], createdAt: 0, updatedAt: 0, schemaVersion: 2 },
+      documentIds: ['doc-1', 'doc-2'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['doc-1', 'doc-2'] },
+      findings: {
+        'coll-1': {
+          'clause-1': {
+            clauseId: 'clause-1', status: 'done',
+            citations: [{ quote: 'six months', documentId: 'doc-2', page: 3 }],
+            verification: { state: 'unchecked' }, notes: [],
+            netPosition,
+          },
+        },
+      },
+      modelId: 'm', startedAt: 1, completedAt: 2, createdByUserId: 'u1',
+    };
+  }
+
+  const trail = [
+    { documentId: 'doc-1', kind: 'original', effect: 'Three months.', citations: [{ quote: 'three months', documentId: 'doc-1' }] },
+    { documentId: 'doc-2', kind: 'varies', effect: 'Extends to six.', citations: [{ quote: 'six months', documentId: 'doc-2' }] },
+  ];
+
+  it('preserves an unconfirmed position, its proposed text and its whole trail', () => {
+    const out = migrateReviewRecord(collectionReview({ proposed: 'Six months notice.', state: 'unconfirmed', trail }));
+    const f = out.findings['coll-1']['clause-1'];
+    expect(f.netPosition).toBeDefined();
+    expect(f.netPosition!.proposed).toBe('Six months notice.');
+    expect(f.netPosition!.state).toBe('unconfirmed');
+    expect(f.netPosition!.trail).toHaveLength(2);
+    expect(f.netPosition!.trail[1].effect).toBe('Extends to six.');
+    expect(f.netPosition!.trail[1].citations[0].quote).toBe('six months');
+  });
+
+  it('preserves a human confirmation, with who and when', () => {
+    const out = migrateReviewRecord(collectionReview(
+      { proposed: 'Six months notice.', state: 'confirmed', byUserId: 'u1', at: 999, trail }));
+    const np = out.findings['coll-1']['clause-1'].netPosition!;
+    expect(np.state).toBe('confirmed');
+    expect(np.byUserId).toBe('u1');
+    expect(np.at).toBe(999);
+  });
+
+  it('preserves an amendment — a person wrote that text', () => {
+    const out = migrateReviewRecord(collectionReview(
+      { proposed: 'model wording', amended: 'the words a person wrote', state: 'confirmed', byUserId: 'u1', at: 5, trail }));
+    expect(out.findings['coll-1']['clause-1'].netPosition!.amended).toBe('the words a person wrote');
+  });
+
+  it('downgrades an unreadable state to unconfirmed, never to confirmed', () => {
+    // Same posture as `readStatus` and `readVerification`: the safe default
+    // is the one that puts the question back in front of a human.
+    for (const bad of ['CONFIRMED', 'accepted', '', null, 7, undefined]) {
+      const out = migrateReviewRecord(collectionReview({ proposed: 'x', state: bad, trail }));
+      expect(out.findings['coll-1']['clause-1'].netPosition!.state).toBe('unconfirmed');
+    }
+  });
+
+  it('drops a position with no proposed text rather than showing an empty one', () => {
+    const out = migrateReviewRecord(collectionReview({ state: 'confirmed', trail }));
+    expect('netPosition' in out.findings['coll-1']['clause-1']).toBe(false);
+  });
+
+  it('leaves a finding that never had a net position without the key at all', () => {
+    // Absent and `undefined` are different to `structuredClone`, which is how
+    // IndexedDB writes every record — an `undefined`-valued key persists and
+    // reads back as "there was a position here".
+    const out = migrateReviewRecord(collectionReview(undefined));
+    expect('netPosition' in out.findings['coll-1']['clause-1']).toBe(false);
+  });
+
+  it('repairs a malformed trail rather than dropping the position', () => {
+    const out = migrateReviewRecord(collectionReview({ proposed: 'Six months.', state: 'unconfirmed', trail: 'not an array' }));
+    const np = out.findings['coll-1']['clause-1'].netPosition!;
+    expect(np.proposed).toBe('Six months.');
+    expect(np.trail).toEqual([]);
+  });
+});

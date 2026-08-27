@@ -7,6 +7,16 @@ import { DocumentViewer } from '../review/DocumentViewer';
 
 export interface CellDetailProps {
   doc: DocumentFile | null;
+  /** Every document in the run, so a citation belonging to a document other
+   *  than `doc` can be shown in the document it actually came from — and so
+   *  its pin label can name that document instead of printing a raw id.
+   *
+   *  A collection review keys ONE finding per clause whose citations may
+   *  span the whole collection, and this panel is reachable from every row
+   *  of the grid, so `doc` is routinely not the document a given quote came
+   *  from. Optional: omitted, the panel behaves exactly as it did — one
+   *  document, no swap. */
+  documents?: DocumentFile[];
   clause: Clause;
   finding: Finding | undefined;
   onClose: () => void;
@@ -35,13 +45,31 @@ export interface CellDetailProps {
  * button feeds that single quote to the viewer as its highlight, scrolling
  * to it, exactly as `ResultsView` wires `FindingCard` to `DocumentViewer`.
  */
-export function CellDetail({ doc, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote, authorInitials, onOpenInReview }: CellDetailProps) {
+export function CellDetail({ doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote, authorInitials, onOpenInReview }: CellDetailProps) {
   const [highlights, setHighlights] = useState<string[]>([]);
+  /** Set when a clicked citation belongs to a document other than `doc`. */
+  const [citedDocId, setCitedDocId] = useState<string | null>(null);
+
+  const shownDoc = (citedDocId ? documents?.find(d => d.id === citedDocId) : undefined) ?? doc;
+  const documentNames = documents
+    ? Object.fromEntries(documents.map(d => [d.id, d.name]))
+    : (doc ? { [doc.id]: doc.name } : {});
+
+  /** Same rule as `ResultsView.handleCiteClick`, and here for the same
+   *  reason: highlighting a quote in a document it did not come from makes
+   *  the viewer report that the evidence cannot be found, about evidence
+   *  that exists. A document not in `documents` leaves the panel on `doc`
+   *  rather than blanking it. */
+  const handleCiteClick = (quotes: string[], documentId?: string) => {
+    if (documentId && documents?.some(d => d.id === documentId)) setCitedDocId(documentId);
+    setHighlights(quotes);
+  };
 
   // A stale highlight from the previously-opened cell must not linger when
   // the panel switches to a different document/clause.
   useEffect(() => {
     setHighlights([]);
+    setCitedDocId(null);
   }, [doc?.id, clause.id]);
 
   return (
@@ -76,19 +104,19 @@ export function CellDetail({ doc, clause, finding, onClose, onRetry, onVerify, v
         <FindingCard
           clause={clause}
           finding={finding}
-          onCiteClick={setHighlights}
+          onCiteClick={handleCiteClick}
           onRetry={onRetry}
           onVerify={onVerify}
           verifyBusy={verifyBusy}
           onAddNote={onAddNote}
           noteBusy={verifyBusy}
-          documentNames={doc ? { [doc.id]: doc.name } : {}}
+          documentNames={documentNames}
           authorInitials={authorInitials}
         />
       </div>
 
       <div className="flex-1 min-h-0">
-        <DocumentViewer doc={doc} highlights={highlights} />
+        <DocumentViewer doc={shownDoc} highlights={highlights} />
       </div>
     </div>
   );

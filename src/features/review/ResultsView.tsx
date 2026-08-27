@@ -169,6 +169,41 @@ export function ResultsView({
     setFocusIndex(0);
   };
 
+  /**
+   * A citation click opens the citation's OWN document, then highlights.
+   *
+   * Found by driving the real app in sub-project C's browser verification,
+   * and the seventh instance of this sub-project's recurring shape: a
+   * `documentId` sits on the record and the consumer ignores it. A
+   * collection review keys one finding per clause, and that finding's
+   * citations can belong to any document in the collection — so clicking a
+   * quote from the base while the amendment was on screen used to leave
+   * `activeDocId` alone and search the AMENDMENT for it, producing
+   * "Couldn't locate this quote in the document ... the wording may not
+   * match exactly" about a quote that is verbatim present one tab away.
+   * Telling a reader their evidence cannot be found, when it can, is the
+   * confident-wrong-answer failure this app exists to remove.
+   *
+   * Deliberately NOT `handleSwitchDoc`: that one is the "I chose to change
+   * documents" intent and resets the keyboard cursor to the top of the
+   * list. Following a citation must keep the cursor on the finding the
+   * reader is reading — the same distinction `openAt` draws.
+   *
+   * The `run.documentIds` check keeps this correct on its own terms rather
+   * than relying on the `activeDocId` effect to clean up after it. It is
+   * unreachable from live data — `repairCitations` stamps the reviewed
+   * document's own id, and `resolveStepCitations` resolves only against the
+   * collection's members — and deliberately has no test, because that
+   * effect masks any observable difference and a test here would pass
+   * against the unguarded version too.
+   */
+  const handleCiteClick = (quotes: string[], documentId?: string) => {
+    if (documentId && documentId !== activeDocId && run.documentIds.includes(documentId)) {
+      setActiveDocId(documentId);
+    }
+    setHighlights(quotes);
+  };
+
   // Task 8A: a collection review's findings are keyed by the COLLECTION id
   // (`findingsKeyFor`, Task 6A), never by whichever document happens to be
   // active in the viewer pane — `activeDocId` only picks which document
@@ -396,7 +431,7 @@ export function ResultsView({
                 <FindingCard
                   clause={clause}
                   finding={findings[clause.id]}
-                  onCiteClick={setHighlights}
+                  onCiteClick={handleCiteClick}
                   onRetry={(clauseId) => onRetryCell(activeDocId, clauseId)}
                   onSuggestFix={handleSuggestFix}
                   suggestFixLoading={revisionLoadingClauseId === clause.id}

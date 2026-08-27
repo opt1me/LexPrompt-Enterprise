@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { mount, keyDown } from '../../test/mount';
+import { mount, keyDown, click } from '../../test/mount';
 import { ResultsView } from './ResultsView';
 import type { DocumentFile, Finding, ReviewRun, Settings, Template } from '../../types';
 
@@ -294,6 +294,90 @@ describe('ResultsView — reading a collection review\'s findings (Task 8A)', ()
     // c4 (done) is the only finding in `makeRun()` with a real summary.
     expect(container.textContent).toContain('Some finding.');
   });
+});
+
+// Found by driving the real app during sub-project C's browser
+// verification, and the seventh instance of this sub-project's recurring
+// shape: a `documentId` sits on the record and the consumer ignores it.
+//
+// A collection review keys ONE finding per clause, and that finding's
+// citations can belong to any of the collection's documents. Clicking a
+// citation only ever set `highlights`, leaving `activeDocId` alone — so a
+// quote from the base clicked while the amendment was on screen made the
+// viewer search the AMENDMENT for it and report "Couldn't locate this quote
+// in the document ... the wording may not match exactly". That is the
+// confident-wrong-answer failure this project exists to remove: the reader
+// is told the evidence cannot be found, about evidence that is verbatim
+// present in a document one tab away.
+describe('ResultsView — a citation opens its own document, not the active one', () => {
+  function makeCollectionRun(): ReviewRun {
+    return {
+      id: 'r1',
+      templateSnapshot: makeTemplate(),
+      documentIds: ['d1', 'd2'],
+      target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] },
+      findings: {
+        'coll-1': {
+          c1: {
+            clauseId: 'c1', status: 'done',
+            summary: 'The notice period is now 6 months.',
+            // Belongs to d2, while the view opens on d1.
+            citations: [{ quote: 'six months notice', documentId: 'd2' }],
+            verification: { state: 'unchecked' }, notes: [],
+          },
+          c2: makeFinding('c2', 'pending'),
+          c3: makeFinding('c3', 'pending'),
+          c4: makeFinding('c4', 'pending'),
+        },
+      },
+      startedAt: 1,
+    };
+  }
+
+  function activeDoc(container: HTMLElement): string {
+    return (container.querySelector('select') as HTMLSelectElement).value;
+  }
+
+  /** The evidence block is the only button whose text carries the quote. */
+  function evidenceButton(container: HTMLElement, quote: string): HTMLElement {
+    const found = Array.from(container.querySelectorAll('button'))
+      .find(b => b.textContent?.includes(quote));
+    if (!found) throw new Error(`No evidence button containing "${quote}"`);
+    return found as HTMLElement;
+  }
+
+  it('switches the viewer to the citation\'s document before highlighting', () => {
+    const container = mount(
+      <ResultsView
+        run={makeCollectionRun()}
+        documents={documents}
+        settings={settings}
+        onRetryCell={() => {}}
+      />,
+    );
+    expect(activeDoc(container)).toBe('d1');
+    click(evidenceButton(container, 'six months notice'));
+    expect(activeDoc(container)).toBe('d2');
+  });
+
+  it('leaves the viewer where it is when the citation belongs to the document already shown', () => {
+    const run = makeCollectionRun();
+    run.findings['coll-1'].c1.citations = [{ quote: 'six months notice', documentId: 'd1' }];
+    const container = mount(
+      <ResultsView run={run} documents={documents} settings={settings} onRetryCell={() => {}} />,
+    );
+    click(evidenceButton(container, 'six months notice'));
+    expect(activeDoc(container)).toBe('d1');
+  });
+
+  // Deliberately NOT tested: a citation naming a document outside
+  // `run.documentIds`. `handleCiteClick` guards against it, but the case is
+  // unreachable from live data (`repairCitations` stamps the reviewed
+  // document's own id; `resolveStepCitations` resolves only against the
+  // collection's members), and the existing `activeDocId` effect bounces an
+  // unknown id back to `documentIds[0]` regardless — so no assertion can
+  // tell the guarded implementation from the unguarded one. A test written
+  // here passes against broken code, which is worse than no test at all.
 });
 
 describe('ResultsView — the comparison grid\'s "Open in review" handoff', () => {

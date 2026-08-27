@@ -1,6 +1,6 @@
 import { repairCitations } from '../citationRepair';
 import { unchecked } from '../verification';
-import type { Finding, Note, Review, ReviewTarget, Verification } from '../../types';
+import type { Finding, NetPosition, Note, Review, ReviewTarget, TrailStep, Verification } from '../../types';
 
 const STATUSES: Finding['status'][] = ['pending', 'running', 'done', 'error', 'cancelled'];
 const STATES: Verification['state'][] = ['unchecked', 'verified', 'flagged', 'rejected'];
@@ -105,7 +105,76 @@ function migrateFinding(
   if (src.truncated === true) finding.truncated = true;
   if (src.noContent === true) finding.noContent = true;
 
+  const netPosition = readNetPosition(src.netPosition);
+  // Assigned conditionally, never as `finding.netPosition = undefined`:
+  // `structuredClone` — how IndexedDB writes every record — PRESERVES an
+  // `undefined`-valued key, so an unconditional assignment would persist a
+  // key that reads as "there was a position here" to any `in` check.
+  if (netPosition) finding.netPosition = netPosition;
+
   return finding;
+}
+
+/**
+ * Repairs a persisted `NetPosition` on read.
+ *
+ * This function exists because it was missing. `migrateFinding` rebuilds a
+ * `Finding` field by field, and a field nobody adds here is a field silently
+ * discarded on every read — which is exactly what happened to `netPosition`:
+ * a reopened collection review lost the entire synthesis and its derivation
+ * while the record on disk stayed perfectly intact, and rendered as a review
+ * that had simply never produced a position. That is this project's founding
+ * failure mode ("a failed storage migration rendering an empty library,
+ * indistinguishable from a fresh install") relocated one level down, and it
+ * survived unit tests because nothing tested that a field-by-field rebuild
+ * carries every field.
+ *
+ * Posture matches `readVerification` and `readStatus` exactly:
+ *  - An unreadable `state` becomes `unconfirmed`, NEVER `confirmed`. A
+ *    confirmation is a person's judgement; inferring one from a record that
+ *    cannot be read would let an export claim a human accepted a synthesis
+ *    they never saw.
+ *  - A position with no `proposed` text is dropped rather than repaired to
+ *    an empty one — an empty position renders as a conclusion that says
+ *    nothing, which is worse than no conclusion.
+ *  - A malformed trail is repaired to `[]`, not allowed to drop the
+ *    position: the conclusion is still the model's real output, and the UI
+ *    already says a position without a trail is unsupported.
+ */
+function readNetPosition(raw: unknown): NetPosition | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const src = raw as Partial<NetPosition> & Record<string, unknown>;
+
+  const proposed = typeof src.proposed === 'string' ? src.proposed : '';
+  if (proposed.trim() === '') return undefined;
+
+  const out: NetPosition = {
+    proposed,
+    state: src.state === 'confirmed' ? 'confirmed' : 'unconfirmed',
+    trail: Array.isArray(src.trail) ? src.trail.map(readTrailStep) : [],
+  };
+  if (typeof src.amended === 'string' && src.amended.trim() !== '') out.amended = src.amended;
+  if (typeof src.byUserId === 'string') out.byUserId = src.byUserId;
+  if (typeof src.at === 'number' && Number.isFinite(src.at)) out.at = src.at;
+  return out;
+}
+
+/** One step of the derivation. Its citations go through the same
+ *  `repairCitations` every other citation does, keyed to the step's OWN
+ *  document — a trail step's quotes come from the document that step is
+ *  about, not from whatever the finding is filed under (for a collection
+ *  that is the collection id, which is not a document at all). No document
+ *  text is available here, so `repairCitations` keeps whatever page was
+ *  derived at extraction time and invents none. */
+function readTrailStep(raw: unknown): TrailStep {
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<TrailStep> & Record<string, unknown>;
+  const documentId = typeof src.documentId === 'string' ? src.documentId : '';
+  return {
+    documentId,
+    kind: src.kind === 'varies' ? 'varies' : 'original',
+    effect: typeof src.effect === 'string' ? src.effect : '',
+    citations: repairCitations(src.citations, documentId, undefined),
+  };
 }
 
 /**
