@@ -8,7 +8,12 @@ const RISK_CLASSES: Record<RiskLevel, string> = {
   Info: 'bg-blue-500/20 text-blue-400',
 };
 
-export function RiskBadge({ level }: { level: RiskLevel | undefined }) {
+/** The risk level the *model* assigned. Its counterpart is `StateChip`,
+ *  which shows what a *human* concluded. They are deliberately two
+ *  components and must never be merged into one badge: a High-risk finding
+ *  nobody has checked and a High-risk finding a lawyer has verified are
+ *  different things, and a single badge cannot say which is which. */
+export function RiskChip({ level }: { level: RiskLevel | undefined }) {
   if (!level) return null;
   return (
     <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold ${RISK_CLASSES[level]}`}>

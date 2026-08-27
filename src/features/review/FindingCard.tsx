@@ -1,7 +1,7 @@
 import React from 'react';
 import { Loader, ShieldAlert, MousePointerClick, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { Clause, Finding } from '../../types';
-import { RiskBadge } from '../../components/RiskBadge';
+import { RiskChip } from '../../components/RiskChip';
 import { Button } from '../../components/Button';
 
 export interface FindingCardProps {
@@ -137,7 +137,7 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
     <div className={`${CARD_SHELL} border-white/5`}>
       <div className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl">
         <span className="font-semibold text-sm text-white">{clause.title}</span>
-        <RiskBadge level={finding?.riskLevel} />
+        <RiskChip level={finding?.riskLevel} />
       </div>
       <div className="p-4 space-y-3">
         {finding?.truncated && (
