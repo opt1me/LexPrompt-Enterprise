@@ -307,3 +307,39 @@ describe('MatterHome — collections (Task 7)', () => {
     expect(collectionRunButton).toBeTruthy();
   });
 });
+
+describe('MatterHome — collection membership is authoritative over document role', () => {
+  it('renders a claimed document once even when its role still says standalone', () => {
+    // Creating a collection writes the collection record and the member
+    // roles as two sequential writes (the sequence allocator is typed to a
+    // single-store transaction, and relaxing that would weaken a guard
+    // against a subtler bug). Both orders are chosen so a partial failure
+    // can never make a document invisible — but it can leave `role` saying
+    // 'standalone' while a collection already lists the document.
+    //
+    // Reading membership from the collection record makes that
+    // disagreement invisible: the document renders once, inside its
+    // collection. Filtering by `role` instead would render it twice, in
+    // the collection card AND in the loose-documents list.
+    const documents = [
+      makeDoc({ id: 'lease', name: 'Lease.pdf', role: 'standalone' }),
+      makeDoc({ id: 'dov', name: 'DoV.pdf', role: 'standalone' }),
+      makeDoc({ id: 'loose', name: 'Loose.pdf', role: 'standalone' }),
+    ];
+    const collections = [
+      makeCollection({ id: 'c1', name: 'Lease as varied', baseDocumentId: 'lease', variesDocumentIds: ['dov'] }),
+    ];
+
+    const container = mount(
+      <MatterHome {...baseProps} documents={documents} collections={collections} />,
+    );
+    const text = container.textContent ?? '';
+    const occurrences = (name: string) => text.split(name).length - 1;
+
+    // Each claimed document appears exactly once — in its collection.
+    expect(occurrences('Lease.pdf')).toBe(1);
+    expect(occurrences('DoV.pdf')).toBe(1);
+    // The genuinely loose document is still shown.
+    expect(occurrences('Loose.pdf')).toBe(1);
+  });
+});

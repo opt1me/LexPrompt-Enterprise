@@ -161,7 +161,27 @@ export function MatterHome({
   // be selected for a NEW one, and the only ones `suggestCollections`
   // should ever propose grouping (a document already in a collection isn't
   // "loose" for the heuristic to notice).
-  const standaloneDocuments = documents.filter(d => d.role === 'standalone');
+  //
+  // Membership is read from the COLLECTION RECORDS, not from each
+  // document's `role`. The two can briefly disagree: creating or ungrouping
+  // a collection writes the collection record and the member roles as two
+  // sequential writes, because `saveCollection`'s sequence allocator is
+  // typed to a single-store transaction and relaxing that type would
+  // weaken a guard against a subtler bug. Both writes are ordered so a
+  // partial failure can never make a document invisible — but it could
+  // leave `role` saying 'standalone' while a collection still lists the
+  // document as a member.
+  //
+  // Treating the collection record as authoritative makes that
+  // disagreement invisible too: the document appears once, inside its
+  // collection, instead of simultaneously in the collection card and in
+  // the loose-documents list. `role` stays as the denormalised convenience
+  // it is, and nothing renders a document twice because two writes did not
+  // land together.
+  const collectionMemberIds = new Set(
+    collections.flatMap(c => [c.baseDocumentId, ...c.variesDocumentIds]),
+  );
+  const standaloneDocuments = documents.filter(d => !collectionMemberIds.has(d.id));
   // Preserves the order the user actually clicked in — `GroupDocumentsDialog`
   // relies on that order for "the base defaults to the first selected" and
   // "amendments keep the order the user put them in".
