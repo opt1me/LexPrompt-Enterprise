@@ -299,7 +299,8 @@ git commit -m "refactor: rename Clause to PlaybookClause and prompt to extractPr
 
 **Interfaces:**
 - Consumes: `PlaybookClause` (Task 1).
-- Produces: `PlaybookVersion`, `PlaybookDraft`, `Playbook` (reshaped), `publishVersion(playbookId, draft, byUserId): Promise<PlaybookVersion>`, `getVersion(id): Promise<PlaybookVersion | null>`, `listVersions(playbookId): Promise<PlaybookVersion[]>` (newest first).
+- Produces: `PlaybookVersion`, `PlaybookDraft`, `publishVersion(playbookId, draft, byUserId): Promise<PlaybookVersion>`, `getVersion(id): Promise<PlaybookVersion | null>`, `listVersions(playbookId): Promise<PlaybookVersion[]>` (newest first).
+- Does NOT produce the reshaped `Playbook` — that is Task 3's, together with the `db/playbooks.ts` rewrite that satisfies it. See Step 1.
 
 - [ ] **Step 1: Add the types**
 
