@@ -129,6 +129,11 @@ export interface Finding {
    *  `error` status rather than `done` (see `extractClause.ts`). Lets
    *  run-level UI count this pattern without string-matching `error`. */
   noContent?: boolean;
+  /** Present only on a finding produced by a collection-aware run. A
+   *  standalone finding has none and must NOT be given an empty one:
+   *  absence means "this question did not arise", where an empty net
+   *  position would read as "we tried and found nothing". */
+  netPosition?: NetPosition;
 }
 
 export interface ReviewRun {
@@ -170,8 +175,10 @@ export const DEFAULT_SETTINGS: Settings = {
 
 /** 3 to 4: `Finding.citations` became `Citation[]`, and `Finding` gained
  *  `verification` and `notes` (sub-project B). Reviews written at 3 are
- *  upgraded on read — see `src/lib/db/reviewMigration.ts`. */
-export const SCHEMA_VERSION = 4;
+ *  upgraded on read — see `src/lib/db/reviewMigration.ts`.
+ *  4 to 5: `Review` gained `target` (sub-project C, Task 5 migration fills it
+ *  in from `documentIds` on read). */
+export const SCHEMA_VERSION = 5;
 
 export interface UserProfile {
   id: string;
@@ -203,13 +210,75 @@ export interface DocumentRecord {
   byteSize: number;
   addedAt: number;
   addedByUserId: string;
+  /** 'standalone' unless the document belongs to a collection. */
+  role: 'base' | 'varies' | 'standalone';
+  collectionId?: string;
+  /** When the document takes effect, where it was read from the document or
+   *  entered by the user. Absent rather than guessed — displayed, never used
+   *  to order amendments (ruling R-C3). */
+  documentDate?: number;
 }
+
+/** An ordered set of documents read together as one source: one base
+ *  document plus the documents that amend it. A lease and its deed of
+ *  variation answer a clause together; asked separately they give two
+ *  confident answers and neither is the answer. */
+export interface Collection {
+  id: string;
+  matterId: string;
+  name: string;
+  baseDocumentId: string;
+  /** The amending documents, in the order they take effect. Ordered
+   *  EXPLICITLY rather than derived from `documentDate` (ruling R-C3): a
+   *  date can be missing, wrong or ambiguous, and the order in which
+   *  amendments bite is a legal judgement, not a sort. */
+  variesDocumentIds: string[];
+  createdAt: number;
+  createdByUserId: string;
+}
+
+export type NetPositionState = 'unconfirmed' | 'confirmed';
+
+/** One document's contribution to a clause's derivation. */
+export interface TrailStep {
+  documentId: string;
+  kind: 'original' | 'varies';
+  /** What this document does to this clause, in the model's words. */
+  effect: string;
+  citations: Citation[];
+}
+
+/**
+ * What the documents, read in order, say now — synthesised text that no
+ * single document contains. It is therefore the most dangerous output this
+ * app produces, and starts `unconfirmed` for the same reason a finding
+ * starts `unchecked`.
+ */
+export interface NetPosition {
+  proposed: string;
+  /** Present when a human rewrote it. Shown and exported in preference to
+   *  `proposed`, which is kept so the trail can show what changed. An
+   *  amended position is a STRONGER claim than a confirmed one, not a
+   *  weaker one — a person wrote it. */
+  amended?: string;
+  state: NetPositionState;
+  byUserId?: string;
+  at?: number;
+  /** The argument for the conclusion, one step per contributing document,
+   *  in effect order. A net position without it is an assertion. */
+  trail: TrailStep[];
+}
+
+export type ReviewTarget =
+  | { kind: 'documents'; documentIds: string[] }
+  | { kind: 'collection'; collectionId: string; documentIds: string[] };
 
 export interface Review {
   id: string;
   matterId: string;
   playbookSnapshot: Playbook;
   documentIds: string[];
+  target: ReviewTarget;
   findings: Record<string, Record<string, Finding>>;
   modelId: string;
   startedAt: number;

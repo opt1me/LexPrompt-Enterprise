@@ -46,6 +46,10 @@ export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
         if (!db.objectStoreNames.contains(STORES.profile)) {
           db.createObjectStore(STORES.profile);
         }
+        if (!db.objectStoreNames.contains(STORES.collections)) {
+          const s = db.createObjectStore(STORES.collections, { keyPath: 'id' });
+          s.createIndex('byMatter', 'matterId');
+        }
       },
       blocked() {
         // Another tab holds an older version open. Without this the open hangs

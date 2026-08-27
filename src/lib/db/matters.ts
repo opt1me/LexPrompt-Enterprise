@@ -67,10 +67,10 @@ export async function saveMatter(m: Matter): Promise<Matter> {
   return saved;
 }
 
-/** Deletes a matter and cascades to its documents, their blobs, and its
- *  reviews, all inside one readwrite transaction so a failure part-way
- *  cannot leave orphans behind (an orphaned blob makes the app's privacy
- *  claim — "deleting a matter deletes its documents" — false).
+/** Deletes a matter and cascades to its documents, their blobs, its
+ *  reviews, and its collections, all inside one readwrite transaction so a
+ *  failure part-way cannot leave orphans behind (an orphaned blob makes the
+ *  app's privacy claim — "deleting a matter deletes its documents" — false).
  *
  *  Everything this needs from the store must be resolved *before* any
  *  delete request is issued, and every awaited step below must itself be an
@@ -79,7 +79,7 @@ export async function saveMatter(m: Matter): Promise<Matter> {
 export async function deleteMatter(id: string): Promise<void> {
   const db = await getDb();
   const tx = db.transaction(
-    [STORES.matters, STORES.documents, STORES.blobs, STORES.reviews],
+    [STORES.matters, STORES.documents, STORES.blobs, STORES.reviews, STORES.collections],
     'readwrite',
   );
 
@@ -87,10 +87,12 @@ export async function deleteMatter(id: string): Promise<void> {
   const reviewsStore = tx.objectStore(STORES.reviews);
   const blobsStore = tx.objectStore(STORES.blobs);
   const mattersStore = tx.objectStore(STORES.matters);
+  const collectionsStore = tx.objectStore(STORES.collections);
 
-  const [docs, reviews] = await Promise.all([
+  const [docs, reviews, collections] = await Promise.all([
     documentsStore.index('byMatter').getAll(id),
     reviewsStore.index('byMatter').getAll(id),
+    collectionsStore.index('byMatter').getAll(id),
   ]);
 
   await Promise.all([
@@ -98,6 +100,7 @@ export async function deleteMatter(id: string): Promise<void> {
     ...docs.map(d => documentsStore.delete(d.id)),
     ...docs.map(d => blobsStore.delete(d.id)),
     ...reviews.map(r => reviewsStore.delete(r.id)),
+    ...collections.map(c => collectionsStore.delete(c.id)),
   ]);
 
   await tx.done;

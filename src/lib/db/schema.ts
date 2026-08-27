@@ -2,7 +2,7 @@ import type { DBSchema } from 'idb';
 import type { Playbook } from '../../types';
 
 export const DB_NAME = 'lexprompt';
-export const DB_VERSION = 1;
+export const DB_VERSION = 2;
 
 export const STORES = {
   matters: 'matters',
@@ -11,6 +11,7 @@ export const STORES = {
   reviews: 'reviews',
   playbooks: 'playbooks',
   profile: 'profile',
+  collections: 'collections',
 } as const;
 
 /** The single key under which the one local profile is stored. */
@@ -31,6 +32,11 @@ export interface LexPromptDB extends DBSchema {
   };
   playbooks: { key: string; value: Playbook };
   profile: { key: string; value: import('../../types').UserProfile };
+  collections: {
+    key: string;
+    value: import('../../types').Collection;
+    indexes: { byMatter: string };
+  };
 }
 
 // Settings deliberately absent — see ruling R6. They are a few hundred bytes,

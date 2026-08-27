@@ -4,7 +4,7 @@ import { DB_NAME, DB_VERSION, STORES } from './schema';
 describe('schema', () => {
   it('names every store the sub-project needs', () => {
     expect(Object.values(STORES).sort()).toEqual(
-      ['blobs', 'documents', 'matters', 'playbooks', 'profile', 'reviews'].sort(),
+      ['blobs', 'collections', 'documents', 'matters', 'playbooks', 'profile', 'reviews'].sort(),
     );
   });
 
