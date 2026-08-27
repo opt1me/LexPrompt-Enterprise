@@ -900,6 +900,21 @@ git commit -m "fix(c): read a collection review's findings under the collection 
 
 **`findingOutcome.ts` is the only place export wording lives.** The DOCX and CSV exporters drifted apart once before; every label added here goes in that module and both exporters read it. There is already a test asserting the two agree — extend it, do not write a parallel one.
 
+**Step 0 — first, stop the exports silently emptying on a collection review.**
+
+Task 8A's implementer read past its own boundary and found the same key bug it had just fixed, one screen over. Verified: `src/features/review/exportDocx.ts`'s `buildReportRows(run, docId)` and `src/features/assistant/draftEmail.ts` both key `run.findings` by document id directly. For a collection review — whose findings live under the collection id — **"Export DOCX" and "Draft Email" currently produce a silently empty report and email, with no error at all.**
+
+That is not a new failure mode for this codebase; it is the one in its founding list. `CLAUDE.md` records "a CSV export writing unreviewed clauses as blank cells — which reads in a spreadsheet as *checked, nothing found*". An empty report of a review that genuinely found things is worse: it is a document a lawyer might send.
+
+Route both through `findingsKeyFor(run.target, docId)` — `ReviewRun` and `Review` both carry `target`, so nothing needs a new parameter. Then assert:
+
+- A **collection** review exports its findings, with content, in the DOCX and in the CSV.
+- A **standalone** review exports byte-identically to today. Regression pin.
+- `draftEmail` for a collection review receives the findings rather than an empty set.
+- **An export that finds no findings at all says so** rather than producing an empty document — the fail-loudly rule, applied to the surface where it was originally learned.
+
+Mutation: key `buildReportRows` by `docId` again, and confirm the collection-export test fails.
+
 - [ ] **Step 1: Write the failing tests**
 
 - `netPositionLabel(finding)` returns `'UNCONFIRMED NET POSITION'` for an unconfirmed one, `null` for a confirmed one, and `null` when there is no net position at all. **The three cases are distinct** and a test must show it: no-position is not the same as confirmed, and conflating them would export a synthesis as though a human had signed it off.
