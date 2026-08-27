@@ -3705,10 +3705,16 @@ All three are gates. If `tsc` is clean but a test now fails, you have changed be
 
 - [ ] **Step 4: Commit**
 
+**Stage only the files you actually changed, by name.** Do **not** use `git add -A`, `git add .`, `git add src` or `git add -u`. During this sub-project another agent's `git add` swept four files belonging to a concurrently-running task into its commit; it was caught and corrected, but a contaminated commit that goes unnoticed attributes one task's work to another and corrupts every review package downstream of it.
+
 ```bash
-git add -A src
+git add src/features/review/runReview.test.ts src/App.interrupted.test.tsx src/App.authRedirect.test.tsx src/features/tabular/TabularReview.interrupted.test.tsx
+# ...adjusted to exactly the files your inventory in Step 1 named
 git commit -m "chore(b): update stale Finding fixtures in tests the plan missed"
+git show --stat HEAD   # confirm the file list is exactly yours, and nothing else
 ```
+
+If `git show --stat HEAD` lists a file you did not touch, **stop and report it** rather than attempting a correction.
 
 ### Task 14: Documentation, full gates, and browser verification
 
