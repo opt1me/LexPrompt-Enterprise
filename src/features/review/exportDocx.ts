@@ -2,6 +2,7 @@ import type { Citation, ReviewRun, RiskLevel } from '../../types';
 import {
   describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
+  collectionExportLabel, safeFileName,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
@@ -402,8 +403,16 @@ export async function exportDocx(
   // document. Same shape as the CSV defect that emitted one identical row
   // per member (M1): the report covers the collection, so it is named after
   // the collection's review, not after a member of it.
-  const reportName = isCollectionTarget(run.target)
-    ? `${run.templateSnapshot.name} - collection of ${run.documentIds.length} linked documents`
+  //
+  // mn4: through `collectionExportLabel`, which is where the CSV gets the
+  // same words. The first version of this named the TEMPLATE — two
+  // collections in one matter under one playbook produced the same title and
+  // the same filename — and counted `run.documentIds` blind, announcing "3
+  // linked documents" when one was gone. Two exporters naming one object two
+  // ways is the drift that produced M1 between these same two files.
+  const isCollection = isCollectionTarget(run.target);
+  const reportName = isCollection
+    ? collectionExportLabel(run.documentIds, documentNames)
     : docName;
   // Fail-loudly rule, applied to the surface where the whole app's founding
   // defect was first learned (CLAUDE.md): a review that genuinely has no
@@ -429,7 +438,18 @@ export async function exportDocx(
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${stripExtension(reportName)}_Report.docx`;
+  // The same label, built from names with their extensions already stripped
+  // — one naming rule, two inputs, rather than a second rule for filenames.
+  // mn5: sanitised, because this is no longer always a filename. `docName`
+  // was; a collection label assembled from user-authored text can carry `/`,
+  // `\` and `:`.
+  const fileStem = isCollection
+    ? collectionExportLabel(
+      run.documentIds,
+      Object.fromEntries(Object.entries(documentNames).map(([id, name]) => [id, stripExtension(name)])),
+    )
+    : stripExtension(docName);
+  a.download = `${safeFileName(fileStem, 'Review')}_Report.docx`;
   a.click();
   URL.revokeObjectURL(url);
 }

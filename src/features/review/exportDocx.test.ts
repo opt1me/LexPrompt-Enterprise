@@ -6,6 +6,11 @@ import { describe, it, expect, vi } from 'vitest';
 // silent wrong answer — and the fix is to add it to devDependencies then.
 import JSZip from 'jszip';
 import { buildReportRows, buildReportDocument, exportDocx } from './exportDocx';
+// Imported across features on purpose: this file carries the one test whose
+// whole point is that the DOCX and the CSV cannot name a collection two
+// different ways, and it cannot prove that without both of them.
+import { buildTabularCsv } from '../tabular/csv';
+import { collectionExportLabel } from '../../lib/findingOutcome';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
 import type { Finding, ReviewRun, Template, TrailStep } from '../../types';
 
@@ -508,8 +513,62 @@ describe('exportDocx — a collection report is named after the collection', () 
   it('does not name the report after a member document', async () => {
     const name = await capturedDownloadName(collectionRun(), 'lease', 'Lease.pdf');
     expect(name).not.toMatch(/^Lease_Report/);
-    expect(name).toContain('Lease Review');
-    expect(name).toContain('collection');
+    // It names the collection: what it is, and which documents it is —
+    // with each member's extension stripped, as a single-document report's
+    // filename has always had its own stripped.
+    expect(name).toMatch(/collection/i);
+    expect(name).toContain('Lease');
+    expect(name).toContain('Deed');
+    expect(name).not.toContain('.pdf');
+  });
+
+  /**
+   * mn4. The DOCX named the collection "<template name> - collection of N
+   * linked documents", which identifies the TEMPLATE: two collections in one
+   * matter under one playbook produced the same report title and the same
+   * filename. It also counted `run.documentIds` blind, announcing "3 linked
+   * documents" when one of them was gone. Both exporters now go through
+   * `collectionExportLabel`, because two implementations of "how an export
+   * names a collection" is the exact drift that produced M1 between these
+   * same two files.
+   */
+  it('names the collection with the same words the CSV uses', async () => {
+    const r = collectionRun();
+    const names = { lease: 'Lease.pdf', deed: 'Deed.pdf' };
+    const label = collectionExportLabel(r.documentIds, names);
+
+    let capturedBlob: Blob | undefined;
+    vi.stubGlobal('URL', {
+      createObjectURL: (b: Blob) => { capturedBlob = b; return 'blob:stub'; },
+      revokeObjectURL: () => {},
+    });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    let xml: string | undefined;
+    try {
+      await exportDocx(r, 'lease', 'Lease.pdf', names);
+      const zip = await JSZip.loadAsync(await blobToArrayBuffer(capturedBlob!));
+      xml = await zip.file('word/document.xml')?.async('string');
+    } finally {
+      clickSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+
+    expect(xml).toContain(label);
+    // The same run, through the other exporter, says the same thing.
+    const csv = buildTabularCsv(r, [
+      { id: 'lease', name: 'Lease.pdf', kind: 'pdf', text: '', file: new File([''], 'Lease.pdf') },
+      { id: 'deed', name: 'Deed.pdf', kind: 'pdf', text: '', file: new File([''], 'Deed.pdf') },
+    ]);
+    expect(csv).toContain(label);
+  });
+
+  // mn5. `docName` was always a filename; a collection label is assembled
+  // from user-authored text and can carry characters no filesystem accepts.
+  it('produces a path-safe filename from a collection label', async () => {
+    const r = collectionRun();
+    const name = await capturedDownloadName(r, 'lease', 'Lease.pdf');
+    expect(name).not.toMatch(/[\/:*?"<>|]/);
+    expect(name.endsWith('_Report.docx')).toBe(true);
   });
 
   it('still names a single-document report after its document', async () => {

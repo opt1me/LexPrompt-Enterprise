@@ -2,6 +2,7 @@ import type { DocumentFile, Finding, ReviewRun } from '../../types';
 import {
   describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
+  collectionExportLabel, safeFileName,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
@@ -72,18 +73,17 @@ function cellText(
  * What the Document column says on a collection's single row: the identity
  * of the collection, spelled out as its member documents read together.
  *
- * Named, never keyed by `collectionId`. A raw internal id in a cell a reader
- * meets says nothing to them while looking like it should — the same defect
- * `trailLines` carries a long comment about, and the one `cd89c27` fixed for
- * a user id. A member whose `DocumentFile` isn't in hand is described in
- * words for the same reason, rather than falling back to its id: "an
- * unavailable document" is at least true and readable.
+ * The wording itself lives in `collectionExportLabel`, beside the other
+ * shared export wording — mn4: the DOCX report names the same collection and
+ * named it differently, in the round that fixed M1, which was a divergence
+ * between these same two exporters. This function is now only the adapter
+ * from the documents this exporter holds to the name map that one reads.
  */
 function collectionLabel(run: ReviewRun, documents: DocumentFile[]): string {
-  const names = run.documentIds.map(
-    id => documents.find(d => d.id === id)?.name ?? 'an unavailable document',
+  return collectionExportLabel(
+    run.documentIds,
+    Object.fromEntries(documents.map(d => [d.id, d.name])),
   );
-  return names.length > 0 ? `Collection: ${names.join(' + ')}` : 'Collection';
 }
 
 /**
@@ -178,7 +178,9 @@ export function downloadTabularCsv(run: ReviewRun, documents: DocumentFile[]): v
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `${run.templateSnapshot.name || 'tabular-review'}.csv`;
+  // mn5: a template name is free text somebody typed and can contain `/`,
+  // `\` and `:` — the same input class the DOCX filename acquired.
+  a.download = `${safeFileName(run.templateSnapshot.name, 'tabular-review')}.csv`;
   a.click();
   URL.revokeObjectURL(url);
 }

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines, isVerifiable,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
+  collectionExportLabel, safeFileName,
 } from './findingOutcome';
 import { unconfirmedPosition, confirmPosition, amendPosition } from './netPosition';
 import type { Finding, TrailStep, Verification } from '../types';
@@ -340,5 +341,65 @@ describe('a derivation does not outlive the output it described', () => {
   it('still labels and exports the derivation of a done finding', () => {
     expect(netPositionLabel(collectionFinding())).toBe('UNCONFIRMED NET POSITION');
     expect(trailLines(collectionFinding())).toHaveLength(2);
+  });
+});
+
+/**
+ * mn4/mn5 (re-review). Two exporters named the same collection two
+ * different ways — the CSV as "Collection: Lease.pdf + Deed of
+ * Variation.pdf", the DOCX as "<template name> - collection of 2 linked
+ * documents", which identifies the TEMPLATE and not the collection: two
+ * collections in one matter under one playbook produced the same report
+ * title and the same filename. That divergence was written in the very
+ * round that fixed M1, itself a divergence between these same two
+ * exporters, which is why the rule now lives here beside the other shared
+ * export wording rather than once in each caller.
+ */
+describe('collectionExportLabel', () => {
+  it('names every member, in the order the review covered them', () => {
+    expect(collectionExportLabel(['lease', 'deed'], { lease: 'Lease.pdf', deed: 'Deed of Variation.pdf' }))
+      .toBe('Collection: Lease.pdf + Deed of Variation.pdf');
+  });
+
+  it('says in words that a member no longer resolves, rather than printing its raw id', () => {
+    const label = collectionExportLabel(['lease', 'deed'], { lease: 'Lease.pdf' });
+    expect(label).toContain('Lease.pdf');
+    expect(label).not.toContain('deed');
+    expect(label).toMatch(/unavailable/i);
+  });
+
+  it('still says what it is when no member resolves at all', () => {
+    expect(collectionExportLabel([], {})).toBe('Collection');
+  });
+});
+
+/**
+ * mn5. A DOCX report's filename used to be built from `docName`, always a
+ * real filename. It is now built from a collection label assembled from
+ * user-authored text, which can carry `/`, `\`, `:` and friends. Browsers
+ * sanitise `a.download` themselves, so this is about a legible name rather
+ * than a security boundary — but the input class changed and nothing had
+ * noticed.
+ */
+describe('safeFileName', () => {
+  it('removes path separators and characters no filesystem accepts', () => {
+    expect(safeFileName('Collection: a/b\c*d?e"f<g>h|i', 'fallback'))
+      .not.toMatch(/[\/:*?"<>|]/);
+  });
+
+  it('keeps the words readable rather than running them together', () => {
+    expect(safeFileName('Collection: Lease.pdf + Deed.pdf', 'fallback'))
+      .toBe('Collection Lease.pdf + Deed.pdf');
+  });
+
+  it('falls back rather than producing an empty or dot-only name', () => {
+    expect(safeFileName('', 'fallback')).toBe('fallback');
+    expect(safeFileName('   ', 'fallback')).toBe('fallback');
+    expect(safeFileName('...', 'fallback')).toBe('fallback');
+    expect(safeFileName('///', 'fallback')).toBe('fallback');
+  });
+
+  it('leaves an ordinary name exactly as it was', () => {
+    expect(safeFileName('MSA', 'fallback')).toBe('MSA');
   });
 });

@@ -279,3 +279,77 @@ export function exportSummaryLine(findings: Review['findings']): string {
   const c = verificationCounts(findings);
   return `${c.total} findings: ${c.verified} verified, ${c.unchecked} unverified, ${c.flagged} flagged, ${c.rejected} rejected.`;
 }
+
+/**
+ * How an export names a COLLECTION — the identity of what was reviewed,
+ * spelled out as the member documents read together.
+ *
+ * The only place that wording lives, for exactly the reason
+ * `verificationLabel` is: the DOCX report and the CSV export must not be
+ * able to name the same object two different ways. They did. The CSV said
+ * "Collection: Lease.pdf + Deed of Variation.pdf" and the DOCX said
+ * "<template name> - collection of 2 linked documents", which identifies the
+ * TEMPLATE rather than the collection: two collections in one matter under
+ * one playbook produced the same report title and the same filename. It also
+ * counted the member ids blind, announcing "3 linked documents" when one of
+ * them no longer existed. That divergence was written in the same round that
+ * fixed M1 — itself a divergence between these two exporters — which is why
+ * it now lives here rather than once in each caller.
+ *
+ * Named, never keyed by `collectionId`. A raw internal id in a cell or a
+ * heading a reader meets says nothing to them while looking like it should —
+ * the same defect `trailLines` carries a long comment about, and the one
+ * `cd89c27` fixed for a user id. A member whose name isn't in hand is
+ * described in words for the same reason, rather than falling back to its
+ * id: "an unavailable document" is at least true and readable, and it keeps
+ * the count honest about what actually resolved.
+ */
+export function collectionExportLabel(
+  documentIds: string[],
+  documentNames: Record<string, string>,
+): string {
+  const names = documentIds.map(id => documentNames[id] ?? 'an unavailable document');
+  return names.length > 0 ? `Collection: ${names.join(' + ')}` : 'Collection';
+}
+
+/** Characters no common filesystem accepts in a name, plus the control
+ *  range. Replaced with a space rather than removed, so `Lease:Deed` reads
+ *  as `Lease Deed` instead of running two words together. */
+// eslint-disable-next-line no-control-regex
+const UNSAFE_FILENAME_CHARS = /[\/:*?"<>|\u0000-\u001f]/g;
+
+/**
+ * A download name that a filesystem will actually accept, from text a person
+ * typed.
+ *
+ * Lives here, beside the other export wording, because it is the second half
+ * of the same rule: `collectionExportLabel` decides what an export is called
+ * and this decides what that name looks like once it becomes a file. Both
+ * exporters call both, and a second home for either is how the two drift
+ * apart again.
+ *
+ * `exportDocx`'s filename used to come from `docName`, which was always a
+ * real filename and needed nothing. It now comes from a collection label
+ * assembled from user-authored text, and the CSV's has always come from a
+ * template name someone typed — either can contain `/`, `\` or `:`. Browsers
+ * sanitise `a.download` themselves, so this is about a legible name rather
+ * than a security boundary; the point is that the input class changed and
+ * nothing had noticed.
+ *
+ * Falls back rather than returning a name that is empty, whitespace-only or
+ * all dots — each of which is either rejected or silently turned into
+ * something else by the browser, which would leave a reader with a file they
+ * cannot identify.
+ */
+export function safeFileName(name: string, fallback: string): string {
+  const cleaned = name
+    .replace(UNSAFE_FILENAME_CHARS, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    // Windows rejects a trailing dot or space outright, and a leading dot
+    // makes the file hidden on Unix — neither is what anyone meant.
+    .replace(/^[.\s]+|[.\s]+$/g, '')
+    .slice(0, 120)
+    .trim();
+  return cleaned === '' ? fallback : cleaned;
+}
