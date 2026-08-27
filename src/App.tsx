@@ -260,6 +260,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // rather than silently falling back to a single-document answer, which is
   // exactly the confidently-wrong result this sub-project exists to avoid.
   const activeCollectionRef = useRef<CollectionRunInput | null>(null);
+  /** WHY `activeCollectionRef` is empty, when it is. A collection that was
+   *  ungrouped is gone for good, and telling someone to reload and try again
+   *  sends them round a loop that cannot succeed; a transient read failure is
+   *  worth retrying. Both used to collapse to one message. */
+  const collectionUnavailableRef = useRef<'missing' | 'error' | null>(null);
   // Minor 2: the id of whoever CREATED the in-session review — set once,
   // either from a freshly-started run's own creator (`handleStartRun`) or
   // from a reopened review's stored `createdByUserId` (`openReview`), and
@@ -562,11 +567,16 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           activeCollectionRef.current = collectionRecord
             ? { target: review.target, members: orderedMembers(collectionRecord, hydratedDocs) }
             : null;
+          // `null` here is not a failure to read — the read succeeded and the
+          // collection is not there, i.e. it was ungrouped or deleted.
+          collectionUnavailableRef.current = collectionRecord ? null : 'missing';
         } catch {
           activeCollectionRef.current = null;
+          collectionUnavailableRef.current = 'error';
         }
       } else {
         activeCollectionRef.current = null;
+        collectionUnavailableRef.current = null;
       }
       const reviewRun: ReviewRun = {
         id: review.id,
@@ -1344,7 +1354,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // not a silent fallback to the wrong extractor.
     const isCollection = isCollectionTarget(current.target);
     if (isCollection && !activeCollectionRef.current) {
-      notify('This collection could not be prepared for retry. Reload the review and try again.', 'error');
+      notify(
+        collectionUnavailableRef.current === 'missing'
+          ? 'These documents are no longer grouped as a collection, so this clause cannot be re-run. ' +
+            'The findings already here are unchanged.'
+          : 'This collection could not be prepared for retry. Reload the review and try again.',
+        'error',
+      );
       return;
     }
 

@@ -816,10 +816,10 @@ describe('App — retrying a collection clause calls the collection extractor (T
     }
   });
 
-  it('refuses the retry, without calling retryCell, when the collection record cannot be reloaded', async () => {
+  it('refuses the retry, without calling retryCell, when the collection is gone', async () => {
     // Deliberately no `saveCollection` call — `getCollection('coll-1')`
-    // genuinely resolves null here, mirroring a deleted or unreachable
-    // collection. Falling back to `extractClause` in this situation would be
+    // genuinely resolves null here, mirroring a collection that was ungrouped
+    // or deleted. Falling back to `extractClause` in this situation would be
     // exactly the silent, confidently-wrong single-document answer this
     // sub-project exists to prevent.
     await openReview();
@@ -828,8 +828,22 @@ describe('App — retrying a collection clause calls the collection extractor (T
     await flush();
 
     expect(retryCellMock).not.toHaveBeenCalled();
-    expect(container.textContent).toMatch(/could not be prepared for retry/i);
+    // Found by driving the app after ungrouping a real collection: the old
+    // wording told the reader to "reload the review and try again", which for
+    // an ungrouped collection is advice that can never work — they reload,
+    // retry, and get the same message. A refusal has to be loud AND accurate.
+    expect(container.textContent).toMatch(/no longer grouped as a collection/i);
+    expect(container.textContent).toMatch(/findings already here are unchanged/i);
+    expect(container.textContent).not.toMatch(/try again/i);
   });
+
+  // NOT tested here: the other branch, where the collection read THROWS and
+  // the message stays "could not be prepared ... try again". This file
+  // deliberately leaves `db/collections` unmocked so the Task 8A tests above
+  // exercise the real `openReview` reconstruction path, and there is no way to
+  // force `getCollection` to reject without mocking it and taking that
+  // property away from them. The branch is one ternary away from the case
+  // that IS pinned above, and swapping the two messages fails that test.
 });
 
 // ---------------------------------------------------------------------------
