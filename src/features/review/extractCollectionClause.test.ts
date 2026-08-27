@@ -323,4 +323,40 @@ describe('extractCollectionClause: scan/image fallback', () => {
     expect(finding.error).toMatch(/no readable text or images/i);
     expect(chatJson).not.toHaveBeenCalled();
   });
+
+  // Sibling parity with `extractClause`, which has always guarded this and
+  // which this function had drifted away from. A member whose stored bytes
+  // could not be found or re-parsed arrives carrying `parseError` — and, if
+  // it is a scan, no text either. Without the guard, `assessDocument` reads
+  // that as `unreadable` and the reviewer is told the document has "no
+  // extractable content": the file is blamed for a failure to READ it.
+  it('names the read failure, not the document, when a member carries a parseError', async () => {
+    const unreadable = docFile('dov', 'DoV.pdf', '', {
+      parseError: 'The original file for this document is no longer available.',
+    });
+
+    const finding = await extractCollectionClause(members({ varies: unreadable }), clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toContain('Could not read DoV.pdf');
+    expect(finding.error).toContain('The original file for this document is no longer available.');
+    expect(finding.error).not.toMatch(/no readable text or images/i);
+    expect(chatJson).not.toHaveBeenCalled();
+  });
+
+  // The same for a member that DOES still have text: a document whose bytes
+  // could not be re-read is not half-reviewable — `extractClause` refuses it
+  // outright and so must this, or the two disagree about what a `parseError`
+  // means depending on which extractor happens to see it.
+  it('refuses a member with a parseError even when its extracted text survives', async () => {
+    const unreadable = docFile('dov', 'DoV.pdf', dovDoc.text, {
+      parseError: 'The original file for this document is no longer available.',
+    });
+
+    const finding = await extractCollectionClause(members({ varies: unreadable }), clause, template, settings);
+
+    expect(finding.status).toBe('error');
+    expect(finding.error).toContain('Could not read DoV.pdf');
+    expect(chatJson).not.toHaveBeenCalled();
+  });
 });

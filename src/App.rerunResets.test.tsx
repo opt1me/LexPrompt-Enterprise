@@ -101,6 +101,23 @@ vi.mock('./features/review/runReview', async (importOriginal) => {
   };
 });
 
+// `documentFileForReview` is spied on (not replaced wholesale) because
+// what these tests need to pin down is WHICH hydration App.tsx uses at
+// retry time, not what that hydration does — the regeneration itself is
+// covered against the real pdfjs stubs in `src/lib/documents.test.ts`.
+// The top-level `beforeEach` below restores the real implementation for
+// every test, so the existing suites keep exercising it; only the tests
+// that need a scan's regenerated images, or a hydration held open
+// mid-flight, override it.
+const documentFileForReviewMock = vi.fn();
+vi.mock('./lib/documents', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/documents')>();
+  return {
+    ...actual,
+    documentFileForReview: (...args: unknown[]) => documentFileForReviewMock(...args),
+  };
+});
+
 import App from './App';
 import type { DocumentFile, ReviewRun, Settings } from './types';
 
@@ -110,6 +127,21 @@ async function flush(times = 8) {
     await act(async () => { await Promise.resolve(); });
   }
 }
+
+// Applies to every describe in this file and runs before their own
+// `beforeEach`es: the default is the REAL `documentFileForReview`, so a
+// test that says nothing about hydration still exercises it for real.
+let realDocuments: typeof import('./lib/documents') | undefined;
+beforeEach(async () => {
+  // Imported once and cached: resolving it per call would leave the mock's
+  // promise pending for longer than `flush()`'s microtask ticks, and the
+  // retry would look stalled rather than hydrated.
+  realDocuments ??= await vi.importActual<typeof import('./lib/documents')>('./lib/documents');
+  const real = realDocuments;
+  documentFileForReviewMock.mockReset().mockImplementation(
+    (record: DocumentRecord, blob: Blob | null) => real.documentFileForReview(record, blob),
+  );
+});
 
 function findButton(container: HTMLDivElement, re: RegExp, index = 0): HTMLButtonElement {
   const matches = Array.from(container.querySelectorAll('button')).filter(b => re.test((b.textContent || '').trim()));
@@ -212,7 +244,13 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
     getMatterMock.mockReset().mockResolvedValue(makeMatter());
     listDocumentsMock.mockReset().mockResolvedValue([]);
     getDocumentMock.mockReset().mockResolvedValue(makeDocumentRecord());
-    getDocumentBlobMock.mockReset().mockResolvedValue(null);
+    // A real Blob, not `null`: `handleRetryCell` re-hydrates the document
+    // FOR REVIEW from its stored bytes before extracting (page images are
+    // never persisted), and a document whose bytes are missing legitimately
+    // fails that re-hydration rather than being retried. `null` here would
+    // model a document with no file left, which is not what these tests are
+    // about.
+    getDocumentBlobMock.mockReset().mockResolvedValue(new Blob(['This is the contract text.'], { type: 'text/plain' }));
     getReviewMock.mockReset().mockResolvedValue(makeReview());
     saveReviewMock.mockReset().mockResolvedValue(undefined);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
@@ -679,7 +717,13 @@ describe('App — retrying a collection clause calls the collection extractor (T
     getDocumentMock.mockReset().mockImplementation((id: string) => Promise.resolve({
       ...makeDocumentRecord(), id, name: `${id}.txt`,
     }));
-    getDocumentBlobMock.mockReset().mockResolvedValue(null);
+    // A real Blob, not `null`: `handleRetryCell` re-hydrates the document
+    // FOR REVIEW from its stored bytes before extracting (page images are
+    // never persisted), and a document whose bytes are missing legitimately
+    // fails that re-hydration rather than being retried. `null` here would
+    // model a document with no file left, which is not what these tests are
+    // about.
+    getDocumentBlobMock.mockReset().mockResolvedValue(new Blob(['This is the contract text.'], { type: 'text/plain' }));
     getReviewMock.mockReset().mockResolvedValue(makeCollectionReview());
     saveReviewMock.mockReset().mockResolvedValue(undefined);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
@@ -727,6 +771,51 @@ describe('App — retrying a collection clause calls the collection extractor (T
     expect(collectionArg?.members.map(m => m.documentId)).toEqual(['d1', 'd2']);
   });
 
+  // The collection half of the re-hydration fix. A collection retry extracts
+  // from `activeCollectionRef.current.members`, which `openReview` built from
+  // VIEW-hydrated files — so a scanned deed of variation reached the
+  // collection extractor with no page images and was reported as having "no
+  // extractable content". Every present member is re-hydrated for review,
+  // and the reading order `orderedMembers` already decided is carried
+  // through untouched rather than re-derived.
+  it('re-hydrates every present member for review, keeping the reading order it was given', async () => {
+    const collection: Collection = {
+      id: 'coll-1',
+      matterId: 'm1',
+      name: 'Lease + amendments',
+      baseDocumentId: 'd1',
+      variesDocumentIds: ['d2'],
+      createdAt: 1,
+      createdByUserId: 'u1',
+    };
+    await saveCollection(collection);
+    retryCellMock.mockResolvedValue(makeCollectionReview());
+    const images = [{ mime: 'image/jpeg', data: 'c2Nhbg==' }];
+    documentFileForReviewMock.mockImplementation(async (record: DocumentRecord) => ({
+      id: record.id,
+      name: record.name,
+      text: record.text,
+      kind: record.kind,
+      file: new File([''], record.name),
+      pageImages: images,
+    }));
+
+    await openReview();
+    act(() => { findButton(container, /^Retry$/i, 0).click(); });
+    await flush();
+
+    expect(documentFileForReviewMock.mock.calls.map(c => (c[0] as DocumentRecord).id)).toEqual(['d1', 'd2']);
+
+    const collectionArg = retryCellMock.mock.calls[0][5] as
+      { members: { documentId: string; kind: string; position: number; document: DocumentFile | null }[] };
+    expect(collectionArg.members.map(m => m.documentId)).toEqual(['d1', 'd2']);
+    expect(collectionArg.members.map(m => m.kind)).toEqual(['original', 'varies']);
+    expect(collectionArg.members.map(m => m.position)).toEqual([1, 2]);
+    for (const member of collectionArg.members) {
+      expect(member.document?.pageImages).toEqual(images);
+    }
+  });
+
   it('refuses the retry, without calling retryCell, when the collection record cannot be reloaded', async () => {
     // Deliberately no `saveCollection` call — `getCollection('coll-1')`
     // genuinely resolves null here, mirroring a deleted or unreachable
@@ -740,5 +829,242 @@ describe('App — retrying a collection clause calls the collection extractor (T
 
     expect(retryCellMock).not.toHaveBeenCalled();
     expect(container.textContent).toMatch(/could not be prepared for retry/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A retry on a REOPENED review must re-hydrate its documents FOR REVIEW.
+//
+// Found by driving the real app: open a saved review over a scanned PDF, hit
+// Retry, and it failed with "<file> has no readable text or images to review.
+// It may have failed to parse, or be a scan with no extractable content." —
+// a message that blames a document the reviewer can see rendered in the pane
+// beside it. `openReview` hydrates with `documentFileForViewing` (correct for
+// the viewer, which renders the PDF itself and needs no base64 page images),
+// and `handleRetryCell` then extracted from those same view-hydrated files.
+// A view-hydrated `DocumentFile` has exactly the field a raw `DocumentRecord`
+// is missing: `pageImages`. For a scan that means empty text and no images,
+// which `assessDocument` correctly calls `unreadable`.
+// ---------------------------------------------------------------------------
+describe('App — a retry on a reopened review re-hydrates its documents for review', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  const SCAN_BLOB = new Blob(['%PDF-1.4 scanned bytes'], { type: 'application/pdf' });
+  const REGENERATED_IMAGES = [
+    { mime: 'image/jpeg', data: 'cGFnZTE=' },
+    { mime: 'image/jpeg', data: 'cGFnZTI=' },
+  ];
+  const SCAN_NAME = 'signed-counterpart-lease-unit-14-meadowview.pdf';
+
+  /** A scan: a PDF whose every page is below `SCAN_TEXT_THRESHOLD`, so
+   *  `documentNeedsPageImages` reports true and a review of it depends
+   *  entirely on regenerated page images. */
+  function makeScanRecord(): DocumentRecord {
+    return {
+      id: 'd1',
+      matterId: 'm1',
+      name: SCAN_NAME,
+      kind: 'pdf',
+      text: '[Page 1]\n\n[Page 2]\n\n',
+      byteSize: 900000,
+      addedAt: 1,
+      addedByUserId: 'u1',
+      role: 'standalone',
+    };
+  }
+
+  /** What `documentFileForReview` returns for that record: the same text,
+   *  plus the page images it re-rendered from the stored bytes. */
+  function reviewHydratedScan(): DocumentFile {
+    return {
+      id: 'd1',
+      name: SCAN_NAME,
+      text: '[Page 1]\n\n[Page 2]\n\n',
+      kind: 'pdf',
+      file: new File([SCAN_BLOB], SCAN_NAME),
+      pageImages: REGENERATED_IMAGES,
+    };
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    listPlaybooksMock.mockReset().mockResolvedValue([]);
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    getMatterMock.mockReset().mockResolvedValue(makeMatter());
+    listDocumentsMock.mockReset().mockResolvedValue([]);
+    getDocumentMock.mockReset().mockResolvedValue(makeScanRecord());
+    getDocumentBlobMock.mockReset().mockResolvedValue(SCAN_BLOB);
+    getReviewMock.mockReset().mockResolvedValue(makeReview());
+    saveReviewMock.mockReset().mockResolvedValue(undefined);
+    getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
+    // Returns the run it was handed, unchanged: these tests are about what
+    // reaches `retryCell`, not about what it does afterwards.
+    retryCellMock.mockReset().mockImplementation(async (retryRun: ReviewRun) => retryRun);
+
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.pushState(null, '', '/');
+  });
+
+  async function openReview() {
+    window.history.pushState(null, '', '/matters/m1/reviews/r1');
+    act(() => { root.render(<App />); });
+    await flush();
+  }
+
+  function retryC1() {
+    act(() => { findButton(container, /^Retry$/i, 0).click(); });
+  }
+
+  // Required assertion 1. Fails against the pre-fix code, which never called
+  // `documentFileForReview` from the retry path at all and handed the
+  // extractor `openReview`'s view-hydrated file — no `pageImages`.
+  it('hands the extractor a document re-hydrated from storage, carrying the regenerated page images', async () => {
+    documentFileForReviewMock.mockResolvedValue(reviewHydratedScan());
+
+    await openReview();
+    retryC1();
+    await flush();
+
+    expect(documentFileForReviewMock).toHaveBeenCalledTimes(1);
+    const [recordArg, blobArg] = documentFileForReviewMock.mock.calls[0] as [DocumentRecord, Blob];
+    expect(recordArg.id).toBe('d1');
+    expect(blobArg).toBe(SCAN_BLOB);
+
+    expect(retryCellMock).toHaveBeenCalled();
+    const docHandedToExtractor = retryCellMock.mock.calls[0][1] as DocumentFile;
+    expect(docHandedToExtractor.pageImages).toEqual(REGENERATED_IMAGES);
+  });
+
+  // Required assertion 2. `handleRetryCell` is now async, and re-rendering a
+  // multi-page scan through pdfjs takes real time — if the busy state were
+  // set after the hydration await, the card would sit showing its old answer
+  // and its Retry button for the whole render, which reads as a dead button.
+  it('shows the cell as busy before the re-hydration has finished', async () => {
+    let releaseHydration: ((doc: DocumentFile) => void) | undefined;
+    documentFileForReviewMock.mockImplementation(() => new Promise<DocumentFile>((resolve) => {
+      releaseHydration = resolve;
+    }));
+
+    await openReview();
+    // Both clauses are `done` in the fixture, so both cards offer Retry and
+    // c1's card shows its answer.
+    expect(container.textContent).toContain('Governed by NY law.');
+
+    retryC1();
+    await flush();
+
+    // The hydration is still in flight: it was started, and nothing has been
+    // handed to the extractor yet.
+    expect(documentFileForReviewMock).toHaveBeenCalledTimes(1);
+    expect(releaseHydration).toBeDefined();
+    expect(retryCellMock).not.toHaveBeenCalled();
+
+    // ...and yet c1's card already reads as busy: the old answer is gone, a
+    // spinner is up, and c1 no longer offers Retry (only c2 does).
+    expect(container.textContent).not.toContain('Governed by NY law.');
+    expect(container.querySelectorAll('.animate-spin').length).toBeGreaterThan(0);
+    const retryButtons = Array.from(container.querySelectorAll('button'))
+      .filter(b => /^Retry$/i.test((b.textContent || '').trim()));
+    expect(retryButtons.length).toBe(1);
+
+    act(() => { releaseHydration!(reviewHydratedScan()); });
+    await flush();
+    expect(retryCellMock).toHaveBeenCalled();
+  });
+
+  // Required assertion 3. The whole point of the fix: never blame the
+  // document for a failure to find or re-read its bytes.
+  it('reports a hydration failure honestly, without blaming the document for having no content', async () => {
+    // The real `documentFileForReview` (restored by the file-level
+    // `beforeEach`) reports a missing blob as `parseError`, exactly as it
+    // documents: "a caller checking `pageImages` alone cannot tell an
+    // unreadable scan from a document that never needed images".
+    getDocumentBlobMock.mockResolvedValue(null);
+
+    await openReview();
+    retryC1();
+    await flush();
+
+    expect(retryCellMock).not.toHaveBeenCalled();
+    expect(container.textContent).toMatch(/could not be re-read/i);
+    expect(container.textContent).toContain('The original file for this document is no longer available.');
+    expect(container.textContent).not.toMatch(/has no readable text or images to review/i);
+
+    // ...and the screen and storage agree about it: the cell is an error
+    // finding naming the real cause, not a spinner that never finishes and
+    // not the old, human-verified answer left standing in storage.
+    const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
+    expect(persisted.findings.d1.c1.status).toBe('error');
+    expect(persisted.findings.d1.c1.error).toMatch(/could not be re-read/i);
+    expect(persisted.findings.d1.c1.error).not.toMatch(/has no readable text or images to review/i);
+    expect(persisted.findings.d1.c1.verification).toEqual({ state: 'unchecked' });
+  });
+
+  // Required assertion 4: a document that needs no page images is retried
+  // exactly as it always was — re-hydrated (so the path is uniform) but
+  // handed to the extractor with no images, because it needs none.
+  it('retries a document with a healthy text layer unchanged, with no page images invented for it', async () => {
+    getDocumentMock.mockResolvedValue(makeDocumentRecord());
+    getDocumentBlobMock.mockResolvedValue(new Blob(['This is the contract text.'], { type: 'text/plain' }));
+
+    await openReview();
+    retryC1();
+    await flush();
+
+    expect(retryCellMock).toHaveBeenCalled();
+    const docHandedToExtractor = retryCellMock.mock.calls[0][1] as DocumentFile;
+    expect(docHandedToExtractor.id).toBe('d1');
+    expect(docHandedToExtractor.text).toBe('This is the contract text.');
+    // Absence, not `undefined`: `structuredClone` (how IndexedDB writes every
+    // record) preserves an `undefined`-valued key, and `toEqual` cannot tell
+    // the two apart.
+    expect('pageImages' in docHandedToExtractor).toBe(false);
+    expect('parseError' in docHandedToExtractor).toBe(false);
+  });
+
+  // Required assertion 5: pinned here as well as in the suites above,
+  // because the re-hydration is inserted between the reset and the call to
+  // `retryCell`, and the run that reaches `retryCell` must still be the one
+  // carrying the reset — not a re-read of `latestRunRef.current`.
+  it('still resets a verified finding and its confirmed net position across the re-hydration', async () => {
+    const confirmed = confirmPosition(
+      unconfirmedPosition('Notice is now 6 months.', [
+        { documentId: 'd1', kind: 'original', effect: 'Break on 12 months notice.', citations: [] },
+      ]),
+      'u1',
+      100,
+    );
+    const review = makeReview();
+    getReviewMock.mockResolvedValue({
+      ...review,
+      findings: { d1: { ...review.findings.d1, c1: { ...review.findings.d1.c1, netPosition: confirmed } } },
+    });
+    documentFileForReviewMock.mockResolvedValue(reviewHydratedScan());
+
+    await openReview();
+    retryC1();
+    await flush();
+
+    expect(retryCellMock).toHaveBeenCalled();
+    const runPassedIn = retryCellMock.mock.calls[0][0] as ReviewRun;
+    expect(runPassedIn.findings.d1.c1.verification).toEqual({ state: 'unchecked' });
+    expect(runPassedIn.findings.d1.c1.netPosition?.state).toBe('unconfirmed');
+    const position = runPassedIn.findings.d1.c1.netPosition;
+    expect(position && 'byUserId' in position).toBe(false);
+    // The retried cell is busy in that same run — the reset and the busy
+    // state are one snapshot, not two competing ones.
+    expect(runPassedIn.findings.d1.c1.status).toBe('running');
+    // ...and an unrelated clause is untouched by either.
+    expect(runPassedIn.findings.d1.c2.verification).toEqual({ state: 'verified', byUserId: 'u1', at: 200 });
   });
 });

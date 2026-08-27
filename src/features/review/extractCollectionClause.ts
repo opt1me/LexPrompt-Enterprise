@@ -189,6 +189,16 @@ export async function extractCollectionClause(
   const present: AssessedMember[] = [];
   for (const member of ordered) {
     if (!member.document) continue;
+    // Checked BEFORE readability, exactly as `extractClause` does for the
+    // standalone path — the two must agree on this or they drift, and this
+    // one had drifted. A member whose stored bytes could not be re-read
+    // arrives with `parseError` set and (for a scan) empty text; without
+    // this, `assessDocument` calls it `unreadable` and the reviewer is told
+    // the document has "no extractable content", blaming a file that is
+    // perfectly fine for a failure to find or re-parse its bytes.
+    if (member.document.parseError) {
+      return { ...base, error: `Could not read ${member.document.name}: ${member.document.parseError}` };
+    }
     const readability = assessDocument(member.document, modelSupportsImages);
     if (readability.kind === 'unreadable') {
       return {

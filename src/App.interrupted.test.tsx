@@ -171,7 +171,13 @@ describe('App — reopening an abandoned review (Important 1)', () => {
     getMatterMock.mockReset().mockResolvedValue(makeMatter());
     listDocumentsMock.mockReset().mockResolvedValue([]);
     getDocumentMock.mockReset().mockResolvedValue(makeDocumentRecord());
-    getDocumentBlobMock.mockReset().mockResolvedValue(null);
+    // A real Blob, not `null`: `handleRetryCell` re-hydrates the document
+    // FOR REVIEW from its stored bytes before extracting (page images are
+    // never persisted), and a document whose bytes are missing legitimately
+    // fails that re-hydration rather than being retried. `null` here would
+    // model a document with no file left, which is not what these tests are
+    // about.
+    getDocumentBlobMock.mockReset().mockResolvedValue(new Blob(['This is the contract text.'], { type: 'text/plain' }));
     getReviewMock.mockReset().mockResolvedValue(makeAbandonedReview());
     saveReviewMock.mockReset().mockResolvedValue(undefined);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });

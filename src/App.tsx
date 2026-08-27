@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
 import type { Template, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
-import { applyVerification, findingKey, makeNote, resetVerification } from './lib/verification';
+import { applyVerification, findingKey, makeNote, resetVerification, unchecked } from './lib/verification';
 import type { VerificationChange } from './lib/verification';
 import { confirmPosition, amendPosition, resetPosition, NetPositionError } from './lib/netPosition';
 import { carryHumanState } from './lib/findingMerge';
@@ -70,6 +70,45 @@ function reviewFromRun(run: ReviewRun, matterId: string, modelId: string, userId
     cancelledAt: run.cancelledAt,
     createdByUserId: userId,
   };
+}
+
+/**
+ * Rebuilds one persisted document as a `DocumentFile` FIT FOR EXTRACTION:
+ * its stored bytes fetched, then run back through `documentFileForReview`
+ * so a scan gets its page images regenerated (they are derived data and are
+ * never persisted — `documentFileForReview` skips the work entirely for a
+ * document with a healthy text layer, and caches the result per session for
+ * one that needs it).
+ *
+ * The ONLY place App.tsx turns a persisted document into something the review
+ * engine may be handed. `handleRunReviewForMatter`'s two branches and
+ * `handleRetryCell` all go through it, so none of them can quietly drift
+ * into hydrating "for viewing" instead — a `documentFileForViewing` result
+ * carries no page images, and a scan hydrated that way reviews as though it
+ * said nothing.
+ */
+async function hydrateRecordForReview(record: DocumentRecord): Promise<DocumentFile> {
+  const blob = await getDocumentBlob(record.id);
+  return documentFileForReview(record, blob);
+}
+
+/**
+ * The same, starting from a document *id* — which is all a retry on a
+ * REOPENED review has. `openReview` hydrates for VIEWING
+ * (`documentFileForViewing`: right for the viewer pane, which renders the
+ * PDF itself through `PdfCanvas` and needs no base64 page images, and wrong
+ * for extraction, which does), and keeps no records behind those files.
+ *
+ * `fallback` is returned when the record is gone from storage entirely —
+ * the document was deleted from its matter since this review was opened.
+ * `openReview` already built a placeholder for exactly that case whose
+ * `parseError` says so; handing it back means the caller reports that real
+ * reason rather than inventing a second wording for it.
+ */
+async function hydrateIdForReview(documentId: string, fallback: DocumentFile): Promise<DocumentFile> {
+  const record = await getDocument(documentId);
+  if (!record) return fallback;
+  return hydrateRecordForReview(record);
 }
 
 /** Replaces one finding in a run, copying only the two objects on the path
@@ -1216,11 +1255,81 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     }
   };
 
-  const handleRetryCell = (docId: string, clauseId: string) => {
+  /**
+   * Writes a retry's outcome back to storage. Shared by the two ways a retry
+   * can end — `retryCell` resolving with a result, and `failRetryCell`
+   * recording that the retry could never start — so the screen and the
+   * stored review cannot disagree about which of those happened. Before
+   * this, only the success path persisted; a retry that fell over left an
+   * error on screen and the old, possibly VERIFIED answer in storage,
+   * indistinguishable on reload from an answer a human had actually checked.
+   */
+  const persistRetryResult = async (toPersist: ReviewRun, matterId: string | null) => {
+    // Important 2: guards this write the same way handleStartRun's
+    // handleUpdate/persistFinal do — `matterId` is a local snapshot of
+    // `activeMatterId`, and the matter it names may have been deleted while
+    // the retry was in flight.
+    if (!matterId || deletedMatterIdsRef.current.has(matterId)) return;
+    try {
+      // Minor 2: same reasoning as `handleVerify`/`handleAddNote` — a
+      // retry's save must not reattribute the review to whoever triggered
+      // the retry either. The fallback for the case `createdByUserIdRef` was
+      // never set — which the other two writers guard with `|| profile.id`
+      // from their own fresh `getProfile()` call — uses the component's
+      // render-time `profile` state instead of awaiting a new one purely for
+      // this: this call has no other need of a fresh profile, and the three
+      // sites are meant to agree on having SOME fallback, not on how each
+      // happens to obtain it.
+      await saveReview(reviewFromRun(toPersist, matterId, settings.modelId, createdByUserIdRef.current || profile?.id || ''));
+      loadMatterReviews(matterId);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not save this retry.', 'error');
+    }
+  };
+
+  /**
+   * Ends a retry that could not even reach the extractor — the document's
+   * stored bytes could not be re-read, so there is nothing to send.
+   *
+   * The cell is already `running` by the time this can be called (the busy
+   * state is set before hydration deliberately, so the button never looks
+   * dead), and leaving it there would give the reviewer a spinner that never
+   * finishes — this project has shipped exactly that once already. It lands
+   * as an `error` finding naming the real cause instead, and is persisted,
+   * so a reload shows the same thing the screen does.
+   */
+  const failRetryCell = (busy: ReviewRun, docId: string, clauseId: string, reason: string) => {
+    const message = `This clause was not re-run: ${reason}`;
+    const existing = busy.findings[findingsKeyFor(busy.target, docId)]?.[clauseId];
+    const failed = withUpdatedFinding(busy, docId, clauseId, {
+      clauseId,
+      status: 'error',
+      citations: [],
+      error: message,
+      verification: existing?.verification ?? unchecked(),
+      notes: existing?.notes ?? [],
+      ...(existing?.netPosition ? { netPosition: existing.netPosition } : {}),
+    });
+    // Same merge `onRetryUpdate` does, for the same reason: a verification
+    // or note a human wrote to a DIFFERENT finding while the hydration was
+    // in flight is invisible to `busy`, and must not be dropped by this.
+    const merged = carryHumanState(latestRunRef.current, failed);
+    latestRunRef.current = merged;
+    setRun(merged);
+    notify(message, 'error');
+    void persistRetryResult(merged, activeMatterId);
+  };
+
+  const handleRetryCell = async (docId: string, clauseId: string) => {
     const current = latestRunRef.current ?? run;
     if (!current) return;
-    const doc = documents.find(d => d.id === docId);
-    if (!doc) return;
+    // The VIEW-hydrated document: right for the viewer pane beside the
+    // findings, and never handed to the extractor — see the re-hydration
+    // below. Used here only to identify the document and to carry
+    // `openReview`'s "this document was deleted" placeholder message
+    // through, if that is what it is.
+    const viewDoc = documents.find(d => d.id === docId);
+    if (!viewDoc) return;
     const matterId = activeMatterId;
 
     // Task 8A: a collection clause's answer is a synthesis across every
@@ -1286,10 +1395,89 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       notify(`${clauseTitle} is being re-run, so its ${clearedDescription} cleared.`);
     }
 
-    latestRunRef.current = cleared;
-    setRun(cleared);
+    // The cell must read as busy NOW — before the re-hydration below, which
+    // re-renders a multi-page scan through pdfjs and can take seconds. Until
+    // this existed, `retryCell`'s own first `onUpdate` was what put the cell
+    // into `running`, and that call now sits behind an await: the button
+    // would look dead for the whole render, with the old (already cleared)
+    // answer still on screen. Built as a fresh finding — the same shape
+    // `retryCell` writes — so a previous attempt's error text or summary
+    // does not sit under a spinner, but carrying `cleared`'s verification,
+    // notes and net position forward: those are the human-authored state the
+    // reset above deliberately just rewrote, not output to discard.
+    const clearedFinding = cleared.findings[findingsKeyFor(cleared.target, docId)]?.[clauseId];
+    const busy = withUpdatedFinding(cleared, docId, clauseId, {
+      clauseId,
+      status: 'running',
+      citations: [],
+      verification: clearedFinding?.verification ?? unchecked(),
+      notes: clearedFinding?.notes ?? [],
+      ...(clearedFinding?.netPosition ? { netPosition: clearedFinding.netPosition } : {}),
+    });
+    latestRunRef.current = busy;
+    setRun(busy);
 
-    // `retryCell` is handed `cleared`, a snapshot frozen at the moment the
+    // Re-hydrate FOR REVIEW, lazily, here — not when the review was opened.
+    //
+    // `openReview` hydrates with `documentFileForViewing`, which carries no
+    // page images, and most reviews are opened to read rather than to retry;
+    // regenerating every scan's images on every open would be exactly the
+    // cost that function exists to avoid. But a view-hydrated `DocumentFile`
+    // is as unfit for extraction as a raw `DocumentRecord` — a scan arrives
+    // with empty text and no images, `assessDocument` calls it `unreadable`,
+    // and the reviewer is told the document "has no readable text or images
+    // to review" about a file they can see rendered in the pane beside it.
+    // So the images get regenerated at the one moment they are actually
+    // needed. `documentFileForReview` caches them per session, so only the
+    // first retry in a session pays the render.
+    let doc: DocumentFile;
+    let collectionInput: CollectionRunInput | undefined;
+    try {
+      if (isCollection) {
+        const active = activeCollectionRef.current!;
+        // Rebuilt member by member rather than by re-deriving the order:
+        // `orderedMembers` already decided this collection's reading order
+        // when the run was started (or the review reopened), and re-running
+        // it here would silently re-read a `Collection` record that may have
+        // been edited since — quietly reviewing a different set of documents
+        // than the one the user asked to retry. Only each member's
+        // `document` is replaced; `documentId`, `kind` and `position` are
+        // carried through untouched. A member that was already absent stays
+        // absent (`document: null`), which is what the collection extractor
+        // is written to report on.
+        const members = await Promise.all(active.members.map(async (member) => (
+          member.document
+            ? { ...member, document: await hydrateIdForReview(member.documentId, member.document) }
+            : member
+        )));
+        collectionInput = { target: active.target, members };
+        // `retryCell` reads `doc` only for the standalone key; kept honest
+        // anyway so nothing downstream is handed a view-hydrated file.
+        doc = members.find(m => m.documentId === docId)?.document ?? await hydrateIdForReview(docId, viewDoc);
+      } else {
+        doc = await hydrateIdForReview(docId, viewDoc);
+      }
+    } catch (e) {
+      failRetryCell(busy, docId, clauseId, e instanceof Error ? e.message : 'The stored file could not be read.');
+      return;
+    }
+
+    // Hydration reports a failure by setting `parseError`, never by
+    // throwing: a missing blob, a re-parse that errored, or a record that is
+    // gone from storage altogether. Extraction must not be reached with one
+    // of those — `extractCollectionClause` would call the document
+    // unreadable and blame it for having "no extractable content", which is
+    // the misleading message this whole path exists to remove. Report the
+    // real cause instead.
+    const unreadable = collectionInput
+      ? collectionInput.members.map(m => m.document).find(d => d?.parseError)
+      : (doc.parseError ? doc : undefined);
+    if (unreadable?.parseError) {
+      failRetryCell(busy, docId, clauseId, `${unreadable.name} could not be re-read: ${unreadable.parseError}`);
+      return;
+    }
+
+    // `retryCell` is handed `busy`, a snapshot frozen at the moment the
     // retry started, and derives every onUpdate snapshot from it. Nothing
     // about `retryCell`'s own bookkeeping knows about a verification or note
     // a human writes to a DIFFERENT finding while this retry is still in
@@ -1302,14 +1490,15 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // whatever `latestRunRef.current` most recently held onto each snapshot.
     //
     // This does not resurrect the verification the reset above just
-    // cleared: `latestRunRef.current` was set to `cleared` immediately
-    // before this retry started, so the retried clause's own verification
-    // is already `unchecked` by the time any snapshot arrives —
-    // `carryHumanState` only ever carries a verification when it is NOT
-    // `unchecked`. There is nothing left for it to fight.
+    // cleared: `latestRunRef.current` was set to `busy` (which carries
+    // `cleared`'s reset verification) immediately before this retry started,
+    // so the retried clause's own verification is already `unchecked` by the
+    // time any snapshot arrives — `carryHumanState` only ever carries a
+    // verification when it is NOT `unchecked`. There is nothing left for it
+    // to fight.
     //
     // This also subsumes the retried clause's own notes, which used to need
-    // a separate, narrower patch: `before` (`cleared`) still holds this
+    // a separate, narrower patch: `before` (`busy`) still holds this
     // clause's original notes, and every snapshot `retryCell` emits for it
     // arrives with `notes: []`, so the standard notes rule (kept below)
     // already reapplies them without a second, parallel mechanism that has
@@ -1320,13 +1509,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       setRun(merged);
     };
 
-    retryCell(cleared, doc, clauseId, settings, onRetryUpdate, isCollection ? activeCollectionRef.current! : undefined)
+    retryCell(busy, doc, clauseId, settings, onRetryUpdate, collectionInput)
       .then(async (updated) => {
-        // Important 2: guards this write the same way handleStartRun's
-        // handleUpdate/persistFinal do — `matterId` is a local snapshot of
-        // `activeMatterId`, and the matter it names may have been deleted
-        // while `retryCell`'s API call was in flight.
-        if (!matterId || deletedMatterIdsRef.current.has(matterId)) return;
         // `latestRunRef.current`, not the raw `updated` retryCell resolved
         // with: `onRetryUpdate` (above) merges in whatever human writes
         // landed on OTHER findings while this retry was in flight, and
@@ -1335,24 +1519,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         // review with those writes gone while the screen still shows them —
         // a verification or note that displays but was never (re-)written,
         // the exact failure this task exists to remove.
-        const toPersist = latestRunRef.current ?? updated;
-        try {
-          // Minor 2: same reasoning as `handleVerify`/`handleAddNote` — a
-          // retry's save must not reattribute the review to whoever
-          // triggered the retry either. `getProfile()` was only ever
-          // fetched here to feed this one field, so it's dropped rather
-          // than kept around unused. The fallback for the case
-          // `createdByUserIdRef` was never set — which the other two writers
-          // guard with `|| profile.id` from their own fresh `getProfile()`
-          // call — uses the component's render-time `profile` state instead
-          // of awaiting a new one purely for this: this call has no other
-          // need of a fresh profile, and the three sites are meant to agree
-          // on having SOME fallback, not on how each happens to obtain it.
-          await saveReview(reviewFromRun(toPersist, matterId, settings.modelId, createdByUserIdRef.current || profile?.id || ''));
-          loadMatterReviews(matterId);
-        } catch (e) {
-          notify(e instanceof Error ? e.message : 'Could not save this retry.', 'error');
-        }
+        await persistRetryResult(latestRunRef.current ?? updated, matterId);
       })
       .catch((error) => {
         notify(error instanceof Error ? error.message : 'Retry failed.', 'error');
@@ -1529,10 +1696,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         const presentRecords = [collection.baseDocumentId, ...collection.variesDocumentIds]
           .map(id => recordById.get(id))
           .filter((r): r is DocumentRecord => !!r);
-        const hydrated = await Promise.all(presentRecords.map(async (record) => {
-          const blob = await getDocumentBlob(record.id);
-          return documentFileForReview(record, blob);
-        }));
+        const hydrated = await Promise.all(presentRecords.map(hydrateRecordForReview));
         const members = orderedMembers(collection, hydrated);
         if (!members[0]?.document) {
           // The base is missing — `CollectionCard` already offers this
@@ -1554,10 +1718,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     }
 
     try {
-      const docs = await Promise.all(matterDocuments.map(async (record) => {
-        const blob = await getDocumentBlob(record.id);
-        return documentFileForReview(record, blob);
-      }));
+      const docs = await Promise.all(matterDocuments.map(hydrateRecordForReview));
       setActiveTemplate(template);
       setActiveMatterId(matterId);
       setRun(null);
