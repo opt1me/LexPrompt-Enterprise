@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
 import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
@@ -10,7 +10,7 @@ import { uid } from './lib/uid';
 import {
   listPlaybooks as listTemplates, getPlaybook as getTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
-  getPlaybookContent, newPlaybookDraft, draftFromVersion, publishAndPoint,
+  getPlaybookContent, newPlaybookDraft, publishAndPoint,
 } from './lib/db/playbooks';
 import {
   listMatters, getMatter, saveMatter, newMatter, deleteMatter,
@@ -38,9 +38,10 @@ import { MattersList, type MattersListItem, type CreateMatterParams } from './fe
 import { MatterHome } from './features/matters/MatterHome';
 import { MatterPickerModal } from './features/matters/MatterPickerModal';
 import { TemplateLibrary } from './features/templates/TemplateLibrary';
-import { TemplateEditor } from './features/templates/TemplateEditor';
+import { TemplateEditor, workingContent } from './features/templates/TemplateEditor';
 import { CreateTemplateDialog, type CreateTemplateParams } from './features/templates/CreateTemplateDialog';
 import { MegaPromptModal } from './features/templates/MegaPromptModal';
+import { PublishDialog } from './features/templates/PublishDialog';
 import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, RunInterruptedBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell, type CollectionRunInput } from './features/review/runReview';
@@ -275,9 +276,17 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // version, or a review's frozen snapshot. Never the thing the editor
   // edits: a published version is immutable.
   const [activeTemplate, setActiveTemplate] = useState<PlaybookVersion | null>(null);
-  // The editor's pair: the playbook's identity, and the working copy of its
-  // content. Split because `Playbook` no longer carries clauses or prompts.
+  // The editor's trio: the playbook's identity, its CURRENT PUBLISHED
+  // content, and the unpublished working copy if there is one. Split because
+  // `Playbook` no longer carries clauses or prompts, and because a published
+  // version is immutable — the editor is handed it for reference and edits
+  // only the draft (Task 9).
+  //
+  // `activeDraft === null` is a real state, not a missing one: it means
+  // there are no unpublished edits, so what is on screen IS the published
+  // version and there is nothing to publish.
   const [activePlaybook, setActivePlaybook] = useState<Playbook | null>(null);
+  const [activeVersion, setActiveVersion] = useState<PlaybookVersion | null>(null);
   const [activeDraft, setActiveDraft] = useState<PlaybookDraft | null>(null);
   const [documents, setDocuments] = useState<DocumentFile[]>([]);
   const [run, setRun] = useState<ReviewRun | null>(null);
@@ -383,6 +392,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [createLoading, setCreateLoading] = useState(false);
   const [generationStatus, setGenerationStatus] = useState('');
   const [megaPromptOpen, setMegaPromptOpen] = useState(false);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [importing, setImporting] = useState(false);
 
   // Important 3: running a playbook from the Library now goes through this
@@ -404,6 +415,20 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     view === 'editor' && activeDraft !== null &&
     (savedTemplateSnapshot === null || JSON.stringify(activeDraft) !== savedTemplateSnapshot);
 
+  /** What the editor is showing — the draft when there are unpublished
+   *  edits, otherwise an editable copy of the published version. Goes
+   *  through `workingContent`, the editor's own function, rather than
+   *  repeating the coalesce here: two copies of it is the sibling drift
+   *  CLAUDE.md names, and this one would be the copy that silently handed
+   *  Export a different thing from what is on screen. `null` — neither a
+   *  version nor a draft — is the "no playbook open" state. */
+  const editorContent = useMemo<PlaybookDraft | null>(
+    () => (activeDraft || activeVersion
+      ? workingContent(activeVersion ?? undefined, activeDraft ?? undefined)
+      : null),
+    [activeDraft, activeVersion],
+  );
+
   /** Important 1: derived at render, not marked on load — see the doc
    *  comment where this is consumed, next to `RunInterruptedBanner`, for
    *  why deriving from `isRunning` (already unambiguous) is enough and
@@ -422,7 +447,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // it has to be its own visible state with a way back in. The post-action
   // refreshes after save/delete/import intentionally do NOT touch this: a
   // refresh failing right after a successful save is reported through that
-  // action's own toast instead (see handleSaveTemplate etc.), not routed
+  // action's own toast instead (see handlePublishTemplate etc.), not routed
   // through this banner.
   const [libraryLoadError, setLibraryLoadError] = useState<string | null>(null);
 
@@ -682,13 +707,21 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           setPlaybookNotFound(true);
           return;
         }
-        // The editor edits a DRAFT: an unpublished one if there is one,
-        // otherwise a working copy of the current published version, and a
-        // blank one for a playbook that has never been published.
+        // The editor is handed the published version for reference and a
+        // DRAFT only if there is one. A playbook that has never been
+        // published gets a blank draft seeded from its identity's name —
+        // there is nothing published for it to show, and everything in it
+        // is by definition unpublished.
         const version = await getPlaybookContent(id);
-        const draft = t.draft ?? (version ? draftFromVersion(version) : newPlaybookDraft(t.name));
+        const draft = t.draft ?? (version ? null : newPlaybookDraft(t.name));
         setActivePlaybook(t);
+        setActiveVersion(version);
         setActiveDraft(draft);
+        // Clean on open either way: a stored draft has already been saved,
+        // and a blank draft over a never-published playbook holds nothing
+        // that closing would lose. Any edit from here replaces
+        // `activeDraft` and makes this comparison fail, which is what marks
+        // the editor dirty.
         setSavedTemplateSnapshot(JSON.stringify(draft));
       })
       .catch((e) => {
@@ -734,6 +767,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   useEffect(() => {
     if (playbookRouteId) return;
     setActivePlaybook(null);
+    setActiveVersion(null);
     setActiveDraft(null);
     setSavedTemplateSnapshot(null);
   }, [playbookRouteId]);
@@ -1884,6 +1918,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // whole template used to be — nothing is persisted until then.
       const identity = newTemplate(draft.name);
       setActivePlaybook(identity);
+      // Nothing published yet, so the editor has no version to show for
+      // reference and everything it holds is an unpublished draft.
+      setActiveVersion(null);
       setActiveDraft(draft);
       // Never-saved: any further edit (or none at all) counts as unsaved —
       // this is what makes closing right after a paid AI generation trigger
@@ -1905,34 +1942,44 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   };
 
   /**
-   * Saving PUBLISHES a version.
+   * Publishing freezes the draft into an immutable version.
    *
-   * It would be less work to write the edits into `Playbook.draft` and stop
-   * there, and it would be wrong: a review runs against a published
-   * version, so a draft nothing publishes never reaches a run — the
-   * reviewer would save, run, and quietly get the previous clauses. Task 9
-   * adds the draft/publish split properly, with a publish dialog; until
-   * then Save is a publish, and `publishAndPoint`'s own change-summary rule
-   * is surfaced as the loud error it already throws.
+   * The change summary comes from `PublishDialog`, which asks for it and
+   * refuses without one from v2 onwards — the same rule `publishVersionIn`
+   * enforces in the store, asked BEFORE the write rather than surfaced as a
+   * toast afterwards. Task 3's stopgap header field is gone with it; two
+   * homes for one field is how they drift apart.
    *
    * `publishAndPoint` rather than `publishVersion` + `savePlaybook`: those
    * were two transactions, and a failure in the window between them left an
    * orphaned version and a gap in the version numbering (Minor 1). It also
    * clears any stored draft, which the two-call form did not.
+   *
+   * On success `activeDraft` becomes null: the edits are IN the version
+   * now, so anything still calling itself a draft would keep the editor
+   * reading "unpublished changes" over content that is published.
    */
-  const handleSaveTemplate = async () => {
+  const handlePublishTemplate = async (changeSummary: string) => {
     if (!activePlaybook || !activeDraft) return;
+    setPublishing(true);
     try {
       const profile = await getProfile();
-      const { playbook: saved, version } = await publishAndPoint(activePlaybook, activeDraft, profile.id);
-      const nextDraft = draftFromVersion(version);
+      const { playbook: saved, version } = await publishAndPoint(
+        activePlaybook, { ...activeDraft, changeSummary }, profile.id,
+      );
       setActivePlaybook(saved);
-      setActiveDraft(nextDraft);
-      setSavedTemplateSnapshot(JSON.stringify(nextDraft));
+      setActiveVersion(version);
+      setActiveDraft(null);
+      setSavedTemplateSnapshot(JSON.stringify(null));
+      setPublishOpen(false);
       await refreshTemplates();
       notify(`Published v${version.version}.`);
     } catch (e) {
-      notify(e instanceof Error ? e.message : 'Could not save the template.', 'error');
+      // The dialog stays open: the change summary the user just typed is in
+      // it, and closing it would make them type it again.
+      notify(e instanceof Error ? e.message : 'Could not publish the playbook.', 'error');
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -2207,14 +2254,15 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                 Back to Library
               </button>
             </div>
-          ) : route.name === 'playbook' && playbookLoading && !activeDraft ? (
+          ) : route.name === 'playbook' && playbookLoading && !editorContent ? (
             <div className="p-8 text-gray-500">Loading playbook…</div>
-          ) : activeDraft ? (
+          ) : editorContent ? (
             <TemplateEditor
-              template={activeDraft}
-              onChange={setActiveDraft}
-              onSave={handleSaveTemplate}
-              onExport={() => handleExportTemplate(activeDraft)}
+              version={activeVersion ?? undefined}
+              draft={activeDraft ?? undefined}
+              onSaveDraft={setActiveDraft}
+              onPublish={() => setPublishOpen(true)}
+              onExport={() => handleExportTemplate(editorContent)}
               onShowMegaPrompt={() => setMegaPromptOpen(true)}
               onClose={() => { if (confirmDiscardIfDirty()) navigate({ name: 'playbooks' }); }}
             />
@@ -2314,11 +2362,28 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         status={generationStatus}
         canGenerate={isConfigured}
       />
-      <MegaPromptModal
-        isOpen={megaPromptOpen}
-        onClose={() => setMegaPromptOpen(false)}
-        template={activeDraft}
-      />
+      {/* Mounted only while open, so its risk toggle re-derives its default
+          from THIS playbook every time it is opened (R-D1) — a `useState`
+          initialiser on a component that stays mounted would keep the first
+          playbook's answer for the rest of the session. */}
+      {megaPromptOpen && (
+        <MegaPromptModal
+          isOpen
+          onClose={() => setMegaPromptOpen(false)}
+          template={editorContent}
+        />
+      )}
+      {/* Only reachable with unpublished edits: the editor's Publish button
+          is disabled without them, and publishing an unchanged draft would
+          mint a second byte-identical version the history cannot explain. */}
+      {publishOpen && activeDraft && (
+        <PublishDialog
+          nextVersion={(activeVersion?.version ?? 0) + 1}
+          onPublish={handlePublishTemplate}
+          onCancel={() => setPublishOpen(false)}
+          busy={publishing}
+        />
+      )}
       <MatterPickerModal
         isOpen={matterPickerOpen}
         templateName={matterPickerTemplate?.name ?? ''}

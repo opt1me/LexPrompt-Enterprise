@@ -12,6 +12,7 @@ import { DbBlockedError } from './lib/db/open';
 const listPlaybooksMock = vi.fn();
 const getPlaybookMock = vi.fn();
 const getPlaybookContentMock = vi.fn();
+const publishAndPointMock = vi.fn();
 const listMattersMock = vi.fn();
 const listReviewsMock = vi.fn();
 const migrateIfNeededMock = vi.fn();
@@ -42,6 +43,7 @@ vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   // unconverted-playbook test below is the only thing that overrides it.
   getPlaybookContent: (...args: unknown[]) => getPlaybookContentMock(...args),
   savePlaybook: vi.fn(),
+  publishAndPoint: (...args: unknown[]) => publishAndPointMock(...args),
   deletePlaybook: vi.fn(),
   newPlaybook: vi.fn(),
   exportPlaybook: vi.fn(),
@@ -575,5 +577,152 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
 
     expect(confirmSpy).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe('/playbooks');
+  });
+});
+
+// Task 9. The editor no longer mutates a playbook: it edits a draft, and
+// Publish freezes that draft into an immutable version. Driven through the
+// real App because the three pieces — the editor's Publish button, the
+// dialog's change-summary rule, and `publishAndPoint` — only meet here.
+describe('App — editing a draft and publishing a version (Task 9)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  const originalPath = window.location.pathname;
+
+  const publishedV1 = {
+    id: 'pb1',
+    name: 'NDA Review',
+    contractType: 'NDA',
+    systemPrompt: 'You are an expert.',
+    formatPrompt: 'Quote verbatim.',
+    clauses: [],
+    playbookId: 'pb1',
+    version: 1,
+    changeSummary: '',
+    publishedAt: 1,
+    publishedByUserId: '',
+    schemaVersion: 6,
+  };
+
+  function setInputValue(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
+    const proto = input instanceof window.HTMLTextAreaElement
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')!.set!;
+    act(() => {
+      setter.call(input, value);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+  }
+
+  const buttonNamed = (name: RegExp) =>
+    Array.from(container.querySelectorAll('button'))
+      .find(b => name.test(b.textContent || '')) as HTMLButtonElement | undefined;
+
+  beforeEach(() => {
+    localStorage.clear();
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    listPlaybooksMock.mockReset().mockResolvedValue([publishedV1]);
+    getPlaybookMock.mockReset().mockResolvedValue(publishedV1);
+    publishAndPointMock.mockReset().mockResolvedValue({
+      playbook: { id: 'pb1', name: 'NDA Review EDITED', createdAt: 1, updatedAt: 2, currentVersionId: 'v2', schemaVersion: 6 },
+      version: { ...publishedV1, id: 'v2', version: 2, name: 'NDA Review EDITED', changeSummary: 'Renamed it.' },
+    });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+    window.history.replaceState(null, '', originalPath);
+  });
+
+  async function openEditor() {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+  }
+
+  // Nothing unpublished means nothing to publish: republishing an unchanged
+  // draft is how a real library came to hold two byte-identical versions a
+  // millisecond apart, which its history cannot explain.
+  it('offers no publish until something has been edited', async () => {
+    await openEditor();
+    expect(container.textContent).not.toMatch(/unpublished changes/i);
+    expect(buttonNamed(/^\s*publish\s*$/i)?.disabled).toBe(true);
+  });
+
+  it('an edit becomes a draft, and publishing it records the change summary', async () => {
+    await openEditor();
+
+    setInputValue(container.querySelector('input') as HTMLInputElement, 'NDA Review EDITED');
+    await flush();
+    expect(container.textContent).toMatch(/unpublished changes/i);
+
+    act(() => { buttonNamed(/^\s*publish\s*$/i)!.click(); });
+    await flush();
+    expect(container.textContent).toContain('Publish v2');
+
+    // Refused without a summary — and the store is never reached, so the
+    // rule is enforced before the write rather than reported after it.
+    act(() => { buttonNamed(/^\s*publish v2\s*$/i)!.click(); });
+    await flush();
+    expect(publishAndPointMock).not.toHaveBeenCalled();
+    expect(container.textContent).toMatch(/say what changed/i);
+
+    setInputValue(container.querySelector('[aria-label="Change summary"]') as HTMLTextAreaElement, 'Renamed it.');
+    act(() => { buttonNamed(/^\s*publish v2\s*$/i)!.click(); });
+    await flush();
+
+    expect(publishAndPointMock).toHaveBeenCalledTimes(1);
+    const [identity, draft] = publishAndPointMock.mock.calls[0]!;
+    expect((identity as { id: string }).id).toBe('pb1');
+    expect((draft as { name: string; changeSummary: string }).name).toBe('NDA Review EDITED');
+    expect((draft as { changeSummary: string }).changeSummary).toBe('Renamed it.');
+  });
+
+  // The edits are IN the version now. A surviving draft would leave the
+  // editor claiming unpublished changes over content that is published, and
+  // would offer to publish it a second time.
+  it('clears the unpublished-changes state once the version is published', async () => {
+    await openEditor();
+    setInputValue(container.querySelector('input') as HTMLInputElement, 'NDA Review EDITED');
+    await flush();
+
+    act(() => { buttonNamed(/^\s*publish\s*$/i)!.click(); });
+    await flush();
+    setInputValue(container.querySelector('[aria-label="Change summary"]') as HTMLTextAreaElement, 'Renamed it.');
+    act(() => { buttonNamed(/^\s*publish v2\s*$/i)!.click(); });
+    await flush();
+
+    expect(container.textContent).not.toContain('Publish v2');
+    expect(container.textContent).not.toMatch(/unpublished changes/i);
+    expect(container.textContent).toContain('v2');
+    expect(buttonNamed(/^\s*publish\s*$/i)?.disabled).toBe(true);
+  });
+
+  // A failed publish must not look like a successful one: the draft is
+  // still unpublished, and the summary the user typed is still in the box.
+  it('keeps the draft and the dialog open when the publish fails', async () => {
+    publishAndPointMock.mockRejectedValue(new Error('Could not save — your browser storage is full.'));
+    await openEditor();
+    setInputValue(container.querySelector('input') as HTMLInputElement, 'NDA Review EDITED');
+    await flush();
+
+    act(() => { buttonNamed(/^\s*publish\s*$/i)!.click(); });
+    await flush();
+    setInputValue(container.querySelector('[aria-label="Change summary"]') as HTMLTextAreaElement, 'Renamed it.');
+    act(() => { buttonNamed(/^\s*publish v2\s*$/i)!.click(); });
+    await flush();
+
+    expect(container.textContent).toContain('Publish v2');
+    expect(container.textContent).toMatch(/storage is full/i);
+    expect(container.textContent).toMatch(/unpublished changes/i);
+    expect((container.querySelector('[aria-label="Change summary"]') as HTMLTextAreaElement).value)
+      .toBe('Renamed it.');
   });
 });
