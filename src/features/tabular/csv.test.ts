@@ -87,6 +87,7 @@ describe('buildTabularCsv', () => {
       id: 'r1',
       templateSnapshot: tmpl,
       documentIds,
+      target: { kind: 'documents', documentIds },
       findings,
       startedAt: 0,
     };
@@ -219,6 +220,7 @@ describe('buildTabularCsv', () => {
       id: 'run-1',
       templateSnapshot: template([{ id: 'clause-1', title: 'Clause', prompt: 'p' }]),
       documentIds: ['doc-1'],
+      target: { kind: 'documents', documentIds: ['doc-1'] },
       findings: { 'doc-1': findings },
       startedAt: 1,
     };

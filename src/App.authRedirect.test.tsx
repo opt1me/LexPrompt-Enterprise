@@ -190,6 +190,7 @@ function makeStaleReview(): Review {
     matterId: 'm1',
     playbookSnapshot: makePlaybook(),
     documentIds: ['d1'],
+    target: { kind: 'documents', documentIds: ['d1'] },
     findings: {
       d1: {
         c1: { clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR, authError: true, verification: { state: 'unchecked' }, notes: [] },

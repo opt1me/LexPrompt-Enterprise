@@ -164,6 +164,7 @@ function makeReview(): Review {
     matterId: 'm1',
     playbookSnapshot: makeTemplate(),
     documentIds: ['d1'],
+    target: { kind: 'documents', documentIds: ['d1'] },
     findings: {
       d1: {
         c1: {

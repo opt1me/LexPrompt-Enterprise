@@ -38,6 +38,7 @@ function makeReview(overrides: Partial<Review> = {}): Review {
     matterId: 'matter-1',
     playbookSnapshot: makePlaybook(),
     documentIds: ['doc-1'],
+    target: { kind: 'documents', documentIds: ['doc-1'] },
     findings: {},
     modelId: 'test-model',
     startedAt: Date.now(),

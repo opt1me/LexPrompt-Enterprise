@@ -53,6 +53,7 @@ function makeReview(matterId: string, documentIds: string[]): Review {
     matterId,
     playbookSnapshot,
     documentIds,
+    target: { kind: 'documents', documentIds },
     findings: {},
     modelId: 'test-model',
     startedAt: Date.now(),

@@ -56,6 +56,7 @@ function reviewFromRun(run: ReviewRun, matterId: string, modelId: string, userId
     matterId,
     playbookSnapshot: run.templateSnapshot,
     documentIds: run.documentIds,
+    target: run.target,
     findings: run.findings,
     modelId,
     startedAt: run.startedAt,
@@ -468,6 +469,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         id: review.id,
         templateSnapshot: review.playbookSnapshot,
         documentIds: review.documentIds,
+        // `getReview` funnels every read through `migrateReviewRecord`, so
+        // `review.target` is always present and its `documentIds` always
+        // agree with `review.documentIds` (ruling F-C1) — carried through
+        // unchanged so a reopened collection review still keys its cells,
+        // and any future retry, by the collection rather than by document.
+        target: review.target,
         findings: review.findings,
         startedAt: review.startedAt,
         completedAt: review.completedAt,

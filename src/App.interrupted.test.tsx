@@ -138,6 +138,7 @@ function makeAbandonedReview(): Review {
     matterId: 'm1',
     playbookSnapshot: makeTemplate(),
     documentIds: ['d1'],
+    target: { kind: 'documents', documentIds: ['d1'] },
     findings: {
       d1: {
         c1: {
@@ -220,8 +221,12 @@ describe('App — reopening an abandoned review (Important 1)', () => {
     await flush();
 
     expect(extractClauseMock).toHaveBeenCalled();
+    // Task 6A: `openReview` carries the stored review's `target` onto the
+    // in-session `ReviewRun`, and `reviewFromRun` carries it back onto the
+    // `Review` this retry persists — a review reopened without either leg
+    // of that round trip would silently forget which kind of review it is.
     expect(saveReviewMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'r1', matterId: 'm1' }),
+      expect.objectContaining({ id: 'r1', matterId: 'm1', target: { kind: 'documents', documentIds: ['d1'] } }),
     );
     expect(container.textContent).toContain('Term is 12 months.');
   });

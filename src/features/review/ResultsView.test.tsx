@@ -53,6 +53,7 @@ function makeRun(): ReviewRun {
     id: 'r1',
     templateSnapshot: makeTemplate(),
     documentIds: ['d1'],
+    target: { kind: 'documents', documentIds: ['d1'] },
     findings: {
       d1: {
         c1: makeFinding('c1', 'pending'),

@@ -5,23 +5,54 @@ import { extractCollectionClause } from './extractCollectionClause';
 import { unchecked } from '../../lib/verification';
 import { uid } from '../../lib/uid';
 import type { CollectionMember } from '../../lib/collectionOrder';
-import { findingsKeyFor } from '../../lib/reviewTarget';
+import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
-export function emptyRun(template: Template, docs: DocumentFile[]): ReviewRun {
+function pendingFinding(clauseId: string): Finding {
+  return { clauseId, status: 'pending', citations: [], verification: unchecked(), notes: [] };
+}
+
+/**
+ * `target` defaults to a `documents` target over exactly `docs` — so every
+ * existing caller (which passes no target at all) keeps seeding one entry
+ * per document per clause, keyed by document id, unchanged (a deliberate
+ * regression pin: see `runReview.test.ts`).
+ *
+ * A `collection` target seeds the opposite shape: ONE entry per clause,
+ * keyed by the collection id (`findingsKeyFor`) — never one per document.
+ * This is what closes Task 6A's hole: before this, `emptyRun` always
+ * seeded per document regardless of target, so a collection run's results
+ * (written under the collection key by `runReview`'s collection branch)
+ * landed beside pending per-document cells that nothing ever touched —
+ * stuck on "Pending" forever, with the real results nothing displayed.
+ * Seeding through the same `findingsKeyFor` the collection branch writes
+ * through means the two can no longer disagree about which key holds a
+ * clause's result.
+ */
+export function emptyRun(template: Template, docs: DocumentFile[], target?: ReviewTarget): ReviewRun {
+  const resolvedTarget: ReviewTarget = target ?? { kind: 'documents', documentIds: docs.map(d => d.id) };
   const findings: ReviewRun['findings'] = {};
-  for (const doc of docs) {
-    findings[doc.id] = {};
+
+  if (isCollectionTarget(resolvedTarget)) {
+    const key = findingsKeyFor(resolvedTarget);
+    findings[key] = {};
     for (const clause of template.clauses) {
-      findings[doc.id][clause.id] = {
-        clauseId: clause.id, status: 'pending', citations: [], verification: unchecked(), notes: [],
-      };
+      findings[key][clause.id] = pendingFinding(clause.id);
+    }
+  } else {
+    for (const doc of docs) {
+      findings[doc.id] = {};
+      for (const clause of template.clauses) {
+        findings[doc.id][clause.id] = pendingFinding(clause.id);
+      }
     }
   }
+
   return {
     id: uid(),
     // Deep copy: editing the template afterwards must not change what this run claims to have checked.
     templateSnapshot: structuredClone(template),
     documentIds: docs.map(d => d.id),
+    target: resolvedTarget,
     findings,
     startedAt: Date.now(),
   };

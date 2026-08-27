@@ -7,7 +7,14 @@ function finding(over: Partial<Finding> = {}): Finding {
 }
 
 function run(findings: ReviewRun['findings']): ReviewRun {
-  return { id: 'r', templateSnapshot: { clauses: [] } as never, documentIds: ['d1'], findings, startedAt: 1 };
+  return {
+    id: 'r',
+    templateSnapshot: { clauses: [] } as never,
+    documentIds: ['d1'],
+    target: { kind: 'documents', documentIds: ['d1'] },
+    findings,
+    startedAt: 1,
+  };
 }
 
 describe('carryHumanState', () => {

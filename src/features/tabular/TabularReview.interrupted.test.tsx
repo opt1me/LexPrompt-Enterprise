@@ -31,6 +31,7 @@ function makeRun(status: 'pending' | 'running'): ReviewRun {
     id: 'r1',
     templateSnapshot: makeTemplate(),
     documentIds: ['d1'],
+    target: { kind: 'documents', documentIds: ['d1'] },
     findings: { d1: { c1: { clauseId: 'c1', status, citations: [], verification: { state: 'unchecked' }, notes: [] } } },
     startedAt: 1,
   };

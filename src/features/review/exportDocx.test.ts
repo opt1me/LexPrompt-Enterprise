@@ -33,6 +33,7 @@ const template: Template = {
 
 const run: ReviewRun = {
   id: 'r', templateSnapshot: template, documentIds: ['d1'],
+  target: { kind: 'documents', documentIds: ['d1'] },
   findings: {
     d1: {
       'clause-1': {
@@ -99,6 +100,7 @@ describe('buildReportRows', () => {
       id: 'run-1',
       templateSnapshot: template,
       documentIds: ['doc-1'],
+      target: { kind: 'documents', documentIds: ['doc-1'] },
       findings: { 'doc-1': findings },
       startedAt: 1,
     };
@@ -229,6 +231,7 @@ describe('exportDocx — header summary is scoped to the exported document (Impo
   function twoDocRun(): ReviewRun {
     return {
       id: 'r2', templateSnapshot: twoDocTemplate, documentIds: ['doc-a', 'doc-b'],
+      target: { kind: 'documents', documentIds: ['doc-a', 'doc-b'] },
       findings: {
         // doc-a: one finding, verified.
         'doc-a': { c1: { clauseId: 'c1', status: 'done', summary: 'a', citations: [], verification: { state: 'verified', byUserId: 'u', at: 1 }, notes: [] } },

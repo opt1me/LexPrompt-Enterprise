@@ -1,9 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { emptyRun, runReview, retryCell, runProgress, countNoContent } from './runReview';
-import type { DocumentFile, Settings, Template, Finding } from '../../types';
+import type { DocumentFile, Settings, Template, Finding, ReviewTarget } from '../../types';
+import type { CollectionMember } from '../../lib/collectionOrder';
 
 vi.mock('./extractClause', () => ({ extractClause: vi.fn() }));
 const { extractClause } = await import('./extractClause');
+
+vi.mock('./extractCollectionClause', () => ({ extractCollectionClause: vi.fn() }));
+const { extractCollectionClause } = await import('./extractCollectionClause');
 
 const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 2 };
 
@@ -51,6 +55,65 @@ describe('emptyRun', () => {
     template.clauses[0].prompt = 'MUTATED';
     expect(run.templateSnapshot.clauses[0].prompt).toBe(originalPrompt);
     template.clauses[0].prompt = originalPrompt;
+  });
+
+  // Regression pin (Task 6A): a documents-target run must seed EXACTLY as
+  // it always has — one entry per document per clause, keyed by document
+  // id — whether or not a target is passed explicitly. Every existing
+  // caller passes no target at all.
+  it('for a documents target, seeds exactly as before: one entry per document per clause, keyed by document id', () => {
+    const run = emptyRun(template, [doc('d1'), doc('d2')]);
+    expect(Object.keys(run.findings).sort()).toEqual(['d1', 'd2']);
+    expect(run.findings.d1.c1.status).toBe('pending');
+    expect(run.findings.d1.c2.status).toBe('pending');
+    expect(run.findings.d2.c1.status).toBe('pending');
+    expect(run.findings.d2.c2.status).toBe('pending');
+    expect(runProgress(run)).toEqual({ done: 0, total: 4, errors: 0 });
+    expect(run.target).toEqual({ kind: 'documents', documentIds: ['d1', 'd2'] });
+  });
+
+  it('for a collection target, seeds ONE entry per clause keyed by the collection id, none by document id', () => {
+    const target: ReviewTarget = { kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] };
+    const run = emptyRun(template, [doc('d1'), doc('d2')], target);
+    expect(Object.keys(run.findings)).toEqual(['coll-1']);
+    expect(run.findings['coll-1'].c1.status).toBe('pending');
+    expect(run.findings['coll-1'].c2.status).toBe('pending');
+    expect(run.findings.d1).toBeUndefined();
+    expect(run.findings.d2).toBeUndefined();
+    expect(runProgress(run)).toEqual({ done: 0, total: 2, errors: 0 });
+    // The seeded run carries its target, so a consumer never has to guess.
+    expect(run.target).toEqual(target);
+  });
+});
+
+describe('emptyRun + runReview: a collection run writes under the key it was seeded with', () => {
+  it('leaves no cell pending — this is the assertion that would have caught Task 6A\'s hole', async () => {
+    const target: ReviewTarget = { kind: 'collection', collectionId: 'coll-1', documentIds: ['d1', 'd2'] };
+    const members: CollectionMember<DocumentFile>[] = [
+      { document: doc('d1'), documentId: 'd1', kind: 'original', position: 1 },
+      { document: doc('d2'), documentId: 'd2', kind: 'varies', position: 2 },
+    ];
+    vi.mocked(extractCollectionClause).mockImplementation(async (_members, clause) => ({
+      clauseId: clause.id, status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [],
+    }));
+
+    const docs = [doc('d1'), doc('d2')];
+    const run = await runReview(
+      emptyRun(template, docs, target),
+      docs,
+      settings,
+      () => {},
+      undefined,
+      { target, members },
+    );
+
+    // If emptyRun had seeded per-document instead (the hole this task
+    // closes), d1/d2 would still hold their never-touched 'pending' seeds
+    // alongside the collection's own 'coll-1' results.
+    expect(Object.keys(run.findings)).toEqual(['coll-1']);
+    const statuses = Object.values(run.findings).flatMap(byClause => Object.values(byClause).map(f => f.status));
+    expect(statuses).not.toContain('pending');
+    expect(statuses).toEqual(['done', 'done']);
   });
 });
 

@@ -141,7 +141,13 @@ export interface ReviewRun {
   /** Frozen copy, so editing the template later does not rewrite what this run claims to have checked. */
   templateSnapshot: Template;
   documentIds: string[];
-  /** docId -> clauseId -> Finding */
+  /** Which documents this run covers and how its findings are keyed —
+   *  by document for an ordinary review, by the collection for a
+   *  collection review (see `findingsKeyFor`). Every run carries one, so
+   *  no consumer has to guess which kind it is or fall back to a default. */
+  target: ReviewTarget;
+  /** docId -> clauseId -> Finding, OR collectionId -> clauseId -> Finding
+   *  for a collection run — see `target` and `findingsKeyFor`. */
   findings: Record<string, Record<string, Finding>>;
   startedAt: number;
   completedAt?: number;
