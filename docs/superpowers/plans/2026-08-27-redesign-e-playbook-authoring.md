@@ -351,6 +351,27 @@ export async function generateDraft(
 ): Promise<AuthoringDraft>;
 ```
 
+- [ ] **Step 0: Build your own fixtures — none of these helpers exist**
+
+Both test files in this task are new, so every fixture below is yours to define. The snippets name `mockChatJson`, `mockChatJsonRejection`, `reviewWith`, `verifiedFinding`, `uncheckedFinding`, `findingInState`, `playbook()`, `versionWith`, `authRejection` and `diffEdit` — **none of them exist anywhere in the repo**, and there is no shared `chatJson` mocking helper.
+
+The real idiom, used by `src/features/review/extractClause.test.ts` and its siblings, is a module mock:
+
+```ts
+vi.mock('../../lib/openrouter', async () => {
+  const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
+  return { ...actual, chatJson: vi.fn() };
+});
+const { chatJson } = await import('../../lib/openrouter');
+// then per test:
+vi.mocked(chatJson).mockResolvedValue({ clauses: [ … ] });
+vi.mocked(chatJson).mockRejectedValue(someError);
+```
+
+Note the `importActual` spread: `isAuthError` is a **real** export of that module and the auth tests below depend on its genuine behaviour, so it must not be replaced by a stub. `isAuthError` exists at `src/lib/openrouter.ts:42` — call it, do not re-derive "was this a 401" from a message string.
+
+For the finding fixtures, build them from the real `Verification` shape (`{ state, byUserId?, at?, reason?, assigneeId? }`) and name them `verifiedFinding` / `uncheckedFinding` — **not** `verified` / `unchecked`, because `src/lib/verification.ts` already exports `unchecked()` and shadowing it is this codebase's most repeated defect shape.
+
 - [ ] **Step 1: Write the failing tests for `fewShot`**
 
 ```ts
