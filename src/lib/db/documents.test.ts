@@ -34,6 +34,7 @@ function makeRecord(overrides: Partial<DocumentRecord> = {}): DocumentRecord {
     byteSize: 11,
     addedAt: Date.now(),
     addedByUserId: 'owner-1',
+    role: 'standalone',
     ...overrides,
   };
 }

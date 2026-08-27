@@ -2,6 +2,29 @@ import { getDb } from './open';
 import { STORES } from './schema';
 import type { DocumentRecord } from '../../types';
 
+const ROLES: DocumentRecord['role'][] = ['base', 'varies', 'standalone'];
+
+/**
+ * Upgrades a persisted `DocumentRecord` to the current schema on read. A
+ * document written before sub-project C predates `role` entirely; it reads
+ * back as `'standalone'` — the same default a document that has never
+ * belonged to a collection gets today — never as `'base'`, which would
+ * silently promote an ordinary document into a collection's base. A
+ * document that already carries a recognised role keeps it untouched.
+ *
+ * Applied at every read site (`listDocuments`, `getDocument`) so a document
+ * upgrades exactly once, in one place, no matter which screen asked for it
+ * — the same funnel discipline `reviewMigration.ts`'s `migrateReviewRecord`
+ * follows for reviews.
+ */
+export function migrateDocumentRecord(raw: unknown): DocumentRecord {
+  const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<DocumentRecord> & Record<string, unknown>;
+  const role: DocumentRecord['role'] = ROLES.includes(src.role as DocumentRecord['role'])
+    ? (src.role as DocumentRecord['role'])
+    : 'standalone';
+  return { ...(src as DocumentRecord), role };
+}
+
 /** All documents belonging to a matter, oldest-added first. Deterministic
  *  regardless of what order the underlying `byMatter` index happens to
  *  return same-key entries in (IndexedDB does not guarantee one for a
@@ -15,13 +38,13 @@ import type { DocumentRecord } from '../../types';
 export async function listDocuments(matterId: string): Promise<DocumentRecord[]> {
   const db = await getDb();
   const docs = await db.getAllFromIndex(STORES.documents, 'byMatter', matterId);
-  return docs.slice().sort((a, b) => a.addedAt - b.addedAt || a.id.localeCompare(b.id));
+  return docs.slice().sort((a, b) => a.addedAt - b.addedAt || a.id.localeCompare(b.id)).map(migrateDocumentRecord);
 }
 
 export async function getDocument(id: string): Promise<DocumentRecord | null> {
   const db = await getDb();
   const found = await db.get(STORES.documents, id);
-  return found ?? null;
+  return found ? migrateDocumentRecord(found) : null;
 }
 
 /** Writes the document's metadata record and its original file bytes in one

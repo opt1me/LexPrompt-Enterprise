@@ -1,6 +1,6 @@
 import { repairCitations } from '../citationRepair';
 import { unchecked } from '../verification';
-import type { Finding, Note, Review, Verification } from '../../types';
+import type { Finding, Note, Review, ReviewTarget, Verification } from '../../types';
 
 const STATUSES: Finding['status'][] = ['pending', 'running', 'done', 'error', 'cancelled'];
 const STATES: Verification['state'][] = ['unchecked', 'verified', 'flagged', 'rejected'];
@@ -49,6 +49,35 @@ function readNotes(v: unknown): Note[] {
       at: typeof src.at === 'number' && Number.isFinite(src.at) ? src.at : 0,
     }];
   });
+}
+
+/**
+ * Rebuilds `Review.target` from `Review.documentIds` on EVERY read, even
+ * when a `target` is already stored (ruling F-C1). `Review` holds the
+ * document list twice — once at the top level, once inside `target` — and
+ * two copies of one fact is this project's most repeated defect shape.
+ * Trusting a stored `target.documentIds` would let the two disagree the
+ * moment anything writes one without the other; rebuilding here means they
+ * cannot drift no matter what wrote them, and `targetDocumentIds()` stays a
+ * safe accessor.
+ *
+ * Only `documentIds` is re-derived. A stored `collection` target's `kind`
+ * and `collectionId` are preserved — there is nothing else to derive them
+ * from — and an unreadable or absent target becomes a `documents` target
+ * over the (already re-derived) `documentIds`, never an absent `target`: a
+ * screen that reads `target` must not crash, and an empty list is visibly
+ * empty rather than silently missing.
+ */
+function readTarget(rawTarget: unknown, documentIds: string[]): ReviewTarget {
+  if (
+    rawTarget &&
+    typeof rawTarget === 'object' &&
+    (rawTarget as { kind?: unknown }).kind === 'collection' &&
+    typeof (rawTarget as { collectionId?: unknown }).collectionId === 'string'
+  ) {
+    return { kind: 'collection', collectionId: (rawTarget as { collectionId: string }).collectionId, documentIds };
+  }
+  return { kind: 'documents', documentIds };
 }
 
 function migrateFinding(
@@ -123,5 +152,10 @@ export function migrateReviewRecord(
     }
   }
 
-  return { ...(src as Review), findings };
+  const documentIds = Array.isArray(src.documentIds)
+    ? src.documentIds.filter((id): id is string => typeof id === 'string')
+    : [];
+  const target = readTarget(src.target, documentIds);
+
+  return { ...(src as Review), findings, documentIds, target };
 }

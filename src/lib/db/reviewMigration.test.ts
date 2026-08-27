@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { migrateReviewRecord } from './reviewMigration';
+import { migrateDocumentRecord } from './documents';
 
 function legacyReview() {
   return {
@@ -135,5 +136,92 @@ describe('migrateReviewRecord', () => {
       },
     };
     expect(migrateReviewRecord(input).findings['doc-1']['clause-1'].verification).toEqual({ state: 'unchecked' });
+  });
+
+  describe('target (Task 6)', () => {
+    it('migrates a review with documentIds and no target into a documents target', () => {
+      const review = migrateReviewRecord(legacyReview());
+      expect(review.target).toEqual({ kind: 'documents', documentIds: ['doc-1'] });
+    });
+
+    it('retains documentIds alongside target — every existing consumer reads it', () => {
+      const review = migrateReviewRecord(legacyReview());
+      expect(review.documentIds).toEqual(['doc-1']);
+      expect('documentIds' in review).toBe(true);
+    });
+
+    // Ruling F-C1: two copies of one list is this project's signature
+    // defect shape. `target.documentIds` must be rebuilt from the
+    // top-level `Review.documentIds` on EVERY read, even when a target is
+    // already stored — never trusted as its own source of truth.
+    it('F-C1: rebuilds target.documentIds from Review.documentIds even when a stored target disagrees', () => {
+      const input = {
+        ...legacyReview(),
+        documentIds: ['doc-1', 'doc-2'],
+        target: { kind: 'documents', documentIds: ['doc-1'] },
+      };
+      const review = migrateReviewRecord(input);
+      expect(review.target).toEqual({ kind: 'documents', documentIds: ['doc-1', 'doc-2'] });
+      expect(review.documentIds).toEqual(['doc-1', 'doc-2']);
+    });
+
+    it('keeps a collection target\'s kind and collectionId, re-deriving only its documentIds', () => {
+      const input = {
+        ...legacyReview(),
+        documentIds: ['doc-1', 'doc-2'],
+        target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['doc-1'] },
+      };
+      const review = migrateReviewRecord(input);
+      expect(review.target).toEqual({ kind: 'collection', collectionId: 'coll-1', documentIds: ['doc-1', 'doc-2'] });
+    });
+
+    it('defaults to an empty documents target when neither target nor documentIds is present, rather than an absent target', () => {
+      const input = { ...legacyReview(), documentIds: undefined, target: undefined };
+      const review = migrateReviewRecord(input);
+      expect(review.target).toEqual({ kind: 'documents', documentIds: [] });
+    });
+
+    it('is idempotent for target, and does not mutate the input\'s target', () => {
+      const input = {
+        ...legacyReview(),
+        documentIds: ['doc-1', 'doc-2'],
+        target: { kind: 'collection', collectionId: 'coll-1', documentIds: ['doc-1'] },
+      };
+      const once = migrateReviewRecord(input);
+      const twice = migrateReviewRecord(once);
+      expect(twice.target).toEqual(once.target);
+      expect(input.target).toEqual({ kind: 'collection', collectionId: 'coll-1', documentIds: ['doc-1'] });
+    });
+  });
+
+  describe('DocumentRecord role (Task 6)', () => {
+    function legacyDocument() {
+      return {
+        id: 'doc-1',
+        matterId: 'matter-1',
+        name: 'nda.txt',
+        kind: 'txt' as const,
+        text: 'text',
+        byteSize: 10,
+        addedAt: 1,
+        addedByUserId: 'user-1',
+      };
+    }
+
+    it('reads a document with no role back as standalone', () => {
+      expect(migrateDocumentRecord(legacyDocument()).role).toBe('standalone');
+    });
+
+    it('keeps a role a document already carries', () => {
+      const withRole = { ...legacyDocument(), role: 'base' as const, collectionId: 'coll-1' };
+      const migrated = migrateDocumentRecord(withRole);
+      expect(migrated.role).toBe('base');
+      expect(migrated.collectionId).toBe('coll-1');
+    });
+
+    it('keeps a varies role too', () => {
+      const withRole = { ...legacyDocument(), role: 'varies' as const, collectionId: 'coll-1' };
+      expect(migrateDocumentRecord(withRole).role).toBe('varies');
+    });
   });
 });

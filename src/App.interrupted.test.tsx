@@ -124,6 +124,7 @@ function makeDocumentRecord(): DocumentRecord {
     byteSize: 27,
     addedAt: 1,
     addedByUserId: 'u1',
+    role: 'standalone',
   };
 }
 

@@ -271,6 +271,7 @@ describe('documentFileForReview', () => {
       byteSize: 100,
       addedAt: Date.now(),
       addedByUserId: 'user-1',
+      role: 'standalone',
       ...overrides,
     };
   }

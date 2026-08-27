@@ -30,6 +30,7 @@ function makeDocument(matterId: string): DocumentRecord {
     byteSize: 1234,
     addedAt: Date.now(),
     addedByUserId: 'owner-1',
+    role: 'standalone',
   };
 }
 

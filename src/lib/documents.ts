@@ -189,6 +189,10 @@ export function toDocumentRecord(
       byteSize: doc.file.size,
       addedAt: Date.now(),
       addedByUserId: userId,
+      // Every newly-added document starts standalone; it only becomes
+      // 'base'/'varies' when a human explicitly groups it into a
+      // collection (App.tsx's handleCreateCollection), never at ingest.
+      role: 'standalone',
     },
     bytes: doc.file,
   };
