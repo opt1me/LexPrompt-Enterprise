@@ -1409,39 +1409,41 @@ git show --stat HEAD
 
 - [ ] **Step 1: Write the failing tests**
 
-Build `verified(outcome, at)` and `unchecked(outcome)` finding helpers locally in the test file — read `src/lib/verification.ts` for the real `Verification` shape rather than guessing it.
+**Name the two fixtures `verifiedFinding` / `uncheckedFinding`, not `verified` / `unchecked`.** `src/lib/verification.ts` already exports `unchecked()` — zero-arg, returning a `Verification`. A local `unchecked(outcome)` returning a `Finding` would shadow it, and this codebase's most repeated defect is two things sharing one name. Build them from the real `Verification` shape: `{ state, byUserId?, at?, reason?, assigneeId? }`.
+
+Build `verifiedFinding(outcome, at)` and `uncheckedFinding(outcome)` finding helpers locally in the test file — read `src/lib/verification.ts` for the real `Verification` shape rather than guessing it.
 
 ```ts
 it('is UNTESTED when no verified finding has tested it', () => {
   expect(positionHealthLabel(positionHealth(0, []))).toBe('UNTESTED');
-  expect(positionHealthLabel(positionHealth(0, [unchecked('meets'), unchecked('deviates')]))).toBe('UNTESTED');
+  expect(positionHealthLabel(positionHealth(0, [uncheckedFinding('meets'), uncheckedFinding('deviates')]))).toBe('UNTESTED');
 });
 
 it('counts only verified findings — an unchecked meets does not strengthen a position', () => {
   // The model agreeing with itself is not evidence. Letting it count would
   // close the loop this app exists to keep open.
-  const h = positionHealth(0, [verified('meets'), unchecked('meets'), unchecked('meets')]);
+  const h = positionHealth(0, [verifiedFinding('meets'), uncheckedFinding('meets'), uncheckedFinding('meets')]);
   expect(positionHealthLabel(h)).toBe('HELD 1 of 1');
 });
 
 it('is HELD n of m when every verified finding met it', () => {
-  expect(positionHealthLabel(positionHealth(0, [verified('meets'), verified('meets')]))).toBe('HELD 2 of 2');
+  expect(positionHealthLabel(positionHealth(0, [verifiedFinding('meets'), verifiedFinding('meets')]))).toBe('HELD 2 of 2');
 });
 
 it('is CONCEDED once a verified deviation lands after the version was published', () => {
-  expect(positionHealthLabel(positionHealth(50, [verified('meets', 100), verified('deviates', 120)])))
+  expect(positionHealthLabel(positionHealth(50, [verifiedFinding('meets', 100), verifiedFinding('deviates', 120)])))
     .toBe('CONCEDED 1 times');
 });
 
 it('ignores a verified deviation from before this version was published', () => {
   // The position changed; a concession against the old wording says nothing
   // about the new one.
-  expect(positionHealthLabel(positionHealth(200, [verified('deviates', 100), verified('meets', 250)])))
+  expect(positionHealthLabel(positionHealth(200, [verifiedFinding('deviates', 100), verifiedFinding('meets', 250)])))
     .toBe('HELD 1 of 1');
 });
 
 it('does not count a verified unclear as either held or conceded', () => {
-  expect(positionHealthLabel(positionHealth(0, [verified('unclear')]))).toBe('UNTESTED');
+  expect(positionHealthLabel(positionHealth(0, [verifiedFinding('unclear')]))).toBe('UNTESTED');
 });
 
 it('is NO POSITION when the clause has no standard position', () => {
