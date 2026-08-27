@@ -3,7 +3,7 @@ import { Copy, MessageSquare, Code, ToggleLeft, ToggleRight } from 'lucide-react
 import type { PlaybookDraft } from '../../types';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
-import { buildMegaPrompt, type MegaPromptFormat } from './buildMegaPrompt';
+import { buildMegaPrompt, defaultIncludeRisk, type MegaPromptFormat } from './buildMegaPrompt';
 
 export interface MegaPromptModalProps {
   isOpen: boolean;
@@ -14,7 +14,14 @@ export interface MegaPromptModalProps {
 /** The "DIY mode" viewer: a self-contained prompt the user can copy and paste elsewhere. */
 export function MegaPromptModal({ isOpen, onClose, template }: MegaPromptModalProps) {
   const [format, setFormat] = useState<MegaPromptFormat>('copilot');
-  const [includeRisk, setIncludeRisk] = useState(true);
+  // R-D1: nothing declares an intent to assess risk any more, so the
+  // default comes from whether the playbook says anything about risk —
+  // `defaultIncludeRisk`, the same rule the review prompt uses. It stays a
+  // TOGGLE: this is a prompt the user is about to paste somewhere else, and
+  // what they want in it is their call. Lazily initialised, so opening the
+  // modal on a different playbook re-derives it (the modal is unmounted
+  // between openings — `isOpen` gates it in App).
+  const [includeRisk, setIncludeRisk] = useState(() => (template ? defaultIncludeRisk(template) : true));
 
   const promptText = useMemo(
     () => (template ? buildMegaPrompt(template, format, includeRisk) : ''),

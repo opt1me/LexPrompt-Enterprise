@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildMegaPrompt } from './buildMegaPrompt';
+import { buildMegaPrompt, defaultIncludeRisk } from './buildMegaPrompt';
 import { newPlaybookDraft } from '../../lib/db/playbooks';
 import type { PlaybookDraft } from '../../types';
 
@@ -60,5 +60,47 @@ describe('buildMegaPrompt', () => {
     const t = newPlaybookDraft('Empty');
     expect(() => buildMegaPrompt(t, 'copilot', true)).not.toThrow();
     expect(() => buildMegaPrompt(t, 'json', true)).not.toThrow();
+  });
+
+  // The DIY prompt has to ask the same question the app asks for the same
+  // playbook: with a position present, a comparison rather than a summary.
+  it('carries a clause standard position and asks for the comparison', () => {
+    const t = templateWithClauses();
+    t.clauses[0]!.standardPosition = {
+      text: 'A 6-month break notice, no conditions.',
+      origin: 'authored',
+      reviewedByHuman: true,
+    };
+    const prompt = buildMegaPrompt(t, 'copilot', true);
+    expect(prompt).toContain('A 6-month break notice, no conditions.');
+    expect(prompt).toMatch(/MEETS.*DEVIATES.*UNCLEAR/);
+  });
+
+  it('carries a standard position into the json format too, and omits it where absent', () => {
+    const t = templateWithClauses();
+    t.clauses[0]!.standardPosition = {
+      text: 'A 6-month break notice.',
+      origin: 'authored',
+      reviewedByHuman: true,
+    };
+    const prompt = buildMegaPrompt(t, 'json', true);
+    const parsed = JSON.parse(prompt.slice(prompt.indexOf('{')));
+    expect(parsed.clauses[0].standard_position).toBe('A 6-month break notice.');
+    expect('standard_position' in parsed.clauses[1]).toBe(false);
+  });
+
+  // The risk block is off unless the playbook says something about risk —
+  // R-D1's rule that presence, not a flag, decides.
+  it('turns the risk block on only when the playbook says something about risk', () => {
+    expect(defaultIncludeRisk(templateWithClauses())).toBe(true);
+
+    const noTolerance = templateWithClauses();
+    delete noTolerance.riskTolerance;
+    expect(defaultIncludeRisk(noTolerance)).toBe(true); // clause criteria still count
+
+    delete noTolerance.clauses[0]!.riskCriteria;
+    expect(defaultIncludeRisk(noTolerance)).toBe(false);
+
+    expect(defaultIncludeRisk(newPlaybookDraft('Empty'))).toBe(false);
   });
 });
