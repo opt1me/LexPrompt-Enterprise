@@ -299,3 +299,46 @@ describe('describeFindingOutcome — a collection finding\'s net position', () =
     expect(describeFindingOutcome(f)).toBe('Explicit summary.');
   });
 });
+
+/**
+ * m1 (final review). When a collection clause's retry cannot even reach the
+ * extractor — the document's stored bytes could not be re-read —
+ * `failRetryCell` lands an `error` finding that carries the previous
+ * attempt's `netPosition` forward. `FindingCard`'s error branch returns
+ * early and renders only the message: no position panel, no trail.
+ *
+ * Both exporters, however, took the non-`done` branch of `buildReportRows`
+ * and emitted `netPositionLabel` plus the whole derivation alongside "This
+ * clause could not be reviewed" — so a DOCX row read "could not be
+ * reviewed", then "UNCONFIRMED NET POSITION", then a Derivation table of
+ * quotes from an attempt that no longer stands, which the app itself
+ * refuses to show on screen. Two surfaces disagreeing about whether a piece
+ * of evidence still stands is the drift this module exists to prevent.
+ *
+ * A derivation belongs to settled output. `isVerifiable` is the same rule,
+ * already stated once here, so it is reused rather than copied.
+ */
+describe('a derivation does not outlive the output it described', () => {
+  function stale(status: Finding['status']): Finding {
+    return { ...collectionFinding(), status, error: 'This clause was not re-run: the file could not be read.' };
+  }
+
+  it('raises no net-position caveat on a finding that failed', () => {
+    expect(netPositionLabel(stale('error'))).toBeNull();
+    expect(netPositionAmendmentLabel(stale('error'))).toBeNull();
+  });
+
+  it('exports no trail for a finding that failed', () => {
+    expect(trailLines(stale('error'))).toEqual([]);
+  });
+
+  it.each(['pending', 'running', 'cancelled'] as const)('does the same for a %s finding', (status) => {
+    expect(netPositionLabel(stale(status))).toBeNull();
+    expect(trailLines(stale(status))).toEqual([]);
+  });
+
+  it('still labels and exports the derivation of a done finding', () => {
+    expect(netPositionLabel(collectionFinding())).toBe('UNCONFIRMED NET POSITION');
+    expect(trailLines(collectionFinding())).toHaveLength(2);
+  });
+});

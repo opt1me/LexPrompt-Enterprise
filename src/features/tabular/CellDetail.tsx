@@ -11,11 +11,25 @@ export interface CellDetailProps {
    *  than `doc` can be shown in the document it actually came from — and so
    *  its pin label can name that document instead of printing a raw id.
    *
-   *  A collection review keys ONE finding per clause whose citations may
-   *  span the whole collection, and this panel is reachable from every row
-   *  of the grid, so `doc` is routinely not the document a given quote came
-   *  from. Optional: omitted, the panel behaves exactly as it did — one
-   *  document, no swap. */
+   *  Written for the collection case: one finding per clause whose citations
+   *  may span the whole collection, so `doc` would routinely not be the
+   *  document a given quote came from.
+   *
+   *  **Currently unreachable, deliberately kept.** `TabularReview` returns
+   *  `CollectionNotComparable` before it renders any grid for a collection
+   *  target, so this panel never opens for one; and for a `documents` target
+   *  every citation carries the reviewed document's own id (`repairCitations`),
+   *  so the swap cannot fire. An earlier version of this comment claimed the
+   *  panel WAS reachable from every row, which stopped being true when the
+   *  grid's collection refusal landed — do not read it as evidence that the
+   *  path runs today.
+   *
+   *  Kept rather than deleted because it is correct, costs nothing, and the
+   *  grid's refusal is a product decision that could be revisited; deleting
+   *  it would mean rediscovering that highlighting a quote in a document it
+   *  did not come from makes the viewer report missing evidence that exists.
+   *  Optional: omitted, the panel behaves exactly as it did — one document,
+   *  no swap. */
   documents?: DocumentFile[];
   clause: Clause;
   finding: Finding | undefined;

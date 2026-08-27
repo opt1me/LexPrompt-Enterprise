@@ -101,6 +101,31 @@ export function verificationLabel(finding: Finding | undefined): string | null {
 }
 
 /**
+ * Whether a finding's net position and derivation still stand — i.e. still
+ * describe the output the finding actually holds.
+ *
+ * They do not when the finding is not `done`. `failRetryCell` carries the
+ * previous attempt's position onto an `error` finding when a retry cannot
+ * even reach the extractor, and `FindingCard`'s error branch returns early:
+ * it renders the message and nothing else, no position panel and no trail.
+ * Without this guard the exporters did the opposite — a DOCX row read "this
+ * clause could not be reviewed", then "UNCONFIRMED NET POSITION", then a
+ * Derivation table of quotes from an attempt that no longer stands. Two
+ * surfaces disagreeing about whether a piece of evidence still stands is
+ * exactly the drift this module exists to prevent, and the screen has the
+ * better of the argument: a derivation is the argument FOR a conclusion, and
+ * a failed clause has no conclusion.
+ *
+ * `isVerifiable` is the same rule — "this finding has settled output a human
+ * judgement can be about" — already stated once in this file, so it is
+ * reused rather than copied. The stale position stays on the record (nothing
+ * is deleted that a later read might want); it simply reaches no reader.
+ */
+function hasStandingPosition(finding: Finding | undefined): boolean {
+  return isVerifiable(finding);
+}
+
+/**
  * How an export names an unconfirmed net position — a synthesised "what the
  * documents say now" that no human has yet read, the most dangerous output
  * this app produces (see `netPosition.ts`). Mirrors `verificationLabel`'s
@@ -127,6 +152,9 @@ export function verificationLabel(finding: Finding | undefined): string | null {
  *    wrote this") that a plain `null` here cannot carry.
  */
 export function netPositionLabel(finding: Finding | undefined): string | null {
+  // A position that no longer describes settled output raises no caveat,
+  // because it must not be exported at all — see `hasStandingPosition`.
+  if (!hasStandingPosition(finding)) return null;
   const state = finding?.netPosition?.state;
   if (state === 'unconfirmed') return 'UNCONFIRMED NET POSITION';
   return null;
@@ -148,6 +176,7 @@ export function netPositionLabel(finding: Finding | undefined): string | null {
  * not deliver.
  */
 export function netPositionAmendmentLabel(finding: Finding | undefined): string | null {
+  if (!hasStandingPosition(finding)) return null;
   if (!finding?.netPosition?.amended) return null;
   return 'AMENDED NET POSITION: this text was rewritten by a person, not the model';
 }
@@ -164,7 +193,7 @@ export function trailLines(
   finding: Finding | undefined,
   documentNames: Record<string, string> = {},
 ): string[] {
-  const trail = finding?.netPosition?.trail ?? [];
+  const trail = hasStandingPosition(finding) ? (finding?.netPosition?.trail ?? []) : [];
   return trail.map((step, i) => {
     const kind = step.kind === 'original' ? 'Original' : 'Varies';
     const quotes = step.citations.map(c => `"${c.quote}"`).join('; ');

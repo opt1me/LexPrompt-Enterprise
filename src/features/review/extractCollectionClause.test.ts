@@ -258,6 +258,37 @@ describe('extractCollectionClause', () => {
 
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.proposed).toMatch(/incomplete/i);
+    // m1 (final review): the note printed the member's raw internal id —
+    // "[Incomplete set: k3jd8fa0x91mq could not be found ...]" — into text
+    // shown in the panel, in the trail modal, in both exports and in the
+    // drafted email. A missing member has no name anywhere by definition, so
+    // the wording says what is missing in words instead of presenting an
+    // opaque token as though it identified something to the reader.
+    // `cd89c27` fixed exactly this shape (a raw user id) one commit earlier.
+    expect(finding.netPosition!.proposed).not.toContain('dov');
+    expect(finding.netPosition!.proposed).toMatch(/one amending document/i);
+  });
+
+  it('counts the missing amendments rather than listing their ids', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: [
+        { document: 1, effect: 'Base effect only.', citations: [] },
+        { document: 2, effect: 'Unavailable.', citations: [] },
+        { document: 3, effect: 'Unavailable.', citations: [] },
+      ],
+      net_position: 'Based on the base document alone.',
+    });
+
+    const three: CollectionMember<DocumentFile>[] = [
+      { document: leaseDoc, documentId: 'lease', kind: 'original', position: 1 },
+      { document: null, documentId: 'dov', kind: 'varies', position: 2 },
+      { document: null, documentId: 'lic', kind: 'varies', position: 3 },
+    ];
+
+    const finding = await extractCollectionClause(three, clause, template, settings);
+
+    expect(finding.netPosition!.proposed).toMatch(/2 amending documents/i);
+    expect(finding.netPosition!.proposed).not.toContain('lic');
   });
 
   it('resolves an aborted request to a calm cancelled finding, not an error', async () => {

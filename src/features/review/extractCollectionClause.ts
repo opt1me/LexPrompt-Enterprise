@@ -391,9 +391,19 @@ export async function extractCollectionClause(
     // relying on the model to have complied with the prompt's own
     // instruction to call out an UNAVAILABLE document.
     const missingAmendments = ordered.filter(m => m.kind !== 'original' && !m.document);
-    const proposed = missingAmendments.length > 0
-      ? `${netPositionText}\n\n[Incomplete set: ${missingAmendments.map(m => m.documentId).join(', ')} ` +
-        'could not be found and this position does not account for it.]'
+    // Counted, never listed by id. This note is appended to the position
+    // text itself, so it is displayed in `NetPositionPanel`, in the trail
+    // modal's terminal card, in the DOCX summary row, in the CSV cell and
+    // in the drafted email - every one of them a reader. A raw internal id
+    // there says nothing to that reader while looking as though it should;
+    // `cd89c27` fixed exactly this shape for a user id, and `trailLines`
+    // carries a long comment about why a name belongs where an id was. A
+    // member with `document: null` has no name anywhere by definition, so
+    // the honest form is to say what is missing in words.
+    const missing = missingAmendments.length;
+    const proposed = missing > 0
+      ? `${netPositionText}\n\n[Incomplete set: ${missing === 1 ? 'one amending document' : `${missing} amending documents`} ` +
+        `could not be found, and this position does not account for ${missing === 1 ? 'it' : 'them'}.]`
       : netPositionText;
 
     return {

@@ -1318,6 +1318,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       error: message,
       verification: existing?.verification ?? unchecked(),
       notes: existing?.notes ?? [],
+      // Carried forward so nothing is destroyed by a retry that never even
+      // reached the extractor. It reaches no reader: `FindingCard`'s error
+      // branch renders the message alone, and `findingOutcome`'s
+      // `hasStandingPosition` now keeps the label and the derivation out of
+      // both exports too — they used to print a Derivation table under a
+      // "could not be reviewed" heading, which the screen refused to show.
       ...(existing?.netPosition ? { netPosition: existing.netPosition } : {}),
     });
     // Same merge `onRetryUpdate` does, for the same reason: a verification
