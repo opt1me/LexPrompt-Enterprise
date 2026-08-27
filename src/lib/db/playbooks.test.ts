@@ -402,21 +402,27 @@ describe('import / export', () => {
     txSpy.mockRestore();
   });
 
-  it('a failed import leaves no orphaned version behind', async () => {
-    const db = await getDb();
-    const spy = vi.spyOn(db, 'transaction').mockImplementation((() => {
-      throw new Error('quota exceeded');
-    }) as typeof db.transaction);
-    try {
-      await expect(importPlaybook(JSON.stringify({
-        name: 'Doomed', clauses: [{ id: 'c1', title: 'T', extractPrompt: 'p' }],
-      }))).rejects.toThrow();
-    } finally {
-      spy.mockRestore();
-    }
-    expect(await listPlaybooks()).toEqual([]);
-    expect(await db.getAll(STORES.playbookVersions)).toEqual([]);
-  });
+  // DELIBERATELY NOT TESTED: "a failure between the version write and the
+  // identity write leaves no orphaned version behind."
+  //
+  // The test that used to sit here threw at `db.transaction`, which fails
+  // before EITHER write and therefore passed under a two-transaction
+  // implementation too — it could not see the window it named. Task 3's
+  // re-reviewer proved that by reverting `importPlaybook` to the
+  // two-transaction form and watching it stay green.
+  //
+  // It cannot be honestly rewritten, because under one transaction the
+  // window does not exist: there is no moment at which the version is
+  // durable and the identity is not. Injecting a failure at the identity
+  // `put` is also not available — `idb` wraps the transaction in a Proxy, so
+  // replacing `tx.objectStore` silently does not stick and the real write
+  // runs (confirmed by trying it).
+  //
+  // The invariant is pinned instead by the test above, which asserts exactly
+  // ONE transaction spanning BOTH stores. That is the property that closes
+  // the orphan window; a test asserting the absence of an orphan adds no
+  // information and, left in place, would tell a future reader the window is
+  // covered when nothing covers it.
 
   it('rejects malformed JSON', async () => {
     await expect(importPlaybook('{not json')).rejects.toThrow(/not valid/i);

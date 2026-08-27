@@ -8,7 +8,7 @@ import { confirmPosition, amendPosition, resetPosition, NetPositionError } from 
 import { carryHumanState } from './lib/findingMerge';
 import { uid } from './lib/uid';
 import {
-  listPlaybooks as listTemplates, getPlaybook as getTemplate, savePlaybook as saveTemplate, deletePlaybook as deleteTemplate,
+  listPlaybooks as listTemplates, getPlaybook as getTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
   getPlaybookContent, newPlaybookDraft, draftFromVersion, publishAndPoint,
 } from './lib/db/playbooks';
