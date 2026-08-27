@@ -3653,6 +3653,59 @@ git commit -m "feat(b): keyboard navigation for the verify loop"
 
 ---
 
+### Task 13A: Sweep the remaining stale `Finding` fixtures
+
+**This task exists because the plan had a hole.** `Finding` gained two required fields in Task 1, and the plan assigned every *source* file that broke to a task — but four **test** files carry their own `Finding` object literals and were assigned to nobody:
+
+- `src/features/review/runReview.test.ts`
+- `src/App.interrupted.test.tsx`
+- `src/App.authRedirect.test.tsx`
+- `src/features/tabular/TabularReview.interrupted.test.tsx`
+
+They pass at runtime, because Vitest does not typecheck. But `npm run build` is `tsc && vite build`, so `tsc` fails and the build gate in the definition of done cannot be met. The hole was invisible for exactly the reason this project distrusts a green suite: the tests were green the whole time.
+
+**Files:** the four above, plus whatever `npx tsc --noEmit` still reports at this point.
+
+- [ ] **Step 1: Take an inventory**
+
+```bash
+npx tsc --noEmit 2>&1 | grep "error TS" | grep -oE "^src/[^(]+" | sort | uniq -c
+```
+
+Write the list into your report *before* changing anything. Tasks 7 and 10-13 should already have cleared `FindingCard.test.tsx`, `ResultsView.tsx`, `exportDocx.ts`, `exportDocx.test.ts`, `csv.test.ts` and `findingOutcome.test.ts`. Anything still listed from those is a **regression to report, not to quietly patch here** — say so in your report rather than absorbing it.
+
+- [ ] **Step 2: Fix each stale fixture**
+
+For every `Finding` object literal missing the new fields, add:
+
+```ts
+      verification: { state: 'unchecked' },
+      notes: [],
+```
+
+or, where the file already imports from `src/lib/verification`, `verification: unchecked(), notes: []`. Prefer whichever the surrounding file already does; do not introduce an import into a file for two words.
+
+Where a literal has `citations: ['some quote']`, it must become `citations: [{ quote: 'some quote', documentId: '<the doc id that test uses>' }]`. **Use the real document id from that test's own fixtures** — a citation attributed to the wrong document is the defect `repairCitations` exists to prevent, and a test fixture that models it wrongly will happily assert wrong behaviour later.
+
+**Change nothing else.** Do not "improve" these tests, do not rename anything, do not add assertions. This is a type-fixture sweep, and every line beyond it makes the diff harder to trust.
+
+- [ ] **Step 3: Prove it**
+
+```bash
+npx tsc --noEmit          # must be completely clean, zero errors
+npm test                  # full suite, must be green
+npm run build             # must complete, with no externalization warning
+```
+
+All three are gates. If `tsc` is clean but a test now fails, you have changed behaviour rather than fixtures — revert and report it.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A src
+git commit -m "chore(b): update stale Finding fixtures in tests the plan missed"
+```
+
 ### Task 14: Documentation, full gates, and browser verification
 
 **Files:**
