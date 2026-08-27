@@ -188,6 +188,19 @@ export function ResultsView({
     onVerify: (i, change) => {
       const clause = clauses[i];
       if (!clause || !onVerify) return;
+      // Critical 2 fix: the mouse path only ever offers verification controls
+      // on a `done` finding (`FindingCard` renders `VerificationControls` —
+      // and the `StateChip` that would show the result — only in its `done`
+      // branch). The keyboard hook is index-based and knows nothing about a
+      // finding's status, so without this gate `v`/`f`/`r` could write
+      // `verified`/`flagged`/`rejected` onto a pending, running, error or
+      // cancelled card — with no chip to show it happened, yet it would
+      // still count in the progress indicators and in the export summary.
+      // That is precisely "a finding nobody could have read, exported as
+      // verified" — the thing this sub-project exists to prevent. Silently
+      // ignoring the keypress here (rather than surfacing a notice) matches
+      // how the mouse path behaves: there is simply no control to press.
+      if (findings[clause.id]?.status !== 'done') return;
       if (change.state === 'rejected') { setRejectClauseId(clause.id); return; }
       void onVerify(activeDocId, clause.id, change);
     },

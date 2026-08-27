@@ -794,7 +794,18 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       }
     };
 
-    const persistFinal = async (finalRun: ReviewRun) => {
+    // Critical 1 fix: `persistFinal` used to take the run to persist as a
+    // parameter, and had two callers — the success path passed `runReview`'s
+    // own return value (which never sees a human write; `runReview` builds
+    // every `Finding` with `unchecked()`/`notes: []`), while the abort path
+    // four lines below correctly passed `latestRunRef.current`. A parameter
+    // that only one of two callers gets right is a trap, so `persistFinal`
+    // now reads `latestRunRef.current` itself — the single place `handleUpdate`
+    // keeps the human-merged run — with `newRun` as a defensive fallback for
+    // the case (which should not occur; `latestRunRef.current` is set to
+    // `newRun` above before either code path can run) where no update ever
+    // landed.
+    const persistFinal = async () => {
       if (!matterId || !reviewSaver) return;
       if (activeRunSaverRef.current?.saver === reviewSaver) {
         activeRunSaverRef.current = null;
@@ -808,6 +819,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         reviewSaver.dispose();
         return;
       }
+      const finalRun = latestRunRef.current ?? newRun;
       try {
         await reviewSaver.saveNow(reviewFromRun(finalRun, matterId, settings.modelId, userId));
       } catch (e) {
@@ -818,9 +830,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     };
 
     runReview(newRun, docs, settings, handleUpdate, controller.signal)
-      .then(async (finalRun) => {
+      .then(async () => {
         setIsRunning(false);
-        await persistFinal(finalRun);
+        await persistFinal();
       })
       .catch(async (error) => {
         setIsRunning(false);
@@ -832,7 +844,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         // itself is what triggered the abort — see `persistFinal`'s own
         // deleted-matter check above).
         if (error instanceof DOMException && error.name === 'AbortError') {
-          await persistFinal(latestRunRef.current ?? newRun);
+          await persistFinal();
           return;
         }
         notify(error instanceof Error ? error.message : 'Review failed.', 'error');

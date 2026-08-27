@@ -25,12 +25,17 @@ const migrateIfNeededMock = vi.fn();
 
 // Captures the debounced saver's `scheduleSave` calls for the live-run test
 // below, mirroring App.reviewSaveError.test.tsx's capture of `onError`.
+// `saveNowMock` is captured the same way (Critical 1's fix site) so a test
+// can assert on the *final* write a completed run makes, not just the
+// mid-run debounced ones.
 let scheduleSaveMock: ReturnType<typeof vi.fn>;
+let saveNowMock: ReturnType<typeof vi.fn>;
 const createDebouncedReviewSaverMock = vi.fn((..._args: unknown[]) => {
   scheduleSaveMock = vi.fn();
+  saveNowMock = vi.fn().mockResolvedValue(undefined);
   return {
     scheduleSave: scheduleSaveMock,
-    saveNow: vi.fn().mockResolvedValue(undefined),
+    saveNow: saveNowMock,
     dispose: vi.fn(),
   };
 });
@@ -403,5 +408,64 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     expect(scheduleSaveMock).toHaveBeenCalled();
     const lastScheduled = scheduleSaveMock.mock.calls[scheduleSaveMock.mock.calls.length - 1][0];
     expect(lastScheduled.findings['live-doc'].c1.verification.state).toBe('verified');
+  });
+
+  it('Critical 1: the run completion save holds a verification made during the run, not runReview\'s own unmerged snapshot', async () => {
+    // Same setup as the previous test — c1 resolves immediately so it can be
+    // verified while the run is still live, c2 stays pending until released
+    // — but this time c2 is released with `runReview`'s own `onUpdate`
+    // eventually resolving the whole run, so the FINAL save (`saveNow`, not
+    // the debounced `scheduleSave`) is the thing under test. `runReview`
+    // builds every Finding with `unchecked()`; the run's own return value
+    // never sees the verification written mid-run. `persistFinal` must not
+    // hand `saveNow` that raw return value.
+    let resolveC2: ((finding: unknown) => void) | undefined;
+    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => {
+      if (clause.id === 'c1') {
+        return Promise.resolve({
+          clauseId: 'c1',
+          status: 'done',
+          citations: [{ quote: 'x', documentId: 'live-doc' }],
+          summary: 'Governed by NY law.',
+          verification: { state: 'unchecked' },
+          notes: [],
+        });
+      }
+      return new Promise((resolve) => { resolveC2 = resolve; });
+    });
+
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    listPlaybooksMock.mockResolvedValue([makeTemplate()]);
+    listMattersMock.mockResolvedValue([makeMatter()]);
+    saveReviewMock.mockResolvedValue(undefined);
+
+    act(() => { root.render(<App />); });
+    await flush();
+
+    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    await flush();
+    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
+    await flush();
+
+    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+    expect(chips()[0].textContent).toBe('Verified');
+
+    // Finish the run: c2 resolves, `runReview`'s promise resolves, and
+    // `persistFinal` fires the run's completion save.
+    act(() => { resolveC2!({
+      clauseId: 'c2',
+      status: 'done',
+      citations: [],
+      summary: 'Term is 12 months.',
+      verification: { state: 'unchecked' },
+      notes: [],
+    }); });
+    await flush();
+
+    expect(saveNowMock).toHaveBeenCalled();
+    const finalSaved = saveNowMock.mock.calls[saveNowMock.mock.calls.length - 1][0];
+    expect(finalSaved.findings['live-doc'].c1.verification.state).toBe('verified');
   });
 });
