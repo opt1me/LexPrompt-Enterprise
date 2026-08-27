@@ -3691,7 +3691,18 @@ Add to the conventions section:
 - `derivePage` is the only place a citation page number is produced, and it returns `undefined` rather than guessing.
 - Verification and note writes are await-then-apply: the UI never shows a state the store did not take.
 
-Add to the extraction-points list: `verification.ts`, `citationRepair.ts`, `citationPage.ts`, `reviewProgress.ts` — each extracted at its first *second* caller, per the standing rule.
+Add to the extraction-points list: `verification.ts`, `citationRepair.ts`, `citationPage.ts`, `reviewProgress.ts`, `findingMerge.ts`, `uid.ts` (extracted at its *seventh* byte-identical copy — recorded as a failure to follow the rule, not a success), and `src/test/mount.tsx`.
+
+**Add these to the "Environment quirks that will waste your time" section.** Every one was found the hard way during this sub-project, and each cost real time:
+
+- **`toEqual` does not distinguish an absent key from an `undefined` one.** Vitest treats `{ a: 1 }` and `{ a: 1, b: undefined }` as equal. When *absence* is the thing you mean, assert `expect('b' in obj).toBe(false)`. This matters beyond tidiness: `structuredClone` — which is how IndexedDB writes every record — **preserves** an `undefined`-valued key, so a guard that looks decorative is load-bearing.
+- **Component tests drive `createRoot`/`act` directly; there is no `@testing-library/react`.** New component tests import the shared harness at `src/test/mount.tsx`. Existing test files keep the harness they hand-rolled — they work, and rewriting them buys no behaviour.
+- **Setting `.value` on a controlled React input does nothing useful.** React reads from its own internal tracker, so a plain assignment updates the DOM and leaves React believing nothing changed. Go through the prototype's value setter, then dispatch `input`. `mount.tsx`'s `type()` does this; use it rather than rediscovering it.
+- **`runReview` owns its own copy of the run and emits a full snapshot roughly twice per cell.** Anything a human writes onto a finding from outside the engine — a verification, a note — is invisible to it and will be overwritten by the next unrelated cell finishing. `carryHumanState` re-applies it; `handleUpdate` must keep using it.
+- **`retryCell` derives every snapshot from the run it is handed.** Mutating state *alongside* the call does not survive; the changed run has to be passed *into* it.
+- **`usableText` strips the `[Page N]` markers and drops sparse pages.** Anything that needs real page numbers must read `doc.text`, not the readability-filtered text.
+
+**Add a line to the sibling-drift section**: this sub-project extracted `uid()` after finding seven byte-identical copies in source. The rule says extract on the second. Seven is what it looks like when nobody does.
 
 - [ ] **Step 4: Browser verification with a real key**
 
