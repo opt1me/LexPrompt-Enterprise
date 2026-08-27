@@ -44,11 +44,23 @@ When you are deciding how something should behave on failure, that list is the p
 
 **Snapshot what a review claims to have checked.** `Review.playbookSnapshot` is a deep copy. Editing a playbook afterwards must not rewrite history.
 
+**Verification state is set only by a human action; nothing derives it.** A finding's `Verification` is a person's judgement about a specific answer, not a status the engine infers. `extractClause` never writes anything but `unchecked()`; the only writers are the verify/flag/reject controls and the reset below.
+
+**Re-running a clause resets its verification.** The verification described a specific piece of output; once that output is replaced, keeping the old verification would let an export claim a human checked text they never saw. This is load-bearing and mutation-tested — break the reset in `resetVerification` or in `retryCell`'s use of it and a test should fail.
+
+**`verificationLabel` in `findingOutcome.ts` is the only place export wording lives.** The DOCX and CSV exporters have drifted apart on this once before (a CSV wrote unreviewed clauses as blank cells while the DOCX said "could not be reviewed") — both exporters now call this and `exportSummaryLine` rather than composing their own strings.
+
+**`derivePage` is the only place a citation page number is produced.** It reads the `[Page N]` markers already in a document's extracted text and returns `undefined` rather than guessing. A wrong page pin sends a reader to the wrong part of a contract with apparent authority, which is worse than no pin.
+
+**Verification and note writes are await-then-apply.** The UI updates its own state only after the store confirms the write, never optimistically — the reviewer must never see a state the store did not actually take.
+
 ## Sibling drift — the recurring failure
 
 Six separate findings in this project came from two implementations of the same idea drifting apart. Once, `matters.ts` reproduced `playbooks.ts`'s sequence-allocation *without* its transaction scoping, while its docstring claimed to mirror it.
 
-**When you find yourself writing a second copy of something, extract it then.** Not after the third. Existing extractions: `seq.ts` (type-enforced so a wrong-mode store fails to compile), `pageSegments.ts`, `findingOutcome.ts`, `modelContext.ts`, `describeLoadError`.
+**When you find yourself writing a second copy of something, extract it then.** Not after the third. Existing extractions: `seq.ts` (type-enforced so a wrong-mode store fails to compile), `pageSegments.ts`, `findingOutcome.ts`, `modelContext.ts`, `describeLoadError`, `verification.ts`, `citationRepair.ts`, `citationPage.ts`, `reviewProgress.ts`, `findingMerge.ts`, `uid.ts`, `src/test/mount.tsx`.
+
+`uid()` is the cautionary case: it was extracted only after the same four lines turned up **seven** byte-identical times across the codebase. That is not a success story for the rule above — it's what it looks like when nobody follows it. Treat "not after the third" as a real number, not a rhetorical one.
 
 ## Testing
 
@@ -60,6 +72,14 @@ Six separate findings in this project came from two implementations of the same 
 - Blobs do **not** round-trip through `fake-indexeddb` with jsdom's `Blob` — Node's `structuredClone` mangles it to `{}` silently. Use `node:buffer`'s `Blob` in tests.
 - `idb`'s convenience reads open their own incidental transactions, which skews spy-based atomicity assertions. Filter on mode.
 - A tool being unable to reach something is not the same as it being untestable — `window.confirm` can't be clicked by browser automation but mocks fine in jsdom.
+- **`toEqual` does not distinguish an absent key from an `undefined` one.** Vitest treats `{ a: 1 }` and `{ a: 1, b: undefined }` as equal. When *absence* is the thing you actually mean to assert, write `expect('b' in obj).toBe(false)` instead. This is more than tidiness: `structuredClone` — how IndexedDB writes every record — **preserves** an `undefined`-valued key, so a guard that looks decorative in a test is load-bearing against real persisted data.
+- **Component tests drive `createRoot`/`act` directly; there is no `@testing-library/react` in this project.** New component tests import the shared harness at `src/test/mount.tsx` (`mount`, `mountOnce`, `click`, `type`, `keyDown`). Existing test files keep the harness they hand-rolled before this existed — they work, and rewriting them buys no behaviour.
+- **Two live `mount()`s in one test leave two competing global listeners.** `mount()` accumulates mounted trees and only tears them down in its shared `afterEach`, so a test that calls `mount()` twice to compare before/after states has both trees alive at once — and for a hook that binds to `window` (`useVerifyKeys`), the first tree's listener still fires alongside the second's. Use `mountOnce` and unmount explicitly when a test genuinely needs a second tree. Found the hard way: a test that looked like it proved keyboard movement stops at the list's ends was actually being answered by a stale listener from the first mount.
+- **Setting `.value` on a controlled React input is a silent no-op.** React installs its own setter on the element instance and reads from an internal tracker, so a plain `el.value = x` updates the DOM but leaves React believing nothing changed — the subsequent `input` event is then treated as a no-op. Go through the prototype's value setter, then dispatch `input`. `mount.tsx`'s `type()` does this already; use it rather than rediscovering it.
+- **`runReview` owns its own copy of the run and emits a full snapshot roughly twice per cell.** Anything a human writes onto a finding from outside the engine — a verification, a note — is invisible to the engine and gets silently overwritten the next time an unrelated cell finishes. `carryHumanState` re-applies human-authored state onto each new snapshot; `handleUpdate` (and anything else consuming run snapshots) must keep calling it.
+- **`retryCell` derives every snapshot from the run it is handed, not from ambient state.** Mutating component state alongside the call does not survive — the changed run has to be passed *into* `retryCell`, or the retry silently reverts it.
+- **`usableText` strips `[Page N]` markers and drops sparse pages** (it's tuned for model readability, not page fidelity). Anything that needs real page numbers — `derivePage`, citation repair — must read `doc.text`, never the readability-filtered text.
+- **jsdom has no `Element.prototype.scrollIntoView`.** Calling it un-stubbed throws `TypeError: ... is not a function` in any component test that scrolls a citation into view. Stubbed once, globally, in `vitest.setup.ts` — call sites are not expected to guard against its absence themselves.
 
 ## Verify UI work in a browser
 
