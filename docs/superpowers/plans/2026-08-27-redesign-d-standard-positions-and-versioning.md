@@ -49,6 +49,8 @@ Recorded here and to be copied into `docs/superpowers/redesign/rulings.md` by Ta
 
 **R-D5 — `Clause` is renamed to `PlaybookClause` with no back-compat alias.** A type alias left behind is exactly this project's "sibling drift" failure in slow motion. One mechanical sweep in Task 1, then the old name does not exist. Cost if wrong: a large but purely mechanical diff.
 
+**R-D6 — `generateTemplate`'s wire schema keeps its `prompt` key; only the domain field is renamed.** `generateTemplate.ts:139` reads `generated.prompt` — that is the *model's* output field, described to the model in a JSON schema, not our domain type. Renaming it would change what the model is asked to produce, on a path whose output quality nothing in this plan tests. The rename stops at the boundary: the wire key stays `prompt` and is mapped to `extractPrompt` when the `PlaybookClause` is constructed. Cost if wrong: one field name is inconsistent between the wire format and the domain type, which is normal and is what a boundary is for.
+
 ---
 
 ## File Structure
@@ -225,9 +227,42 @@ Expected: FAIL — `extractPrompt` is `undefined` before Step 2's edit lands, or
 
 - [ ] **Step 5: Sweep every call site**
 
-Run `grep -rn "clause\.prompt\|c\.prompt" src/` and `grep -rn "\bClause\b" src/`. Rename `Clause` → `PlaybookClause` and `.prompt` → `.extractPrompt` at each. Known sites: `extractClause.ts` (`buildClausePrompt`'s `INSTRUCTION:` line and its signature), `extractCollectionClause.ts`, `collectionPrompt.ts`, `buildMegaPrompt.ts`, `generateTemplate.ts`, `TemplateEditor.tsx` (`updateClause`'s field union and `addClause`), `CreateTemplateDialog.tsx`, and their tests.
+These were enumerated against the tree at plan time, not from memory. Verify with `grep -rln "\bClause\b" src/` before you start; if the list differs, trust the tree.
 
-Beware: `.prompt` also appears as `window.prompt` and inside `openrouter`'s own request fields. Only rename the clause field.
+**20 files reference the `Clause` type** — rename each to `PlaybookClause`:
+
+```
+src/types.ts                                    src/features/review/FindingCard.tsx
+src/lib/db/playbooks.ts                         src/features/review/FindingCard.test.tsx
+src/lib/collectionPrompt.ts                     src/features/review/ResultsView.tsx
+src/lib/collectionPrompt.test.ts                src/features/tabular/CellDetail.tsx
+src/features/review/extractClause.ts            src/features/tabular/csv.test.ts
+src/features/review/extractClause.test.ts       src/features/templates/buildMegaPrompt.ts
+src/features/review/extractCollectionClause.ts  src/features/templates/generateTemplate.ts
+src/features/review/extractCollectionClause.test.ts  src/features/templates/generateTemplate.test.ts
+src/features/assistant/draftEmail.ts            src/features/templates/TemplateEditor.tsx
+src/features/assistant/suggestRevision.ts       src/features/assistant/RevisionModal.tsx
+```
+
+Note the three `src/features/assistant/` files. That directory is on the **do-not-touch** list for behaviour — a type rename is not a behaviour change and is required for the build, so rename the type there and change nothing else in those files.
+
+**Exactly 6 non-test sites read or write the clause's `prompt` field:**
+
+```
+src/features/review/extractClause.ts:71     INSTRUCTION: ${clause.prompt}
+src/lib/collectionPrompt.ts:152             INSTRUCTION: ${clause.prompt}
+src/features/templates/buildMegaPrompt.ts:16    - Instruction: ${c.prompt}
+src/features/templates/buildMegaPrompt.ts:53    instruction: c.prompt
+src/features/templates/TemplateEditor.tsx:136   value={clause.prompt}
+src/lib/db/playbooks.ts:46                  prompt: typeof c.prompt === 'string' ...
+```
+
+**Two traps. A blind `sed s/\.prompt/\.extractPrompt/` breaks both:**
+
+1. **`src/lib/openrouter.ts:358,392`** contain `pricing.prompt` and `promptPrice`. Unrelated to clauses, and that file is on the **do-not-touch** list. Leave it entirely alone.
+2. **`src/features/templates/generateTemplate.ts:139`** is `prompt: generated.prompt` — the left side is ours, the right side is the **model's** output field, described to the model in a JSON schema. Per **R-D6** the wire key stays `prompt`; only the left side becomes `extractPrompt`. Do not rename the field in the generation schema or in the prompt text that asks for it.
+
+**26 test files** contain `prompt:` in fixtures; `generateTemplate.test.ts` (11), `runReview.test.ts` (6) and `reviews.test.ts` (6) are the heaviest. Most are `Clause` literals that simply need the key renamed — but check each, because `generateTemplate.test.ts`'s are largely wire-format fixtures that must keep `prompt` per R-D6.
 
 - [ ] **Step 6: Run the gates**
 
