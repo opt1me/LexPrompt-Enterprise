@@ -2,9 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   listReviews, getReview, saveReview, deleteReview, createDebouncedReviewSaver,
 } from './reviews';
+import { publishVersion, getVersion } from './playbookVersions';
+import { deletePlaybook } from './playbooks';
+import { migrateDraft } from './playbookMigration';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
-import type { Review, PlaybookVersion } from '../../types';
+import type { Review, PlaybookVersion, PlaybookDraft } from '../../types';
 
 beforeEach(async () => {
   const db = await getDb();
@@ -163,6 +166,47 @@ describe('review CRUD', () => {
     const [read] = await listReviews('matter-legacy');
     expect(read.findings['doc-1']['clause-1'].citations)
       .toEqual([{ quote: 'another quote', documentId: 'doc-1' }]);
+  });
+});
+
+// Task 4: a review records the playbook version it ran against.
+//
+// `draftFrom` maps a `PlaybookVersion`-shaped fixture onto a `PlaybookDraft`
+// by calling `migrateDraft` (Task 3) rather than hand-rolling a second copy
+// of that mapping.
+function draftFrom(version: PlaybookVersion): PlaybookDraft {
+  return migrateDraft(version, version.name);
+}
+
+describe('Review.playbookVersionId (Task 4)', () => {
+  it('reopening a review reads the version it ran against, not the current one', async () => {
+    const v1 = await publishVersion('pb-1', draftFrom(makePlaybook()), 'u1');
+    const review = await saveReview(makeReview({ playbookVersionId: v1.id }));
+    await publishVersion('pb-1', { ...draftFrom(makePlaybook()), changeSummary: 'later' }, 'u1');
+
+    const reopened = await getReview(review.id);
+    const version = await getVersion(reopened!.playbookVersionId!);
+    expect(version!.version).toBe(1);
+  });
+
+  // R-D15: the id may DANGLE, not merely be absent. Task 3 made deleting a
+  // playbook cascade to its versions, so a review that ran against a
+  // deleted playbook's version still carries an id that resolves to
+  // nothing. Nothing may render "ran against v4" from the id's presence
+  // alone; the version must be fetched and a miss handled honestly.
+  it('a review whose version was deleted still opens, and says the version is gone', async () => {
+    const v1 = await publishVersion('pb-1', draftFrom(makePlaybook()), 'u1');
+    const review = await saveReview(makeReview({ playbookVersionId: v1.id }));
+    await deletePlaybook('pb-1'); // cascades to its versions (Task 3, R-D13)
+
+    const reopened = await getReview(review.id);
+    // The id is still there — it is a record of what ran, not a live handle —
+    // but it no longer resolves, and the caller must not present it as one.
+    expect(reopened!.playbookVersionId).toBe(v1.id);
+    expect(await getVersion(v1.id)).toBeNull();
+    // and the review is still readable, on its snapshot, exactly as a review
+    // whose DOCUMENT was deleted still opens (spec §9's reasoning, one level up)
+    expect(reopened!.playbookSnapshot.clauses).toBeDefined();
   });
 });
 

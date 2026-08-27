@@ -56,12 +56,21 @@ type View = 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | '
  *  save, and `handleRetryCell`'s post-retry save) so those three call sites
  *  cannot drift into building slightly different `Review` objects — the
  *  exact sibling-drift failure this project's own review history keeps
- *  flagging when the same shape gets rebuilt by hand more than once. */
+ *  flagging when the same shape gets rebuilt by hand more than once.
+ *
+ *  Task 4: `playbookVersionId` is the id of the exact `PlaybookVersion` this
+ *  run snapshotted — `run.templateSnapshot` is always a real, already-
+ *  published version (`handleStartRun` reads it from `activeTemplate` /
+ *  `options.template`, both sourced from `getPlaybookContent`), so its `id`
+ *  is a live version id, not invented here. Omitted rather than set to an
+ *  empty string on the defensive path where it somehow is not (never set to
+ *  `undefined` — `structuredClone` preserves that key, per R-D4/R-D15). */
 function reviewFromRun(run: ReviewRun, matterId: string, modelId: string, userId: string): Review {
   return {
     id: run.id,
     matterId,
     playbookSnapshot: run.templateSnapshot,
+    ...(run.templateSnapshot.id ? { playbookVersionId: run.templateSnapshot.id } : {}),
     documentIds: run.documentIds,
     target: run.target,
     findings: run.findings,

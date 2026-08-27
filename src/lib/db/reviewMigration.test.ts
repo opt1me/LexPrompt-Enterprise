@@ -359,3 +359,47 @@ describe('reviewMigration — truncation names survive a read', () => {
     expect('truncated' in out.findings['doc-1']['clause-1']).toBe(false);
   });
 });
+
+// Task 4: a review records the playbook version it ran against.
+//
+// NOTE ON ARGUMENT ORDER: the task brief showed these as two-argument calls,
+// `migrateReviewRecord(legacyReview(), { pb: 'v1-of-pb' })`. That collides
+// with the existing `documentText` parameter, which already occupies
+// position 2 and is exercised (unchanged) two-arg style just above by
+// 'derives pages when a document text lookup is supplied'. Making
+// `versionIndex` a second positional argument in front of `documentText`
+// would have required rewriting that pre-existing test's call as
+// three-argument too — reasonable, but a change the brief never asked for.
+// Instead `versionIndex` is appended as a new THIRD parameter, defaulting to
+// `{}`; every call below passes `undefined` for `documentText` to reach it.
+describe('migrateReviewRecord — records the playbook version it ran against (Task 4)', () => {
+  it('points a pre-D review at the migrated v1 of the playbook its snapshot names', () => {
+    // The index maps playbookId -> that playbook's v1 version id. `legacyReview()`'s
+    // snapshot id is 'pb', so that is the key the migration must look up.
+    const migrated = migrateReviewRecord(legacyReview(), undefined, { pb: 'v1-of-pb' });
+    expect(migrated.playbookVersionId).toBe('v1-of-pb');
+  });
+
+  it('leaves playbookVersionId absent when the playbook no longer exists', () => {
+    const orphan = legacyReview();
+    orphan.playbookSnapshot = { ...orphan.playbookSnapshot, id: 'deleted-pb' };
+    const migrated = migrateReviewRecord(orphan, undefined, { pb: 'v1-of-pb' });
+    // Absent, not undefined — `structuredClone` persists an undefined-valued key.
+    expect('playbookVersionId' in migrated).toBe(false);
+    // and it still opens on its snapshot, which is what makes such a review readable at all
+    expect(migrated.playbookSnapshot).toBeDefined();
+  });
+
+  it('does not overwrite a version id a review already has', () => {
+    const migrated = migrateReviewRecord(
+      { ...legacyReview(), playbookVersionId: 'v4' },
+      undefined,
+      { pb: 'v1-of-pb' },
+    );
+    expect(migrated.playbookVersionId).toBe('v4');
+  });
+
+  it('an empty index leaves every review unbound rather than guessing', () => {
+    expect('playbookVersionId' in migrateReviewRecord(legacyReview(), undefined, {})).toBe(false);
+  });
+});

@@ -3,6 +3,7 @@ import { debug } from '../debug';
 import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
 import { migrateReviewRecord } from './reviewMigration';
+import { listVersions } from './playbookVersions';
 import type { Review } from '../../types';
 
 /** A review record as it actually sits in IndexedDB: the public `Review`
@@ -14,18 +15,50 @@ interface StoredReview extends Review {
   _seq: number;
 }
 
-function stripSeq(record: StoredReview): Review {
+/**
+ * Task 4: builds the one-entry `versionIndex` `migrateReviewRecord` needs to
+ * back-fill `playbookVersionId` on a review written before D. Reaches into
+ * the `playbookVersions` store — the pure repair function must not — but
+ * only when the review has no version id of its own yet, so an ordinary
+ * post-D review (which already carries one from `reviewFromRun`) costs an
+ * extra store read exactly never.
+ *
+ * `record.playbookSnapshot` may still be a pre-D `Template`, whose own `id`
+ * IS the playbook's id (there was no separate identity/version split yet);
+ * a real `PlaybookVersion` carries that as `playbookId` instead. Reading
+ * `playbookId` first and falling back to `id` covers both shapes without
+ * duplicating `migrateVersionRecord`'s own such-or-such logic here.
+ */
+async function buildVersionIndex(record: StoredReview): Promise<Record<string, string>> {
+  if (typeof record.playbookVersionId === 'string' && record.playbookVersionId) return {};
+
+  const snapshot = record.playbookSnapshot as { id?: unknown; playbookId?: unknown } | undefined;
+  const playbookId =
+    typeof snapshot?.playbookId === 'string' && snapshot.playbookId
+      ? snapshot.playbookId
+      : typeof snapshot?.id === 'string'
+        ? snapshot.id
+        : '';
+  if (!playbookId) return {};
+
+  const versions = await listVersions(playbookId);
+  const v1 = versions.find(v => v.version === 1);
+  return v1 ? { [playbookId]: v1.id } : {};
+}
+
+async function stripSeq(record: StoredReview): Promise<Review> {
   const { _seq, ...review } = record;
   void _seq;
   // Every read path — `getReview`, `listReviews` — funnels through here, so
-  // a review written before sub-project B is upgraded exactly once, in one
-  // place, no matter which screen asked for it. No `documentText` lookup is
-  // passed — this is the only production caller of `migrateReviewRecord`,
-  // so a pre-B review's citations always come back without page pins (an
-  // absent page is the honest answer spec §4 asks for; it is never wrong,
-  // just less than it could be). See `migrateReviewRecord`'s own comment for
-  // why the parameter exists anyway.
-  return migrateReviewRecord(review);
+  // a review written before sub-project B (or D) is upgraded exactly once,
+  // in one place, no matter which screen asked for it. No `documentText`
+  // lookup is passed — this is the only production caller of
+  // `migrateReviewRecord`, so a pre-B review's citations always come back
+  // without page pins (an absent page is the honest answer spec §4 asks
+  // for; it is never wrong, just less than it could be). See
+  // `migrateReviewRecord`'s own comment for why the parameter exists anyway.
+  const versionIndex = await buildVersionIndex(record);
+  return migrateReviewRecord(review, undefined, versionIndex);
 }
 
 /** All reviews for a matter, most recently started first; tiebreak on write
@@ -40,7 +73,7 @@ function stripSeq(record: StoredReview): Review {
 export async function listReviews(matterId: string): Promise<Review[]> {
   const db = await getDb();
   const raw = (await db.getAllFromIndex(STORES.reviews, 'byMatter', matterId)) as StoredReview[];
-  const entries = raw.map(r => ({ review: stripSeq(r), seq: seqOf(r) }));
+  const entries = await Promise.all(raw.map(async r => ({ review: await stripSeq(r), seq: seqOf(r) })));
   entries.sort((a, b) => {
     const diff = b.review.startedAt - a.review.startedAt;
     return diff !== 0 ? diff : b.seq - a.seq;
@@ -51,7 +84,7 @@ export async function listReviews(matterId: string): Promise<Review[]> {
 export async function getReview(id: string): Promise<Review | null> {
   const db = await getDb();
   const found = (await db.get(STORES.reviews, id)) as StoredReview | undefined;
-  return found ? stripSeq(found) : null;
+  return found ? await stripSeq(found) : null;
 }
 
 /** Persists a review, deep-copying `playbookSnapshot` first.

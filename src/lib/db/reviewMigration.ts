@@ -213,10 +213,33 @@ function readTrailStep(raw: unknown): TrailStep {
  * `stripSeq`, the only one, always omits it), so a review migrated from
  * before sub-project B opens with citations and no page pins, which is the
  * honest answer spec §4 asks for when a page cannot be derived, not a bug.
+ *
+ * `versionIndex` (Task 4, sub-project D) maps a playbook id to that
+ * playbook's v1 version id, and back-fills `Review.playbookVersionId` for a
+ * review written before D — one whose `playbookSnapshot.id` names a
+ * playbook that has since been converted to identity + v1 (R-D7). This
+ * function stays a PURE repair function: it takes the index as a value and
+ * never reaches into the store itself, so the caller (`reviews.ts`) is the
+ * only place that has to touch `playbookVersions`, exactly one place. Three
+ * rules:
+ *  - A review that already has a `playbookVersionId` keeps it, untouched —
+ *    including a stale one that no longer resolves to anything (R-D15): the
+ *    id is a record of what ran, not a live handle, and only a human action
+ *    (there is none here) could ever change what a review claims to have
+ *    run against.
+ *  - A snapshot id absent from the index (never existed, or the caller
+ *    chose not to look it up) leaves the key ABSENT, never `undefined` —
+ *    `structuredClone`, how IndexedDB writes every record, preserves an
+ *    `undefined`-valued key, and this app's `'x' in obj` checks (R-D4) treat
+ *    that as "there is a version" rather than "there is none".
+ *  - An empty index (`{}`, the default) therefore leaves every review
+ *    unbound rather than guessing — the same posture as every other
+ *    unreadable-field fallback in this file.
  */
 export function migrateReviewRecord(
   raw: unknown,
   documentText?: (documentId: string) => string | undefined,
+  versionIndex: Record<string, string> = {},
 ): Review {
   const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<Review> & Record<string, unknown>;
 
@@ -246,5 +269,20 @@ export function migrateReviewRecord(
   // drift this project keeps paying for.
   const playbookSnapshot = migrateVersionRecord(src.playbookSnapshot);
 
-  return { ...(src as Review), findings, documentIds, target, playbookSnapshot };
+  const out: Review = { ...(src as Review), findings, documentIds, target, playbookSnapshot };
+
+  // Task 4 / R-D4 / R-D15. A review that already names a version — however
+  // it got there, including one that no longer resolves to anything — keeps
+  // exactly what it has; `versionIndex` never overwrites. Only a review with
+  // no id at all gets one back-filled, and only when the index actually has
+  // an entry for the playbook its (already-migrated) snapshot names.
+  // Omitted, not assigned `undefined`, for the same `structuredClone`
+  // reason every other optional field in this file is conditional.
+  if (typeof src.playbookVersionId !== 'string' || src.playbookVersionId === '') {
+    const versionId = versionIndex[playbookSnapshot.playbookId];
+    if (versionId) out.playbookVersionId = versionId;
+    else delete out.playbookVersionId;
+  }
+
+  return out;
 }

@@ -365,6 +365,12 @@ export interface Review {
   id: string;
   matterId: string;
   playbookSnapshot: PlaybookVersion;
+  /** The playbook version this review ran against. Optional (R-D4): a review
+   *  whose playbook was deleted before D has no version to point at, and a
+   *  required field would force the migration to invent one.
+   *  `playbookSnapshot` remains what makes such a review readable at all;
+   *  this id is what lets the app show "ran against v4" and link to it. */
+  playbookVersionId?: string;
   documentIds: string[];
   target: ReviewTarget;
   findings: Record<string, Record<string, Finding>>;
