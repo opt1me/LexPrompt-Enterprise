@@ -935,46 +935,76 @@ export interface FieldSuggestionProps {
 
 - [ ] **Step 1: Failing tests**
 
+**Harness and mocks, checked at plan time.** `src/test/mount.tsx` exports `mount`, `mountOnce`, `buttons`, `buttonNamed`, `textbox`, `click`, `type`, `keyDown`, `keyDownOn` — there is **no** `text()` or `buttonMatching()`. There is no `chatJsonMock`, `triggerSuggestion`, `acceptFor` or `suggestionVisibleFor` either; mock `chatJson` with the module-mock idiom (`vi.mock` + `importActual` spread, so `isAuthError` stays real), and write the three small selectors yourself.
+
+**Note the editor's props changed in sub-project D.** `TemplateEditor` no longer takes a mutable `template` with `onChange`; it takes the published `version`, the `draft` it edits, `onDraftChange`, `onPersistDraft` and `onShowVersionHistory` (rulings R-D18–R-D24). Read the current interface before writing a single mount.
+
 ```ts
+import { mount, buttonNamed, click } from '../../test/mount';
+
+const suggestionBlock = (c: HTMLElement, field: RegExp) =>
+  [...c.querySelectorAll('[data-suggestion-for]')]
+    .find(el => field.test(el.getAttribute('data-suggestion-for') ?? ''));
+
 it('renders a suggestion as visibly unaccepted', () => {
-  const el = mount(<FieldSuggestion text="We ask for six months." … />);
-  expect(text(el)).toMatch(/suggestion|not accepted/i);
-  expect(el.querySelector('[class*="dashed"]')).toBeTruthy();
+  const c = mount(<FieldSuggestion text="We ask for six months." onAccept={() => {}}
+    onRegenerate={() => {}} onDismiss={() => {}} />);
+  expect(c.textContent).toMatch(/suggestion|not accepted/i);
+  expect(c.innerHTML).toMatch(/dashed/);
 });
 
 it('offers accept, regenerate and dismiss', () => {
-  const el = mount(<FieldSuggestion text="x" … />);
-  for (const re of [/use this/i, /try again/i, /i'll write it/i]) {
-    expect(buttonMatching(el, re)).toBeTruthy();
+  const c = mount(<FieldSuggestion text="x" onAccept={() => {}} onRegenerate={() => {}} onDismiss={() => {}} />);
+  for (const re of [/use this/i, /try again/i, /i.ll write it/i]) {
+    expect(buttonNamed(c, re)).toBeTruthy();
   }
 });
 
 it('a suggestion is NOT adopted by saving the form', () => {
-  // The rule this component exists for. Saving with a suggestion on screen
-  // and unaccepted must leave the field as it was.
-  const onSaveDraft = vi.fn();
-  const el = mount(<TemplateEditor … />);
-  triggerSuggestion(el, /risk/i);
-  click(buttonMatching(el, /publish|save/i));
-  expect(onSaveDraft.mock.calls.at(-1)![0].clauses[0].riskCriteria).toBe('');
+  // The rule this component exists for. A suggestion on screen and
+  // unaccepted must leave the field exactly as it was — otherwise "suggested"
+  // and "accepted" collapse into each other and the provenance on every
+  // saved position becomes a guess.
+  const onDraftChange = vi.fn();
+  const c = mount(<TemplateEditor version={publishedV1} draft={draftWithEmptyRisk}
+    onDraftChange={onDraftChange} onPersistDraft={() => {}} onPublish={() => {}}
+    onShowVersionHistory={() => {}} onExport={() => {}} onShowMegaPrompt={() => {}} onClose={() => {}} />);
+  showSuggestionFor(c, /risk/i);              // your local helper
+  click(buttonNamed(c, /save draft/i));
+  expect(onDraftChange.mock.calls.at(-1)?.[0].clauses[0].riskCriteria ?? '').toBe('');
 });
 
 it('accepting one field does not disturb its neighbour', () => {
-  // Each suggestion is its own small call and its own state.
-  const el = mount(<TemplateEditor … />);
-  triggerSuggestion(el, /extraction/i);
-  triggerSuggestion(el, /risk/i);
-  click(acceptFor(el, /extraction/i));
-  expect(suggestionVisibleFor(el, /risk/i)).toBe(true);
+  // Each suggestion is its own small call and its own state (spec §5).
+  const c = mount(<TemplateEditor /* …as above… */ />);
+  showSuggestionFor(c, /extraction/i);
+  showSuggestionFor(c, /risk/i);
+  click(buttonNamed(suggestionBlock(c, /extraction/i)!, /use this/i));
+  expect(suggestionBlock(c, /risk/i)).toBeTruthy();
 });
 
-it('suggestField asks for one field only', async () => {
+it('suggestField asks for ONE field only', async () => {
+  vi.mocked(chatJson).mockResolvedValue({ text: 'Must be unconditional.' });
   await suggestField('riskCriteria', { title: 'Break', extractPrompt: 'Find it.' }, 'Lease', settings);
-  const prompt = chatJsonMock.mock.calls[0][0].user as string;
+  const prompt = vi.mocked(chatJson).mock.calls[0][0].user as string;
   expect(prompt).toMatch(/risk/i);
+  // A call that regenerates the clause around the field would silently
+  // discard the extraction prompt the user already wrote.
   expect(prompt).not.toMatch(/return the whole clause|all fields/i);
 });
+
+it('a failed suggestion leaves the field untouched and says so', async () => {
+  // The field had a value the user typed. A failure must not blank it.
+  vi.mocked(chatJson).mockRejectedValue(new Error('rate limited'));
+  const c = mount(<TemplateEditor /* …draft whose clause has riskCriteria: 'Mine' … */ />);
+  click(buttonNamed(c, /draft this for me/i));
+  await act(async () => { await Promise.resolve(); });
+  expect(c.textContent).toMatch(/could not|failed/i);
+  expect(fieldValue(c, /risk/i)).toBe('Mine');
+});
 ```
+
+`data-suggestion-for` is an attribute you add to each suggestion block so the tests can name which field they are asserting on. A test that cannot name its target is a test that will drift.
 
 - [ ] **Steps 2–4: Run / implement / run.**
 
