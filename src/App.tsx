@@ -967,30 +967,35 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     latestRunRef.current = cleared;
     setRun(cleared);
 
-    // Notes are commentary, not a claim about output, so they stay through a
-    // retry even though the verification does not (see the reset above).
-    // `retryCell`/`extractClause` don't know about the note the human wrote,
-    // though: every snapshot `retryCell` emits for this one clause — the
-    // 'running' placeholder and the final result alike — is built fresh with
-    // `notes: []`. Captured here, before the retry starts, and reapplied
-    // below wherever the retried clause's own snapshot shows up empty.
-    const priorNotes = existing?.notes ?? [];
-
-    // Was `setRun` passed directly. It must go through the ref as well, or
-    // `handleVerify`/`handleAddNote` read a stale `latestRunRef.current` for
-    // the rest of the session.
+    // `retryCell` is handed `cleared`, a snapshot frozen at the moment the
+    // retry started, and derives every onUpdate snapshot from it. Nothing
+    // about `retryCell`'s own bookkeeping knows about a verification or note
+    // a human writes to a DIFFERENT finding while this retry is still in
+    // flight (`handleVerify`/`handleAddNote` write straight to
+    // `latestRunRef.current`, entirely outside `retryCell`'s view) — so the
+    // next `onRetryUpdate` would otherwise replace the whole run with a
+    // stale, `cleared`-derived snapshot and silently discard that write, on
+    // screen and in the next persisted save. `carryHumanState` (already used
+    // by the live-run path for the same reason) fixes this by re-applying
+    // whatever `latestRunRef.current` most recently held onto each snapshot.
+    //
+    // This does not resurrect the verification the reset above just
+    // cleared: `latestRunRef.current` was set to `cleared` immediately
+    // before this retry started, so the retried clause's own verification
+    // is already `unchecked` by the time any snapshot arrives —
+    // `carryHumanState` only ever carries a verification when it is NOT
+    // `unchecked`. There is nothing left for it to fight.
+    //
+    // This also subsumes the retried clause's own notes, which used to need
+    // a separate, narrower patch: `before` (`cleared`) still holds this
+    // clause's original notes, and every snapshot `retryCell` emits for it
+    // arrives with `notes: []`, so the standard notes rule (kept below)
+    // already reapplies them without a second, parallel mechanism that has
+    // to agree with the first.
     const onRetryUpdate = (updated: ReviewRun) => {
-      const retriedFinding = updated.findings[docId]?.[clauseId];
-      // Deliberately narrower than `carryHumanState`: this touches only the
-      // one finding `retryCell` is producing snapshots for, and only its
-      // notes — never its verification, which the reset above already set
-      // correctly and which must not be resurrected (see Step 4's own
-      // reasoning on `cleared`).
-      const withNotes = retriedFinding && priorNotes.length > 0 && retriedFinding.notes.length === 0
-        ? withUpdatedFinding(updated, docId, clauseId, { ...retriedFinding, notes: priorNotes })
-        : updated;
-      latestRunRef.current = withNotes;
-      setRun(withNotes);
+      const merged = carryHumanState(latestRunRef.current, updated);
+      latestRunRef.current = merged;
+      setRun(merged);
     };
 
     retryCell(cleared, doc, clauseId, settings, onRetryUpdate)
@@ -1001,12 +1006,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         // while `retryCell`'s API call was in flight.
         if (!matterId || deletedMatterIdsRef.current.has(matterId)) return;
         // `latestRunRef.current`, not the raw `updated` retryCell resolved
-        // with: `onRetryUpdate` (above) re-applies this clause's prior notes
-        // on top of retryCell's own snapshot, and `updated` is retryCell's
-        // un-patched return value. Persisting `updated` directly would save
-        // a review with the note gone while the screen still shows it — a
-        // verification that displays but was never written, the exact
-        // failure this task exists to remove, just for a note instead.
+        // with: `onRetryUpdate` (above) merges in whatever human writes
+        // landed on OTHER findings while this retry was in flight, and
+        // `updated` is retryCell's un-patched return value, which knows
+        // nothing about them. Persisting `updated` directly would save a
+        // review with those writes gone while the screen still shows them —
+        // a verification or note that displays but was never (re-)written,
+        // the exact failure this task exists to remove.
         const toPersist = latestRunRef.current ?? updated;
         try {
           const profile = await getProfile();

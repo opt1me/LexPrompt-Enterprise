@@ -111,6 +111,12 @@ function findButton(container: HTMLDivElement, re: RegExp, index = 0): HTMLButto
   return button as HTMLButtonElement;
 }
 
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')!.set!;
+  setter.call(textarea, value);
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 function makeMatter(): Matter {
   return { id: 'm1', name: 'Acme v Bolt', ownerId: 'u1', createdAt: 1, updatedAt: 1 };
 }
@@ -325,5 +331,172 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
     expect(container.textContent).toContain('Check this against the side letter.');
     const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
     expect(persisted.findings.d1.c1.notes).toEqual([NOTE_ON_C1]);
+  });
+
+  // Fix round 1 (reviewer-confirmed MEDIUM defect): a verification or note
+  // written to a DIFFERENT finding while another clause's retry is still in
+  // flight must not be discarded by the retry's own onUpdate/save, on screen
+  // or in what gets persisted. `retryCell` is handed `cleared` — a snapshot
+  // frozen at the moment the retry started — and knows nothing about a
+  // write that lands on `latestRunRef.current` afterwards; without
+  // `carryHumanState` in `onRetryUpdate`, the next snapshot `retryCell`
+  // emits replaces the whole run with that stale, `cleared`-derived copy.
+  describe('a human write to a different finding during an in-flight retry', () => {
+    it('keeps a verification and a note on that finding, on screen and in what is persisted', async () => {
+      // c1's retry pauses mid-flight (after its 'running' transition, before
+      // its 'done' result) so a write to c2 can land while c1 is still
+      // in-flight — exactly the reviewer's reproduction.
+      let resolveC1Retry: (() => void) | undefined;
+      retryCellMock.mockReset().mockImplementationOnce(async (
+        retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: Settings, onUpdate: (r: ReviewRun) => void,
+      ) => {
+        const running: ReviewRun = {
+          ...retryRun,
+          findings: {
+            ...retryRun.findings,
+            [doc.id]: {
+              ...retryRun.findings[doc.id],
+              [clauseId]: { clauseId, status: 'running', citations: [], verification: { state: 'unchecked' }, notes: [] },
+            },
+          },
+        };
+        onUpdate(running);
+        await new Promise<void>((resolve) => { resolveC1Retry = resolve; });
+        const done: ReviewRun = {
+          ...running,
+          findings: {
+            ...running.findings,
+            [doc.id]: {
+              ...running.findings[doc.id],
+              [clauseId]: {
+                clauseId,
+                status: 'done',
+                citations: [{ quote: 'z', documentId: doc.id }],
+                summary: 'Updated: governed by Delaware law.',
+                verification: { state: 'unchecked' },
+                notes: [],
+              },
+            },
+          },
+        };
+        onUpdate(done);
+        return done;
+      });
+
+      await openReview();
+      retryC1(container);
+      await flush();
+
+      // c1 is now 'running' (no VerificationControls/NotesPanel rendered for
+      // it), so the one remaining textarea/state-chip on screen belongs to
+      // c2 — the "different finding" the reviewer's repro writes to.
+      const textarea = container.querySelectorAll('textarea')[0] as HTMLTextAreaElement;
+      act(() => { setTextareaValue(textarea, 'New note added mid-retry.'); });
+      act(() => { findButton(container, /Add note/i, 0).click(); });
+      await flush();
+
+      expect(container.textContent).toContain('New note added mid-retry.');
+
+      act(() => { findButton(container, /^Flag$/i, 0).click(); });
+      await flush();
+
+      const chipsDuring = () => Array.from(container.querySelectorAll('[role="status"]'));
+      expect(chipsDuring()[0].textContent).toBe('Flagged');
+
+      // Let c1's retry finish.
+      act(() => { resolveC1Retry!(); });
+      await flush();
+
+      // Both survive on screen once c1's retry resolves and re-renders the
+      // whole run...
+      expect(container.textContent).toContain('New note added mid-retry.');
+      const chipsAfter = () => Array.from(container.querySelectorAll('[role="status"]'));
+      expect(chipsAfter()[0].textContent).toBe('Unverified'); // c1, correctly reset
+      expect(chipsAfter()[1].textContent).toBe('Flagged'); // c2, must survive
+
+      // ...and in what the retry's own completion handler persisted — this
+      // is the exact write the reviewer found silently reverted.
+      const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
+      expect(persisted.findings.d1.c2.verification.state).toBe('flagged');
+      expect(persisted.findings.d1.c2.notes.map((n: { text: string }) => n.text)).toContain('New note added mid-retry.');
+    });
+
+    it('keeps a second note on a finding that already had one', async () => {
+      // Same shape as above, but c2 starts with ONE pre-existing note
+      // (typical of a review reopened from an earlier session) rather than
+      // none — `carryHumanState`'s notes rule keys off "before has notes,
+      // incoming shows none"; this confirms it also holds when "incoming"
+      // (retryCell's stale, cleared-derived copy) still shows a non-empty,
+      // out-of-date note list rather than an empty one.
+      const preExistingNote = { id: 'n2', findingId: 'd1::c2', text: 'Earlier note on c2.', byUserId: 'u1', at: 60 };
+      getReviewMock.mockResolvedValue({
+        ...makeReview(),
+        findings: {
+          d1: {
+            ...makeReview().findings.d1,
+            c2: { ...makeReview().findings.d1.c2, notes: [preExistingNote] },
+          },
+        },
+      });
+
+      let resolveC1Retry: (() => void) | undefined;
+      retryCellMock.mockReset().mockImplementationOnce(async (
+        retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: Settings, onUpdate: (r: ReviewRun) => void,
+      ) => {
+        const running: ReviewRun = {
+          ...retryRun,
+          findings: {
+            ...retryRun.findings,
+            [doc.id]: {
+              ...retryRun.findings[doc.id],
+              [clauseId]: { clauseId, status: 'running', citations: [], verification: { state: 'unchecked' }, notes: [] },
+            },
+          },
+        };
+        onUpdate(running);
+        await new Promise<void>((resolve) => { resolveC1Retry = resolve; });
+        const done: ReviewRun = {
+          ...running,
+          findings: {
+            ...running.findings,
+            [doc.id]: {
+              ...running.findings[doc.id],
+              [clauseId]: {
+                clauseId,
+                status: 'done',
+                citations: [{ quote: 'z', documentId: doc.id }],
+                summary: 'Updated: governed by Delaware law.',
+                verification: { state: 'unchecked' },
+                notes: [],
+              },
+            },
+          },
+        };
+        onUpdate(done);
+        return done;
+      });
+
+      await openReview();
+      expect(container.textContent).toContain('Earlier note on c2.');
+
+      retryC1(container);
+      await flush();
+
+      const textarea = container.querySelectorAll('textarea')[0] as HTMLTextAreaElement;
+      act(() => { setTextareaValue(textarea, 'Second note added mid-retry.'); });
+      act(() => { findButton(container, /Add note/i, 0).click(); });
+      await flush();
+
+      act(() => { resolveC1Retry!(); });
+      await flush();
+
+      expect(container.textContent).toContain('Earlier note on c2.');
+      expect(container.textContent).toContain('Second note added mid-retry.');
+
+      const persisted = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
+      const texts = persisted.findings.d1.c2.notes.map((n: { text: string }) => n.text);
+      expect(texts).toContain('Earlier note on c2.');
+      expect(texts).toContain('Second note added mid-retry.');
+    });
   });
 });
