@@ -224,3 +224,107 @@ sub-decisions taken inside those rulings, plus the two left to my judgement.
 - **R-E7. `AuthoringDraft` carries no `systemPrompt`/`formatPrompt`, and `toPlaybookDraft` supplies the same defaults a brand-new playbook gets.** A real gap in E's spec §4, found by Task 1's implementer rather than by me: D's `PlaybookDraft` requires both fields and E's authoring object defines neither, so the conversion had to invent something. Defaulting is the right answer *as the spec stands* — §5 says the generation call returns a **clause list**, not review instructions, and D's editor (Task 9) is where a user changes a playbook's persona and format rules afterwards. The alternative, having the model draft them too, is a scope increase E never asked for and would put un-reviewed model text into the instructions every future review runs on — the precise thing E's save gate exists to prevent. The constants are defined locally rather than imported from `db/playbooks.ts`, which would drag IndexedDB's connection module into a deliberately pure module. **Task 2 (generation) should confirm it does not intend to produce these fields**; if it does, this ruling is superseded. *Cost if wrong: a drafted playbook starts with generic review instructions the author edits, instead of tailored ones.*
 - **R-D16. Draft persistence is wired on explicit intent, never per keystroke — and the deferral is recorded here rather than in a gitignored report.** Task 9 shipped five draft mechanisms with no writer (`saveDraft`, `Playbook.draft`, `loadPlaybookForEdit`'s draft preference, publish-consumes-draft, and `TemplateLibrary`'s "Unpublished changes" badge, which could therefore never appear). Its implementer deferred wiring them and its reasoning was sound — per-keystroke persistence contradicts the in-memory discard semantics Task 3's fix round established, which five App tests cover. But the deferral lived only in a `.superpowers/` report, which is gitignored and disposable, so nothing durable recorded that a shipped badge was unreachable. Task 9A wires it on explicit intent: a `Save draft` control, and a three-way leave prompt (Keep / Discard / Cancel) where **Discard clears the stored draft too** — otherwise "discard" leaves the rejected edits durable and the next open resurrects them, which is the defect Task 3's M2 fixed in memory, one layer down. *Cost if wrong: a draft survives a reload only when the author asked for it to.*
 - **R-D17. A standard position's health is dated from the version in which that clause's position TEXT last changed, not from the current version's `publishedAt`.** `positionHealth` discards verifications older than the date it is given, so dating from the current version would report `UNTESTED` for a position tested for months every time an unrelated clause is republished — publishing v5 to change clause B would silently erase clause A's evidence. This is the difference between "nobody has tested this" and "we forgot what we knew", and the first is a claim the app would be making falsely. *Cost if wrong: computing the dating is more expensive than reading one timestamp; the documented fallback is the earliest version containing the current text, stated rather than silently substituted.*
+
+---
+
+# Sub-project D, Task 9 fix round + Task 9A — rulings made without owner review (2026-08-27)
+
+Task 9's review found 4 Major and 8 Minor, and that three things D's spec
+and DoD require were owned by no task in the 13-task plan. R-D16 and R-D17
+were written by the controller before this work; these are the decisions
+taken inside them, plus the ones the fixes required.
+
+- **R-D17 was implemented in full, not by its documented fallback.**
+  `positionPublishedAt` walks back from the newest version while the
+  clause's position text is unchanged, so a position is dated from the
+  version its own wording last changed in. Recording this because R-D17
+  required the fallback (the earliest version containing the current text)
+  to be *stated* rather than silently substituted; it was not needed.
+  *Cost if wrong: one pass over a playbook's versions per editor open.*
+- **R-D18. `saveDraft` takes the identity RECORD, not a playbook id.** The
+  brief's tests call `saveDraft('pb-1', draft)`, but the id-only form reads
+  the store and throws "that playbook no longer exists" when it finds
+  nothing — which is the *common* case, not a rare one: a playbook created
+  in this session is not written until its first save, so every brand-new
+  playbook (including one that has just cost a ~30s paid AI generation)
+  would have been refused. The value form mirrors `publishAndPoint`, which
+  takes the identity for exactly this reason, and the old guard's stated
+  worry ("a draft nothing can publish") does not survive the change, since
+  `publishAndPoint` would publish the recreated record normally. Its test
+  is deleted with the reasoning in place. *Cost if wrong: a playbook
+  deleted in another tab is recreated, carrying the draft its editor was
+  still open on, rather than the edits being lost with a message.*
+- **R-D19. The three-way leave prompt is two native confirms, not a modal.**
+  `confirmDiscardIfDirty` is also `useRoute`'s popstate guard, and a Back
+  press has already moved the address bar by the time it runs — so the
+  answer must be synchronous and there is no await to be had. One
+  implementation serves the Close control, a nav click and Back alike;
+  giving the two async-capable paths a modal would be two guards to keep
+  honest. Both writes (Keep's save, Discard's clear) are therefore fired
+  without being awaited and report failure through their own toast.
+  *Cost if wrong: two stacked browser dialogs where a designed one would
+  read better, and a save whose failure is reported after the screen has
+  changed.*
+- **R-D20. `VersionHistory.tsx` is STARTED by Task 9A, not duplicated.**
+  Spec §8's editor link needs a destination and Task 10 owns the screen, so
+  Task 9A writes the file Task 10 extends rather than a temporary block
+  Task 10 must remember to delete. Two things it deliberately omits, both
+  Task 10's: `matterNamesByVersion`, and each version's author — the record
+  carries `publishedByUserId`, and a raw user id printed at the reader is a
+  defect this project has already shipped once, so resolving it belongs
+  with the screen that has the profile to hand. Its `error` prop is a
+  `string` rather than the plan's `unknown`, matching every other load site
+  in `App.tsx`, which classifies through `describeLoadError` first.
+  *Cost if wrong: Task 10 widens a prop instead of writing a file.*
+- **R-D21. `PublishDialog`'s `busy` guard was deleted rather than tested.**
+  The review mutation-confirmed the test covering it was vacuous: `Button`
+  sets `disabled = disabled || loading`, so the button refuses the click
+  before the guard is reached. The guard could not have covered the race it
+  appeared to either — `busy` is a prop, so it is still false for the whole
+  tick in which a double-click lands. An in-flight ref, written
+  synchronously, closes the real race, and the deleted test's reasoning is
+  left in the file (the precedent is `playbooks.test.ts`). *Cost if wrong:
+  a publish is refused while an earlier one is still in flight, which is
+  the intent.*
+- **R-D22. Publish is gated on the draft's serialised content differing from
+  the version's, compared WHOLE rather than field by field.** A field-by-
+  field comparison that forgot a field added later would report "no
+  changes" over a real edit and leave Publish disabled with no explanation —
+  the user could not publish at all. Stringifying both through
+  `draftFromVersion` puts anything the comparison does not understand on
+  the "changed" side, which is the safe direction. *Cost if wrong: a draft
+  whose key order differs from the version's is treated as edited, which is
+  what it was treated as before.*
+- **R-D23. `StandardPositionField` renders `provenance` for every origin,
+  not only `learned` (m5).** Spec §8 attaches provenance to learned
+  positions; the field shows it wherever it is set. Kept as-is and recorded
+  rather than narrowed: provenance is free text naming where a position came
+  from, and hiding it on an authored or suggested position would withhold
+  something the author themselves wrote. *Cost if wrong: one line of
+  presentational text appears on positions the spec did not anticipate it
+  on.*
+- **R-D24. `TemplateEditor`'s `onSaveDraft` is renamed `onDraftChange`, and
+  the new persisting callback is `onPersistDraft`.** The old name described
+  an in-memory setter, which is how a future reader wires a `Save draft`
+  button to the wrong callback. Both `onPersistDraft` and
+  `onShowVersionHistory` are REQUIRED props, not optional ones: an optional
+  callback is exactly how five draft mechanisms and a version-history link
+  came to ship with nothing behind them. *Cost if wrong: a mechanical
+  rename across one component and its tests.*
+
+## Known, recorded, not closed here
+
+- **A stored draft comes back from `migrateDraft` with `changeSummary` set
+  to `IMPORTED_SUMMARY` when it was saved empty.** `migrateDraft` invents
+  that string for a content record with no summary, which is right for the
+  pre-D conversion it was written for and wrong for a round-tripped draft.
+  The visible effect is small — a reopened draft compares as differing from
+  its version even if the user undid every edit, so Publish stays enabled —
+  and changing `migrateDraft` touches the pre-D conversion, so it is
+  recorded rather than fixed at the end of a fix round. *Cost if wrong: the
+  m2 guard does not catch the undo-everything case for a draft that has
+  been through a reload.*
+- **Nothing in this round was verified in a browser.** Draft persistence,
+  the three-way leave prompt, the health chips and the version-history modal
+  are unit-tested only. Task 13's browser checklist gains steps for all of
+  them.

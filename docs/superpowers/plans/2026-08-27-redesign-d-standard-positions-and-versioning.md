@@ -1710,10 +1710,17 @@ Spec §8 says the editor gains "a link to version history". It is absent. Task 1
 
 ### Steps
 
-- [ ] **Step 1:** Write the failing tests above; confirm each fails for its stated reason.
-- [ ] **Step 2:** Implement Parts 1–3.
-- [ ] **Step 3: Mutation-test.** Remove the draft write (the badge test must fail); make the failed review scan return `{}` (the error-state test must fail); date positions from the current version's `publishedAt` (the unrelated-republish test must fail). Report each observed failure — **a mutation that does not bite means that test proves nothing.**
-- [ ] **Step 4:** Gates (`tsc --noEmit`, `npm test`, `npm run build` — all clean, no externalization warning) and commit, staged by name.
+- [x] **Step 1:** Write the failing tests above; confirm each fails for its stated reason.
+- [x] **Step 2:** Implement Parts 1–3.
+- [x] **Step 3: Mutation-test.** Remove the draft write (the badge test must fail); make the failed review scan return `{}` (the error-state test must fail); date positions from the current version's `publishedAt` (the unrelated-republish test must fail). Report each observed failure — **a mutation that does not bite means that test proves nothing.**
+- [x] **Step 4:** Gates (`tsc --noEmit`, `npm test`, `npm run build` — all clean, no externalization warning) and commit, staged by name.
+
+**Done (2026-08-27).** See `rulings.md`'s Task 9 fix round section for the
+seven decisions taken inside R-D16/R-D17, including the two deviations from
+this brief that the code required: `saveDraft` takes the identity record
+rather than an id (R-D18), and `VersionHistory.tsx` is started here rather
+than duplicated as a temporary block (R-D20). R-D17 was implemented in
+full; the documented fallback was not needed.
 
 ---
 
@@ -1998,6 +2005,11 @@ Spec §10.10 and CLAUDE.md's "Verify UI work in a browser". Unit tests did not c
 6. Confirm a clause with no position shows no comparison block at all.
 7. Verify the deviation; reload; confirm both the verification and the outcome survived.
 8. Re-run that clause; confirm the verification resets (B's rule) and the outcome is re-derived.
+9. **Position health (DoD #7, added after Task 9's review):** with that verification in place, reopen the playbook and confirm the clause shows `HELD`/`CONCEDED` rather than `UNTESTED` — then publish a v3 that changes a DIFFERENT clause and confirm the first clause's health is unchanged (R-D17). Confirm a clause with no position shows no health line at all.
+10. **A failed review scan (added after Task 9's review):** the health scan is cross-matter and must never fall back to an empty map. There is no easy way to fail it by hand in a browser; at minimum confirm that a playbook in a profile with no matters shows no health chips rather than `UNTESTED` for every position.
+11. **Drag reordering (m8, added after Task 9's review):** drag a clause from the top of a long list to the bottom. Confirm the drop lands where the pointer is, the list scrolls while dragging, and the chevrons still work afterwards. HTML5 DnD does not work on touch — note what happens on a touch device rather than assuming.
+12. **Drafts (Task 9A):** edit a playbook, press `Save draft`, reload the tab, and confirm the edits are still there and the library row reads "Unpublished changes". Then edit again, Close, choose **Discard**, reopen, and confirm the discarded edits are gone — including after a reload, which is what proves the STORED draft was cleared. Repeat choosing **Keep** and confirm the opposite.
+13. **Version history (Task 9A):** open a playbook with two or more versions, click `Version history`, and confirm each version's number, date and change summary, that v1 says it had no summary rather than showing a blank, and that there is no way to edit a published version.
 9. Export DOCX and CSV; confirm both carry the deviation label and its rationale, in the same words.
 10. Publish v3, reopen the earlier review, and confirm its header still says it ran against v2 and that it reads against v2's clauses.
 
