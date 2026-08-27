@@ -43,6 +43,55 @@ export interface DocumentFile {
   parseError?: string;
 }
 
+/** One piece of attributed evidence. Replaces v1's bare quote string: a
+ *  quote alone cannot say which document it came from (a review can cover
+ *  several) or where in that document to look. */
+export interface Citation {
+  /** Verbatim substring of the document text, as the model returned it.
+   *  This is what `findQuoteRects` matches on — the matcher still takes
+   *  plain strings and is not to be changed. */
+  quote: string;
+  documentId: string;
+  /** Derived from the `[Page N]` markers in the document's extracted text
+   *  where the quote can be located, absent where it cannot. Never guessed:
+   *  a wrong page pin sends a reader to the wrong part of a contract with
+   *  apparent authority, which is worse than no pin at all. */
+  page?: number;
+  /** e.g. "14.2", when the model supplies one. Presentational only —
+   *  nothing navigates by it. */
+  clauseRef?: string;
+}
+
+export type VerificationState = 'unchecked' | 'verified' | 'flagged' | 'rejected';
+
+/** What a *human* concluded about a finding. Deliberately separate from
+ *  `Finding.status`, which describes what the *run* produced. A finding can
+ *  be `status: 'done'` and `state: 'rejected'` at the same time — the model
+ *  answered, and a person disagreed. */
+export interface Verification {
+  state: VerificationState;
+  /** The local profile's id (ruling R1) — this app has one user. */
+  byUserId?: string;
+  at?: number;
+  /** Required when `state` is 'rejected'. A rejection with no reason is a
+   *  silent disagreement, useless to whoever reads the export. */
+  reason?: string;
+  /** Exists so the field survives into later sub-projects. Reaches nobody:
+   *  there is no second user and nothing notifies (ruling R1). */
+  assigneeId?: string;
+}
+
+export interface Note {
+  id: string;
+  /** `${documentId}::${clauseId}` — see `findingKey` in
+   *  `src/lib/verification.ts`. Stored on the note so a note stays
+   *  self-describing if notes are ever lifted into their own store. */
+  findingId: string;
+  text: string;
+  byUserId: string;
+  at: number;
+}
+
 export interface Finding {
   clauseId: string;
   /** 'cancelled' is distinct from 'error': the run was stopped by the user
@@ -51,7 +100,14 @@ export interface Finding {
    *  DOMException string behind an error banner. */
   status: 'pending' | 'running' | 'done' | 'error' | 'cancelled';
   summary?: string;
-  citations: string[];
+  /** Was `string[]` before sub-project B. Reviews persisted with the old
+   *  shape are upgraded on read — see `src/lib/db/reviewMigration.ts`. */
+  citations: Citation[];
+  /** Always present. Every finding starts `unchecked`: there is no implicit
+   *  verification, and a finding is never "probably fine". */
+  verification: Verification;
+  /** May be empty. */
+  notes: Note[];
   riskLevel?: RiskLevel;
   riskAnalysis?: string;
   error?: string;
@@ -112,8 +168,10 @@ export const DEFAULT_SETTINGS: Settings = {
   concurrency: 5,
 };
 
-/** Bumped from TEMPLATE_SCHEMA_VERSION (2) — see src/lib/db/migrate.ts. */
-export const SCHEMA_VERSION = 3;
+/** 3 to 4: `Finding.citations` became `Citation[]`, and `Finding` gained
+ *  `verification` and `notes` (sub-project B). Reviews written at 3 are
+ *  upgraded on read — see `src/lib/db/reviewMigration.ts`. */
+export const SCHEMA_VERSION = 4;
 
 export interface UserProfile {
   id: string;
