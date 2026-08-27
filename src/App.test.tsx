@@ -979,4 +979,34 @@ describe('App — position health in the playbook editor (Task 9A)', () => {
     await openEditor();
     expect(container.textContent).toContain('UNTESTED');
   });
+
+  // Spec 8's "link to version history" (review M3). The author could
+  // publish v4 from this screen with no way from it to see what v1-v3 said.
+  it('opens the version history from the editor', async () => {
+    listVersionsMock.mockResolvedValue([
+      { ...v1, id: 'v2', version: 2, changeSummary: 'Added a break-notice position' },
+      v1,
+    ]);
+    await openEditor();
+    const link = Array.from(container.querySelectorAll('button'))
+      .find(b => /version history/i.test(b.textContent || '')) as HTMLButtonElement;
+    expect(link.disabled).toBe(false);
+    act(() => { link.click(); });
+    await flush();
+
+    expect(container.textContent).toContain('Added a break-notice position');
+    expect(container.textContent).toContain('v2');
+  });
+
+  it('says the versions could not be read rather than showing an empty history', async () => {
+    listVersionsMock.mockResolvedValueOnce([v1]).mockRejectedValue(new Error('disk'));
+    await openEditor();
+    const link = Array.from(container.querySelectorAll('button'))
+      .find(b => /version history/i.test(b.textContent || '')) as HTMLButtonElement;
+    act(() => { link.click(); });
+    await flush();
+
+    expect(container.textContent).toMatch(/versions could not be read/i);
+    expect(container.textContent).not.toMatch(/nothing published yet/i);
+  });
 });

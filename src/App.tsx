@@ -44,6 +44,7 @@ import { TemplateEditor, workingContent } from './features/templates/TemplateEdi
 import { CreateTemplateDialog, type CreateTemplateParams } from './features/templates/CreateTemplateDialog';
 import { MegaPromptModal } from './features/templates/MegaPromptModal';
 import { PublishDialog } from './features/templates/PublishDialog';
+import { VersionHistory } from './features/templates/VersionHistory';
 import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, RunInterruptedBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell, type CollectionRunInput } from './features/review/runReview';
@@ -714,6 +715,28 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [healthReviews, setHealthReviews] = useState<Review[]>([]);
   const [healthLoaded, setHealthLoaded] = useState(false);
   const [healthError, setHealthError] = useState<string | null>(null);
+
+  // Spec 8's "link to version history", opened from the editor. Its own
+  // read and its own error state rather than reusing the health scan's
+  // versions: that scan reports one error for versions AND reviews
+  // together, so a reviews failure would leave this showing "nothing
+  // published yet" over a playbook with four versions — the empty-versus-
+  // broken confusion CLAUDE.md exists to stop.
+  const [versionHistoryOpen, setVersionHistoryOpen] = useState(false);
+  const [historyVersions, setHistoryVersions] = useState<PlaybookVersion[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+
+  const loadVersionHistory = (playbookId: string) => {
+    setHistoryError(null);
+    setHistoryLoading(true);
+    return listVersions(playbookId)
+      .then(setHistoryVersions)
+      .catch((e) => {
+        setHistoryError(describeLoadError(e, "This playbook's versions could not be read. Try again."));
+      })
+      .finally(() => setHistoryLoading(false));
+  };
 
   const loadPositionHealth = (playbookId: string) => {
     setHealthError(null);
@@ -2416,6 +2439,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               savingDraft={savingDraft}
               onPublish={() => setPublishOpen(true)}
               onExport={() => handleExportTemplate(editorContent)}
+              onShowVersionHistory={() => {
+                setVersionHistoryOpen(true);
+                if (playbookRouteId) loadVersionHistory(playbookRouteId);
+              }}
               onShowMegaPrompt={() => setMegaPromptOpen(true)}
               onClose={() => { if (confirmDiscardIfDirty()) navigate({ name: 'playbooks' }); }}
               health={positionHealthMap}
@@ -2527,6 +2554,15 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           isOpen
           onClose={() => setMegaPromptOpen(false)}
           template={editorContent}
+        />
+      )}
+      {versionHistoryOpen && (
+        <VersionHistory
+          versions={historyVersions}
+          loading={historyLoading}
+          error={historyError ?? undefined}
+          onRetry={() => { if (playbookRouteId) loadVersionHistory(playbookRouteId); }}
+          onClose={() => setVersionHistoryOpen(false)}
         />
       )}
       {/* Only reachable with unpublished edits: the editor's Publish button

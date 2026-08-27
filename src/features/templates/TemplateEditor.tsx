@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import {
   Cpu, FileOutput, ShieldAlert, Plus, ChevronUp, ChevronDown, X, UploadCloud, Download, Copy,
-  Settings, GripVertical, Save,
+  Settings, GripVertical, Save, History,
 } from 'lucide-react';
 import type { PlaybookClause, PlaybookDraft, PlaybookVersion, StandardPosition } from '../../types';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
@@ -28,6 +28,10 @@ export interface TemplateEditorProps {
    *  draft, and the library's "Unpublished changes" badge — came to ship
    *  with no writer at all. */
   onPersistDraft: () => void;
+  /** Opens the version history (spec §8's "link to version history").
+   *  REQUIRED for the same reason `onPersistDraft` is: an optional
+   *  callback is how a control that leads nowhere ships. */
+  onShowVersionHistory: () => void;
   /** True when the working copy differs from what is STORED (a different
    *  question from `hasUnpublishedContent`, which compares against the
    *  published version). Disables Save draft when false. */
@@ -91,7 +95,8 @@ export function hasUnpublishedContent(version?: PlaybookVersion, draft?: Playboo
 }
 
 export function TemplateEditor({
-  version, draft, onDraftChange, onPersistDraft, unsavedChanges = false, savingDraft = false,
+  version, draft, onDraftChange, onPersistDraft, onShowVersionHistory,
+  unsavedChanges = false, savingDraft = false,
   onPublish, onExport, onShowMegaPrompt, onClose, health, healthError, onRetryHealth,
 }: TemplateEditorProps) {
   // Memoised: without it this re-CLONES the published version on every
@@ -202,6 +207,17 @@ export function TemplateEditor({
 
         <div className="flex flex-wrap gap-2 md:gap-3 w-full md:w-auto justify-end items-center">
           <button onClick={onShowMegaPrompt} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors border border-blue-500/30 text-xs md:text-sm"><Copy className="h-4 w-4" /> DIY Mode</button>
+          {/* Spec §8. Disabled rather than hidden when there is no published
+             version: there is genuinely no history to show, and saying so
+             is better than the control vanishing without explanation. */}
+          <button
+            onClick={onShowVersionHistory}
+            disabled={!version}
+            title={version ? 'See what each published version said.' : 'Nothing published yet — there is no history.'}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <History className="h-4 w-4" /> Version history
+          </button>
           <button onClick={onExport} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm"><Download className="h-4 w-4" /> Export</button>
           {/* R-D16. Drafts are persisted on EXPLICIT INTENT — this control
              and the Keep branch of the leave prompt — never per keystroke:

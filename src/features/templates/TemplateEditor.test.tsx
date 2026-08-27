@@ -58,6 +58,7 @@ function editedDraftOf(v: PlaybookVersion): PlaybookDraft {
 const noop = () => {};
 const wiring = {
   onPersistDraft: noop,
+  onShowVersionHistory: noop,
   onPublish: noop,
   onExport: noop,
   onShowMegaPrompt: noop,
@@ -232,6 +233,34 @@ describe('TemplateEditor — publish state', () => {
     expect(publish.disabled).toBe(false);
     click(publish);
     expect(onPublish).toHaveBeenCalled();
+  });
+
+  // Spec 8: the editor gains "a link to version history". It was absent
+  // (review M3) — the author could publish v4 from this screen with no way
+  // from it to see what v1–v3 said, in the sub-project whose whole point is
+  // being able to answer that.
+  it('links to the version history', () => {
+    const onShowVersionHistory = vi.fn();
+    const c = mount(
+      <TemplateEditor
+        version={version()}
+        draft={undefined}
+        onDraftChange={noop}
+        {...wiring}
+        onShowVersionHistory={onShowVersionHistory}
+      />,
+    );
+    click(buttonNamed(c, /version history/i));
+    expect(onShowVersionHistory).toHaveBeenCalledTimes(1);
+  });
+
+  // A playbook with no published version has no history, and a live link to
+  // an empty screen is a promise the app cannot keep.
+  it('does not offer version history for a playbook that has never been published', () => {
+    const c = mount(
+      <TemplateEditor version={undefined} draft={undefined} onDraftChange={noop} {...wiring} />,
+    );
+    expect(buttonNamed(c, /version history/i)?.disabled).toBe(true);
   });
 
   // Task 3 put a "What changed? (required after v1)" input in the header as
