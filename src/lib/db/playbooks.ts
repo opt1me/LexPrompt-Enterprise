@@ -227,10 +227,34 @@ export async function saveDraft(playbookId: string, draft: PlaybookDraft): Promi
   await savePlaybook({ ...playbook, draft });
 }
 
+/**
+ * Deletes the playbook AND every version of it, in one transaction.
+ *
+ * The versions used to be left behind: unreachable, since nothing
+ * enumerates them except through a playbook that no longer exists, and
+ * unbounded, since nothing ever collected them. This is `deleteMatter`'s
+ * shape — the record plus what only it owns, atomically — rather than a
+ * second convention for the same idea.
+ *
+ * It does not conflict with "never delete what you cannot read": that rule
+ * quarantines data we cannot make sense of, and these are records we read
+ * perfectly well and whose owner the user has explicitly discarded. Nor
+ * does it lose a review's history — a `Review` carries its own
+ * `playbookSnapshot`, which is what spec 5 means by "a review whose
+ * playbook was deleted still opens on its snapshot, as it does today", and
+ * why R-D4 makes `Review.playbookVersionId` optional.
+ */
 export async function deletePlaybook(id: string): Promise<void> {
   const db = await getDb();
   try {
-    await db.delete(STORES.playbooks, id);
+    const tx = db.transaction([STORES.playbooks, STORES.playbookVersions], 'readwrite');
+    const versions = tx.objectStore(STORES.playbookVersions);
+    const owned = await versions.index('byPlaybook').getAllKeys(id);
+    await Promise.all([
+      tx.objectStore(STORES.playbooks).delete(id),
+      ...owned.map(key => versions.delete(key)),
+    ]);
+    await tx.done;
   } catch {
     throw new Error(STORAGE_FULL_MESSAGE);
   }

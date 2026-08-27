@@ -4,7 +4,7 @@ import {
   newPlaybook, newPlaybookDraft, draftFromVersion, getPlaybookContent, saveDraft,
   exportPlaybook, importPlaybook, publishAndPoint,
 } from './playbooks';
-import { publishVersion } from './playbookVersions';
+import { publishVersion, listVersions } from './playbookVersions';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
 import { UnconvertedPlaybookError } from './playbookMigration';
@@ -140,18 +140,59 @@ describe('playbook CRUD', () => {
     txSpy.mockRestore();
   });
 
+  // Minor 6 (fix round 1). Deleting a playbook used to leave every one of
+  // its `PlaybookVersion` records behind: unreachable (nothing enumerates
+  // versions except by a playbook that no longer exists) and unbounded. The
+  // shape here is `deleteMatter`'s — one transaction, the record plus what
+  // only it owns. A review that ran against a deleted playbook is unharmed:
+  // it carries its own `playbookSnapshot`, which is what spec 5 means by
+  // "a review whose playbook was deleted still opens on its snapshot".
+  it('deletePlaybook takes every version of that playbook with it', async () => {
+    const db = await getDb();
+    const { playbook } = await published('Doomed', {
+      clauses: [{ id: 'c1', title: 'T', extractPrompt: 'p' }],
+    });
+    await publishAndPoint(playbook, {
+      ...newPlaybookDraft('Doomed'), changeSummary: 'a second version',
+    }, 'u1');
+    const { playbook: survivor } = await published('Survivor');
+    expect((await listVersions(playbook.id)).length).toBe(2);
+
+    await deletePlaybook(playbook.id);
+
+    expect(await listVersions(playbook.id)).toEqual([]);
+    // And nothing else was swept up with it.
+    expect((await listVersions(survivor.id)).length).toBe(1);
+    expect((await db.getAll(STORES.playbookVersions)).length).toBe(1);
+  });
+
+  it('deletePlaybook removes the record and its versions in ONE transaction', async () => {
+    const { playbook } = await published('Doomed');
+    const db = await getDb();
+    const txSpy = vi.spyOn(db, 'transaction');
+    await deletePlaybook(playbook.id);
+    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(txSpy).toHaveBeenCalledWith([STORES.playbooks, STORES.playbookVersions], 'readwrite');
+    txSpy.mockRestore();
+  });
+
   it('deletePlaybook rejects with a clear message when storage is full', async () => {
     const p = newPlaybook('Doomed');
     await savePlaybook(p);
     const db = await getDb();
-    const deleteSpy = vi.spyOn(db, 'delete').mockImplementation(() => {
+    // The failure is injected at the transaction now that the delete and
+    // its cascade share one, rather than at `db.delete` — which the cascade
+    // no longer goes through.
+    const txSpy = vi.spyOn(db, 'transaction').mockImplementation((() => {
       throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
-    });
+    }) as typeof db.transaction);
     try {
       await expect(deletePlaybook(p.id)).rejects.toThrow(/storage is full/i);
     } finally {
-      deleteSpy.mockRestore();
+      txSpy.mockRestore();
     }
+    // And the playbook is still there — a failed delete deletes nothing.
+    expect((await listPlaybooks()).map(x => x.id)).toContain(p.id);
   });
 });
 
