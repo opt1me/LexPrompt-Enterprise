@@ -4,11 +4,13 @@ import type { PlaybookClause, Finding } from '../../types';
 import type { VerificationChange } from '../../lib/verification';
 import { RiskChip } from '../../components/RiskChip';
 import { StateChip } from '../../components/StateChip';
+import { PositionChip } from '../../components/PositionChip';
 import { Button } from '../../components/Button';
 import { EvidenceList } from './EvidenceList';
 import { VerificationControls } from './VerificationControls';
 import { NotesPanel } from './NotesPanel';
 import { NetPositionPanel } from './NetPositionPanel';
+import { PositionComparison } from './PositionComparison';
 import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
 import { isVerifiable } from '../../lib/findingOutcome';
 
@@ -190,6 +192,7 @@ export function FindingCard({
         <span className="font-semibold text-sm text-white">{clause.title}</span>
         <div className="flex items-center gap-2">
           <RiskChip level={finding?.riskLevel} />
+          <PositionChip outcome={finding?.positionOutcome} />
           {finding && <StateChip verification={finding.verification} />}
           {/* A `Verification` only ever exists on a `done` finding (it's the
              only status `VerificationControls` renders for), and the spec's
@@ -235,6 +238,14 @@ export function FindingCard({
             )}
           </div>
         )}
+        {/* Above the summary and the evidence, deliberately: the reader
+           meets the comparison against the firm's own position before the
+           model's free-text summary and the quotes that argue for it —
+           mirrors where `NetPositionPanel` sits for the same reason. */}
+        {clause.standardPosition && finding && (
+          <PositionComparison position={clause.standardPosition} finding={finding} />
+        )}
+
         <p className="text-xs text-gray-300 leading-relaxed">{finding?.summary}</p>
 
         {finding?.riskAnalysis && (

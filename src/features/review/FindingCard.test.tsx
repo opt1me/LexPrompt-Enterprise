@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import type { PlaybookClause, Finding } from '../../types';
+import type { PlaybookClause, Finding, StandardPosition } from '../../types';
 import { FindingCard } from './FindingCard';
 import { unconfirmedPosition } from '../../lib/netPosition';
 
@@ -268,5 +268,57 @@ describe('FindingCard — the truncation warning names what was cut', () => {
       <FindingCard clause={CLAUSE} finding={doneFinding()} onCiteClick={() => {}} onRetry={() => {}} />,
     );
     expect(container.textContent || '').not.toMatch(/context budget/i);
+  });
+});
+
+/**
+ * Task 7. Three chips, three questions, never merged (spec §11): a
+ * `PositionChip` (does this finding match the firm's own standard position?)
+ * is a third, independent axis from `StateChip` (has a human checked this?)
+ * and `RiskChip` (how risky is it?). The third test below is the one that
+ * catches a merge — see this file's mutation test in the task report.
+ */
+describe('FindingCard — standard position comparison (Task 7)', () => {
+  const pos: StandardPosition = {
+    text: 'a 6-month break notice, no conditions.',
+    origin: 'authored',
+    reviewedByHuman: true,
+  };
+
+  it('shows the comparison above the evidence when the clause has a position', () => {
+    const finding = doneFinding({
+      summary: 'The lease gives 9 months.',
+      citations: [{ quote: 'Evidence quote here', documentId: 'doc-1' }],
+      positionOutcome: 'deviates',
+      positionRationale: 'Nine months, not six.',
+    });
+    const container = mount(
+      <FindingCard {...baseProps} clause={{ ...CLAUSE, standardPosition: pos }} finding={finding} />,
+    );
+    const html = container.innerHTML;
+    expect(html).toContain('We ask for');
+    // 'Evidence quote here' is the actual quote text `EvidenceList` renders
+    // for this citation — its real marker, not an invented `data-testid`.
+    expect(html.indexOf('We ask for')).toBeLessThan(html.indexOf('Evidence quote here'));
+  });
+
+  it('shows no comparison block for a clause with no position', () => {
+    const container = mount(<FindingCard {...baseProps} finding={doneFinding()} />);
+    expect(container.innerHTML).not.toContain('We ask for');
+  });
+
+  it('renders the position chip alongside the state and risk chips, not instead of them', () => {
+    const finding = doneFinding({
+      riskLevel: 'Medium',
+      verification: { state: 'verified' },
+      positionOutcome: 'deviates',
+    });
+    const container = mount(
+      <FindingCard {...baseProps} clause={{ ...CLAUSE, standardPosition: pos }} finding={finding} />,
+    );
+    const text = container.textContent || '';
+    expect(text).toMatch(/deviates/i);
+    expect(text).toMatch(/verified/i);   // state chip survives
+    expect(text).toMatch(/medium/i);     // risk chip survives
   });
 });
