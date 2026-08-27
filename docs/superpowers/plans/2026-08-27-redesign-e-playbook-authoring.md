@@ -442,6 +442,35 @@ it('records the sources it learned from, for the provenance line', () => {
   const draft = await generateDraft(form, 'material', [{ kind: 'playbook', id: 'p', name: 'Lease v4' }], settings);
   expect(draft.learnedFrom).toEqual(['Lease v4']);
 });
+
+it('marks a rejected key as an auth error, so the caller can route to Settings', async () => {
+  // Spec §7: "A 401/403 routes to Settings, as everywhere else in this app."
+  // `generateDraft` does not navigate — it reports, and the route decides.
+  // `isAuthError` from `openrouter.ts` is the shared predicate; do not
+  // re-derive "was this a 401" from a message string.
+  mockChatJsonRejection(authRejection(401));
+  await expect(generateDraft(form, '', [], settings)).rejects.toSatisfy(isAuthError);
+});
+
+it('a non-auth failure is NOT reported as an auth error', () => {
+  // Otherwise every 500 sends the user to Settings to fix a key that is fine,
+  // which is the same class of wrong advice as telling them to reload when
+  // reloading cannot help.
+  mockChatJsonRejection(new Error('502 Bad Gateway'));
+  await expect(generateDraft(form, '', [], settings)).rejects.not.toSatisfy(isAuthError);
+});
+```
+
+**Wiring, in Task 3's screen:** an auth error from `generateDraft` calls `onAuthError` (the same prop `ResultsView` already takes and `App.tsx` already routes to Settings) rather than rendering the message in the form's error slot. Every other failure keeps the form intact with its values (the test above it). Read how `ResultsView` distinguishes the two before writing this — the pattern exists and must not be re-invented.
+
+Add to Task 3's tests:
+
+```ts
+it('routes an auth failure to Settings instead of showing it in the form', () => {
+  const onAuthError = vi.fn();
+  const el = mount(<DraftForm error="Your API key was rejected." authFailed onAuthError={onAuthError} … />);
+  expect(onAuthError).toHaveBeenCalled();
+});
 ```
 
 - [ ] **Steps 3–5: Run / implement / run.**
