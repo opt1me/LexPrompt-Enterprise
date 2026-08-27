@@ -1,10 +1,12 @@
 import React from 'react';
 import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { Clause, Finding } from '../../types';
+import type { VerificationChange } from '../../lib/verification';
 import { RiskChip } from '../../components/RiskChip';
 import { StateChip } from '../../components/StateChip';
 import { Button } from '../../components/Button';
 import { EvidenceList } from './EvidenceList';
+import { VerificationControls } from './VerificationControls';
 
 export interface FindingCardProps {
   clause: Clause;
@@ -35,6 +37,13 @@ export interface FindingCardProps {
    *  from. Optional so the tabular cell detail (single document) can omit
    *  it — `EvidenceList` falls back to the id. */
   documentNames?: Record<string, string>;
+  /** Reports the human's verification intent. Optional: a card rendered
+   *  somewhere with no way to persist (a preview) simply shows the state
+   *  chip and no controls, rather than offering an action that goes
+   *  nowhere. */
+  onVerify?: (change: VerificationChange) => void;
+  /** True while this card's verification write is in flight. */
+  verifyBusy?: boolean;
 }
 
 // Written fresh, not ported: the corresponding classes in the deleted
@@ -53,7 +62,7 @@ const CARD_SHELL = 'bg-[#1a1a1a] rounded-xl border';
  * for a review reopened after an abandoned run rather than one actually
  * in flight.
  */
-export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames }: FindingCardProps) {
+export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames, onVerify, verifyBusy }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
 
   if (status === 'pending') {
@@ -185,6 +194,14 @@ export function FindingCard({ clause, finding, onCiteClick, onRetry, onSuggestFi
             citations={finding.citations}
             documentNames={documentNames ?? {}}
             onCiteClick={onCiteClick}
+          />
+        )}
+
+        {finding && onVerify && (
+          <VerificationControls
+            verification={finding.verification}
+            busy={verifyBusy}
+            onChange={onVerify}
           />
         )}
       </div>
