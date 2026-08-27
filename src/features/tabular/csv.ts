@@ -2,7 +2,7 @@ import type { DocumentFile, Finding, ReviewRun } from '../../types';
 import {
   describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
-  collectionExportLabel, safeFileName,
+  collectionExportLabel, safeFileName, truncationLabel,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
@@ -53,7 +53,14 @@ function cellText(
   // bracketed the same way, and in the same order every time, so a
   // spreadsheet reader always meets them before the (possibly truncated)
   // outcome text.
-  const labels = [verificationLabel(finding), netPositionLabel(finding), netPositionAmendmentLabel(finding)]
+  // mn6: truncation is a fourth, independent caveat — it says the model
+  // did not see all of the text, which no verification or confirmation
+  // state can express. Last in the bracket list so the human-judgement
+  // labels a reader is used to meeting first keep their place.
+  const labels = [
+    verificationLabel(finding), netPositionLabel(finding), netPositionAmendmentLabel(finding),
+    truncationLabel(finding),
+  ]
     .filter((label): label is string => label !== null);
   const base = labels.length > 0 ? `[${labels.join('] [')}] ${outcome}` : outcome;
   // Important 3 (spec §6: "a flagged finding carries its flag and any

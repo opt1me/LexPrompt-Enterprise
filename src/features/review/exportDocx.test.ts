@@ -444,6 +444,28 @@ describe('buildReportRows / exportDocx / buildReportDocument — net positions',
     expect(xml).toContain('Notice cut to 6 months.');
   });
 
+  // mn6. See the CSV's twin test: an export that omits truncation lets a
+  // net position derived from half a deed of variation read as one derived
+  // from all of it.
+  it('carries a truncation caveat, naming the cut documents, onto the row and into the XML', async () => {
+    const run = runWithNetPosition(doneCollectionFinding({
+      truncated: true,
+      truncatedDocuments: ['Deed of Variation.pdf'],
+    }));
+    const [row] = buildReportRows(run, 'lease');
+    expect(row.truncationLabel).toMatch(/incomplete/i);
+    expect(row.truncationLabel).toContain('Deed of Variation.pdf');
+
+    const xml = await docXml(run, 'lease');
+    expect(xml).toMatch(/INCOMPLETE/);
+    expect(xml).toContain('Deed of Variation.pdf');
+  });
+
+  it('raises no truncation caveat when the whole text fit', () => {
+    const [row] = buildReportRows(runWithNetPosition(doneCollectionFinding()), 'lease');
+    expect(row.truncationLabel).toBeNull();
+  });
+
   it('carries the UNCONFIRMED NET POSITION label into the generated DOCX XML', async () => {
     const run = runWithNetPosition(doneCollectionFinding());
     const xml = await docXml(run, 'lease');

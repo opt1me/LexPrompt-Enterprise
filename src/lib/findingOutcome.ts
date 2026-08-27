@@ -353,3 +353,45 @@ export function safeFileName(name: string, fallback: string): string {
     .trim();
   return cleaned === '' ? fallback : cleaned;
 }
+
+/**
+ * How an export says the model did not read all of the text this finding is
+ * drawn from.
+ *
+ * mn6 (residual). M3 made truncation legible on the card and in
+ * `CellDetail`, and it reached neither exporter: `ReportRow` had no field
+ * for it and no CSV cell mentioned it, so the DOCX a client receives said
+ * nothing about a deed of variation the model had only read half of. Spec
+ * §11 names that precise case — "a silently truncated deed of variation
+ * produces a net position that is confidently wrong about exactly the thing
+ * the user grouped the documents to find out" — and §6 requires the cut
+ * documents to be named. Every other honesty signal in this app is
+ * single-sourced into both exporters through this module; this one now is
+ * too.
+ *
+ * By NAME wherever names were recorded. A collection finding derived from
+ * four documents cannot tell a reviewer anything with "the text was
+ * truncated"; which document was cut is the whole question. A single-
+ * document finding records `truncated` with no names because the document it
+ * reports on is the only one there is, and gets the singular wording.
+ *
+ * Gated on `isVerifiable`, exactly as `hasStandingPosition` gates the net
+ * position: this caveat qualifies an ANSWER, and a finding that is not
+ * `done` has no answer to qualify — its own "could not be reviewed" text is
+ * already the loud failure. It is also what the card does, and screen and
+ * export disagreeing about a caveat is the drift this module exists to stop.
+ */
+export function truncationLabel(finding: Finding | undefined): string | null {
+  if (!isVerifiable(finding) || !finding.truncated) return null;
+
+  const names = finding.truncatedDocuments ?? [];
+  if (names.length === 0) {
+    return 'INCOMPLETE SOURCE TEXT: this document exceeded the model\'s context budget, so only ' +
+      'part of it was read for this clause';
+  }
+
+  const subject = names.length === 1 ? 'this document exceeded' : 'these documents exceeded';
+  const each = names.length === 1 ? 'it' : 'each';
+  return `INCOMPLETE SOURCE TEXT: ${subject} the model's context budget, so only part of ${each} ` +
+    `was read for this clause: ${names.join(', ')}`;
+}

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines, isVerifiable,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
-  collectionExportLabel, safeFileName,
+  collectionExportLabel, safeFileName, truncationLabel,
 } from './findingOutcome';
 import { unconfirmedPosition, confirmPosition, amendPosition } from './netPosition';
 import type { Finding, TrailStep, Verification } from '../types';
@@ -401,5 +401,53 @@ describe('safeFileName', () => {
 
   it('leaves an ordinary name exactly as it was', () => {
     expect(safeFileName('MSA', 'fallback')).toBe('MSA');
+  });
+});
+
+/**
+ * mn6 (residual, pre-existing). M3 made truncation legible on the card and
+ * in `CellDetail`, and neither exporter mentioned it at all — so the DOCX a
+ * client receives said nothing about a deed of variation the model only read
+ * half of. Spec §11: "a silently truncated deed of variation produces a net
+ * position that is confidently wrong about exactly the thing the user
+ * grouped the documents to find out." Every other honesty signal in this app
+ * is single-sourced into both exporters through this module; this one now is
+ * too.
+ */
+describe('truncationLabel', () => {
+  function done(overrides: Partial<Finding> = {}): Finding {
+    return {
+      clauseId: 'c1', status: 'done', summary: 's', citations: [],
+      verification: { state: 'unchecked' }, notes: [], ...overrides,
+    };
+  }
+
+  it('names the documents that were cut short', () => {
+    const label = truncationLabel(done({ truncated: true, truncatedDocuments: ['Deed of Variation.pdf'] }));
+    expect(label).toMatch(/incomplete/i);
+    expect(label).toContain('Deed of Variation.pdf');
+  });
+
+  it('names every cut document, not just the first', () => {
+    const label = truncationLabel(done({ truncated: true, truncatedDocuments: ['Lease.pdf', 'Deed.pdf'] }));
+    expect(label).toContain('Lease.pdf');
+    expect(label).toContain('Deed.pdf');
+  });
+
+  it('still says the text was cut when there is only one document to name', () => {
+    // A single-document finding records `truncated` with no names — the
+    // document it reports on is the only one there is.
+    const label = truncationLabel(done({ truncated: true }));
+    expect(label).toMatch(/incomplete/i);
+    expect(label).toMatch(/only part/i);
+  });
+
+  it('says nothing when the whole text fit', () => {
+    expect(truncationLabel(done())).toBeNull();
+  });
+
+  it('says nothing for a finding with no settled output, exactly as the card does', () => {
+    expect(truncationLabel(done({ status: 'error', truncated: true }))).toBeNull();
+    expect(truncationLabel(undefined)).toBeNull();
   });
 });

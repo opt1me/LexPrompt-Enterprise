@@ -509,6 +509,12 @@ export async function extractCollectionClause(
         citations: trail.flatMap(step => step.citations),
         error: 'The model returned no content for this clause.',
         noContent: true,
+        // Kept, exactly as `extractClause`'s identical empty-summary branch
+        // keeps it. The two extractors had drifted here: a collection whose
+        // model returned nothing lost the one recorded fact that best
+        // explains why. Conditional, never `undefined`-valued, for the
+        // `structuredClone` reason spelled out on the `done` return below.
+        ...(truncated.length > 0 ? { truncated: true, truncatedDocuments: truncated } : {}),
       };
     }
 

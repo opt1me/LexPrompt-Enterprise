@@ -412,6 +412,30 @@ describe('buildTabularCsv', () => {
       expect(row).toMatch(/unavailable/i);
     });
 
+    // mn6. Truncation reached the card and neither export, so the DOCX a
+    // client receives — and the CSV a reviewer sorts — said nothing about a
+    // deed of variation the model only read half of. Spec §11 names exactly
+    // that as the way a collection produces a confidently wrong answer.
+    it('carries a truncation caveat, naming the documents that were cut short', () => {
+      const truncatedRun: ReviewRun = {
+        ...collectionRun,
+        findings: {
+          'coll-1': {
+            ...collectionRun.findings['coll-1'],
+            c1: {
+              ...collectionRun.findings['coll-1'].c1,
+              truncated: true,
+              truncatedDocuments: ['Deed of Variation.pdf'],
+            },
+          },
+        },
+      };
+      const csv = buildTabularCsv(truncatedRun, collectionDocs);
+      const [, , row] = csv.split('\r\n');
+      expect(row).toMatch(/incomplete/i);
+      expect(row).toContain('Deed of Variation.pdf');
+    });
+
     it('agrees with its own summary line about how many findings there are', () => {
       const csv = buildTabularCsv(collectionRun, collectionDocs);
       const [summary, , ...body] = csv.split('\r\n');

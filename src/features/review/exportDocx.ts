@@ -2,7 +2,7 @@ import type { Citation, ReviewRun, RiskLevel } from '../../types';
 import {
   describeFindingOutcome, exportSummaryLine, verificationLabel, noteLines,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
-  collectionExportLabel, safeFileName,
+  collectionExportLabel, safeFileName, truncationLabel,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
@@ -34,6 +34,12 @@ export interface ReportRow {
    *  document, in effect order. Empty for anything without a net position.
    *  A conclusion exported without this is an assertion, not a derivation. */
   trail: string[];
+  /** mn6: says the model did not see all of the text this row is drawn
+   *  from, naming the documents that were cut short. A fourth caveat,
+   *  independent of the three above — no verification or confirmation state
+   *  can express "the source was incomplete". `null` when the whole text
+   *  fit, or when the row has no settled answer to qualify. */
+  truncationLabel: string | null;
 }
 
 /**
@@ -79,6 +85,7 @@ export function buildReportRows(
         netPositionLabel: netPositionLabel(finding),
         netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
         trail: trailLines(finding, documentNames),
+        truncationLabel: truncationLabel(finding),
       };
     }
 
@@ -93,6 +100,7 @@ export function buildReportRows(
       netPositionLabel: netPositionLabel(finding),
       netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
       trail: trailLines(finding, documentNames),
+      truncationLabel: truncationLabel(finding),
     };
   });
 }
@@ -181,6 +189,23 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
             children: [new Paragraph({ children: [new TextRun({ text: row.verificationLabel, bold: true })] })],
             columnSpan: 2,
             shading: { fill: 'FFF4CC' },
+            margins: cellMargins,
+          }),
+        ],
+      }));
+    }
+
+    // mn6: the source text itself was incomplete. Above the net-position
+    // caveat and the summary, because it qualifies everything below it —
+    // a reader must not reach a confident synthesis before learning that the
+    // model was only shown part of the deed it was drawn from.
+    if (row.truncationLabel) {
+      tableRows.push(new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: row.truncationLabel, bold: true })] })],
+            columnSpan: 2,
+            shading: { fill: 'FFE4CC' },
             margins: cellMargins,
           }),
         ],

@@ -789,6 +789,29 @@ describe('extractCollectionClause: truncation names the documents it cut', () =>
     expect(finding.truncatedDocuments).toEqual(['Lease.pdf', 'DoV.pdf']);
   });
 
+  /**
+   * The two extractors disagreed about this: `extractClause`'s empty-summary
+   * branch keeps `truncated`, and this one dropped it — so a collection
+   * whose model returned nothing lost the one fact that best explains why.
+   * Invisible in today's exports (a caveat qualifies an answer, and this
+   * finding has none), but sibling drift between two copies of one rule is
+   * this project's most repeated defect, and it is the finding record that
+   * is wrong, not just the render.
+   */
+  it('keeps the truncation names on an empty-net-position error, exactly as extractClause does', async () => {
+    vi.mocked(chatJson).mockResolvedValue({
+      trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
+      net_position: '   ',
+    });
+
+    const finding = await extractCollectionClause(longMembers(), clause, template, tight);
+
+    expect(finding.status).toBe('error');
+    expect(finding.noContent).toBe(true);
+    expect(finding.truncated).toBe(true);
+    expect(finding.truncatedDocuments).toEqual(['Lease.pdf', 'DoV.pdf']);
+  });
+
   it('records no names, and no key at all, when everything fit', async () => {
     vi.mocked(chatJson).mockResolvedValue({
       trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
