@@ -28,9 +28,9 @@ const DISPOSITION_ICON: Record<ClauseDisposition, typeof Circle> = {
 };
 
 const DISPOSITION_CLASS: Record<ClauseDisposition, string> = {
-  unreviewed: 'text-gray-500',
-  kept: 'text-emerald-400',
-  cut: 'text-red-400',
+  unreviewed: 'text-ink-4',
+  kept: 'text-accent',
+  cut: 'text-risk-high',
 };
 
 /**
@@ -45,11 +45,11 @@ export function ClauseRail({ clauses, activeId, onSelect, disabled = false }: Cl
   const unreviewed = clauses.filter((c) => c.disposition === 'unreviewed').length;
 
   return (
-    <div className="flex flex-col h-full bg-[#111] border border-white/10 rounded-xl overflow-hidden">
-      <div className="p-3 border-b border-white/10 flex items-center justify-center gap-3 text-[11px] font-semibold uppercase tracking-wide shrink-0">
-        <span className="text-emerald-400">{kept} kept</span>
-        <span className="text-red-400">{cut} cut</span>
-        <span className="text-gray-400">{unreviewed} unreviewed</span>
+    <div className="flex flex-col h-full bg-card border border-rule rounded-panel overflow-hidden">
+      <div className="p-3 border-b border-rule flex items-center justify-center gap-3 font-mono text-chip uppercase shrink-0">
+        <span className="text-accent">{kept} kept</span>
+        <span className="text-risk-high">{cut} cut</span>
+        <span className="text-ink-4">{unreviewed} unreviewed</span>
       </div>
       <ul className="flex-1 overflow-y-auto custom-scrollbar">
         {clauses.map((c) => {
@@ -61,13 +61,13 @@ export function ClauseRail({ clauses, activeId, onSelect, disabled = false }: Cl
                 onClick={() => onSelect(c.id)}
                 disabled={disabled}
                 aria-current={isActive}
-                className={`w-full text-left px-3 py-2.5 flex items-center gap-2 border-b border-white/5 transition-colors ${
-                  isActive ? 'bg-violet-500/10' : 'hover:bg-white/5'
+                className={`w-full text-left px-3 py-2.5 flex items-center gap-2 border-b border-rule-soft transition-colors ${
+                  isActive ? 'bg-accent-tint' : 'hover:bg-chip-fill'
                 }`}
               >
                 <Icon className={`h-3.5 w-3.5 shrink-0 ${DISPOSITION_CLASS[c.disposition]}`} aria-hidden="true" />
-                <span className="flex-1 text-xs text-gray-200 truncate">{c.title}</span>
-                <span className={`text-[10px] uppercase font-semibold shrink-0 ${DISPOSITION_CLASS[c.disposition]}`}>
+                <span className="flex-1 font-ui text-ui-sm text-ink-2 truncate">{c.title}</span>
+                <span className={`font-mono text-chip uppercase shrink-0 ${DISPOSITION_CLASS[c.disposition]}`}>
                   {DISPOSITION_LABEL[c.disposition]}
                 </span>
               </button>

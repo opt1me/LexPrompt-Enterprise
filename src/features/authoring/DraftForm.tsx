@@ -108,52 +108,52 @@ export function DraftForm({
   return (
     <div className="space-y-5">
       {showInlineError && (
-        <p className="flex items-start gap-2 text-xs text-red-300 bg-red-500/10 border border-red-500/20 rounded-lg p-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
+        <p className="flex items-start gap-2 text-xs text-risk-high bg-risk-high-tint border border-risk-high-edge rounded-inset p-3">
+          <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" aria-hidden="true" />
           <span>{error}</span>
         </p>
       )}
 
       <div>
-        <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+        <label className="block font-mono text-label text-ink-4 uppercase mb-1">
           Contract Type
         </label>
         <input
           value={contractType}
           onChange={(e) => setContractType(e.target.value)}
           placeholder="e.g. SaaS Agreement, NDA, Employment Contract"
-          className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+          className="w-full bg-paper border border-rule rounded-control p-3 text-ink-1 text-sm outline-none focus:border-accent transition-colors placeholder-ink-5"
           autoFocus
         />
       </div>
 
       <div>
-        <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+        <label className="block font-mono text-label text-ink-4 uppercase mb-1">
           Acting For (Optional)
         </label>
         <input
           value={actingFor}
           onChange={(e) => setActingFor(e.target.value)}
           placeholder="e.g. the tenant, the buyer"
-          className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+          className="w-full bg-paper border border-rule rounded-control p-3 text-ink-1 text-sm outline-none focus:border-accent transition-colors placeholder-ink-5"
         />
       </div>
 
       <div>
-        <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+        <label className="block font-mono text-label text-ink-4 uppercase mb-1">
           Context (Optional)
         </label>
         <textarea
           value={context}
           onChange={(e) => setContext(e.target.value)}
           placeholder="e.g. Focus on strict liability caps..."
-          className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 transition-colors resize-none h-20 placeholder-gray-600"
+          className="w-full bg-paper border border-rule rounded-control p-3 text-ink-1 text-sm outline-none focus:border-accent transition-colors resize-none h-20 placeholder-ink-5"
         />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+          <label className="block font-mono text-label text-ink-4 uppercase mb-1">
             Target Clause Count (Optional)
           </label>
           <input
@@ -162,26 +162,26 @@ export function DraftForm({
             value={targetClauseCount}
             onChange={(e) => setTargetClauseCount(e.target.value)}
             placeholder="e.g. 15"
-            className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+            className="w-full bg-paper border border-rule rounded-control p-3 text-ink-1 text-sm outline-none focus:border-accent transition-colors placeholder-ink-5"
           />
-          <p className="text-[10px] text-gray-500 mt-1.5 px-1 italic">
+          <p className="font-ui text-meta text-ink-4 mt-1.5 px-1 italic">
             Guidance only — a shorter list of genuinely relevant clauses is not a failure.
           </p>
         </div>
 
         <div>
-          <label className="block text-xs text-gray-500 uppercase mb-2 font-semibold tracking-wider">
+          <label className="block font-mono text-label text-ink-4 uppercase mb-2">
             Answer Length
           </label>
-          <div className="flex bg-black/50 border border-white/10 rounded-lg p-1">
+          <div className="flex bg-chip-fill rounded-control p-0.5">
             {ANSWER_LENGTHS.map((level) => (
               <button
                 key={level}
                 onClick={() => setAnswerLength(level)}
-                className={`flex-1 py-1.5 text-[10px] sm:text-xs font-medium rounded-md transition-all ${
+                className={`flex-1 py-1.5 text-[10px] sm:text-xs font-medium rounded-inset transition-all ${
                   answerLength === level
-                    ? 'bg-violet-600 text-white shadow-sm'
-                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    ? 'bg-card text-ink-1 shadow-tab'
+                    : 'text-ink-4 hover:text-ink-1'
                 }`}
               >
                 {ANSWER_LENGTH_LABEL[level]}
@@ -202,7 +202,7 @@ export function DraftForm({
         />
       </div>
 
-      <p className="text-xs text-gray-500 italic border-t border-white/10 pt-4">
+      <p className="font-ui text-meta text-ink-4 italic border-t border-rule pt-4">
         Nothing is saved yet. You will review every proposed clause — keep, edit, or cut it — before
         anything becomes a playbook.
       </p>

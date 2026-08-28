@@ -199,14 +199,14 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto h-[calc(100vh-64px)] flex flex-col bg-[#09090b]">
+    <div className="p-6 max-w-7xl mx-auto h-[calc(100vh-64px)] flex flex-col bg-paper">
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6 shrink-0">
         <div>
-          <span className="inline-block px-2 py-1 rounded bg-amber-500/15 border border-amber-500/30 text-amber-300 text-[10px] font-bold uppercase tracking-wider">
+          <span className="inline-block font-mono text-chip uppercase text-draft border border-draft rounded-chip px-1.5 py-0.5">
             Unsaved draft
           </span>
-          <h2 className="text-xl font-bold text-white mt-2">{draft.contractType}</h2>
-          <p className="text-xs text-gray-500 mt-1">
+          <h2 className="font-prose text-screen-title text-ink-1 mt-2">{draft.contractType}</h2>
+          <p className="font-ui text-meta text-ink-4 mt-1">
             {reviewedCount} of {draft.clauses.length} clauses reviewed
             {draft.learnedFrom.length > 0 && <> &middot; learned from {draft.learnedFrom.join(', ')}</>}
           </p>
@@ -224,7 +224,7 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
           clauses={draft.clauses} activeId={activeId} onSelect={goToClause} disabled={saving}
         />
 
-        <div className="overflow-y-auto custom-scrollbar bg-[#111] border border-white/10 rounded-xl p-5">
+        <div className="overflow-y-auto custom-scrollbar bg-card border border-rule rounded-card p-5">
           {activeClause ? (
             <ClauseEditor
               key={activeClause.id}
@@ -239,7 +239,7 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
               saving={saving}
             />
           ) : (
-            <p className="text-sm text-gray-500 italic">No clauses to review.</p>
+            <p className="font-ui text-meta text-ink-4 italic">No clauses to review.</p>
           )}
         </div>
       </div>
@@ -329,22 +329,22 @@ function ClauseEditor({
 
   const dispositionClass =
     clause.disposition === 'kept'
-      ? 'text-emerald-400'
+      ? 'text-accent'
       : clause.disposition === 'cut'
-        ? 'text-red-400'
-        : 'text-gray-500';
+        ? 'text-risk-high'
+        : 'text-ink-4';
 
   return (
     <div className="space-y-4">
       <div className="flex items-start justify-between gap-3">
-        <h3 data-active-clause className="text-lg font-bold text-white">{clause.title}</h3>
-        <span className={`text-[10px] uppercase font-bold tracking-wide shrink-0 mt-1 ${dispositionClass}`}>
+        <h3 data-active-clause className="font-prose text-clause text-ink-1">{clause.title}</h3>
+        <span className={`font-mono text-chip uppercase shrink-0 mt-1 ${dispositionClass}`}>
           {DISPOSITION_LABEL[clause.disposition]}
         </span>
       </div>
 
       <div>
-        <label className="block text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1">
+        <label className="block font-mono text-label text-ink-4 uppercase mb-1">
           Extraction instructions
         </label>
         <AutoResizeTextarea
@@ -352,12 +352,12 @@ function ClauseEditor({
           disabled={saving}
           value={extractPrompt}
           onChange={(e) => setExtractPrompt(e.target.value)}
-          className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-sm text-gray-200 outline-none focus:border-violet-500 min-h-[70px]"
+          className="w-full bg-paper border border-rule rounded-control p-3 text-sm text-ink-2 outline-none focus:border-accent min-h-[70px]"
         />
       </div>
 
       <div>
-        <label className="block text-[10px] text-red-400 uppercase tracking-wider font-bold mb-1 flex items-center gap-1">
+        <label className="block font-mono text-label text-risk-high uppercase mb-1 flex items-center gap-1">
           <ShieldAlert className="h-3 w-3" aria-hidden="true" /> Risk criteria
         </label>
         <AutoResizeTextarea
@@ -366,17 +366,17 @@ function ClauseEditor({
           value={riskCriteria}
           onChange={(e) => setRiskCriteria(e.target.value)}
           placeholder="Leave blank to use the playbook's global risk tolerance."
-          className="w-full bg-red-900/10 border border-red-500/10 rounded-lg p-3 text-sm text-gray-200 outline-none focus:border-red-500/50 min-h-[60px]"
+          className="w-full bg-risk-high-tint border border-risk-high-edge rounded-control p-3 text-sm text-ink-2 outline-none focus:border-risk-high min-h-[60px]"
         />
       </div>
 
       {clause.standardPosition && (
-        <div className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2">
-          <div className="flex items-center gap-1 text-[10px] font-bold text-gray-500 uppercase tracking-wide">
+        <div className="bg-chip-fill border border-rule rounded-inset p-3 space-y-2">
+          <div className="flex items-center gap-1 font-mono text-label text-ink-4 uppercase">
             <Scale className="w-3 h-3" aria-hidden="true" /> Standard position
           </div>
           {!clause.standardPosition.reviewedByHuman && (
-            <p className="text-[10px] uppercase font-bold text-amber-300">
+            <p className="font-mono text-label uppercase text-risk-med">
               Drafted by AI &mdash; not yet reviewed by a person.
             </p>
           )}
@@ -385,26 +385,26 @@ function ClauseEditor({
           disabled={saving}
             value={positionText}
             onChange={(e) => setPositionText(e.target.value)}
-            className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-xs text-gray-200 outline-none focus:border-violet-500 min-h-[50px]"
+            className="w-full bg-paper border border-rule rounded-control p-2 text-xs text-ink-2 outline-none focus:border-accent min-h-[50px]"
           />
         </div>
       )}
 
       {clause.suggestions.length > 0 && (
         <div className="space-y-2">
-          <p className="flex items-center gap-1 text-[10px] font-bold text-gray-500 uppercase tracking-wide">
+          <p className="flex items-center gap-1 font-mono text-label text-ink-4 uppercase">
             <Sparkles className="w-3 h-3" aria-hidden="true" /> Suggested sub-questions
           </p>
           {clause.suggestions.map((s) => (
             <div
               key={s}
-              className="flex items-center justify-between gap-2 bg-white/5 border border-dashed border-white/20 rounded-lg p-2"
+              className="flex items-center justify-between gap-2 bg-chip-fill border border-dashed border-rule-strong rounded-inset p-2"
             >
-              <span className="text-xs text-gray-300 flex-1">{s}</span>
+              <span className="text-xs text-ink-2 flex-1">{s}</span>
               <button
                 onClick={() => onAddSuggestion(s)}
                 disabled={saving}
-                className="text-[10px] font-semibold text-violet-300 hover:text-violet-200 flex items-center gap-1 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-[10px] font-semibold text-accent hover:text-accent-strong flex items-center gap-1 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Plus className="h-3 w-3" aria-hidden="true" /> Add as clause
               </button>
@@ -412,7 +412,7 @@ function ClauseEditor({
                 onClick={() => onDismissSuggestion(s)}
                 disabled={saving}
                 aria-label="Dismiss suggestion"
-                className="text-gray-500 hover:text-gray-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="text-ink-4 hover:text-ink-2 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <X className="h-3 w-3" aria-hidden="true" />
               </button>
@@ -421,7 +421,7 @@ function ClauseEditor({
         </div>
       )}
 
-      <div className="flex justify-end gap-3 pt-2 border-t border-white/10">
+      <div className="flex justify-end gap-3 pt-2 border-t border-rule">
         <Button variant="danger" onClick={onCut} disabled={saving}>Cut</Button>
         <Button onClick={handleKeep} disabled={saving}>Keep</Button>
       </div>

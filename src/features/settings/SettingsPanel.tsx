@@ -4,6 +4,7 @@ import type { Settings } from '../../types';
 import { saveSettings } from '../../lib/storage';
 import { listModels, type ModelInfo } from '../../lib/openrouter';
 import { Button } from '../../components/Button';
+import { API_KEY_PRIVACY, STORAGE_PRIVACY } from '../../lib/privacyCopy';
 
 export interface SettingsPanelProps {
   settings: Settings;
@@ -90,8 +91,7 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
           <div className="flex items-start gap-2 p-3 bg-black/30 border border-white/5 rounded-lg">
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
             <p className="text-xs text-gray-400 leading-relaxed">
-              Your key is stored only in this browser's local storage and is sent only to OpenRouter
-              when making a request. It is never sent anywhere else.
+              {API_KEY_PRIVACY}
             </p>
           </div>
         </section>
@@ -101,21 +101,7 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
           <div className="flex items-start gap-2 p-3 bg-black/30 border border-white/5 rounded-lg">
             <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
             <div className="text-xs text-gray-400 leading-relaxed space-y-2">
-              <p>
-                Matters, documents (including the original file bytes), and reviews are stored in
-                this browser's IndexedDB — on this device, in this browser, and nowhere else.
-                Nothing is uploaded anywhere except to the model you chose, via OpenRouter, at the
-                moment you run a review.
-              </p>
-              <p>
-                Deleting a matter deletes its documents and their stored bytes, not just its entry
-                in a list. Data is per-browser: clearing this browser's site data removes your
-                matters permanently, and there is no sync or backup.
-              </p>
-              <p>
-                Page images generated for scanned PDFs are never stored — they're regenerated from
-                the original file bytes whenever they're needed again.
-              </p>
+              {STORAGE_PRIVACY.map(p => <p key={p}>{p}</p>)}
             </div>
           </div>
         </section>

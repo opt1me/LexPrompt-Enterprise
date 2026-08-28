@@ -41,12 +41,12 @@ export function RouteChooser({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <button
           onClick={onDraftWithAI}
-          className="text-left p-5 bg-black/50 border border-white/10 rounded-xl hover:border-violet-500/50 transition-colors flex flex-col gap-3"
+          className="text-left p-5 bg-card border border-rule rounded-panel hover:border-accent-edge transition-colors flex flex-col gap-3"
         >
-          <Wand2 className="h-5 w-5 text-violet-400" />
+          <Wand2 className="h-5 w-5 text-accent" aria-hidden="true" />
           <div>
-            <h4 className="font-bold text-white text-sm mb-1">Draft with AI</h4>
-            <p className="text-xs text-gray-400 leading-relaxed">
+            <h4 className="font-ui text-ui font-semibold text-ink-1 mb-1">Draft with AI</h4>
+            <p className="font-ui text-meta text-ink-3 leading-relaxed">
               Describe the contract type and let a model propose a first pass, clause by clause.
             </p>
           </div>
@@ -54,12 +54,12 @@ export function RouteChooser({
 
         <button
           onClick={onBuildByHand}
-          className="text-left p-5 bg-black/50 border border-white/10 rounded-xl hover:border-white/30 transition-colors flex flex-col gap-3"
+          className="text-left p-5 bg-card border border-rule rounded-panel hover:border-accent-edge transition-colors flex flex-col gap-3"
         >
-          <PenTool className="h-5 w-5 text-gray-300" />
+          <PenTool className="h-5 w-5 text-ink-2" aria-hidden="true" />
           <div>
-            <h4 className="font-bold text-white text-sm mb-1">Build by hand</h4>
-            <p className="text-xs text-gray-400 leading-relaxed">
+            <h4 className="font-ui text-ui font-semibold text-ink-1 mb-1">Build by hand</h4>
+            <p className="font-ui text-meta text-ink-3 leading-relaxed">
               Add clauses one at a time, with AI suggestions for individual fields on request.
             </p>
           </div>
@@ -68,16 +68,19 @@ export function RouteChooser({
         <button
           onClick={handleLearnFromRedlines}
           aria-disabled={!learnFromRedlinesAvailable}
-          className={`text-left p-5 bg-black/50 border border-white/10 rounded-xl flex flex-col gap-3 ${
+          className={`text-left p-5 bg-card border border-rule rounded-panel flex flex-col gap-3 ${
             learnFromRedlinesAvailable
-              ? 'hover:border-white/30 transition-colors'
-              : 'opacity-50 cursor-not-allowed'
+              ? 'hover:border-accent-edge transition-colors'
+              : 'opacity-60 cursor-not-allowed'
           }`}
         >
-          <GitPullRequest className="h-5 w-5 text-gray-300" />
+          <GitPullRequest className="h-5 w-5 text-ink-2" aria-hidden="true" />
           <div>
-            <h4 className="font-bold text-white text-sm mb-1">Learn from redlines</h4>
-            <p className="text-xs text-gray-400 leading-relaxed">
+            <h4 className="font-ui text-ui font-semibold text-ink-1 mb-1">Learn from redlines</h4>
+            {/* R-G19: this line discloses whether the route actually works,
+               so it stays at text-ink-2 rather than the ink-3 the two
+               sibling cards' plain descriptions use — never ink-4 or below. */}
+            <p className="font-ui text-meta text-ink-2 leading-relaxed">
               {learnFromRedlinesAvailable
                 ? 'Infer standard positions from a chain of tracked-changes documents.'
                 : 'Infer standard positions from tracked changes. Not built yet.'}
