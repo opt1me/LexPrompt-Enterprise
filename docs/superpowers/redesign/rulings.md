@@ -545,3 +545,38 @@ cost-if-wrong.
   visual review surface and enormous blast radius. Radii and type sizes are *not*
   snapped: those are named roles with explicit values, so they reproduce the prototype
   exactly. *Cost if wrong: padding differs from the mock by up to 2px in places.*
+
+---
+
+# `getDb` open-timeout backstop (2026-08-28)
+
+A previous agent correctly escalated rather than deciding alone: `src/lib/db/open.ts`'s
+existing 3s guard rejects with `DbBlockedError` only `if (blockedFlag)` — i.e. only when
+another tab's `blocked()` callback fired. An IndexedDB open that never succeeds, never
+errors, and never fires `blocked()` (a bare browser- or disk-level fault) leaves the timer
+do nothing at all, and `getDb()` pending forever. Every screen awaiting it then sits on its
+loading state with no error and no retry, indistinguishable from "still working" —
+`CLAUDE.md`'s founding rule in miniature.
+
+- **R-DB1. The fix is a separate, generous 30s backstop, not a widened short guard.**
+  Widening the existing 3s (or similar) guard to reject on *any* unsettled open would abort
+  a legitimately slow first open on a large database, breaking the app for exactly the
+  users with the most data. Instead `OPEN_TIMEOUT_MS = 30000` races alongside the unchanged
+  `BLOCKED_TIMEOUT_MS = 3000` guard: whichever of the four ways the race can settle fires
+  first (success, failure, blocked-timeout, open-timeout) clears the other timers, so
+  nothing is left running once the open has settled either way. The rejection is a new,
+  specific `DbOpenTimeoutError` — not `DbBlockedError` and not a generic failure — whose
+  message says what happened and what to do ("LexPrompt's local database did not respond.
+  Your data has not been lost — try again."). *Cost if wrong: a genuinely slow open on a
+  very large database is aborted after 30s and the user sees an error with a Retry, rather
+  than eventually loading. That is visible and recoverable — the infinite spinner it
+  replaces is neither.*
+- **Left open:** `DbOpenTimeoutError` is not yet wired into `describeLoadError`
+  (`src/lib/loadError.ts`), which is the mechanism that lets `DbBlockedError`'s own message
+  reach the UI instead of each call site's generic fallback string. This task's scope was
+  restricted to `src/lib/db/open.ts` and its test, to avoid a shared-tree conflict with a
+  concurrent agent working in `src/test/`. Until `describeLoadError` adds
+  `DbOpenTimeoutError` alongside `DbBlockedError` on its pass-through side, a caller loading
+  through `App.tsx` sees its generic "could not be loaded" message rather than the specific,
+  reassuring one — mechanically correct (a loud, recoverable error, not a silent hang) but
+  not yet the exact wording this ruling specifies. One-line addition when picked up.

@@ -4,6 +4,16 @@ import { debug } from '../debug';
 
 const BLOCKED_TIMEOUT_MS = 3000;
 
+// Generous on purpose. The blocked-guard above only fires when another tab
+// is provably in the way — but an IndexedDB open can also simply never
+// settle (no `blocked()`, no error, no success) with no browser-visible
+// signal at all. Without a backstop that leaves every caller's `getDb()`
+// pending forever, indistinguishable from a slow-but-working load. 30s is
+// wide enough that a legitimately slow first open on a large database is
+// not aborted for the users with the most data (see rulings.md) — this is
+// a last resort, not a normal-path timeout.
+const OPEN_TIMEOUT_MS = 30000;
+
 export class DbBlockedError extends Error {
   constructor() {
     super(
@@ -11,6 +21,21 @@ export class DbBlockedError extends Error {
         'Close other LexPrompt tabs and reload.',
     );
     this.name = 'DbBlockedError';
+  }
+}
+
+/** Raised when the underlying IndexedDB open neither succeeds, fails, nor
+ *  fires `blocked()` within `OPEN_TIMEOUT_MS`. Distinct from `DbBlockedError`
+ *  (which names a specific, diagnosable cause) because this covers whatever
+ *  is left when none of the recognised signals ever arrived — a browser- or
+ *  disk-level fault this app has no way to name more precisely. */
+export class DbOpenTimeoutError extends Error {
+  constructor() {
+    super(
+      "LexPrompt's local database did not respond. Your data has not been lost — " +
+        'try again.',
+    );
+    this.name = 'DbOpenTimeoutError';
   }
 }
 
@@ -85,21 +110,33 @@ export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
 
     // openDB still never settles once `blocked()` has fired — the callback alone
     // is not a fix. Race it against a timer so callers get a rejection instead
-    // of hanging forever.
+    // of hanging forever. A second, much longer timer backstops the case
+    // `blocked()` never covers: an open that never settles AT ALL, with no
+    // signal of any kind. Whichever of the four ways this can settle fires
+    // first (success, failure, blocked-timeout, open-timeout) clears the
+    // others, so nothing is left running once `guarded` has settled.
     const guarded: Promise<IDBPDatabase<LexPromptDB>> = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const blockedTimer = setTimeout(() => {
         if (blockedFlag) {
+          clearTimeout(openTimer);
           reject(new DbBlockedError());
         }
       }, BLOCKED_TIMEOUT_MS);
 
+      const openTimer = setTimeout(() => {
+        clearTimeout(blockedTimer);
+        reject(new DbOpenTimeoutError());
+      }, OPEN_TIMEOUT_MS);
+
       openPromise.then(
         db => {
-          clearTimeout(timer);
+          clearTimeout(blockedTimer);
+          clearTimeout(openTimer);
           resolve(db);
         },
         err => {
-          clearTimeout(timer);
+          clearTimeout(blockedTimer);
+          clearTimeout(openTimer);
           reject(err);
         },
       );
