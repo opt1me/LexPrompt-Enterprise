@@ -128,6 +128,20 @@ describe('round-trip: buildPath(parseRoute(p)) === p', () => {
   });
 });
 
+describe('the standard positions route', () => {
+  it('parses /positions', () => {
+    expect(parseRoute('/positions')).toEqual({ name: 'positions' });
+  });
+
+  it('round-trips', () => {
+    expect(buildPath(parseRoute('/positions'))).toBe('/positions');
+  });
+
+  it('does not swallow a deeper path', () => {
+    expect(parseRoute('/positions/anything')).toEqual({ name: 'not-found', path: '/positions/anything' });
+  });
+});
+
 describe('useRoute', () => {
   let container: HTMLDivElement;
   let root: Root;

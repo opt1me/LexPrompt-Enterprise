@@ -19,6 +19,7 @@ export type Route =
   | { name: 'playbooks' }
   | { name: 'playbook'; playbookId: string }
   | { name: 'settings' }
+  | { name: 'positions' }
   | { name: 'not-found'; path: string };
 
 /** Parses a pathname into a Route. Never throws — an unparseable or unknown
@@ -56,6 +57,8 @@ function parsePath(pathname: string): Route {
     if (segments.length === 2) return { name: 'playbook', playbookId: segments[1] };
   } else if (segments[0] === 'settings' && segments.length === 1) {
     return { name: 'settings' };
+  } else if (segments[0] === 'positions' && segments.length === 1) {
+    return { name: 'positions' };
   }
 
   return { name: 'not-found', path: pathname };
@@ -79,6 +82,8 @@ export function buildPath(route: Route): string {
       return `/playbooks/${encodeURIComponent(route.playbookId)}`;
     case 'settings':
       return '/settings';
+    case 'positions':
+      return '/positions';
     case 'not-found':
       return route.path;
   }

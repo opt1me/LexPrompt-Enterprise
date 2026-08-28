@@ -23,9 +23,10 @@ import {
 import { getProfile } from './lib/db/profile';
 import { migrateIfNeeded, type MigrationPhase } from './lib/db/migrate';
 import { describeLoadError } from './lib/loadError';
-import { getVersion } from './lib/db/playbookVersions';
+import { getVersion, listVersions } from './lib/db/playbookVersions';
 import { scanPlaybookAcrossMatters } from './lib/playbookScan';
 import { buildPositionHealthMap } from './lib/positionHealthMap';
+import { buildPositionRows, type PositionRow } from './lib/standardPositions';
 import {
   listCollections, getCollection, saveCollection, deleteCollection, newCollection,
 } from './lib/db/collections';
@@ -84,6 +85,7 @@ import { WhatWeLearned } from './features/redlines/WhatWeLearned';
 import { TheWorkings } from './features/redlines/TheWorkings';
 import { positionsToDraft, includedPositions } from './features/redlines/positionsToDraft';
 import { Button } from './components/Button';
+import { StandardPositionsView } from './features/positions/StandardPositionsView';
 
 /** `authoring-form` and `authoring-review` are sub-project E's two
  *  session-only screens. They deliberately have **no `Route`**: a draft
@@ -93,7 +95,8 @@ import { Button } from './components/Button';
 type View =
   | 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter' | 'not-found'
   | 'authoring-form' | 'authoring-review'
-  | 'redlines-intake' | 'redlines-learned' | 'redlines-workings';
+  | 'redlines-intake' | 'redlines-learned' | 'redlines-workings'
+  | 'positions';
 
 /** The two views that hold a session-only `AuthoringDraft`. Leaving either
  *  of them, by any path, destroys it (see the effect that clears the
@@ -336,6 +339,7 @@ function viewForRoute(route: Route): View {
     case 'playbooks': return 'library';
     case 'playbook': return 'editor';
     case 'settings': return 'settings';
+    case 'positions': return 'positions';
     case 'not-found': return 'not-found';
     default: return 'matters';
   }
@@ -354,6 +358,7 @@ const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
   matters: { name: 'matters' },
   library: { name: 'playbooks' },
   settings: { name: 'settings' },
+  positions: { name: 'positions' },
 };
 
 /**
@@ -723,6 +728,42 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     loadMatters();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // --- Standard positions (sub-project G, Task 20) ------------------------
+  //
+  // "Which of our house rules are drifting?" — no new data, no new writes,
+  // no model call (R-G18). `buildPositionRows` is pure; everything here is
+  // just gathering what it needs to read: every playbook's identity plus
+  // its published versions, and every review from every matter (health is
+  // only visible across matters, per `buildPositionHealthMap`'s own doc
+  // comment).
+  const [positionRows, setPositionRows] = useState<PositionRow[]>([]);
+  const [positionsError, setPositionsError] = useState<string | null>(null);
+
+  const loadPositions = () => {
+    setPositionsError(null);
+    return (async () => {
+      const playbooks = await listTemplates();
+      const withVersions = await Promise.all(
+        playbooks.map(async (playbook) => ({ playbook, versions: await listVersions(playbook.id) })),
+      );
+      const matterList = await listMatters();
+      const perMatterReviews = await Promise.all(matterList.map(m => listReviews(m.id)));
+      const reviews = perMatterReviews.flat();
+      setPositionRows(buildPositionRows({ playbooks: withVersions, reviews }));
+    })().catch((e) => {
+      // Leaves `positionRows` untouched on failure — never resets it to
+      // `[]`, which would render the "no standard positions yet" empty
+      // state over what is actually a failed read (CLAUDE.md's founding
+      // defect, one level up).
+      setPositionsError(describeLoadError(e, 'Your standard positions could not be loaded. Try again.'));
+    });
+  };
+
+  useEffect(() => {
+    if (view === 'positions') loadPositions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
 
   // --- Matter home (Task 11) ---------------------------------------------
 
@@ -3172,6 +3213,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           >
             Playbooks
           </button>
+          <button
+            onClick={() => requestView('positions')}
+            className={`font-ui text-ui-sm px-2.5 py-1.5 rounded-inset ${view === 'positions' ? 'font-semibold text-ink-1 bg-accent-tint' : 'font-medium text-ink-3 hover:text-ink-1'}`}
+          >
+            Standard positions
+          </button>
           {run && (
             // Important 6: nothing else sets `view` back to 'results' once
             // the user navigates elsewhere (e.g. to Playbooks), so a run was
@@ -3243,6 +3290,18 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               importing={importing}
             />
           )
+        )}
+        {view === 'positions' && (
+          <StandardPositionsView
+            rows={positionRows}
+            error={positionsError}
+            onRetry={loadPositions}
+            onOpenPlaybook={(playbookId) => navigate({ name: 'playbook', playbookId })}
+            // `clauseId` is accepted by the prop and deliberately unused
+            // here: the editor has no clause deep-link today, and adding
+            // one is not something this task invents — it only reads what
+            // D's derivation already produces.
+          />
         )}
         {/* Sub-project E's two session-only screens. Neither has a URL: a
             deep link would promise a draft that cannot be restored. */}
