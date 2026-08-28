@@ -32,7 +32,7 @@ function formatWhen(at: number | undefined): string {
   return typeof at === 'number' ? new Date(at).toLocaleString() : 'an unknown time';
 }
 
-const BADGE = 'text-[10px] px-2 py-0.5 rounded-full uppercase font-bold border inline-flex items-center gap-1 shrink-0';
+const BADGE = 'font-mono text-chip px-2 py-0.5 rounded-chip uppercase border inline-flex items-center gap-1 shrink-0';
 
 /**
  * The state badge, always rendered — there is no "no chip" state, for the
@@ -46,20 +46,20 @@ const BADGE = 'text-[10px] px-2 py-0.5 rounded-full uppercase font-bold border i
 function PositionBadge({ netPosition }: { netPosition: NetPosition }) {
   if (netPosition.state !== 'confirmed') {
     return (
-      <span role="status" className={`${BADGE} bg-amber-500/15 text-amber-300 border-amber-500/20`}>
+      <span role="status" className={`${BADGE} bg-risk-med-tint text-risk-med border-risk-med-edge`}>
         <ShieldQuestion className="w-3 h-3" aria-hidden="true" /> Unconfirmed
       </span>
     );
   }
   if (netPosition.amended) {
     return (
-      <span role="status" className={`${BADGE} bg-violet-500/20 text-violet-200 border-violet-500/30`}>
+      <span role="status" className={`${BADGE} bg-accent-tint text-accent border-accent-edge`}>
         <PencilLine className="w-3 h-3" aria-hidden="true" /> Amended
       </span>
     );
   }
   return (
-    <span role="status" className={`${BADGE} bg-emerald-500/15 text-emerald-300 border-emerald-500/20`}>
+    <span role="status" className={`${BADGE} bg-accent-tint text-accent border-accent-edge`}>
       <CheckCircle2 className="w-3 h-3" aria-hidden="true" /> Confirmed
     </span>
   );
@@ -103,7 +103,7 @@ function AmendPositionModal({ open, initialText, onCancel, onConfirm }: {
         </>
       }
     >
-      <p className="text-xs text-gray-400 leading-relaxed">
+      <p className="font-ui text-ui-sm text-ink-3 leading-relaxed">
         Rewrite what the documents, read together, actually say. This replaces the model&apos;s
         proposal as the position shown here, and is recorded as written by a person — a stronger
         claim than simply confirming the model&apos;s text.
@@ -112,7 +112,7 @@ function AmendPositionModal({ open, initialText, onCancel, onConfirm }: {
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="What the documents say, read in order"
-        className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white outline-none"
+        className="w-full p-2"
       />
     </Modal>
   );
@@ -135,15 +135,22 @@ export function NetPositionPanel({ netPosition, busy = false, onConfirm, onAmend
 
   const text = positionText(netPosition);
   const hasTrail = netPosition.trail.length > 0;
+  // A net position must not read as settled until a human confirms it (the
+  // most dangerous output this app produces — see `netPosition.ts`):
+  // unconfirmed stays visibly provisional, dashed and amber-tinted, never
+  // the plain card fill a confirmed one gets.
+  const shellClass = netPosition.state === 'confirmed'
+    ? 'bg-card border border-net-confirmed'
+    : 'bg-risk-med-tint border border-dashed border-net-unconfirmed';
 
   return (
-    <div className="space-y-2 p-3 rounded-lg border border-violet-500/20 bg-violet-500/[0.06]">
+    <div className={`space-y-2 p-3 rounded-control ${shellClass}`}>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] font-bold text-violet-300 uppercase tracking-wide">Net position</span>
+        <span className="font-mono text-label uppercase text-ink-4">Net position</span>
         <PositionBadge netPosition={netPosition} />
       </div>
 
-      <p className="text-xs text-gray-200 leading-relaxed whitespace-pre-wrap">{text}</p>
+      <p className="font-prose text-finding text-ink-prose leading-relaxed whitespace-pre-wrap">{text}</p>
 
       {/* "Confirmed by you", never "Confirmed by vzcsj71fs7mtalycwr".
           Found by driving the real app: this was the last place in the
@@ -158,7 +165,7 @@ export function NetPositionPanel({ netPosition, busy = false, onConfirm, onAmend
           the actor rather than inventing "an unknown user" — which reads as
           "somebody else", the very implication R1 forbids. */}
       {netPosition.state === 'confirmed' && (
-        <p className="text-[10px] text-gray-500">
+        <p className="font-mono text-pin text-ink-4">
           {netPosition.amended ? 'Amended' : 'Confirmed'}
           {netPosition.byUserId ? ' by you' : ''} on {formatWhen(netPosition.at)}
         </p>
@@ -166,17 +173,17 @@ export function NetPositionPanel({ netPosition, busy = false, onConfirm, onAmend
 
       <div className="flex flex-wrap gap-1.5 pt-1">
         {netPosition.state === 'unconfirmed' && onConfirm && (
-          <Button variant="ghost" disabled={busy} onClick={onConfirm} className="text-[11px] py-1 px-2.5">
+          <Button variant="ghost" disabled={busy} onClick={onConfirm} className="text-button py-1 px-2.5">
             <CheckCircle2 className="w-3 h-3" aria-hidden="true" /> Confirm
           </Button>
         )}
         {onAmend && (
-          <Button variant="ghost" disabled={busy} onClick={() => setAmendOpen(true)} className="text-[11px] py-1 px-2.5">
+          <Button variant="ghost" disabled={busy} onClick={() => setAmendOpen(true)} className="text-button py-1 px-2.5">
             <PencilLine className="w-3 h-3" aria-hidden="true" /> Amend
           </Button>
         )}
         {onOpenTrail && hasTrail && (
-          <Button variant="ghost" disabled={busy} onClick={onOpenTrail} className="text-[11px] py-1 px-2.5">
+          <Button variant="ghost" disabled={busy} onClick={onOpenTrail} className="text-button py-1 px-2.5">
             <History className="w-3 h-3" aria-hidden="true" /> See the variation trail
           </Button>
         )}

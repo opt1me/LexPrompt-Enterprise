@@ -31,9 +31,9 @@ function MarkupNotice({ notice }: { notice: string }) {
   return (
     <div
       role="status"
-      className="shrink-0 flex items-start gap-2 bg-yellow-500/10 border-b border-yellow-500/20 text-yellow-300 text-xs px-4 py-2"
+      className="shrink-0 flex items-start gap-2 bg-risk-med-tint border-b border-risk-med-edge text-risk-med font-ui text-ui-sm px-4 py-2"
     >
-      <FileWarning className="w-4 h-4 shrink-0 mt-px" />
+      <FileWarning className="w-4 h-4 shrink-0 mt-px" aria-hidden="true" />
       <span>{notice}</span>
     </div>
   );
@@ -46,14 +46,18 @@ function MarkupNotice({ notice }: { notice: string }) {
  *  document *and* the caveat — never one instead of the other. */
 export function DocumentViewer({ doc, highlights }: DocumentViewerProps) {
   if (!doc) {
-    return <div className="h-full flex items-center justify-center text-gray-500">No document loaded</div>;
+    return (
+      <div className="h-full flex items-center justify-center bg-doc-gutter font-ui text-ui text-ink-4">
+        No document loaded
+      </div>
+    );
   }
 
   if (doc.parseError) {
     return (
-      <div className="h-full flex flex-col items-center justify-center text-center text-gray-400 p-8 gap-2">
-        <span className="text-white font-medium">{doc.name}</span>
-        <span className="text-sm text-red-400">Could not read this file: {doc.parseError}</span>
+      <div className="h-full flex flex-col items-center justify-center text-center bg-doc-gutter p-8 gap-2">
+        <span className="font-ui text-ui font-medium text-ink-1">{doc.name}</span>
+        <span className="font-ui text-ui-sm text-risk-high">Could not read this file: {doc.parseError}</span>
       </div>
     );
   }
@@ -61,14 +65,20 @@ export function DocumentViewer({ doc, highlights }: DocumentViewerProps) {
   const body = doc.kind === 'pdf'
     ? (
       <Suspense
-        fallback={<div className="h-full flex items-center justify-center text-gray-500 text-sm">Loading PDF…</div>}
+        fallback={(
+          <div className="h-full flex items-center justify-center bg-doc-gutter font-ui text-ui-sm text-ink-4">
+            Loading PDF…
+          </div>
+        )}
       >
         <PdfCanvas file={doc.file} highlights={highlights} />
       </Suspense>
     )
     : (
-      <div className="p-8 whitespace-pre-wrap font-serif text-sm text-gray-300 max-w-3xl mx-auto overflow-y-auto h-full bg-[#1a1a1a] shadow-2xl my-4 rounded">
-        {doc.text}
+      <div className="h-full overflow-y-auto bg-doc-gutter">
+        <div className="p-8 whitespace-pre-wrap bg-page shadow-page rounded-inset font-prose text-finding text-ink-prose max-w-3xl mx-auto my-4">
+          {doc.text}
+        </div>
       </div>
     );
 

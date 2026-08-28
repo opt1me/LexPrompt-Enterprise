@@ -46,7 +46,7 @@ export function RejectReasonModal({ open, initialReason = '', onCancel, onConfir
         </>
       }
     >
-      <p className="text-xs text-gray-400 leading-relaxed">
+      <p className="font-ui text-ui-sm text-ink-3 leading-relaxed">
         A rejected finding is still exported, with this reason attached. Say what is wrong with it
         so whoever reads the report knows why it was not relied on.
       </p>
@@ -54,7 +54,7 @@ export function RejectReasonModal({ open, initialReason = '', onCancel, onConfir
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         placeholder="e.g. Cites the indemnity, not the liability cap"
-        className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-sm text-white outline-none"
+        className="w-full p-2"
       />
     </Modal>
   );

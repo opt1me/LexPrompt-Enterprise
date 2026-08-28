@@ -49,13 +49,13 @@ export function RunPanel({ template, onBack, onRun, initialDocuments = [] }: Run
 
   return (
     <div className="p-8 max-w-2xl mx-auto h-full flex flex-col justify-center">
-      <div className="w-full bg-[#1a1a1a] border border-white/10 rounded-2xl p-8 shadow-2xl">
+      <div className="w-full bg-card border border-rule rounded-panel p-8">
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-bold text-white">Run review: {template.name}</h2>
-          <button onClick={onBack} className="text-xs text-gray-500 hover:text-white">Cancel</button>
+          <h2 className="font-prose text-section text-ink-1">Run review: {template.name}</h2>
+          <button onClick={onBack} className="font-ui text-meta text-ink-3 hover:text-ink-1">Cancel</button>
         </div>
 
-        <div className="border-2 border-dashed border-white/10 rounded-xl p-10 text-center mb-6 hover:bg-white/5 transition-colors relative bg-[#111]">
+        <div className="border-2 border-dashed border-rule rounded-card p-10 text-center mb-6 hover:bg-chip-fill transition-colors relative bg-paper">
           <input
             type="file"
             multiple
@@ -63,28 +63,28 @@ export function RunPanel({ template, onBack, onRun, initialDocuments = [] }: Run
             className="absolute inset-0 opacity-0 cursor-pointer"
             aria-label="Upload documents"
           />
-          <Upload className="w-8 h-8 text-gray-500 mx-auto mb-2" />
-          <p className="text-sm text-gray-400">{parsing ? 'Reading files…' : 'Drag files here or click to upload'}</p>
-          <p className="text-xs text-gray-600 mt-2">Supports PDF, DOCX, TXT</p>
+          <Upload className="w-8 h-8 text-ink-4 mx-auto mb-2" aria-hidden="true" />
+          <p className="font-ui text-ui text-ink-2">{parsing ? 'Reading files…' : 'Drag files here or click to upload'}</p>
+          <p className="font-ui text-meta text-ink-4 mt-2">Supports PDF, DOCX, TXT</p>
         </div>
 
         {documents.length > 0 && (
           <div className="mb-6 space-y-2 max-h-48 overflow-y-auto">
             {documents.map(d => (
-              <div key={d.id} className="flex items-center justify-between gap-3 text-xs text-gray-300 bg-white/5 p-2 rounded border border-white/5">
+              <div key={d.id} className="flex items-center justify-between gap-3 font-ui text-ui-sm text-ink-2 bg-paper p-2 rounded-control border border-rule">
                 <span className="truncate flex items-center gap-2 min-w-0">
-                  {d.parseError && <FileWarning className="w-3.5 h-3.5 text-red-400 shrink-0" />}
+                  {d.parseError && <FileWarning className="w-3.5 h-3.5 text-risk-high shrink-0" aria-hidden="true" />}
                   <span className="truncate">{d.name}</span>
                 </span>
                 <span className="flex items-center gap-2 shrink-0">
                   {d.parseError ? (
-                    <span className="text-red-400 max-w-[12rem] truncate" title={d.parseError}>{d.parseError}</span>
+                    <span className="text-risk-high max-w-[12rem] truncate" title={d.parseError}>{d.parseError}</span>
                   ) : (
-                    <span className="opacity-50">Ready</span>
+                    <span className="text-ink-4">Ready</span>
                   )}
                   <button
                     onClick={() => removeDocument(d.id)}
-                    className="text-gray-500 hover:text-white"
+                    className="text-ink-4 hover:text-ink-1"
                     aria-label={`Remove ${d.name}`}
                   >
                     <X className="w-3.5 h-3.5" />
@@ -95,7 +95,7 @@ export function RunPanel({ template, onBack, onRun, initialDocuments = [] }: Run
           </div>
         )}
 
-        <p className="text-xs text-gray-500 mb-3 text-center">
+        <p className="font-ui text-meta text-ink-3 mb-3 text-center">
           {docCount} document{docCount === 1 ? '' : 's'} &times; {clauseCount} clause{clauseCount === 1 ? '' : 's'}
         </p>
 
@@ -124,14 +124,14 @@ export function RunProgressBar({ run, onCancel }: RunProgressBarProps) {
   const pct = total > 0 ? Math.round((done / total) * 100) : 0;
 
   return (
-    <div className="shrink-0 border-b border-white/10 bg-[#111] px-6 py-3 flex items-center gap-4">
+    <div className="shrink-0 border-b border-rule bg-card px-6 py-3 flex items-center gap-4" data-busy="true" aria-live="polite">
       <div className="flex-1 min-w-0">
-        <div className="flex justify-between text-xs text-gray-400 mb-1.5">
+        <div className="flex justify-between font-ui text-meta text-ink-3 mb-1.5">
           <span>Reviewing… {done} of {total} clauses</span>
           <span>{pct}%</span>
         </div>
-        <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-          <div className="h-full bg-violet-500 transition-all" style={{ width: `${pct}%` }} />
+        <div className="h-1.5 bg-chip-fill rounded-meter overflow-hidden">
+          <div className="h-full bg-accent transition-all duration-150" style={{ width: `${pct}%` }} />
         </div>
       </div>
       <Button variant="ghost" onClick={onCancel} className="shrink-0">Cancel</Button>
@@ -149,8 +149,8 @@ export function RunProgressBar({ run, onCancel }: RunProgressBarProps) {
 export function RunCancelledBanner({ run }: { run: ReviewRun }) {
   const { done, total } = runProgress(run);
   return (
-    <div className="shrink-0 border-b border-white/10 bg-[#111] px-6 py-3 flex items-center gap-3 text-sm text-gray-400">
-      <CircleSlash className="w-4 h-4 shrink-0" />
+    <div className="shrink-0 border-b border-rule bg-card px-6 py-3 flex items-center gap-3 font-ui text-ui text-ink-2">
+      <CircleSlash className="w-4 h-4 shrink-0" aria-hidden="true" />
       <span>Run cancelled — {done} of {total} clauses were reviewed before it stopped.</span>
     </div>
   );
@@ -187,8 +187,8 @@ export function RunCancelledBanner({ run }: { run: ReviewRun }) {
 export function RunInterruptedBanner({ run }: { run: ReviewRun }) {
   const { done, total } = runProgress(run);
   return (
-    <div className="shrink-0 border-b border-yellow-500/20 bg-yellow-500/5 px-6 py-3 flex items-center gap-3 text-sm text-yellow-300">
-      <AlertOctagon className="w-4 h-4 shrink-0" />
+    <div className="shrink-0 border-b border-risk-med-edge bg-risk-med-tint px-6 py-3 flex items-center gap-3 font-ui text-ui text-risk-med">
+      <AlertOctagon className="w-4 h-4 shrink-0" aria-hidden="true" />
       <span>
         This review was interrupted before it finished — {done} of {total} clauses were reviewed. It will not
         resume on its own; use Retry on any stalled clause below to continue.
@@ -203,8 +203,8 @@ export function RunEmptyFindingsBanner({ run }: { run: ReviewRun }) {
   if (noContent === 0) return null;
 
   return (
-    <div className="shrink-0 border-b border-yellow-500/20 bg-yellow-500/5 px-6 py-3 flex items-center gap-3 text-sm text-yellow-300">
-      <TriangleAlert className="w-4 h-4 shrink-0" />
+    <div className="shrink-0 border-b border-risk-med-edge bg-risk-med-tint px-6 py-3 flex items-center gap-3 font-ui text-ui text-risk-med">
+      <TriangleAlert className="w-4 h-4 shrink-0" aria-hidden="true" />
       <span>{noContent} of {total} clauses returned no content from the model.</span>
     </div>
   );

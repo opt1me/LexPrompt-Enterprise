@@ -78,9 +78,14 @@ export function ReviewVersionLine({ versionId, version, lookupFailed, onOpenHist
     // that was later lost, which is a different and more alarming claim
     // than the truth — this branch means one was NEVER made (pre-versioning
     // data, or a playbook that never existed), per this prop's own doc
-    // comment above.
+    // comment above. Sub-project G's spec/brief restated this branch's
+    // sentence as "Ran against a playbook version that is no longer
+    // recorded" — the exact wording m4 rejected, and still forbidden by
+    // this file's own test (`.not.toMatch(/no longer recorded/i)`). Kept as
+    // shipped rather than reverting a deliberate, documented fix; flagged in
+    // the task report rather than silently diverging from the brief.
     return (
-      <span className="text-xs text-gray-500">
+      <span className="font-ui text-meta text-ink-3">
         This review predates playbook versioning, so it does not record which version it ran against.
       </span>
     );
@@ -88,7 +93,7 @@ export function ReviewVersionLine({ versionId, version, lookupFailed, onOpenHist
 
   if (lookupFailed) {
     return (
-      <span className="text-xs text-amber-500">
+      <span className="font-ui text-meta text-risk-med">
         Could not check which playbook version this review ran against. Try reloading.
       </span>
     );
@@ -96,7 +101,7 @@ export function ReviewVersionLine({ versionId, version, lookupFailed, onOpenHist
 
   if (version === null) {
     return (
-      <span className="text-xs text-amber-500">
+      <span className="font-ui text-meta text-risk-med">
         The version this review ran against has been deleted.
       </span>
     );
@@ -104,14 +109,14 @@ export function ReviewVersionLine({ versionId, version, lookupFailed, onOpenHist
 
   const label = `Ran against v${version.version}`;
   if (!onOpenHistory) {
-    return <span className="text-xs text-gray-500">{label}</span>;
+    return <span className="font-ui text-meta text-ink-3">{label}</span>;
   }
 
   return (
     <button
       type="button"
       onClick={onOpenHistory}
-      className="text-xs text-violet-300 hover:text-violet-200 underline underline-offset-2"
+      className="font-ui text-meta text-accent hover:text-accent-strong underline underline-offset-2"
     >
       {label}
     </button>

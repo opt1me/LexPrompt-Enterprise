@@ -97,8 +97,8 @@ function PdfPage({ pdfDoc, pageNum, scale, highlightRects }: PdfPageProps) {
               top: viewRect[1] - rect.h * scale,
               width: viewRect[2] - viewRect[0],
               height: rect.h * scale * 1.4,
-              backgroundColor: 'rgba(255, 235, 59, 0.35)',
-              borderBottom: '2px solid rgba(255, 193, 7, 0.8)',
+              backgroundColor: 'var(--color-highlight-fill)',
+              borderBottom: '2px solid var(--color-highlight-edge)',
               mixBlendMode: 'multiply',
               pointerEvents: 'none',
             }}

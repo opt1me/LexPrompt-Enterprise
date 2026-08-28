@@ -21,12 +21,29 @@ export interface PositionComparisonProps {
  * amendment over the model's proposal — and a second copy of that precedence
  * is this project's most repeated defect (CLAUDE.md: "sibling drift").
  */
+const OUTCOME_CARD: Record<'deviates' | 'meets' | 'unclear', string> = {
+  deviates: 'bg-risk-high-tint border-risk-high-edge',
+  meets: 'bg-accent-tint border-accent-edge',
+  unclear: 'bg-risk-med-tint border-risk-med-edge',
+};
+
+/** A clause with no house rule is not a comparison that came out blank — no
+ *  placeholder, no "n/a". `positionOutcome` is set alongside `summary`/
+ *  `netPosition` by the same extraction that produced this finding
+ *  (`normalisePositionOutcome`, the only place it's produced) whenever the
+ *  clause carries a `standardPosition`, so its absence here means the
+ *  outcome was never derived for this finding, not that the model chose
+ *  "meets" or "unclear" — rendering nothing is the honest response to that,
+ *  not a downgraded card. */
 export function PositionComparison({ position, finding }: PositionComparisonProps) {
+  if (!finding.positionOutcome) return null;
+
   const documentSide = describeFindingOutcome(finding);
+  const cardClass = OUTCOME_CARD[finding.positionOutcome];
 
   return (
-    <div className="bg-white/5 border border-white/10 rounded-lg p-3 space-y-2">
-      <div className="flex items-center gap-1 text-[10px] font-bold text-gray-500 uppercase tracking-wide">
+    <div className={`border rounded-control p-3 space-y-2 ${cardClass}`}>
+      <div className="flex items-center gap-1 font-mono text-label uppercase text-ink-4">
         <Scale className="w-3 h-3" aria-hidden="true" /> Standard position
       </div>
 
@@ -36,22 +53,22 @@ export function PositionComparison({ position, finding }: PositionComparisonProp
          here too, because a reader meeting the comparison for the first time
          on a finding has no other way to know whether to trust it. */}
       {!position.reviewedByHuman && (
-        <p className="text-[10px] uppercase font-bold text-amber-300">
+        <p className="font-mono text-label uppercase text-risk-med">
           AI-drafted suggestion — not yet reviewed by a person
         </p>
       )}
 
-      <p className="text-xs text-gray-300 leading-relaxed">
-        <span className="font-semibold text-gray-400">We ask for </span>
+      <p className="font-prose text-field text-ink-prose leading-relaxed">
+        <span className="font-semibold text-ink-2">We ask for </span>
         {position.text}
       </p>
-      <p className="text-xs text-gray-300 leading-relaxed">
-        <span className="font-semibold text-gray-400">This document says </span>
+      <p className="font-prose text-field text-ink-prose leading-relaxed">
+        <span className="font-semibold text-ink-2">This document says </span>
         {documentSide}
       </p>
 
       {finding.positionRationale && (
-        <p className="text-xs text-gray-400 italic leading-relaxed">{finding.positionRationale}</p>
+        <p className="font-ui text-ui-sm text-ink-3 italic leading-relaxed">{finding.positionRationale}</p>
       )}
     </div>
   );
