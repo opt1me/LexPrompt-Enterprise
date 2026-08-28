@@ -1,5 +1,212 @@
 @import "tailwindcss";
 
+/* ── Layer 1 · palette ────────────────────────────────────────────────────
+   Plain custom properties, deliberately NOT inside @theme, so Tailwind
+   generates no utilities for them. `bg-oxblood` is not a class anyone can
+   type, because the raw colour never enters the --color-* namespace
+   (R-G2). Application code may not reference a --lex-* name; the semantic
+   -role guard in src/test/palette.test.ts fails on one outside this file. */
+:root {
+  --lex-canvas: #e5e2db;  --lex-paper: #f6f3ed;  --lex-card: #fffefb;
+  --lex-gutter: #e8e4dc;  --lex-page: #ffffff;
+
+  --lex-ink-1: #1a1815;  --lex-ink-prose: #26231e;  --lex-ink-quote: #3a352e;
+  --lex-ink-2: #57524a;  --lex-ink-3: #6b665c;      --lex-ink-4: #8a847a;
+  --lex-ink-5: #a8a29a;  --lex-ink-6: #c9c3b8;
+
+  --lex-teal: #14574f;   --lex-oxblood: #8c2f24;  --lex-amber: #8a6414;
+  --lex-green: #2c6448;  --lex-blue: #3d5a80;
+  /* The hover/pressed step for teal. A real value, not an alias of
+     --lex-teal: `hover:bg-accent-strong` on every primary button and every
+     link would otherwise be a visual no-op, invisible to the whole test
+     suite and findable only in a browser (R-GP9). */
+  --lex-teal-strong: #0e3f39;
+
+  /* Channel triplets, so a tint or an edge is one rgb(… / a) away from the
+     hue it belongs to and cannot drift from it by hand-mixing. */
+  --lex-ink-rgb: 26 24 21;
+  --lex-teal-rgb: 20 87 79;
+  --lex-oxblood-rgb: 140 47 36;
+  --lex-amber-rgb: 138 100 20;
+  --lex-green-rgb: 44 100 72;
+  --lex-blue-rgb: 61 90 128;
+  --lex-highlight-rgb: 255 222 89;
+  --lex-highlight-edge-rgb: 198 150 20;
+}
+
+/* ── Layer 2 · roles ──────────────────────────────────────────────────────
+   The only names application code may use. Each answers a question about
+   meaning, never about appearance. */
+@theme {
+  /* Surfaces */
+  --color-canvas:     var(--lex-canvas);
+  --color-paper:      var(--lex-paper);
+  --color-card:       var(--lex-card);
+  --color-doc-gutter: var(--lex-gutter);
+  --color-page:       var(--lex-page);
+
+  /* Ink. ink-4 and below are decorative-grade contrast on paper: no failure
+     state, disclosure or warning may use them (R-G19). */
+  --color-ink-1:     var(--lex-ink-1);
+  --color-ink-prose: var(--lex-ink-prose);
+  --color-ink-quote: var(--lex-ink-quote);
+  --color-ink-2:     var(--lex-ink-2);
+  --color-ink-3:     var(--lex-ink-3);
+  --color-ink-4:     var(--lex-ink-4);
+  --color-ink-5:     var(--lex-ink-5);
+  --color-ink-6:     var(--lex-ink-6);
+
+  /* Rules and neutral fills */
+  --color-rule-soft:   rgb(var(--lex-ink-rgb) / 0.09);
+  --color-rule:        rgb(var(--lex-ink-rgb) / 0.12);
+  --color-rule-strong: rgb(var(--lex-ink-rgb) / 0.18);
+  --color-chip-fill:   rgb(var(--lex-ink-rgb) / 0.06);
+
+  /* Action and human confirmation. Teal means a person did something. */
+  --color-accent:        var(--lex-teal);
+  --color-accent-tint:   rgb(var(--lex-teal-rgb) / 0.09);
+  --color-accent-edge:   rgb(var(--lex-teal-rgb) / 0.24);
+  --color-accent-strong: var(--lex-teal-strong);
+
+  /* Risk — a model judgement */
+  --color-risk-high:      var(--lex-oxblood);
+  --color-risk-high-tint: rgb(var(--lex-oxblood-rgb) / 0.06);
+  --color-risk-high-edge: rgb(var(--lex-oxblood-rgb) / 0.22);
+  --color-risk-med:       var(--lex-amber);
+  --color-risk-med-tint:  rgb(var(--lex-amber-rgb) / 0.09);
+  --color-risk-med-edge:  rgb(var(--lex-amber-rgb) / 0.22);
+  --color-risk-low:       var(--lex-green);
+  --color-risk-low-tint:  rgb(var(--lex-green-rgb) / 0.10);
+
+  /* Verification — a human judgement. verified is TEAL, not the green of
+     low risk (R-G4). */
+  --color-state-verified:  var(--lex-teal);
+  --color-state-flagged:   var(--lex-amber);
+  --color-state-rejected:  var(--lex-oxblood);
+  --color-state-unchecked: var(--lex-ink-4);
+
+  /* Standard-position outcome — a model judgement */
+  --color-outcome-meets:    var(--lex-green);
+  --color-outcome-deviates: var(--lex-oxblood);
+  --color-outcome-unclear:  var(--lex-amber);
+
+  /* Position health — derived from VERIFIED findings only, which is why
+     held is teal rather than green. */
+  --color-health-held:      var(--lex-teal);
+  --color-health-conceded:  var(--lex-amber);
+  --color-health-untested:  var(--lex-ink-4);
+  --color-health-none:      var(--lex-ink-5);
+
+  /* Net position */
+  --color-net-unconfirmed: var(--lex-amber);
+  --color-net-confirmed:   var(--lex-teal);
+  --color-net-amended:     var(--lex-teal);
+
+  /* Draft / suggested / informational */
+  --color-draft:      var(--lex-blue);
+  --color-draft-tint: rgb(var(--lex-blue-rgb) / 0.11);
+
+  /* Document */
+  --color-highlight-fill: rgb(var(--lex-highlight-rgb) / 0.34);
+  --color-highlight-edge: rgb(var(--lex-highlight-edge-rgb) / 0.75);
+  --color-redline-ins:    var(--lex-teal);
+  --color-redline-del:    var(--lex-oxblood);
+
+  /* Families. Real fallback stacks: with the woff2 files blocked every
+     screen must stay readable and un-reflowed (R-G3, §13.5 item 1). */
+  --font-prose: "Newsreader", ui-serif, Georgia, "Times New Roman", serif;
+  --font-ui:    "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono:  "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Type scale as named roles, not raw sizes */
+  --text-matter-title: 30px;   --text-matter-title--line-height: 1.1;
+  --text-matter-title--letter-spacing: -0.015em;
+  --text-screen-title: 26px;   --text-screen-title--line-height: 1.15;
+  --text-section:      17px;   --text-section--line-height: 1.3;
+  --text-clause:       18px;   --text-clause--line-height: 1.2;
+  --text-finding:      15.5px; --text-finding--line-height: 1.62;
+  --text-quote:        13.5px; --text-quote--line-height: 1.6;
+  --text-field:        13.5px; --text-field--line-height: 1.6;
+  --text-ui:           13.5px; --text-ui--line-height: 1.5;
+  --text-ui-sm:        12px;   --text-ui-sm--line-height: 1.5;
+  --text-button:       12px;   --text-button--line-height: 1;
+  --text-meta:         11.5px; --text-meta--line-height: 1.45;
+  --text-label:        9.5px;  --text-label--line-height: 1.2;
+  --text-label--letter-spacing: 0.13em;
+  --text-chip:         9.5px;  --text-chip--line-height: 1.2;
+  --text-chip--letter-spacing: 0.07em;
+  --text-pin:          10.5px; --text-pin--line-height: 1.3;
+  --text-figure:       30px;   --text-figure--line-height: 1;
+
+  /* Radii, named by what they wrap */
+  --radius-chip:    3px;
+  --radius-inset:   5px;
+  --radius-control: 6px;
+  --radius-card:    7px;
+  --radius-panel:   8px;
+  --radius-meter:   9999px;
+
+  /* The only two shadows in the system. No shadow on a card, ever. */
+  --shadow-tab:  0 1px 2px rgb(0 0 0 / 0.07);
+  --shadow-page: 0 4px 18px rgb(0 0 0 / 0.14);
+}
+
+@font-face {
+  font-family: "Newsreader";
+  src: url("/fonts/newsreader-latin-var.woff2") format("woff2");
+  font-weight: 300 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Newsreader";
+  src: url("/fonts/newsreader-latin-var-italic.woff2") format("woff2");
+  font-weight: 300 600;
+  font-style: italic;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Instrument Sans";
+  src: url("/fonts/instrument-sans-latin-var.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-400.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-500.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  src: url("/fonts/ibm-plex-mono-latin-600.woff2") format("woff2");
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+
+/* The one looping animation in the system: the extracting pulse. Under
+   reduced motion it becomes a static tinted bar — and the WORD next to it
+   stays, which is the half that matters (R-G20, §8.6). */
+@keyframes lex-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.45; }
+}
+.lex-pulse {
+  animation: lex-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lex-pulse { animation: none; }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 @theme {
   --color-surface: #09090b;
   --color-panel: #111113;
