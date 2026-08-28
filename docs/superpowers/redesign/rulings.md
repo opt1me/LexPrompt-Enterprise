@@ -638,3 +638,38 @@ something incomplete presented as though it were complete.
   gate goes soft. Any test asserting on them is a new test, never an edited one.
   *Cost if wrong: two labels a later reviewer must either keep or remove deliberately, rather
   than discovering them in a diff and wondering whether they were intended.*
+
+- **R-F8 (Task 10A-fix). "Learn from redlines" publishes a genuine v1 through E's draft
+  review; it never mints a playbook or publishes an empty version first.** Task 10A routed
+  the flow into F's changeset mechanism, which requires a live `PlaybookVersion`, so it
+  minted a playbook, published an **empty v1**, and published the adopted positions as v2.
+  That empty v1 is a false entry in an audit trail every review cites ("ran against vN"), it
+  orphaned a playbook whenever the flow was abandoned after intake, it made
+  `confirm`/`drift`/`new_clause` degenerate (everything is `new_clause` against an empty
+  version), and it cost a second model call to produce that empty classification. Spec §4.8
+  has two entry points, not one: a NEW playbook from redlines feeds "E's draft-review surface
+  and D's publish path" (`positionsToDraft` → `DraftReview` → `saveDraftAsV1`), and the
+  changeset mechanism belongs to the OTHER one — an EXISTING playbook fed a new deal, where
+  the classification is meaningful because there is a real prior version. F's three screens
+  now write nothing at all; the first and only durable write in the flow is E's publish.
+  `ChangesetReview`/`publishChangeset` are left committed, tested and **unreached** rather
+  than reached through a fabricated version, and no button leads to them — that entry point
+  needs scoping as its own task. *Cost if wrong: F's changeset path sits unused until that
+  task lands. Cost of the behaviour it replaces: a version recording a state the playbook was
+  never in, in the one record this app offers as proof of what a review ran against.*
+- **R-F9 (Task 10A-fix). Three small shapes of the redlines→draft conversion, chosen without
+  review.** (a) The draft's `contractType` — which `handleSaveDraftAsV1` also uses as the
+  playbook's NAME — is the constant `'Learned from redlines'`; this flow asks for neither, and
+  naming it after where it came from is the one thing certainly true. The name is editable in
+  D's editor immediately after the publish, which is where the flow lands. (b) Each learned
+  clause's `extractPrompt` starts from a plainly-derived default ("What does this agreement say
+  about <title>? Quote the operative wording") rather than a second model call — the redlines
+  say what the firm's POSITION is, nothing about how to go looking for the clause, and E's save
+  gate forces a person to read and keep every clause before anything is published. (c)
+  `standardPosition.reviewedByHuman` starts `false` and only a REWORD (not an adopt) sets
+  `edited`/`positionEdited`; `toPlaybookDraft` flips `reviewedByHuman` at the moment of publish,
+  which is the moment a person read the text being published. *Cost if wrong: (a) two
+  AI-suggestion prompts in the editor read "Contract type: Learned from redlines"; (b) a generic
+  extraction instruction someone waved through, visible and editable on the screen where it must
+  be reviewed; (c) provenance under-claims — "accepted unchanged by a person in the draft
+  review" rather than also crediting the earlier adopt.*
