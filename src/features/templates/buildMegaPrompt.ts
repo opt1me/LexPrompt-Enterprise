@@ -33,6 +33,26 @@ const POSITION_COMPARISON_INSTRUCTION =
 const RISK_LEVEL_LIST = 'High, Medium, Low or Info';
 
 /**
+ * Minor 7 (integrity review). `StandardPositionField.tsx`'s own docstring
+ * states the rule: `origin` says where the words came from and
+ * `reviewedByHuman` says whether a person has read them, and collapsing the
+ * two is how an AI suggestion nobody read comes to be presented as the
+ * firm's position. Both mega-prompt branches used to emit
+ * `standardPosition.text` under an unqualified "Our standard position" /
+ * `standard_position` regardless of `reviewedByHuman` — an unreviewed
+ * AI-drafted proposal pasted into an outside model's prompt with the same
+ * authority as a house rule a person actually signed off on, and with no
+ * caveat telling the outside model (or the person reading its answer) that
+ * the comparison it is about to run is against something nobody has
+ * checked yet.
+ */
+function positionLabel(reviewedByHuman: boolean): string {
+  return reviewedByHuman
+    ? 'Our standard position'
+    : 'Proposed standard position — DRAFTED BY AI, NOT YET REVIEWED by a person at the firm';
+}
+
+/**
  * Builds the "DIY mode" mega-prompt: a self-contained prompt a user can paste
  * into any chat model to do the review by hand, without this app. Pure
  * string-building so it is testable without mounting the modal.
@@ -62,7 +82,7 @@ export function buildMegaPrompt(template: PlaybookDraft, format: MegaPromptForma
     // would answer a different question from the one the app answers for
     // the same playbook — a summary where the app gives a comparison.
     if (c.standardPosition) {
-      str += `\n   - Our standard position: ${c.standardPosition.text}`;
+      str += `\n   - ${positionLabel(c.standardPosition.reviewedByHuman)}: ${c.standardPosition.text}`;
       str += `\n   - ${POSITION_COMPARISON_INSTRUCTION}`;
     }
     if (includeRisk && c.riskCriteria) {
@@ -115,6 +135,13 @@ Acknowledge this prompt and tell me when you are ready.
       ...(c.standardPosition
         ? {
             standard_position: c.standardPosition.text,
+            // Minor 7 — present only when it's true, the same convention
+            // `provenance` uses: a reviewed position needs no caveat, and an
+            // absent key must not be misread as "reviewed" by a consumer
+            // that only checks for the field's presence.
+            ...(c.standardPosition.reviewedByHuman
+              ? {}
+              : { standard_position_status: 'DRAFTED BY AI — NOT YET REVIEWED by a person at the firm' }),
             position_instruction: POSITION_COMPARISON_INSTRUCTION,
           }
         : {}),

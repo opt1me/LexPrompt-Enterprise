@@ -67,6 +67,26 @@ describe('generateDraft', () => {
     expect('standardPosition' in draft.clauses[0]).toBe(false);
   });
 
+  // Minor 3 (integrity review). This clause's fields eventually reach an
+  // IMMUTABLE `PlaybookVersion` record, and `structuredClone` — how
+  // IndexedDB writes every record — PRESERVES an `undefined`-valued key, so
+  // an unconditional `riskCriteria: trimmedString(...)` here used to make a
+  // published clause answer `'riskCriteria' in clause` with `true` while
+  // holding `undefined`. `toEqual` cannot see this (it treats an absent key
+  // and an `undefined`-valued one as equal) — `'in'` is the only check that
+  // actually distinguishes them, per CLAUDE.md.
+  it('leaves riskCriteria absent, not undefined, when the model gives none', async () => {
+    mockChatJson({ clauses: [{ title: 'A', extract_prompt: 'a' }] });
+    const draft = await generateDraft(form, '', [], settings);
+    expect('riskCriteria' in draft.clauses[0]).toBe(false);
+  });
+
+  it('keeps riskCriteria when the model gives one', async () => {
+    mockChatJson({ clauses: [{ title: 'A', extract_prompt: 'a', risk_criteria: 'Flag uncapped liability.' }] });
+    const draft = await generateDraft(form, '', [], settings);
+    expect(draft.clauses[0].riskCriteria).toBe('Flag uncapped liability.');
+  });
+
   it('every clause arrives unreviewed and unedited', async () => {
     mockChatJson({ clauses: [{ title: 'A', extract_prompt: 'a' }] });
     const draft = await generateDraft(form, '', [], settings);

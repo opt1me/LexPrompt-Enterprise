@@ -160,6 +160,51 @@ describe('buildMegaPrompt', () => {
     expect(prompt).toMatch(/OUTPUT FORMAT[\s\S]*MEETS/);
   });
 
+  // Minor 7 (integrity review). `StandardPositionField.tsx` labels an
+  // unreviewed AI-drafted position "Drafted by AI — not yet reviewed" in the
+  // editor; the DIY prompt used to emit the same text under an unqualified
+  // "Our standard position" regardless of `reviewedByHuman`, handing an
+  // outside model (and whoever reads its answer) a suggestion nobody at the
+  // firm has read, with the same authority as an actual house rule.
+  describe('an unreviewed AI-drafted position is caveated, not presented as the firm\'s own (Minor 7)', () => {
+    const unreviewed = {
+      text: 'A 6-month break notice, no conditions.',
+      origin: 'ai-drafted', reviewedByHuman: false,
+    } as const;
+
+    it('copilot format labels it as proposed and unreviewed', () => {
+      const t = templateWithClauses();
+      t.clauses[0]!.standardPosition = { ...unreviewed };
+      const prompt = buildMegaPrompt(t, 'copilot', true);
+      expect(prompt).not.toContain('Our standard position: A 6-month break notice');
+      expect(prompt).toMatch(/NOT YET REVIEWED/);
+      // Still asked for the comparison — this is a caveat, not a block.
+      expect(prompt).toContain('A 6-month break notice, no conditions.');
+      expect(prompt).toMatch(/MEETS.*DEVIATES.*UNCLEAR/);
+    });
+
+    it('json format flags it with a status field rather than a bare standard_position', () => {
+      const t = templateWithClauses();
+      t.clauses[0]!.standardPosition = { ...unreviewed };
+      const prompt = buildMegaPrompt(t, 'json', true);
+      const parsed = JSON.parse(prompt.slice(prompt.indexOf('{')));
+      expect(parsed.clauses[0].standard_position).toBe('A 6-month break notice, no conditions.');
+      expect(parsed.clauses[0].standard_position_status).toMatch(/NOT YET REVIEWED/);
+    });
+
+    it('a REVIEWED position gets no caveat, in either format', () => {
+      const t = templateWithClauses();
+      t.clauses[0]!.standardPosition = { ...unreviewed, reviewedByHuman: true };
+      const copilotPrompt = buildMegaPrompt(t, 'copilot', true);
+      expect(copilotPrompt).toContain('Our standard position: A 6-month break notice, no conditions.');
+      expect(copilotPrompt).not.toMatch(/NOT YET REVIEWED/);
+
+      const jsonPrompt = buildMegaPrompt(t, 'json', true);
+      const parsed = JSON.parse(jsonPrompt.slice(jsonPrompt.indexOf('{')));
+      expect('standard_position_status' in parsed.clauses[0]).toBe(false);
+    });
+  });
+
   // The risk block is off unless the playbook says something about risk —
   // R-D1's rule that presence, not a flag, decides.
   it('turns the risk block on only when the playbook says something about risk', () => {

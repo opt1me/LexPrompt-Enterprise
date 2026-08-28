@@ -86,11 +86,20 @@ function repairClause(raw: RawClause): DraftClause | undefined {
     ? raw.suggestions.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
     : [];
 
+  const riskCriteria = trimmedString(raw.risk_criteria);
+
   return {
     id: uid(),
     title,
     extractPrompt: typeof raw.extract_prompt === 'string' ? raw.extract_prompt : '',
-    riskCriteria: trimmedString(raw.risk_criteria),
+    // Minor 3 (integrity review): omitted, not assigned `undefined` — this
+    // clause's fields eventually reach an IMMUTABLE `PlaybookVersion`
+    // record, and `structuredClone` (how IndexedDB writes every record)
+    // PRESERVES an `undefined`-valued key. An unconditional assignment here
+    // would make a published clause answer `'riskCriteria' in clause` with
+    // `true` while holding `undefined` — the same shape `standardPosition`
+    // just below already avoids with its own conditional spread.
+    ...(riskCriteria !== undefined ? { riskCriteria } : {}),
     ...(standardPosition ? { standardPosition } : {}),
     disposition: 'unreviewed',
     edited: false,
