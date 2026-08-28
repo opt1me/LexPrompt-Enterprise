@@ -2,9 +2,9 @@ import React from 'react';
 import type { PositionOutcome } from '../types';
 
 const POSITION_CLASSES: Record<PositionOutcome, string> = {
-  meets: 'bg-emerald-500/20 text-emerald-400',
-  deviates: 'bg-red-500/20 text-red-400',
-  unclear: 'bg-yellow-500/20 text-yellow-400',
+  meets: 'text-outcome-meets border-outcome-meets',
+  deviates: 'text-outcome-deviates border-outcome-deviates',
+  unclear: 'text-outcome-unclear border-outcome-unclear',
 };
 
 const POSITION_LABEL: Record<PositionOutcome, string> = {
@@ -28,15 +28,18 @@ export interface PositionChipProps {
  * same time, and this chip must be able to sit beside the other two without
  * being confused for either.
  *
- * Styled to match `RiskChip` exactly (same sizing, same "flat badge of
- * colour" idiom) rather than inventing a third convention — the two already
- * read as siblings on the card header and this is their sibling, not a new
- * kind of thing.
+ * Deliberately NOT styled to match `RiskChip`: R-G16 makes that the wrong
+ * goal, because `outcome-deviates` shares a hue with `risk-high` and
+ * `outcome-unclear` shares one with `risk-med` — colour alone cannot tell
+ * a reader which question a chip is answering. The three chips are three
+ * *shapes* instead: `RiskChip` is a filled dot with no border, `StateChip`
+ * is an icon in a bordered fill, and this one is a label inside a
+ * role-coloured border on a transparent fill.
  */
 export function PositionChip({ outcome }: PositionChipProps) {
   if (!outcome) return null;
   return (
-    <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold ${POSITION_CLASSES[outcome]}`}>
+    <span className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border bg-transparent ${POSITION_CLASSES[outcome]}`}>
       {POSITION_LABEL[outcome]}
     </span>
   );

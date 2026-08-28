@@ -45,14 +45,18 @@ export function Toast({ toast }: { toast: ToastState | null }) {
   const isError = toast.variant === 'error';
   return (
     <div
-      className={`fixed bottom-8 right-8 px-6 py-3 rounded-lg shadow-2xl z-[100] flex items-center gap-3 border backdrop-blur-md transition-all ${
-        isError
-          ? 'bg-red-900/90 border-red-500 text-red-100'
-          : 'bg-violet-900/90 border-violet-500 text-violet-100'
+      data-toast
+      // `aria-live`, never role="status": that selector is how ~21 positional
+      // assertions find a StateChip, and this element renders FIRST in the app
+      // frame (R-GP2/F1). `assertive` for an error the user must not miss,
+      // `polite` for a success they can read when they get to it.
+      aria-live={isError ? 'assertive' : 'polite'}
+      className={`fixed bottom-8 right-8 px-6 py-3 rounded-card z-[100] flex items-center gap-3 border-l-2 border border-rule bg-card font-ui text-ui transition-colors duration-150 ${
+        isError ? 'border-l-risk-high text-risk-high' : 'border-l-accent text-ink-1'
       }`}
     >
-      {isError ? <AlertCircle className="h-5 w-5" /> : <Check className="h-5 w-5" />}
-      <span className="font-medium text-sm">{toast.message}</span>
+      {isError ? <AlertCircle className="h-5 w-5" aria-hidden="true" /> : <Check className="h-5 w-5" aria-hidden="true" />}
+      <span>{toast.message}</span>
     </div>
   );
 }

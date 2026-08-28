@@ -2,10 +2,17 @@ import React from 'react';
 import type { RiskLevel } from '../types';
 
 const RISK_CLASSES: Record<RiskLevel, string> = {
-  High: 'bg-red-500/20 text-red-400',
-  Medium: 'bg-yellow-500/20 text-yellow-400',
-  Low: 'bg-green-500/20 text-green-400',
-  Info: 'bg-blue-500/20 text-blue-400',
+  High: 'text-risk-high',
+  Medium: 'text-risk-med',
+  Low: 'text-risk-low',
+  Info: 'text-draft',
+};
+
+const RISK_DOT: Record<RiskLevel, string> = {
+  High: 'bg-risk-high',
+  Medium: 'bg-risk-med',
+  Low: 'bg-risk-low',
+  Info: 'bg-draft',
 };
 
 /** The risk level the *model* assigned. Its counterpart is `StateChip`,
@@ -16,7 +23,8 @@ const RISK_CLASSES: Record<RiskLevel, string> = {
 export function RiskChip({ level }: { level: RiskLevel | undefined }) {
   if (!level) return null;
   return (
-    <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold ${RISK_CLASSES[level]}`}>
+    <span className={`font-mono text-chip uppercase inline-flex items-center gap-1.5 ${RISK_CLASSES[level]}`}>
+      <span className={`w-1.5 h-1.5 rounded-meter ${RISK_DOT[level]}`} aria-hidden="true" />
       {level}
     </span>
   );

@@ -33,12 +33,13 @@ export interface LoadErrorPanelProps {
 export function LoadErrorPanel({ message, onRetry, compact = false }: LoadErrorPanelProps) {
   if (compact) {
     return (
-      <div className="p-6 text-center space-y-3 border border-dashed border-red-500/30 rounded-xl bg-red-950/10">
-        <p className="text-red-400 text-sm">{message}</p>
+      <div className="p-6 text-center space-y-3 border border-dashed border-risk-high-edge rounded-card bg-risk-high-tint">
+        <p className="text-risk-high font-ui text-ui">{message}</p>
         {onRetry && (
           <button
             onClick={onRetry}
-            className="px-3 py-1.5 rounded-md bg-violet-600 text-white text-sm hover:bg-violet-500"
+            title="Retry"
+            className="px-3 py-1.5 rounded-control bg-accent text-page font-ui text-button font-semibold hover:bg-accent-strong"
           >
             Retry
           </button>
@@ -49,11 +50,12 @@ export function LoadErrorPanel({ message, onRetry, compact = false }: LoadErrorP
 
   return (
     <div className="p-8 max-w-md mx-auto text-center space-y-4">
-      <p className="text-red-400">{message}</p>
+      <p className="text-risk-high font-ui text-ui">{message}</p>
       {onRetry && (
         <button
           onClick={onRetry}
-          className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+          title="Retry"
+          className="px-4 py-2 rounded-control bg-accent text-page font-ui text-button font-semibold hover:bg-accent-strong"
         >
           Retry
         </button>

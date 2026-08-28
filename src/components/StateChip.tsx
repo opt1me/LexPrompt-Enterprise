@@ -6,10 +6,10 @@ const CHIP: Record<VerificationState, { label: string; classes: string; Icon: ty
   // "Unverified" rather than "Unchecked": the chip is read by someone
   // deciding whether to rely on the finding, and "unverified AI output" is
   // the phrase the export uses. The two must say the same thing.
-  unchecked: { label: 'Unverified', classes: 'bg-white/5 text-gray-400 border-white/10', Icon: CircleDashed },
-  verified: { label: 'Verified', classes: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20', Icon: CheckCircle2 },
-  flagged: { label: 'Flagged', classes: 'bg-amber-500/15 text-amber-300 border-amber-500/20', Icon: Flag },
-  rejected: { label: 'Rejected', classes: 'bg-red-500/15 text-red-300 border-red-500/20', Icon: XCircle },
+  unchecked: { label: 'Unverified', classes: 'bg-chip-fill text-state-unchecked border-rule', Icon: CircleDashed },
+  verified: { label: 'Verified', classes: 'bg-accent-tint text-state-verified border-accent-edge', Icon: CheckCircle2 },
+  flagged: { label: 'Flagged', classes: 'bg-risk-med-tint text-state-flagged border-risk-med-edge', Icon: Flag },
+  rejected: { label: 'Rejected', classes: 'bg-risk-high-tint text-state-rejected border-risk-high-edge', Icon: XCircle },
 };
 
 /**
@@ -30,7 +30,7 @@ export function StateChip({ verification }: { verification: Verification }) {
     <span
       role="status"
       title={title}
-      className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold border inline-flex items-center gap-1 ${classes}`}
+      className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border inline-flex items-center gap-1 ${classes}`}
     >
       <Icon className="w-3 h-3" aria-hidden="true" />
       {label}

@@ -29,7 +29,7 @@ export const AutoResizeTextarea: React.FC<AutoResizeTextareaProps> = ({ value, c
             ref={textareaRef}
             value={value}
             onChange={handleChange}
-            className={`${className} overflow-hidden resize-none`}
+            className={`${className} overflow-hidden resize-none bg-card border border-rule-strong rounded-control text-ink-prose font-prose text-field placeholder:text-ink-5 focus:outline-none focus:ring-1 focus:ring-accent focus:border-accent`}
             {...props}
         />
     );
