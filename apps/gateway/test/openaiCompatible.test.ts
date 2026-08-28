@@ -43,7 +43,7 @@ describe('the registry', () => {
   });
 
   it('throws for an unregistered id, naming what is pending, rather than returning undefined', () => {
-    expect(() => registry.get('anthropic')).toThrow(/Not yet implemented: anthropic, recorded/);
+    expect(() => registry.get('recorded')).toThrow(/Not yet implemented: recorded/);
     expect(() => registry.get('bedrock' as never)).toThrow(/bedrock/);
   });
 });

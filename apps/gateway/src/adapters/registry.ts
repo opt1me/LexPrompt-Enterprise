@@ -1,5 +1,6 @@
 import { PROVIDER_IDS, type ProviderId } from '@lexprompt/core';
 import type { ProviderAdapter } from './types.ts';
+import { anthropicAdapter } from './anthropic.ts';
 import { azureFoundryAdapter } from './azureFoundry.ts';
 import { azureOpenaiAdapter } from './azureOpenai.ts';
 import { openaiAdapter } from './openai.ts';
@@ -22,7 +23,7 @@ import { makeOpenrouterAdapter } from './openrouter.ts';
  * direction — so it cannot be forgotten and cannot become a place to hide
  * an unimplemented provider.
  */
-export const PENDING: readonly ProviderId[] = ['anthropic', 'recorded'];
+export const PENDING: readonly ProviderId[] = ['recorded'];
 
 export interface RegistryConfig {
   publicOrigin: string;
@@ -39,8 +40,8 @@ export function buildRegistry(config: RegistryConfig): {
     azureOpenaiAdapter,
     openaiAdapter,
     makeOpenrouterAdapter(config.publicOrigin),
-    // Task 9 adds anthropicAdapter here; Task 13 adds
-    // makeRecordedAdapter(config.recordedDir, config.readFile).
+    anthropicAdapter,
+    // Task 13 adds makeRecordedAdapter(config.recordedDir, config.readFile).
   ];
   const byId = new Map<ProviderId, ProviderAdapter>(all.map(a => [a.id, a]));
   return {
