@@ -4,6 +4,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, buttons, click, type } from '../../test/mount';
 import { TemplateEditor } from './TemplateEditor';
 import type { PlaybookClause, PlaybookDraft, PlaybookVersion } from '../../types';
+import { getDb, closeDb } from '../../lib/db/open';
+import { STORES } from '../../lib/db/schema';
+import {
+  newPlaybook, savePlaybook, saveDraft, getPlaybook, getPlaybookContent, draftFromVersion,
+} from '../../lib/db/playbooks';
+import { publishVersion } from '../../lib/db/playbookVersions';
 
 // No text()/flush()/fieldMatching() helper exists in `src/test/mount`; these
 // are local selectors, the same way PositionComparison.test.tsx writes its
@@ -537,5 +543,51 @@ describe('TemplateEditor — standard positions', () => {
       <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect(c.textContent).not.toMatch(/untested|held|conceded/i);
+  });
+});
+
+// Integrity review (D/E), Major 1. The "byte-identical draft" case above is
+// built by hand and so never travels through the store; the real editor's
+// draft always has. `saveDraft` writes `changeSummary: ''` (that is all
+// `draftFromVersion` ever produces — the publish summary is collected
+// separately by `PublishDialog`), and a read that rewrote a blank summary
+// made EVERY reopened draft differ from its version, whatever it said. That
+// is how a real library ended up with a byte-identical v1/v2 pair.
+describe('TemplateEditor — a draft that has been through the store (Major 1)', () => {
+  it('offers no publish for a saved draft reopened byte-identical to its version', async () => {
+    const db = await getDb();
+    await db.clear(STORES.playbooks);
+    await db.clear(STORES.playbookVersions);
+    try {
+      const identity = newPlaybook('Lease Review');
+      const v1 = await publishVersion(identity.id, {
+        name: 'Lease Review',
+        contractType: 'Lease',
+        systemPrompt: 'You are a reviewer.',
+        formatPrompt: 'Quote verbatim.',
+        clauses: structuredClone(twoClauses),
+        changeSummary: '',
+      }, 'u1');
+      const saved = await savePlaybook({ ...identity, currentVersionId: v1.id });
+      // Exactly what the editor's "Save draft" writes for an edit typed and
+      // then undone: the working copy of the published version, unchanged.
+      await saveDraft(saved, draftFromVersion(v1));
+
+      // Reopened the way `loadPlaybookForEdit` does it — both sides read
+      // back out of the store, not carried over in memory.
+      const reopened = await getPlaybook(identity.id);
+      const publishedVersion = await getPlaybookContent(identity.id);
+      expect(reopened!.draft).toBeTruthy();
+
+      const c = mount(
+        <TemplateEditor
+          version={publishedVersion!} draft={reopened!.draft} onDraftChange={noop} {...wiring}
+        />,
+      );
+      expect(buttonNamed(c, /publish/i)?.disabled).toBe(true);
+      expect(c.textContent).not.toMatch(/unpublished changes/i);
+    } finally {
+      await closeDb();
+    }
   });
 });

@@ -335,6 +335,17 @@ describe('migrateDraft', () => {
   it('falls back to the playbook name when the content has none', () => {
     expect(migrateDraft({}, 'Fallback').name).toBe('Fallback');
   });
+
+  // Integrity review (D/E), Major 1. ABSENT is a pre-versioning record and
+  // gets the label; an explicit `''` is a post-D draft or export that
+  // genuinely has no summary, and inventing one for it made every
+  // round-tripped draft differ from its own published version.
+  it('labels a summary that is ABSENT, and preserves one that is explicitly empty', () => {
+    expect(migrateDraft({ name: 'X' }, 'X').changeSummary).toBe(IMPORTED_SUMMARY);
+    expect(migrateDraft({ name: 'X', changeSummary: '' }, 'X').changeSummary).toBe('');
+    expect(migrateDraft({ name: 'X', changeSummary: 'Tightened the cap.' }, 'X').changeSummary)
+      .toBe('Tightened the cap.');
+  });
 });
 
 describe('the startup conversion (R-D7)', () => {

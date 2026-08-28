@@ -177,8 +177,21 @@ export function migrateDraft(input: unknown, fallbackName: string): PlaybookDraf
     // passes the index as the second argument, which would arrive as
     // `keepsRisk` and silently clear the criteria on clause 0 alone.
     clauses: Array.isArray(t.clauses) ? t.clauses.map(c => migrateClause(c, keepsRisk)) : [],
-    changeSummary:
-      typeof t.changeSummary === 'string' && t.changeSummary ? t.changeSummary : IMPORTED_SUMMARY,
+    // ABSENT means "a record written before `changeSummary` existed", and
+    // that is the only case this labels. An EXPLICIT `''` is preserved:
+    // every draft `saveDraft` writes carries `changeSummary: ''` (that is
+    // all `draftFromVersion` produces — the publish summary is collected
+    // separately by `PublishDialog`), so treating `''` as absent rewrote
+    // every reopened draft to IMPORTED_SUMMARY and made
+    // `hasUnpublishedContent` report unpublished changes over content
+    // byte-identical to the published version, whatever it said. That
+    // defeated the duplicate-version guard entirely — a real library holds
+    // an identical v1/v2 pair minted this way — and made Version History
+    // read "Imported from before versioning." for a playbook exported from
+    // a versioned build. `migrateVersionRecord` already draws exactly this
+    // distinction on the same field for the same reason; this is the draft
+    // branch catching up with it (CLAUDE.md: sibling drift).
+    changeSummary: typeof t.changeSummary === 'string' ? t.changeSummary : IMPORTED_SUMMARY,
   };
   // Omitted, never assigned as `undefined` — see the note in
   // `migratePlaybookRecord`, and `migrateClause`'s `standardPosition`.
