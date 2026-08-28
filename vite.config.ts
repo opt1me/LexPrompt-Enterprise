@@ -6,5 +6,10 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
   server: { port: 3005, host: '127.0.0.1' },
   plugins: [react(), tailwindcss()],
-  resolve: { alias: { '@': path.resolve(__dirname, 'src') } },
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, 'src'),
+      '@lexprompt/core': path.resolve(__dirname, 'packages/core/src/index.ts'),
+    },
+  },
 });

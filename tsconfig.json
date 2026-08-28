@@ -22,10 +22,12 @@
     "paths": {
       "@/*": [
         "./src/*"
-      ]
+      ],
+      "@lexprompt/core": ["./packages/core/src/index.ts"],
+      "@lexprompt/core/*": ["./packages/core/src/*"]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "include": ["src"]
+  "include": ["src", "packages/core/src", "packages/core/test"]
 }

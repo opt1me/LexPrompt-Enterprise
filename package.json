@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "workspaces": ["packages/*", "apps/*"],
   "scripts": {
     "dev": "vite",
     "test": "vitest run",
@@ -13,6 +14,7 @@
     "hosting:on": "npm run build && npx firebase-tools@13 deploy"
   },
   "dependencies": {
+    "@lexprompt/core": "*",
     "docx": "^9.7.1",
     "idb": "^8.0.3",
     "jszip": "^3.10.1",
