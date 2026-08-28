@@ -14,6 +14,10 @@ export interface ChatPanelProps {
    *  model's answer (Important 4) — reported here instead of appearing in
    *  the chat history, so the caller can route to Settings. */
   onAuthError?: () => void;
+  /** The matter `documents` belongs to, if any — passed straight through to
+   *  `sendChatMessage`'s `InferContext` (Task 21). Absent for documents
+   *  loaded outside a matter. */
+  matterId?: string;
 }
 
 /**
@@ -31,7 +35,7 @@ export interface ChatPanelProps {
  *     no text and the model can read images, and decline honestly — without
  *     spending a request — when there's nothing usable at all.
  */
-export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) {
+export function ChatPanel({ documents, settings, onAuthError, matterId }: ChatPanelProps) {
   const [history, setHistory] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -82,6 +86,7 @@ export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) 
         contextLength,
         modelSupportsImages,
         settings,
+        matterId,
         onDelta: (chunk) => {
           setHistory(prev => [
             ...prev.slice(0, -1),

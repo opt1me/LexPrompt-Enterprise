@@ -109,6 +109,12 @@ export interface ResultsViewProps {
    *  omitted, a resolved "Ran against vN" line renders as plain text with
    *  nothing to click. */
   onShowVersionHistory?: () => void;
+  /** The matter this run belongs to, if any — carried into every model call
+   *  made from this screen (draft email, suggest a fix, the assistant chat)
+   *  as `InferContext.matterId` so the gateway's audit record can answer
+   *  "which matter did this call serve". Absent for a run started outside a
+   *  matter, which is a genuine fact (Task 21) — never invented. */
+  matterId?: string;
 }
 
 type Tab = 'findings' | 'chat';
@@ -146,7 +152,7 @@ export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
-  playbookVersion, onShowVersionHistory,
+  playbookVersion, onShowVersionHistory, matterId,
 }: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
@@ -309,7 +315,7 @@ export function ResultsView({
     if (!activeDocId) return;
     setEmailLoading(true);
     try {
-      const body = await draftEmail(run, activeDocId, settings);
+      const body = await draftEmail(run, activeDocId, settings, matterId);
       setEmailContent(body);
     } catch (error) {
       reportError('Could not draft the email.', error);
@@ -334,7 +340,9 @@ export function ResultsView({
     setRevisionLoadingClauseId(clause.id);
     try {
       const original = finding.citations[0]?.quote ?? finding.summary ?? '';
-      const revised = await suggestRevision(clause.title, original, finding.riskAnalysis ?? '', settings);
+      const revised = await suggestRevision(clause.title, original, finding.riskAnalysis ?? '', settings, {
+        matterId, reviewId: run.id, clauseId: clause.id,
+      });
       setRevisionData({ title: clause.title, original, revised });
       setRevisionOpen(true);
     } catch (error) {
@@ -628,7 +636,7 @@ export function ResultsView({
           </div>
         ) : (
           <Suspense fallback={<div className="p-4 font-ui text-ui-sm text-ink-4">Loading assistant…</div>}>
-            <ChatPanel documents={activeDoc ? [activeDoc] : []} settings={settings} onAuthError={onAuthError} />
+            <ChatPanel documents={activeDoc ? [activeDoc] : []} settings={settings} onAuthError={onAuthError} matterId={matterId} />
           </Suspense>
         )}
       </div>

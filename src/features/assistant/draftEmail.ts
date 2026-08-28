@@ -18,7 +18,9 @@ function riskRank(level: RiskLevel | undefined): number {
  *
  * Returns markdown; the caller renders it (in a Modal, not `alert()`).
  */
-export async function draftEmail(run: ReviewRun, docId: string, settings: Settings): Promise<string> {
+export async function draftEmail(
+  run: ReviewRun, docId: string, settings: Settings, matterId?: string,
+): Promise<string> {
   const rows = [...buildReportRows(run, docId)].sort((a, b) => riskRank(a.riskLevel) - riskRank(b.riskLevel));
 
   // Fail-loudly rule (see `exportDocx`'s identical guard): a run with no
@@ -65,6 +67,7 @@ must not be written to a client as settled fact.`;
   const answer = await gatewayModelClient.chat({
     modelChoiceId: settings.modelChoiceId,
     purpose: 'export.email',
+    context: { matterId, reviewId: run.id },
     system,
     user,
   });

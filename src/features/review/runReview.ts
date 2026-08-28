@@ -161,8 +161,14 @@ export async function runReview(
   onUpdate: (run: ReviewRun) => void,
   signal?: AbortSignal,
   collection?: CollectionRunInput,
+  matterId?: string,
 ): Promise<ReviewRun> {
   const template = initial.templateSnapshot;
+  // The run's own id IS the review's id (App.tsx's `reviewFromRun` writes
+  // `id: run.id` unchanged) — the one id every clause call this run makes
+  // can carry from the moment the run starts, before anything is ever
+  // persisted.
+  const reviewId = initial.id;
 
   let current = initial;
 
@@ -182,7 +188,9 @@ export async function runReview(
           });
           onUpdate(current);
 
-          const finding = await extractCollectionClause(collection.members, clause, template, settings, signal);
+          const finding = await extractCollectionClause(
+            collection.members, clause, template, settings, signal, { matterId, reviewId },
+          );
           current = withFinding(current, key, finding);
           onUpdate(current);
         },
@@ -200,7 +208,7 @@ export async function runReview(
           });
           onUpdate(current);
 
-          const finding = await extractClause(doc, clause, template, settings, signal);
+          const finding = await extractClause(doc, clause, template, settings, signal, { matterId, reviewId });
           current = withFinding(current, doc.id, finding);
           onUpdate(current);
         },
@@ -240,6 +248,7 @@ export async function retryCell(
   settings: Settings,
   onUpdate: (run: ReviewRun) => void,
   collection?: CollectionRunInput,
+  matterId?: string,
 ): Promise<ReviewRun> {
   const clause = run.templateSnapshot.clauses.find(c => c.id === clauseId);
   // Deliberately return the identical `run` reference: an unknown clause id
@@ -256,8 +265,12 @@ export async function retryCell(
   onUpdate(current);
 
   const finding = collection
-    ? await extractCollectionClause(collection.members, clause, run.templateSnapshot, settings)
-    : await extractClause(doc, clause, run.templateSnapshot, settings);
+    ? await extractCollectionClause(
+        collection.members, clause, run.templateSnapshot, settings, undefined, { matterId, reviewId: run.id },
+      )
+    : await extractClause(
+        doc, clause, run.templateSnapshot, settings, undefined, { matterId, reviewId: run.id },
+      );
   current = withFinding(current, key, finding);
   onUpdate(current);
   return current;

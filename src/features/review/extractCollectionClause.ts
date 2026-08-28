@@ -390,12 +390,20 @@ function alignTrail(
  * resolves to `status: 'cancelled'`, an API failure to `status: 'error'`
  * with `authError` where applicable.
  */
+export interface ExtractCollectionClauseContext {
+  matterId?: string;
+  reviewId?: string;
+}
+
 export async function extractCollectionClause(
   members: CollectionMember<DocumentFile>[],
   clause: PlaybookClause,
   template: PlaybookVersion,
   settings: Settings,
+  // `signal` kept 5th, mirroring `extractClause`'s identical positioning —
+  // see its comment for why the order matters to an existing mock.
   signal?: AbortSignal,
+  context: ExtractCollectionClauseContext = {},
 ): Promise<Finding> {
   const base: Finding = {
     clauseId: clause.id,
@@ -477,6 +485,12 @@ export async function extractCollectionClause(
       {
         modelChoiceId: settings.modelChoiceId,
         purpose: 'review.collection_clause',
+        context: {
+          matterId: context.matterId,
+          reviewId: context.reviewId,
+          clauseId: clause.id,
+          documentIds: ordered.map(m => m.documentId),
+        },
         system: `${template.systemPrompt}\n\nOUTPUT RULES: ${template.formatPrompt}`,
         user: documentsPrompt + imageNote,
         images: images.length > 0 ? images : undefined,

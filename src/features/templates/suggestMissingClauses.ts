@@ -56,6 +56,9 @@ export async function suggestMissingClauses(
   const raw = await gatewayModelClient.chatJson<RawMissingClauses>({
     modelChoiceId: settings.modelChoiceId,
     purpose: 'playbook.suggest',
+    // No matter, review or document this call is about — a playbook is
+    // checked for gaps independent of any of those.
+    context: {},
     system:
       'You are an expert legal contract reviewer checking a review playbook for missing clauses. ' +
       'Propose clause TITLES ONLY — never an extract prompt, risk criteria or standard position.',

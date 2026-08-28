@@ -154,6 +154,9 @@ export async function generateDraft(
     {
       modelChoiceId: settings.modelChoiceId,
       purpose: 'playbook.draft',
+      // No matter, review or document this call is about — a playbook is
+      // drafted before any of those exist.
+      context: {},
       system: 'You are an expert legal contract reviewer drafting a review playbook. ' +
         'Use legal judgement to choose the number and content of clauses; do not pad to hit a count.',
       user,

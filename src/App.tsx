@@ -1821,7 +1821,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       loadMatterReviews(matterId);
     };
 
-    runReview(newRun, docs, settings, handleUpdate, controller.signal, collectionInput)
+    runReview(newRun, docs, settings, handleUpdate, controller.signal, collectionInput, matterId ?? undefined)
       .then(async () => {
         setIsRunning(false);
         await persistFinal();
@@ -2385,7 +2385,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       setRun(merged);
     };
 
-    retryCell(busy, doc, clauseId, settings, onRetryUpdate, collectionInput)
+    retryCell(busy, doc, clauseId, settings, onRetryUpdate, collectionInput, matterId ?? undefined)
       .then(async (updated) => {
         // `latestRunRef.current`, not the raw `updated` retryCell resolved
         // with: `onRetryUpdate` (above) merges in whatever human writes
@@ -3678,6 +3678,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     run={run}
                     documents={documents}
                     settings={settings}
+                    matterId={activeMatterId ?? undefined}
                     onRetryCell={handleRetryCell}
                     onOpenTabular={() => { setOpenReviewAt(undefined); setView('tabular'); }}
                     openAt={openReviewAt}

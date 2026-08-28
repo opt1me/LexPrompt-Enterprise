@@ -117,6 +117,11 @@ export interface SendChatMessageParams {
   modelSupportsImages: boolean;
   settings: Settings;
   onDelta: (chunk: string) => void;
+  /** The matter these documents belong to, if any — carried into the
+   *  gateway's audit record (Task 21) so "which matter did this chat serve"
+   *  is answerable. Absent for documents loaded outside a matter, which is
+   *  a genuine fact, not an omission. */
+  matterId?: string;
 }
 
 /**
@@ -145,6 +150,10 @@ export async function sendChatMessage(params: SendChatMessageParams): Promise<st
     {
       modelChoiceId: params.settings.modelChoiceId,
       purpose: 'assistant.chat',
+      context: {
+        matterId: params.matterId,
+        documentIds: params.documents.map(d => d.id),
+      },
       system: SYSTEM_PROMPT,
       user,
       images: context.images.length ? context.images : undefined,

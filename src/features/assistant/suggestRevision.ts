@@ -1,6 +1,12 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import type { Settings } from '../../types';
 
+export interface SuggestRevisionContext {
+  matterId?: string;
+  reviewId?: string;
+  clauseId?: string;
+}
+
 /**
  * Asks the model to rewrite a risky clause. `original` is normally the
  * clause's first citation (the exact quoted text) — the caller falls back to
@@ -13,6 +19,7 @@ export async function suggestRevision(
   original: string,
   issue: string,
   settings: Settings,
+  context: SuggestRevisionContext = {},
 ): Promise<string> {
   const system = 'You are an expert contract drafter.';
   const user = `Clause: ${clauseTitle} | Original: "${original}" | Issue: ${issue}
@@ -21,6 +28,11 @@ Rewrite this clause to mitigate the risk while maintaining commercial viability.
   const answer = await gatewayModelClient.chat({
     modelChoiceId: settings.modelChoiceId,
     purpose: 'export.suggest_fix',
+    context: {
+      matterId: context.matterId,
+      reviewId: context.reviewId,
+      clauseId: context.clauseId,
+    },
     system,
     user,
   });

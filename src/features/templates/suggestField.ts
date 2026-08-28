@@ -71,6 +71,9 @@ export async function suggestField(
   const result = await gatewayModelClient.chatJson<SuggestionResponse>({
     modelChoiceId: settings.modelChoiceId,
     purpose: 'playbook.suggest',
+    // No matter, review or document this call is about — a playbook field
+    // is drafted independent of any of those.
+    context: {},
     system:
       'You are an expert legal contract reviewer drafting a single field of a single clause in a ' +
       "review playbook. Draft exactly the one field asked for, for exactly the one clause named — " +

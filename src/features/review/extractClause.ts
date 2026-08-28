@@ -134,12 +134,23 @@ If the document text above is empty and images are attached, read the images ins
  * text — got reviewed anyway and produced a confident, entirely fictional
  * "the agreement is silent on this point."
  */
+export interface ExtractClauseContext {
+  matterId?: string;
+  reviewId?: string;
+}
+
 export async function extractClause(
   doc: DocumentFile,
   clause: PlaybookClause,
   template: PlaybookVersion,
   settings: Settings,
+  // `signal` stays 5th, its original position: `App.verification.test.tsx`'s
+  // `extractClauseMock` destructures the 5th positional argument as the
+  // abort signal, and reordering it silently would hand that mock a plain
+  // object with no `addEventListener` — not a type error, just a mock that
+  // stops seeing the abort. `context` is appended last instead.
   signal?: AbortSignal,
+  context: ExtractClauseContext = {},
 ): Promise<Finding> {
   const base: Finding = {
     clauseId: clause.id,
@@ -186,6 +197,12 @@ export async function extractClause(
       {
         modelChoiceId: settings.modelChoiceId,
         purpose: 'review.clause',
+        context: {
+          matterId: context.matterId,
+          reviewId: context.reviewId,
+          clauseId: clause.id,
+          documentIds: [doc.id],
+        },
         system: `${template.systemPrompt}\n\nOUTPUT RULES: ${template.formatPrompt}`,
         user: buildClausePrompt(doc, clause, template, { text: textForPrompt, truncated }),
         images: readability.useImages ? doc.pageImages : undefined,

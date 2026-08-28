@@ -263,9 +263,15 @@ export async function inferPositions(
   const byId = new Map<string, EditEntry>();
   edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
+  // The precedent documents this call read from, deduped — never `docs`,
+  // which does not exist here: `edits` (already resolved per-document by the
+  // caller) is the only record of which documents contributed.
+  const documentIds = Array.from(new Set(edits.map(e => e.documentId)));
+
   const raw = await gatewayModelClient.chatJson<RawInferResponse>({
     modelChoiceId: settings.modelChoiceId,
     purpose: 'redlines.infer',
+    context: { documentIds },
     system:
       "You analyse a law firm's own past negotiated redlines to identify recurring standard positions. " +
       'You only ever group evidence and state the position it implies. You never count documents, never ' +
