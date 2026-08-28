@@ -231,8 +231,10 @@ export async function prepare(
 }
 
 /** Turns a provider's failure response into a ModelError, with the
- *  credential scrubbed out of whatever the provider chose to echo back. */
-async function toModelError(
+ *  credential scrubbed out of whatever the provider chose to echo back.
+ *  Exported so the stream route (Task 12) can classify a pre-stream failure
+ *  identically to the non-streamed path, rather than reimplementing it. */
+export async function toModelError(
   response: TransportResponse,
   credential: ResolvedCredential,
   callId: string,
