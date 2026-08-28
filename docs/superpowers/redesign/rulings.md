@@ -1323,6 +1323,20 @@ stream deltas equal the non-streamed completion, byte for byte. This is named as
 highest-risk part of Stage 1, because its failure is quiet — a truncated clause analysis reads
 as a model that had little to say.
 
+**AMENDED, 2026-08-28 by D5 — the jurisdiction reasoning above is restated, and its mechanisms
+are not.** As written, the jurisdiction bullets read as the system protecting an operator from
+their own provider choice: US processing framed as a hazard, and the refusal justified by "a
+cross-border transfer is a firm-level decision the lawyer cannot take" as a claim about what is
+ACCEPTABLE. The owner corrected that framing (D5). Everything mechanical here survives
+verbatim — refusal rather than surfacing, fail closed on UNDECLARED, no default allow-set, the
+startup refusal, the per-call record, the run-row snapshot, the unconditional labelling. What
+changes is the AUTHORITY: the gateway enforces the operator's DECLARED policy, arrived at from
+the contracts and data provisions they hold with each provider, rather than a view about what a
+law firm ought to want. Read every bullet above with that substitution. Note also that this
+paragraph's "there is no default allow-set" was already correct on 2026-08-28 and the Stage 1
+plan nonetheless defaulted the variable to `UK,EU`; D5 makes the spec say so explicitly and in
+the places an implementer reads.
+
 *Cost if wrong: the design's central claim — the gateway is the only egress, nothing else can
 call a model — is untouched and still architectural, so what is at risk here is the SECOND
 claim, the one about keys and jurisdiction. If the two sentences are ever merged, a firm is
@@ -1468,3 +1482,102 @@ configuration key diff equals the table; the same suites run against both enviro
 rather than by asking anyone to keep it current. If the list is allowed to drift, "the same
 code runs in both" quietly becomes a comforting sentence, and it would be discovered on a
 first deployment, which is the most expensive place to discover anything.*
+
+---
+
+# Owner decision, 2026-08-28 — a fifth, and it corrects a framing error rather than adding
+
+Recorded separately from D1–D4 for the same reason they were recorded separately from each
+other: this file is the decision log, and a reader must be able to see that a position CHANGED
+rather than find a document that always said the new thing. D5 is different from its
+predecessors in one way worth naming — it changes NO MECHANISM. Every rule the spec's §10.3
+enforces after D5 is a rule it enforced before it. What changes is whose authority those rules
+are exercised under, which is the kind of error that survives a review precisely because
+nothing in the code would look different.
+
+## D5 — the gateway enforces the operator's declared policy; it does not protect them from their provider
+
+The owner: *"It's basically for the person running the solution to be happy with the provider
+they're using, and the associated contracts and data provisions that those providers will give
+them (the API key is just the interface into the service, backed by those guarantees)."*
+
+**What was wrong.** The 2026-08-28 revision (D3) built the jurisdiction rules as though the
+system were evaluating a jurisdiction on the operator's behalf — US processing as a hazard to
+be defended against, `UK,EU` as the safe default the deployment template shipped, and the
+refusal justified as "a cross-border transfer of privileged text needs a firm-level consent a
+lawyer at their desk cannot give", stated as a claim about what is ACCEPTABLE rather than about
+who sets policy. That is not the operator's position and the spec had no standing to take it.
+A firm may hold entirely sound provisions with a US provider — standard contractual clauses, a
+data processing agreement, negotiated retention and training terms — settled with legal input
+long before anyone opens a deployment configuration. **The API key is the interface into a
+service whose guarantees live in the contract behind it, not in the key.** The system's
+authority was misplaced: it should enforce WHAT THE OPERATOR DECLARED, not what the spec's
+author assumed a law firm ought to want.
+
+**The default allow-set is removed, and removing it makes fail-closed STRONGER, not weaker.**
+`GATEWAY_ALLOWED_JURISDICTIONS` ships UNSET — not `UK,EU`, not anything — and the gateway
+REFUSES TO START when it is absent, naming the variable and saying what it is for. A default
+encodes an assumption about one particular firm's contracts, and a default that happens to
+match a firm's policy is indistinguishable at a glance from a firm that declared one. With the
+default gone, UNCONFIGURED IS AN ERROR RATHER THAN A GUESS, which is the same posture as the
+API's refusal to start with no issuer and the gateway's refusal to start with no log sink. The
+deployment template carries `UK,EU` as a COMMENTED EXAMPLE with its reasoning written beside
+it, so an operator reads why the line exists and then types their own. The spec's §14 adds a
+mutation for it — reintroduce `?? 'UK,EU'` and the `jurisdiction` suite must fail — because a
+default is the one mutation that leaves every happy-path test green while silently substituting
+a guess for a policy. That makes two absences this design mutation-tests; the other is S29's
+authentication bypass, and they fail the same way if nobody guards them.
+
+**The refusal survives verbatim; only its reasoning is restated.** The gateway still refuses to
+route outside the declared set and still fails closed on an undeclared entry. It is no longer
+"a lawyer cannot authorise a cross-border transfer" as a statement about acceptability; it is
+"the operator has declared which providers they hold provisions for, and a request outside that
+set is a MISCONFIGURATION, not a decision to re-take at request time" — to be fixed in
+configuration by whoever owns the policy, not by a click from whoever is next to the keyboard.
+The asymmetry argument is untouched and is still the load-bearing half: refuse wrongly and a
+call fails loudly with a 403 naming the provider, its jurisdiction and the declared set — one
+config change, minutes, nothing lost; route wrongly and text has gone somewhere the operator
+did not declare and cannot be un-sent. Enforcement by warning would put a written-down policy
+in the hands of whoever happened to be concentrating, which is the same bet every defect on
+`CLAUDE.md`'s list lost.
+
+**`dataHandling` is the operator's record, not the system's assessment.** The per-provider note
+records the retention, training and sub-processing terms THIS OPERATOR HOLDS — published
+defaults or a negotiated DPA, whichever it is — with the date they were last checked, so it can
+be shown to a reviewer and re-read when it ages. The staleness marker prompts the operator to
+re-read THEIR OWN CONTRACT; it never means the provider has become less trustworthy, and no
+code path grades, scores or decides anything from the note. Stored, displayed, dated.
+
+**The labels are factual, never evaluative.** Every allowlisted model still shows its provider
+and jurisdiction, ALWAYS — that ruling is unchanged and so is its reason, that a badge shown
+only on some entries makes its ABSENCE carry meaning, which is the blank-CSV-cell defect
+exactly. What changes is that the label states WHERE PROCESSING OCCURS, in the same neutral
+form for every entry, and never implies one allowlisted option is safer than another. It could
+not honestly imply otherwise: by the time a model reaches the picker the operator has already
+declared its jurisdiction acceptable under contracts the picker knows nothing about.
+
+**What must NOT be lost to over-correction, listed because the pressure runs both ways.** The
+per-call record of provider and jurisdiction. The snapshot on the `run` row, so a past review's
+processing location cannot be rewritten by a later config change. The refusal to start when
+misconfigured. The exhaustive labelling. The refusal to route outside the declared set. None of
+those was the framing error, and a later reader trimming them "because the operator decides
+anyway" would be making the opposite mistake at the same location.
+
+**Where it landed.** Spec Revision 3 rewrites §10.3 and amends §10.1, §4's Out list, §12.0,
+§12 Q5, §14, §17 Q4, §18 and §19. Spec rulings S15, S26 and S27 carry dated amendment notes
+rather than being edited away. D3 above carries one too. **The Stage 1 gateway plan defaults
+`GATEWAY_ALLOWED_JURISDICTIONS` to `UK,EU` in its config loader, its compose file and its
+`.env.example`, and that must follow this decision** — it was already inconsistent with D3's
+own "there is no default allow-set" sentence before D5 sharpened it.
+
+*Cost if wrong: nothing mechanical, which is exactly what makes it easy to get wrong twice.
+If the correction is over-applied and the refusal is softened into a warning, privileged text
+routes somewhere the operator never declared on a badge nobody read, and no retry un-sends it.
+If it is under-applied and a default allow-set creeps back — in a config loader, a compose
+file, a `.env.example`, or a later edit that finds an unset variable inconvenient — the system
+runs on the spec author's guess about a firm's contracts while presenting it as the firm's
+declared policy, which is a false control of the same family as the merged no-keys sentence
+D3 exists to keep apart: it reads as a decision, it is a guess, and nobody looks behind it. And
+if the framing itself is left uncorrected, the document tells a firm's Risk function that the
+system has judged their provider, which is a claim this design cannot support and which would
+be read as assurance by exactly the reader least able to check it.*
