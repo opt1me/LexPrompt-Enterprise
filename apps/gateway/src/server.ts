@@ -6,6 +6,7 @@ import type { CredentialResolver } from './credentials/types.ts';
 import type { buildRegistry } from './adapters/registry.ts';
 import type { RateLimiter } from './rateLimit.ts';
 import type { CallContext, Transport } from './callModel.ts';
+import { makeCallerAuthHook, type VerifyEntra } from './callerAuth.ts';
 import { registerHealth } from './routes/health.ts';
 import { registerModels } from './routes/models.ts';
 import { registerInfer, type InferBody } from './routes/infer.ts';
@@ -19,7 +20,19 @@ export interface ServerDeps {
   transport: Transport;
   limiter: RateLimiter;
   registry: ReturnType<typeof buildRegistry>;
+  // Optional: only `mode: 'entra'` calls this. `mode: 'none'`/`'mtls'` never
+  // reach it, so every existing test wiring a `ServerDeps` without one (they
+  // all use `mode: 'none'` or `'mtls'`) keeps compiling. A deployment
+  // actually running in `entra` mode with no `verifyEntra` wired fails
+  // loudly at the first call, rather than silently admitting every caller.
+  verifyEntra?: VerifyEntra;
 }
+
+const NO_VERIFY_ENTRA: VerifyEntra = async () => {
+  throw new Error(
+    'GATEWAY_CALLER_AUTH=entra but no verifyEntra implementation was wired into ServerDeps.',
+  );
+};
 
 /**
  * One `CallContext` builder, shared by the streamed and non-streamed
@@ -46,13 +59,43 @@ function makeContext(deps: ServerDeps): (req: FastifyRequest) => CallContext {
   };
 }
 
-export function buildServer(deps: ServerDeps): FastifyInstance {
-  const app = Fastify({
-    // audit.ts owns every log line this service writes (§10). Fastify's own
-    // request logger would write URLs and headers on a service whose whole
-    // discipline is that it logs metadata and never content.
-    logger: false,
-    bodyLimit: deps.config.maxPromptChars * 4,
+/** What `main.ts` builds from `config.caller` when `mode === 'mtls'` and
+ *  passes in here — the ONLY place this process opens an HTTPS listener
+ *  instead of plain HTTP. `rejectUnauthorized: true` against the local CA
+ *  is necessary but not sufficient on its own: it proves the client's
+ *  certificate was signed by a CA this gateway trusts, not that the
+ *  specific caller presenting it is `apps/api` — `callerAuth.ts`'s CN
+ *  check (Task 15) is what narrows "any service the CA signed" down to
+ *  "only apps/api". */
+export interface MtlsHttpsOptions {
+  ca: Buffer;
+  cert: Buffer;
+  key: Buffer;
+  requestCert: true;
+  rejectUnauthorized: true;
+}
+
+export function buildServer(deps: ServerDeps, httpsOptions?: MtlsHttpsOptions): FastifyInstance {
+  const app: FastifyInstance = httpsOptions
+    ? Fastify({
+      logger: false,
+      bodyLimit: deps.config.maxPromptChars * 4,
+      https: httpsOptions,
+    })
+    : Fastify({
+      // audit.ts owns every log line this service writes (§10). Fastify's
+      // own request logger would write URLs and headers on a service whose
+      // whole discipline is that it logs metadata and never content.
+      logger: false,
+      bodyLimit: deps.config.maxPromptChars * 4,
+    });
+  // Only `apps/api` may call this gateway (Task 15). `/healthz` is excluded
+  // because a liveness probe has neither a client certificate nor a token —
+  // it is checked by URL, ahead of the auth hook itself, not inside it.
+  const callerAuth = makeCallerAuthHook(deps.config.caller, deps.verifyEntra ?? NO_VERIFY_ENTRA);
+  app.addHook('preHandler', async (req, reply) => {
+    if (req.url === '/healthz') return;
+    return callerAuth(req, reply);
   });
   registerHealth(app);
   registerModels(app, deps.allowlist);
