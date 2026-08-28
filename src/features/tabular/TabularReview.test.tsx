@@ -245,4 +245,27 @@ describe('TabularReview — the clause index counts deviations (Task 12)', () =>
     expect(mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />).textContent)
       .toMatch(/1[^0-9]{0,3}deviat/i);
   });
+
+  it('does not count a positionOutcome carried onto a non-done finding', () => {
+    // `failRetryCell` can carry a previous attempt's `positionOutcome` onto
+    // an `error` finding when a retry cannot even reach the extractor
+    // (`findingOutcome.ts`'s `hasStandingPosition`). That comparison no
+    // longer describes settled output, and the exporters already refuse to
+    // report on it — the clause index must apply the same gate rather than
+    // reading `finding.positionOutcome` directly, or it will disagree with
+    // the exports about whether a stale comparison still counts.
+    const run = makeRun({ d1: {
+      c1: {
+        clauseId: 'c1',
+        status: 'error',
+        error: 'retry failed before reaching the model',
+        citations: [],
+        verification: { state: 'unchecked' },
+        notes: [],
+        positionOutcome: 'deviates',
+      },
+    } });
+    const text = mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />).textContent;
+    expect(text).not.toMatch(/deviat/i);
+  });
 });

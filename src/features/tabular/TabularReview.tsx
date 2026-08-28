@@ -4,7 +4,7 @@ import type { DocumentFile, Finding, Review, ReviewRun, RiskLevel } from '../../
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
-import { verificationCounts } from '../../lib/findingOutcome';
+import { verificationCounts, isVerifiable } from '../../lib/findingOutcome';
 import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';
 import { CellDetail } from './CellDetail';
@@ -60,13 +60,21 @@ const RISK_CELL_CLASSES: Record<RiskLevel, string> = {
  * could not tell, not that it found a conflict — counting it here would
  * report a deviation nobody actually found, the same distinction
  * `positionOutcomeLabel` (`findingOutcome.ts`) draws for the exports.
+ *
+ * Gated on `isVerifiable`, the same guard `findingOutcome.ts`'s
+ * `positionOutcomeLabel` applies via `hasStandingPosition`: `failRetryCell`
+ * can carry a previous attempt's `positionOutcome` onto an `error` finding,
+ * and that comparison no longer describes settled output once the attempt it
+ * was reasoning about has been superseded. Without this gate the exporters
+ * and this index could disagree about whether a stale comparison still
+ * counts — exactly the sibling-drift shape this project keeps paying for.
  */
 function positionOutcomeCounts(findings: Review['findings']): { deviating: number; hasPosition: boolean } {
   let deviating = 0;
   let hasPosition = false;
   for (const byClause of Object.values(findings ?? {})) {
     for (const finding of Object.values(byClause ?? {})) {
-      if (finding?.positionOutcome === undefined) continue;
+      if (!isVerifiable(finding) || finding.positionOutcome === undefined) continue;
       hasPosition = true;
       if (finding.positionOutcome === 'deviates') deviating++;
     }
