@@ -9,6 +9,7 @@ import { CollectionCard } from './CollectionCard';
 import { GroupDocumentsDialog } from './GroupDocumentsDialog';
 import { MatterStats } from './MatterStats';
 import { MatterActivity } from './MatterActivity';
+import { IntakeWizard } from './IntakeWizard';
 import { suggestCollections, type CollectionSuggestion } from '../../lib/collectionSuggest';
 import { progressLabel } from '../../lib/reviewProgress';
 
@@ -69,6 +70,20 @@ export interface MatterHomeProps {
    *  else reads with no actor at all. The only consumer is
    *  `MatterActivity`; nothing else in this screen needs an identity. */
   localUserId: string;
+
+  /** Task 19: the model a review will run on, shown in the intake wizard's
+   *  footer. The only consumer is `IntakeWizard`, rendered below in place
+   *  of the empty-documents placeholder — nothing else in this screen
+   *  names a model. */
+  modelId: string;
+  /** Task 19: opens Settings, for the intake wizard's "change the model"
+   *  link. The only consumer is `IntakeWizard`. */
+  onOpenSettings: () => void;
+  /** Task 19: opens the route chooser that starts a new playbook (the same
+   *  entry point `TemplateLibrary`'s "New" button opens), for the intake
+   *  wizard's step 3 when the user has no playbooks yet. The only consumer
+   *  is `IntakeWizard`. */
+  onCreatePlaybook: () => void;
 }
 
 function formatDate(ms: number): string {
@@ -154,6 +169,9 @@ export function MatterHome({
   onRunReview,
   onDeleteMatter,
   localUserId,
+  modelId,
+  onOpenSettings,
+  onCreatePlaybook,
 }: MatterHomeProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [addingDocuments, setAddingDocuments] = useState(false);
@@ -439,9 +457,29 @@ export function MatterHome({
         ) : (
           <>
             {documents.length === 0 ? (
-              <div className="text-ink-4 border border-dashed border-rule p-6 rounded-card text-center text-sm">
-                No documents yet. Add one to get started.
-              </div>
+              // Spec §10.2 / the handoff's own instruction: an empty matter
+              // shows the first-run intake wizard, not an empty table. It
+              // is genuinely a different fact from "the documents failed to
+              // load" (the `documentsError` branch above, which this
+              // ternary never reaches when there IS an error) — "this
+              // matter has no documents yet" and "we could not read this
+              // matter's documents" must never look alike.
+              <IntakeWizard
+                matter={matter}
+                documents={documents}
+                documentsError={documentsError}
+                onRetryDocuments={onRetryDocuments}
+                onAddDocuments={onAddDocuments}
+                onRemoveDocument={onRemoveDocument}
+                onCreateCollection={onCreateCollection}
+                playbooks={playbooks}
+                playbooksError={playbooksError}
+                onRetryPlaybooks={onRetryPlaybooks}
+                onRunReview={(playbook) => onRunReview(playbook)}
+                onCreatePlaybook={onCreatePlaybook}
+                modelId={modelId}
+                onOpenSettings={onOpenSettings}
+              />
             ) : standaloneDocuments.length > 0 ? (
               <div className="flex flex-col gap-2">
                 {standaloneDocuments.map(doc => (

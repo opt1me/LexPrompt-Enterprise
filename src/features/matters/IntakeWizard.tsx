@@ -147,8 +147,30 @@ export function IntakeWizard({
         )}
       </section>
 
-      {/* Task 19 replaces this section with the playbook step. */}
-      <section className="bg-card border border-rule rounded-card p-5" data-step="playbook" />
+      <section className="bg-card border border-rule rounded-card p-5 space-y-3">
+        <h3 className="font-prose text-section text-ink-1">Playbook</h3>
+        {playbooksError ? (
+          <LoadErrorPanel compact message={playbooksError} onRetry={onRetryPlaybooks} />
+        ) : playbooks.length === 0 ? (
+          <div className="space-y-3">
+            <p className="font-ui text-ui text-ink-2">
+              You have no playbooks yet. A playbook is the list of clauses a review looks for.
+            </p>
+            <Button onClick={onCreatePlaybook}>Create a playbook</Button>
+          </div>
+        ) : (
+          <ul className="space-y-2">
+            {[...playbooks].sort((a, b) => b.updatedAt - a.updatedAt).map(p => (
+              <li key={p.id} className="flex items-center gap-3 border border-rule rounded-control p-3">
+                <span data-playbook-name className="font-ui text-ui text-ink-1 truncate">{p.name}</span>
+                <Button className="ml-auto shrink-0" onClick={() => void onRunReview(p)}>
+                  Run this playbook
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       <footer className="space-y-2">
         <p className="font-ui text-ui-sm text-ink-2">{STORAGE_PRIVACY[0]}</p>

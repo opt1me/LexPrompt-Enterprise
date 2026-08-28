@@ -116,6 +116,9 @@ const baseProps = {
   onRunReview: async () => {},
   onDeleteMatter: async () => {},
   localUserId: 'u1',
+  modelId: 'anthropic/claude-3.5-sonnet',
+  onOpenSettings: () => {},
+  onCreatePlaybook: () => {},
 };
 
 describe('MatterHome — converged load-error panels (Important 4)', () => {

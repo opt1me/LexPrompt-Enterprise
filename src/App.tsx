@@ -3451,6 +3451,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onRunReview={(playbook, target) => handleRunReviewForMatter(matter.id, playbook, target)}
               onDeleteMatter={handleDeleteMatterFromHome}
               localUserId={profile?.id ?? ''}
+              modelId={settings.modelId}
+              onOpenSettings={() => requestView('settings')}
+              onCreatePlaybook={() => setChooserOpen(true)}
             />
           ) : null
         )}
