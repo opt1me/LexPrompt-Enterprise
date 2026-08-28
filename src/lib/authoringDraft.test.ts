@@ -1,17 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
   keepClause, cutClause, unreviewedCount, canSaveDraft, saveGateLabel, toPlaybookDraft,
+  positionProvenance,
   type AuthoringDraft, type DraftClause,
 } from './authoringDraft';
 
 const clause = (id: string, over: Partial<DraftClause> = {}): DraftClause => ({
   id, title: `Clause ${id}`, extractPrompt: `Extract ${id}.`,
-  disposition: 'unreviewed', edited: false, suggestions: [], ...over,
+  disposition: 'unreviewed', edited: false, positionEdited: false, suggestions: [], ...over,
 });
 
 const draft = (clauses: DraftClause[]): AuthoringDraft => ({
   contractType: 'Lease', learnedFrom: [], modelId: 'test/model', clauses,
 });
+
+const aiPosition = { text: 'We ask for six months.', origin: 'ai-drafted', reviewedByHuman: false } as const;
 
 describe('the save gate', () => {
   it('refuses to save while any clause is unreviewed', () => {
@@ -118,17 +121,18 @@ describe('toPlaybookDraft', () => {
     const out = toPlaybookDraft(draft([clause('a', { disposition: 'kept' })]), 'p');
     expect('disposition' in out.clauses[0]).toBe(false);
     expect('edited' in out.clauses[0]).toBe(false);
+    expect('positionEdited' in out.clauses[0]).toBe(false);
     expect('suggestions' in out.clauses[0]).toBe(false);
   });
 
-  it('marks an AI position a human kept as reviewed', () => {
-    const withPos = clause('a', {
-      disposition: 'kept',
-      standardPosition: { text: 'We ask for six months.', origin: 'ai-drafted', reviewedByHuman: false },
-    });
+  it('marks an AI position a human kept as reviewed, and records how it got there', () => {
+    const withPos = clause('a', { disposition: 'kept', standardPosition: { ...aiPosition } });
     const out = toPlaybookDraft(draft([withPos]), 'p');
     expect(out.clauses[0].standardPosition).toEqual({
-      text: 'We ask for six months.', origin: 'ai-drafted', reviewedByHuman: true,
+      text: 'We ask for six months.',
+      origin: 'ai-drafted',
+      reviewedByHuman: true,
+      provenance: 'Drafted by test/model; accepted unchanged by a person in the draft review.',
     });
   });
 
@@ -154,5 +158,85 @@ describe('toPlaybookDraft', () => {
     // v1 is exempt from D's required-change-summary rule, so an empty string
     // is correct here and `publishVersion` accepts it.
     expect(out.changeSummary).toBe('');
+  });
+});
+
+// Integrity review (D/E), Major 3 — E spec §8's `provenance` row and DoD 5.
+// `edited` was computed and then thrown away at this seam, and
+// `StandardPosition.provenance` was written nowhere in the authoring path,
+// so a position a person rewrote and one they clicked past were stored as
+// byte-identical claims.
+describe('provenance on a saved standard position (Major 3)', () => {
+  const learned = (clauses: DraftClause[]): AuthoringDraft => ({
+    contractType: 'Lease',
+    learnedFrom: ['Commercial Lease — Tenant v4', 'Acme Lease'],
+    modelId: 'anthropic/claude',
+    clauses,
+  });
+
+  it('names the model and the sources the draft learned from', () => {
+    const withPos = clause('a', { disposition: 'kept', standardPosition: { ...aiPosition } });
+    const out = toPlaybookDraft(learned([withPos]), 'p');
+    expect(out.clauses[0].standardPosition!.provenance)
+      .toBe('Drafted by anthropic/claude, learning from Commercial Lease — Tenant v4, Acme Lease; '
+        + 'accepted unchanged by a person in the draft review.');
+  });
+
+  it('distinguishes a position a person rewrote from one they clicked past', () => {
+    const base = clause('a', { standardPosition: { ...aiPosition } });
+    const clickedPast = keepClause(draft([base]), 'a', { standardPosition: { ...aiPosition } });
+    const rewritten = keepClause(draft([base]), 'a', {
+      standardPosition: { ...aiPosition, text: 'We ask for nine months, no conditions.' },
+    });
+
+    expect(toPlaybookDraft(clickedPast, 'p').clauses[0].standardPosition!.provenance)
+      .toMatch(/accepted unchanged/);
+    expect(toPlaybookDraft(rewritten, 'p').clauses[0].standardPosition!.provenance)
+      .toMatch(/rewritten and accepted/);
+  });
+
+  // The narrow claim is the honest one: provenance is a claim about the
+  // POSITION, and rewriting a risk criterion is not evidence that anyone
+  // rewrote the house rule.
+  it('does not claim the position was rewritten when a different field was', () => {
+    const base = clause('a', { standardPosition: { ...aiPosition } });
+    const out = keepClause(draft([base]), 'a', { extractPrompt: 'Something else entirely.' });
+    expect(out.clauses[0].edited).toBe(true);
+    expect(out.clauses[0].positionEdited).toBe(false);
+    expect(toPlaybookDraft(out, 'p').clauses[0].standardPosition!.provenance)
+      .toMatch(/accepted unchanged/);
+  });
+
+  // R-E5, applied to the narrow flag too: comparing values, never reacting
+  // to an onChange. Re-submitting the same text is not engagement.
+  it('does not mark the position rewritten when the same text is re-submitted', () => {
+    const base = clause('a', { standardPosition: { ...aiPosition } });
+    const out = keepClause(draft([base]), 'a', { standardPosition: { ...aiPosition } });
+    expect(out.clauses[0].positionEdited).toBe(false);
+  });
+
+  it('keeps the stronger claim when a clause is edited, reopened and kept again', () => {
+    const base = clause('a', { standardPosition: { ...aiPosition } });
+    const once = keepClause(draft([base]), 'a', {
+      standardPosition: { ...aiPosition, text: 'We ask for nine months.' },
+    });
+    const twice = keepClause(once, 'a', {
+      standardPosition: { ...aiPosition, text: 'We ask for nine months.' },
+    });
+    expect(twice.clauses[0].positionEdited).toBe(true);
+  });
+
+  it('says a hand-written position was written by a person, claiming no model', () => {
+    const withPos = clause('a', {
+      disposition: 'kept',
+      standardPosition: { text: 'We ask for six months.', origin: 'authored', reviewedByHuman: true },
+    });
+    const provenance = toPlaybookDraft(learned([withPos]), 'p').clauses[0].standardPosition!.provenance;
+    expect(provenance).toBe('Written by a person.');
+    expect(provenance).not.toMatch(/anthropic|Drafted/);
+  });
+
+  it('writes no provenance for a clause with no position', () => {
+    expect(positionProvenance(draft([clause('a')]), clause('a'))).toBeUndefined();
   });
 });

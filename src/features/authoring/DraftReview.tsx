@@ -93,6 +93,7 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
       extractPrompt: text,
       disposition: 'unreviewed',
       edited: false,
+      positionEdited: false,
       suggestions: [],
     };
     onChange({

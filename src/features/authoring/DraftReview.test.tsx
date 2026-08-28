@@ -11,6 +11,7 @@ function clause(id: string, title: string, disposition: ClauseDisposition, overr
     extractPrompt: `Extract the ${title.toLowerCase()} terms.`,
     disposition,
     edited: false,
+    positionEdited: false,
     suggestions: [],
     ...overrides,
   };

@@ -19,6 +19,16 @@ export interface DraftClause extends PlaybookClause {
    *  drafted" and "rewritten then kept" are different claims about how much
    *  a person actually engaged, and this one feeds provenance. */
   edited: boolean;
+  /** True when the human changed the STANDARD POSITION before keeping it.
+   *
+   *  Narrower than `edited`, deliberately. Provenance is a claim about the
+   *  position, and rewriting a risk criterion is not evidence that anyone
+   *  rewrote the house rule — a provenance line saying "rewritten and
+   *  accepted" over a position the person never touched is precisely the
+   *  confidently-wrong claim this app exists not to make. Computed by the
+   *  same value comparison as `edited` (R-E5) and OR'd with itself the same
+   *  way, so a position rewritten, reopened and kept again stays marked. */
+  positionEdited: boolean;
   /** Extra sub-questions the model offered, neither added nor dismissed. */
   suggestions: string[];
 }
@@ -74,11 +84,15 @@ export function keepClause(
 ): AuthoringDraft {
   return updateClause(draft, clauseId, (clause) => {
     let changed = false;
+    let positionChanged = false;
     const next: DraftClause = { ...clause };
     if (edits) {
       for (const key of Object.keys(edits) as (keyof PlaybookClause)[]) {
         const newValue = edits[key];
-        if (!valuesEqual(clause[key], newValue)) changed = true;
+        if (!valuesEqual(clause[key], newValue)) {
+          changed = true;
+          if (key === 'standardPosition') positionChanged = true;
+        }
         // Deleted, not assigned `undefined`: `structuredClone` (how
         // IndexedDB writes every record, once this draft is published)
         // PRESERVES an `undefined`-valued key, so an explicit `undefined`
@@ -94,6 +108,7 @@ export function keepClause(
     }
     next.disposition = 'kept';
     next.edited = clause.edited || changed;
+    next.positionEdited = clause.positionEdited || positionChanged;
     return next;
   });
 }
@@ -124,6 +139,47 @@ export function saveGateLabel(draft: AuthoringDraft): string {
   return `${remaining} clause${remaining === 1 ? '' : 's'} left to review`;
 }
 
+/**
+ * The provenance sentence stamped onto a standard position when the draft is
+ * published — `StandardPosition.provenance`, the field E's spec §8 and DoD 5
+ * require to "honestly reflect how it got there".
+ *
+ * It is the ONLY place this wording is composed, for the reason
+ * `verificationLabel` is the only place export wording lives: provenance is
+ * shown in the editor and travels into every export of the playbook, and two
+ * copies of it would drift into two different claims about the same
+ * position.
+ *
+ * Everything it can say is something the draft actually recorded: the model
+ * that drafted it (`AuthoringDraft.modelId`), the sources it learned from
+ * (`learnedFrom`, already filtered by `usedFewShotSources` to sources that
+ * genuinely contributed), and whether a person rewrote the position before
+ * keeping it (`positionEdited`, computed by comparison — R-E5). It never
+ * claims a model for a position a person wrote.
+ */
+export function positionProvenance(draft: AuthoringDraft, clause: DraftClause): string | undefined {
+  const position = clause.standardPosition;
+  if (!position) return undefined;
+  // "Accepted unchanged" is a real and useful claim — it says a person saw
+  // this and let it stand — but it must never be confused with "a person
+  // wrote this", which is what the `authored` branch below says instead.
+  const engagement = clause.positionEdited
+    ? 'rewritten and accepted by a person in the draft review'
+    : 'accepted unchanged by a person in the draft review';
+  const sources = draft.learnedFrom.join(', ');
+  switch (position.origin) {
+    case 'ai-drafted':
+      return `Drafted by ${draft.modelId || 'an AI model'}` +
+        `${sources ? `, learning from ${sources}` : ''}; ${engagement}.`;
+    case 'learned':
+      return `Learned from ${sources || "the firm's prior work"}; ${engagement}.`;
+    case 'authored':
+      // No model, no sources, no "accepted": a person wrote every word, and
+      // that is the whole claim.
+      return 'Written by a person.';
+  }
+}
+
 /** Converts a fully-reviewed draft into D's `PlaybookDraft`, ready for
  *  `publishVersion`. Cut clauses are genuinely absent, not merely hidden.
  *  Authoring-only fields are stripped by destructuring rather than deleted
@@ -132,15 +188,32 @@ export function saveGateLabel(draft: AuthoringDraft): string {
  *  A kept clause's `standardPosition`, if any, is marked `reviewedByHuman:
  *  true` — a human just read it — without touching `origin`: an AI-drafted
  *  position a person edited is still `ai-drafted`, because rewriting the
- *  provenance would erase where it came from. */
+ *  origin would erase where it came from. It also gains the `provenance`
+ *  sentence `positionProvenance` composes (E spec §8, DoD 5). */
 export function toPlaybookDraft(draft: AuthoringDraft, name: string): PlaybookDraft {
   const clauses: PlaybookClause[] = draft.clauses
     .filter((c) => c.disposition === 'kept')
     .map((c) => {
-      const { disposition: _disposition, edited: _edited, suggestions: _suggestions, ...rest } = c;
+      const {
+        disposition: _disposition, edited: _edited, positionEdited: _positionEdited,
+        suggestions: _suggestions, ...rest
+      } = c;
       const clause: PlaybookClause = { ...rest };
       if (clause.standardPosition) {
-        clause.standardPosition = { ...clause.standardPosition, reviewedByHuman: true };
+        // The authoring-only facts (`modelId`, `learnedFrom`, `edited`,
+        // `positionEdited`) reach the persisted record HERE or nowhere:
+        // `AuthoringDraft` dies with the session (R-E1), and this is the one
+        // seam where what happened to a position can still be written down.
+        const provenance = positionProvenance(draft, c);
+        clause.standardPosition = {
+          ...clause.standardPosition,
+          reviewedByHuman: true,
+          // Omitted, never assigned `undefined` — `structuredClone` (how
+          // IndexedDB writes every record) preserves an `undefined`-valued
+          // key, so an `in` check would say a provenance is there when there
+          // is none. Same rule as `migratePosition`'s own spread.
+          ...(provenance ? { provenance } : {}),
+        };
       }
       return clause;
     });

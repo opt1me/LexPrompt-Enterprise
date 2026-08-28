@@ -94,6 +94,7 @@ function repairClause(raw: RawClause): DraftClause | undefined {
     ...(standardPosition ? { standardPosition } : {}),
     disposition: 'unreviewed',
     edited: false,
+    positionEdited: false,
     suggestions,
   };
 }

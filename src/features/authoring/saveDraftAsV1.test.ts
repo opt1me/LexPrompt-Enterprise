@@ -20,6 +20,7 @@ const clause = (id: string, over: Partial<DraftClause> = {}): DraftClause => ({
   extractPrompt: `Extract ${id}.`,
   disposition: 'unreviewed',
   edited: false,
+  positionEdited: false,
   suggestions: [],
   ...over,
 });
@@ -101,8 +102,14 @@ describe('saveDraftAsV1', () => {
       standardPosition: { text: 'We ask for six months.', origin: 'ai-drafted', reviewedByHuman: false },
     });
     const { version } = await saveDraftAsV1(draft([withPos]), 'p', 'u1');
+    // Provenance travels into the immutable version with it (Major 3): the
+    // draft that knew the model and the sources dies with the session, so
+    // this write is the only chance to record how the position got here.
     expect(version.clauses[0].standardPosition).toEqual({
-      text: 'We ask for six months.', origin: 'ai-drafted', reviewedByHuman: true,
+      text: 'We ask for six months.',
+      origin: 'ai-drafted',
+      reviewedByHuman: true,
+      provenance: 'Drafted by test/model; accepted unchanged by a person in the draft review.',
     });
   });
 

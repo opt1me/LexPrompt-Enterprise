@@ -215,7 +215,12 @@ describe('Review.playbookVersionId (Task 4)', () => {
   // nothing. Nothing may render "ran against v4" from the id's presence
   // alone; the version must be fetched and a miss handled honestly.
   it('a review whose version was deleted still opens, and says the version is gone', async () => {
-    const v1 = await publishVersion('pb-1', draftFrom(makePlaybook()), 'u1');
+    // An explicit summary: `playbookVersions` is not cleared between tests
+    // here, so this is pb-1's THIRD version and `publishVersionIn` requires
+    // one from v2 onwards. (`draftFrom` carries the fixture's own empty
+    // summary through verbatim — `migrateDraft` no longer invents one.)
+    const v1 = await publishVersion(
+      'pb-1', { ...draftFrom(makePlaybook()), changeSummary: 'the version this review ran against' }, 'u1');
     const review = await saveReview(makeReview({ playbookVersionId: v1.id }));
     await deletePlaybook('pb-1'); // cascades to its versions (Task 3, R-D13)
 

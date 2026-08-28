@@ -92,6 +92,7 @@ function draftWithTwoClauses(): AuthoringDraft {
         extractPrompt: 'Extract the break clause.',
         disposition: 'unreviewed',
         edited: false,
+        positionEdited: false,
         suggestions: [],
       },
       {
@@ -100,6 +101,7 @@ function draftWithTwoClauses(): AuthoringDraft {
         extractPrompt: 'Extract the rent review mechanism.',
         disposition: 'unreviewed',
         edited: false,
+        positionEdited: false,
         suggestions: [],
       },
     ],
