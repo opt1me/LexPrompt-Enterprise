@@ -78,6 +78,26 @@ describe('positionHealth', () => {
     expect(positionHealthLabel(positionHealth(0, [verifiedFinding('unclear')]))).toBe('UNTESTED');
   });
 
+  // A verified unclear tested nothing (positionHealth.ts's own doc comment).
+  // That has to mean invisible to the count entirely, not merely unable to
+  // move `supporting` — if it leaked into `total` while a `meets`/`deviates`
+  // sibling made the result HELD, a reader would see "HELD 1 of 2" and read
+  // that as two comparisons, one of which somehow didn't count, rather than
+  // the true fact: exactly one comparison ever resolved either way.
+  it('a verified unclear does not inflate the denominator when mixed with a tested finding', () => {
+    const h = positionHealth(0, [verifiedFinding('meets'), verifiedFinding('unclear')]);
+    expect(positionHealthLabel(h)).toBe('HELD 1 of 1');
+  });
+
+  // The `at === publishedAt` boundary: a verification stamped the exact
+  // instant a version was published must count as evidence for it, not be
+  // excluded as "too early" — the alternative would mean the very FIRST
+  // review run against a freshly-published position could never count as
+  // testing it, no matter how genuinely it did.
+  it('counts a verification made exactly when the version was published', () => {
+    expect(positionHealthLabel(positionHealth(100, [verifiedFinding('meets', 100)]))).toBe('HELD 1 of 1');
+  });
+
   it('is NO POSITION when the clause has no standard position', () => {
     expect(positionHealthLabel(positionHealth(0, [], { hasPosition: false }))).toBe('NO POSITION');
   });
