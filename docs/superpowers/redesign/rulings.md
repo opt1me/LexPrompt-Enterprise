@@ -1011,3 +1011,44 @@ real browser on a real review, recorded in the fix report.
 pane somewhere the model does not describe — a grid, say, or a pane whose width is not a
 `w-[Npx]` utility — `paneWidth` throws rather than passing, which is the intended direction,
 but the test then needs updating with the layout rather than merely re-running.*
+
+---
+
+# R1 / R-G1 superseded (2026-08-28) — LexPrompt Server
+
+**R1** ("build SCHEMA-READY, SINGLE-USER-IN-PRACTICE") and its sub-project-G
+restatement **R-G1** ("every multi-user affordance in the prototypes is dropped or
+resolved to the local profile") are **superseded** by
+`docs/superpowers/specs/2026-08-28-lexprompt-server-design.md` §3.1.
+
+Both were correct while assignment reached nobody: an assignee chip in an app with no
+accounts manufactures a silence, and R-G1's own cost-if-wrong says so. The server design
+removes that condition — real Entra accounts, a real assignment that reaches a real
+person, and an activity feed read from a stored audit log rather than derived from one
+browser's own actions — so assignee chips, an "assigned to me" counter, actors in the
+feed and "flagged for X" phrasing become honest.
+
+**R-G1 continues to bind until the mechanism behind each affordance ships.** The server
+design's Stages 1–3 (gateway, storage and auth, server-side engine) must not add a
+collaborative affordance ahead of Stage 4, which is what makes one true. A reader finding
+R-G1 in a Stage 1–3 diff should treat it as live, not as history.
+
+**R1's schema-readiness is what makes the migration cheap**, and it is worth recording as
+a ruling that paid for itself: `Matter.ownerId`, `DocumentRecord.addedByUserId`,
+`Collection.createdByUserId`, `Review.createdByUserId`, `PlaybookVersion.publishedByUserId`,
+`Changeset.createdByUserId`, `Note.byUserId`, `Verification.byUserId` and
+`NetPosition.byUserId` all already exist and are already populated. They become foreign
+keys to an `app_user` table and are otherwise untouched. The one identity field that does
+NOT survive is `Verification.assigneeId`, retired in favour of an `assignment` table
+(design ruling S17): a real assignment needs an assigner, a time and a resolution, none of
+which a single id can carry.
+
+*Cost if wrong: if the server design is not built, R-G1 stands unchanged and this entry is
+a note about a road not taken. If it is built but a collaborative affordance ships ahead of
+its mechanism, the failure is exactly the one R-G1 named — a lawyer waiting on a review
+nobody was asked for — which is why the supersession is staged rather than immediate.*
+
+The server design's own twenty rulings (S1–S20) live in that spec's §16 rather than being
+duplicated here, because they are design rulings awaiting owner review, not decisions taken
+during execution without it. Anything decided without review while BUILDING it belongs here,
+in this file's format, as every sub-project's did.
