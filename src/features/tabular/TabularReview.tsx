@@ -8,6 +8,7 @@ import { verificationCounts, isVerifiable, positionOutcomeCounts } from '../../l
 import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';
 import { Button } from '../../components/Button';
+import { ViewSwitch } from '../review/ViewSwitch';
 import { CellDetail } from './CellDetail';
 import { downloadTabularCsv } from './csv';
 
@@ -124,9 +125,12 @@ export function TabularReview({
             <Download className="w-4 h-4" aria-hidden="true" /> Export CSV
           </Button>
           {onOpenCards && (
-            <Button variant="ghost" onClick={onOpenCards} className="shrink-0">
-              <LayoutList className="w-4 h-4" aria-hidden="true" /> Card view
-            </Button>
+            <ViewSwitch
+              value="compare"
+              onChange={(next) => { if (next === 'review') onOpenCards(); }}
+              target={run.target}
+              documentCount={run.documentIds.length}
+            />
           )}
         </div>
       </div>

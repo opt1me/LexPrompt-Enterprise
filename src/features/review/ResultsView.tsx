@@ -8,6 +8,7 @@ import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { isVerifiable } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 import { FindingCard } from './FindingCard';
+import { ViewSwitch } from './ViewSwitch';
 import { ReviewVersionLine } from './ReviewVersionLine';
 import type { TrailDocumentInfo } from './VariationTrailModal';
 import { DocumentViewer } from './DocumentViewer';
@@ -386,12 +387,12 @@ export function ResultsView({
           </span>
 
           {onOpenTabular && (
-            <button
-              onClick={onOpenTabular}
-              className="shrink-0 flex items-center gap-1.5 font-ui text-ui-sm text-ink-2 hover:text-ink-1 bg-chip-fill hover:bg-rule px-2.5 py-1.5 rounded-control border border-rule transition-colors"
-            >
-              <Table className="w-3.5 h-3.5" aria-hidden="true" /> Tabular view
-            </button>
+            <ViewSwitch
+              value="review"
+              onChange={(next) => { if (next === 'compare') onOpenTabular(); }}
+              target={run.target}
+              documentCount={run.documentIds.length}
+            />
           )}
         </div>
 
