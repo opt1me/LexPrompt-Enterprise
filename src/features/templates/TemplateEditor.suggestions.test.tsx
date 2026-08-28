@@ -18,9 +18,16 @@ beforeEach(() => vi.clearAllMocks());
 
 const flush = () => act(async () => { await Promise.resolve(); });
 
-const fieldFor = (c: HTMLElement, label: RegExp) =>
-  [...c.querySelectorAll('textarea')].find(t =>
-    label.test(t.closest('div')?.textContent ?? '')) as HTMLTextAreaElement | undefined;
+/** Every editable field carries the accessible name it is labelled with,
+ *  so a test names the field rather than the markup shape around it. The
+ *  relayout renamed the visible labels to the handoff's shorter ones
+ *  ("Extract", "Risky when"), and the old helper matched on the OLD label
+ *  text via `closest('div')`. `FIELD_LABEL` in `suggestField.ts` — which
+ *  names the field in the prompt AND in each suggest button's accessible
+ *  name — is deliberately unchanged, so the button queries below still read
+ *  "extraction instruction". */
+const labelled = (c: HTMLElement, name: string) =>
+  c.querySelector(`[aria-label="${name}"]`) as HTMLTextAreaElement;
 
 const testSettings: Settings = { apiKey: 'k', modelId: 'test/model', concurrency: 5 };
 
@@ -71,7 +78,7 @@ describe('TemplateEditor — per-field suggestions (Part A)', () => {
     expect(c.textContent).toMatch(/What is the fixed term, in months\?/);
     expect(c.textContent).toMatch(/not accepted/i);
     // The actual field is untouched — only the suggestion box shows the text.
-    expect(fieldFor(c, /extraction instruction/i)!.value).toBe('What is the term?');
+    expect(labelled(c, 'Extract').value).toBe('What is the term?');
   });
 
   // This is the whole point of Part A (CLAUDE.md / FieldSuggestion's own doc
@@ -104,7 +111,7 @@ describe('TemplateEditor — per-field suggestions (Part A)', () => {
     expect(onPersistDraft).toHaveBeenCalledTimes(1);
     // Nothing about the save adopted the suggestion into the working copy.
     expect(onDraftChange).not.toHaveBeenCalled();
-    expect(fieldFor(c, /extraction instruction/i)!.value).toBe('What is the term?');
+    expect(labelled(c, 'Extract').value).toBe('What is the term?');
   });
 
   it('accepting writes the suggestion into the field and clears the suggestion', async () => {
@@ -193,7 +200,7 @@ describe('TemplateEditor — per-field suggestions (Part A)', () => {
     await flush();
 
     expect(c.textContent).toMatch(/empty suggestion/i);
-    expect(fieldFor(c, /extraction instruction/i)!.value).toBe('What is the term?');
+    expect(labelled(c, 'Extract').value).toBe('What is the term?');
     expect(onDraftChange).not.toHaveBeenCalled();
   });
 
@@ -223,7 +230,7 @@ describe('TemplateEditor — per-field suggestions (Part A)', () => {
 
     expect(onAuthError).toHaveBeenCalledTimes(1);
     expect(c.textContent).not.toMatch(/unauthorized/i);
-    expect(fieldFor(c, /extraction instruction/i)!.value).toBe('What is the term?');
+    expect(labelled(c, 'Extract').value).toBe('What is the term?');
     expect(onDraftChange).not.toHaveBeenCalled();
   });
 
@@ -254,7 +261,15 @@ describe('TemplateEditor — per-field suggestions (Part A)', () => {
 });
 
 describe('TemplateEditor — "Suggest what I\'m missing" (Part B, Task 8)', () => {
-  it('offers no "add all" affordance — every clause entering a playbook is a decision', () => {
+  // Was: "offers no 'add all' affordance — every clause entering a playbook
+  // is a decision", asserting `buttonNamed(c, /add all/i)` is undefined
+  // unconditionally. The owner asked for the opposite ("it becomes annoying
+  // to have to verify each and every one, one by one"), and the rule that
+  // test was protecting is not one-at-a-time — it is that nothing enters the
+  // playbook except by an explicit act. "Add all" IS one. What survives is
+  // that the control does not exist when there is nothing to batch; see
+  // `TemplateEditor.bulk.test.tsx` for the rest.
+  it('offers no "add all" affordance when nothing has been suggested', () => {
     const published = version({ clauses: structuredClone(oneClause) });
     const c = mount(
       <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
@@ -275,7 +290,6 @@ describe('TemplateEditor — "Suggest what I\'m missing" (Part B, Task 8)', () =
 
     expect(c.textContent).toMatch(/Rent Review/);
     expect(c.textContent).toMatch(/Assignment/);
-    expect(buttonNamed(c, /add all/i)).toBeUndefined();
 
     // Dismissing one leaves the other.
     const dismissButtons = [...c.querySelectorAll('button')].filter(b => /dismiss/i.test(b.textContent || ''));

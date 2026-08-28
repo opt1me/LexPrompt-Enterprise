@@ -1,7 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
-  Cpu, FileOutput, ShieldAlert, Plus, ChevronUp, ChevronDown, X, UploadCloud, Download, Copy,
-  Settings as SettingsIcon, GripVertical, Save, History, Sparkles,
+  ShieldAlert, Plus, X, UploadCloud, Download, Copy, Save, History, Sparkles, ScanText,
 } from 'lucide-react';
 import type {
   PlaybookClause, PlaybookDraft, PlaybookVersion, Settings, StandardPosition,
@@ -17,6 +16,8 @@ import { isAuthError } from '../../lib/openrouter';
 import { suggestField, FIELD_LABEL, type SuggestableField } from './suggestField';
 import { FieldSuggestion } from './FieldSuggestion';
 import { suggestMissingClauses } from './suggestMissingClauses';
+import { ClauseListRail } from './ClauseListRail';
+import { PromptConfigPanel } from './PromptConfigPanel';
 
 export interface TemplateEditorProps {
   /** The current published version, or `undefined` for a playbook that has
@@ -91,6 +92,33 @@ interface FieldSuggestionState {
 
 function suggestionKey(clauseId: string, field: SuggestableField): string {
   return `${clauseId}:${field}`;
+}
+
+/** The three fields a clause can carry a suggestion for, in the order they
+ *  are rendered. Iterated by the "use all" control below, so that control
+ *  can never fall out of step with the boxes it claims to accept. */
+const SUGGESTABLE_FIELDS: readonly SuggestableField[] = ['extractPrompt', 'riskCriteria', 'standardPosition'];
+
+/**
+ * The clause patch one accepted suggestion produces — the ONE place a
+ * suggestion becomes clause content.
+ *
+ * A single accept and a bulk accept both reduce over this and both hand the
+ * result to `updateClause`, the same funnel a hand-typed edit uses. That is
+ * the whole point: a bulk control is an explicit act, so it may exist, but
+ * it may not be a SECOND write path, because a second path is how the rule
+ * "only accepting writes a suggestion into a field" comes to be true of one
+ * route and not the other.
+ *
+ * `origin: 'ai-drafted'` on a position, always: the words came from the
+ * model, and only `reviewedByHuman` records that a person then took them.
+ * Collapsing those two facts is exactly how an AI draft nobody read comes to
+ * be presented as the firm's position.
+ */
+function suggestionPatch(field: SuggestableField, text: string): Partial<PlaybookClause> {
+  if (field === 'extractPrompt') return { extractPrompt: text };
+  if (field === 'riskCriteria') return { riskCriteria: text };
+  return { standardPosition: { text, origin: 'ai-drafted', reviewedByHuman: true } };
 }
 
 /**
@@ -171,7 +199,23 @@ export function TemplateEditor({
   // from `App`'s `editorContent` as a second, structurally-equal object.
   const working = useMemo(() => workingContent(version, draft), [version, draft]);
   const hasUnpublishedChanges = hasUnpublishedContent(version, draft);
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  /**
+   * Which clause the main pane is showing. The editor renders ONE clause at
+   * a time (the previous layout expanded all of them at once, three walls of
+   * text each); the rail is how a reader moves between them.
+   *
+   * Resolved by DERIVATION rather than by an effect that syncs state to
+   * props. `working` comes from the parent, so a clause this component just
+   * asked to add may or may not come back — and an effect correcting the
+   * selection afterwards would be one more "runs in declaration order" trap
+   * of the kind CLAUDE.md records. An id that no longer names a clause
+   * simply falls back to the first one.
+   */
+  const [activeClauseId, setActiveClauseId] = useState<string | undefined>(undefined);
+  const foundIndex = working.clauses.findIndex((c) => c.id === activeClauseId);
+  const activeIndex = foundIndex >= 0 ? foundIndex : (working.clauses.length > 0 ? 0 : -1);
+  const activeClause = activeIndex >= 0 ? working.clauses[activeIndex] : undefined;
 
   // Part A — per-field suggestions. Keyed by `${clauseId}:${field}` so
   // accepting, regenerating or dismissing one field's suggestion can never
@@ -220,24 +264,43 @@ export function TemplateEditor({
 
   /**
    * THE only place a suggestion is written into a clause (mirrors
-   * `FieldSuggestion`'s own doc comment). `updateClause`/`setPosition` below
-   * are the same funnels a hand-typed edit uses — there is no second write
-   * path for AI-suggested text.
+   * `FieldSuggestion`'s own doc comment). `updateClause` is the same funnel
+   * a hand-typed edit uses — there is no second write path for AI-suggested
+   * text, and nothing else in this component reads `fieldSuggestions` into
+   * the working copy. Saving the form reads only `working`.
+   *
+   * Takes a LIST because "use all" and "use this" are the same act at
+   * different widths. Batched into one `updateClause` deliberately: calling
+   * a single-field accept three times would compute each patch from the
+   * same stale `working`, and the last write would silently drop the first
+   * two — a bulk control that quietly accepted one of three suggestions
+   * while saying it took them all.
    */
-  const acceptFieldSuggestion = (index: number, field: SuggestableField) => {
+  const acceptFieldSuggestions = (index: number, fields: readonly SuggestableField[]) => {
     const clause = working.clauses[index];
     if (!clause) return;
-    const key = suggestionKey(clause.id, field);
-    const text = fieldSuggestions[key]?.text;
-    if (text === undefined) return;
-    if (field === 'extractPrompt') updateClause(index, { extractPrompt: text });
-    else if (field === 'riskCriteria') updateClause(index, { riskCriteria: text });
-    else setPosition(index, { text, origin: 'ai-drafted', reviewedByHuman: true });
-    dismissFieldSuggestion(clause.id, field);
+    const taken = fields.filter((f) => fieldSuggestions[suggestionKey(clause.id, f)]?.text !== undefined);
+    if (taken.length === 0) return;
+    const patch = taken.reduce<Partial<PlaybookClause>>(
+      (acc, f) => ({ ...acc, ...suggestionPatch(f, fieldSuggestions[suggestionKey(clause.id, f)]!.text!) }),
+      {},
+    );
+    updateClause(index, patch);
+    setFieldSuggestions((prev) => {
+      const next = { ...prev };
+      for (const f of taken) delete next[suggestionKey(clause.id, f)];
+      return next;
+    });
   };
 
-  // Part B — "Suggest what I'm missing" (Task 8). Proposals are titles only,
-  // each added or dismissed on its own — there is deliberately no "add all".
+  const acceptFieldSuggestion = (index: number, field: SuggestableField) =>
+    acceptFieldSuggestions(index, [field]);
+
+  // Part B — "Suggest what I'm missing" (Task 8). Proposals are titles only;
+  // each can be added or dismissed on its own, and "Add all" adds every one
+  // of them at once. Both routes go through `addMissingClauses` below — the
+  // bulk control is an explicit act, not an implicit adoption, and it writes
+  // through the same funnel the one-at-a-time control does.
   const [missingSuggestions, setMissingSuggestions] = useState<string[]>([]);
   const [missingBusy, setMissingBusy] = useState(false);
   const [missingError, setMissingError] = useState<string | undefined>();
@@ -262,12 +325,20 @@ export function TemplateEditor({
       });
   };
 
-  const addMissingClause = (title: string) => {
-    updateDraft({
-      clauses: [...working.clauses, newDefaultClause(title)],
-    });
-    setMissingSuggestions((prev) => prev.filter((t) => t !== title));
+  /** One accepted proposal or every one of them — the same act at two
+   *  widths, and one write. Appending them one call at a time would compute
+   *  each new `clauses` array from the same stale `working` and keep only
+   *  the last title, so "Add all 6" would add one clause and say it added
+   *  six. */
+  const addMissingClauses = (titles: readonly string[]) => {
+    const added = titles.map(newDefaultClause);
+    if (added.length === 0) return;
+    updateDraft({ clauses: [...working.clauses, ...added] });
+    setMissingSuggestions((prev) => prev.filter((t) => !titles.includes(t)));
+    setActiveClauseId(added[0]!.id);
   };
+
+  const addMissingClause = (title: string) => addMissingClauses([title]);
 
   const dismissMissingClause = (title: string) => {
     setMissingSuggestions((prev) => prev.filter((t) => t !== title));
@@ -297,17 +368,18 @@ export function TemplateEditor({
     updateDraft({ clauses: next });
   };
 
-  const moveClause = (index: number, direction: 'up' | 'down') =>
-    reorderClause(index, direction === 'up' ? index - 1 : index + 1);
-
   const addClause = () => {
-    updateDraft({
-      clauses: [...working.clauses, newDefaultClause('New Clause')],
-    });
+    const clause = newDefaultClause('New Clause');
+    updateDraft({ clauses: [...working.clauses, clause] });
+    // The main pane shows one clause; adding one and staying put would look
+    // like nothing happened.
+    setActiveClauseId(clause.id);
   };
 
   const deleteClause = (index: number) => {
     updateDraft({ clauses: working.clauses.filter((_, i) => i !== index) });
+    const next = working.clauses[index + 1] ?? working.clauses[index - 1];
+    setActiveClauseId(next?.id);
   };
 
   const updateClause = (index: number, patch: Partial<PlaybookClause>) => {
@@ -393,6 +465,17 @@ export function TemplateEditor({
     );
   };
 
+
+  // Every suggestion currently DISPLAYED for the active clause. The "use
+  // all" control below exists only when there is more than one — a "use all"
+  // over a single suggestion is noise, and the box's own "Use this" already
+  // says it better.
+  const showingFields = activeClause
+    ? SUGGESTABLE_FIELDS.filter((f) => fieldSuggestions[suggestionKey(activeClause.id, f)]?.text !== undefined)
+    : [];
+
+  const activeHealth = activeClause ? health?.[activeClause.id] : undefined;
+
   return (
     <div
       // `h-full`, not `calc(100vh - 64px)`: the app header's height is
@@ -477,256 +560,243 @@ export function TemplateEditor({
         </div>
       </div>
 
-      {/* Grid Layout. Below `lg` this collapses to one column — the left
-         rail (global settings) stacks above the clause list, in normal
-         document order, with nothing hidden. At `lg`+ the two panes sit
-         side by side, each scrolling independently within the fixed
-         viewport height. Below `lg` there are two stacked rows instead of
-         one, so `h-full`/forced internal scrolling on either child would
-         divide that same fixed height between them and squeeze the clause
-         list into a cramped scroll box — the collapse this task exists to
-         prevent. So the height/overflow constraints are `lg:`-only below,
-         and the OUTER grid scrolls the whole stacked page vertically
-         instead. */}
-      <div className="flex-1 overflow-y-auto lg:overflow-hidden grid grid-cols-1 lg:grid-cols-3 gap-6 pb-2">
-        {/* Left Column: Global Settings */}
-        <div className="space-y-6 lg:overflow-y-auto pr-2 custom-scrollbar">
-          <div className="bg-card border border-rule rounded-card p-5">
-            <label className="block font-ui text-ui text-ink-3 mb-2 flex items-center gap-2"><Cpu className="h-4 w-4" /> System Persona</label>
-            <AutoResizeTextarea
-              value={working.systemPrompt}
-              onChange={(e) => updateDraft({ systemPrompt: e.target.value })}
-              className="w-full bg-card border border-rule-strong rounded-control p-3 font-prose text-field text-ink-prose focus:border-accent outline-none min-h-[120px]"
-            />
-          </div>
-          <div className="bg-card border border-rule rounded-card p-5">
-            <label className="block font-ui text-ui text-ink-3 mb-2 flex items-center gap-2"><FileOutput className="h-4 w-4" /> Format & Rules</label>
-            <AutoResizeTextarea
-              value={working.formatPrompt}
-              onChange={(e) => updateDraft({ formatPrompt: e.target.value })}
-              className="w-full bg-card border border-rule-strong rounded-control p-3 font-prose text-field text-ink-prose focus:border-accent outline-none min-h-[120px]"
-            />
-          </div>
-          {/* R-D1: always visible. The Standard/Risk toggle that used to hide
-              this is gone, and what decides whether a review assesses risk is
-              now whether this field (or a clause's own criteria) has anything
-              in it — so a hidden field would be a hidden decision. */}
-          <div className="bg-risk-high-tint border border-risk-high-edge rounded-card p-5">
-            <label className="block font-ui text-ui text-risk-high mb-2 flex items-center gap-2"><ShieldAlert className="h-4 w-4" /> Global Risk Tolerance</label>
-            <AutoResizeTextarea
-              value={working.riskTolerance || ''}
-              onChange={(e) => setRiskTolerance(e.target.value)}
-              placeholder="e.g. We are risk-averse regarding uncapped liability..."
-              className="w-full bg-card border border-risk-high-edge rounded-control p-3 font-prose text-field text-ink-prose focus:border-risk-high outline-none min-h-[100px]"
-            />
-            <p className="mt-2 font-ui text-meta text-ink-4">
-              Applies to every clause that has no criteria of its own. There is no risk mode any
-              more: what is written here and in each clause's Risk Scorer is what decides. Leave
-              them all empty and no risk criteria are sent at all.
-            </p>
-          </div>
-        </div>
+      {/* Set once, rarely revisited, and previously the busiest thing on the
+         screen. Its collapsed header still states whether a global risk
+         tolerance is set, so R-D1's "no hidden decision" survives the fold. */}
+      <PromptConfigPanel
+        systemPrompt={working.systemPrompt}
+        formatPrompt={working.formatPrompt}
+        riskTolerance={working.riskTolerance}
+        onSystemPromptChange={(value) => updateDraft({ systemPrompt: value })}
+        onFormatPromptChange={(value) => updateDraft({ formatPrompt: value })}
+        onRiskToleranceChange={setRiskTolerance}
+      />
 
-        {/* Right Column: Clauses (Spans 2 cols on large screens) */}
-        <div className="lg:col-span-2 flex flex-col lg:h-full bg-card border border-rule rounded-card overflow-hidden">
-          <div className="p-4 border-b border-rule bg-paper flex justify-between items-center shrink-0">
-            <h3 className="font-prose text-section text-ink-1 flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-accent" /> Extraction Clauses ({working.clauses.length})</h3>
-            <Button onClick={addClause} className="px-3 py-1.5"><Plus className="h-3 w-3" /> Add Clause</Button>
-          </div>
+      {/* Rail + one clause. Below `lg` this collapses to a single column —
+         the rail stacks above the clause, in normal document order, with
+         nothing hidden. At `lg`+ they sit side by side, each scrolling
+         independently within the fixed viewport height; below it there are
+         two stacked rows, so `h-full`/forced internal scrolling on either
+         child would divide that same height between them and squeeze both
+         into cramped scroll boxes. The height/overflow constraints are
+         therefore `lg:`-only, and the OUTER grid scrolls the stacked page. */}
+      <div className="flex-1 overflow-y-auto lg:overflow-hidden grid grid-cols-1 lg:grid-cols-[288px_1fr] gap-6 pb-2">
+        <ClauseListRail
+          clauses={working.clauses}
+          activeId={activeClause?.id}
+          onSelect={setActiveClauseId}
+          onReorder={reorderClause}
+          footer={
+            <>
+              <Button onClick={addClause} className="w-full px-3 py-1.5"><Plus className="h-3 w-3" /> Add clause</Button>
 
-          <div className="flex-1 lg:overflow-y-auto p-4 space-y-4 custom-scrollbar">
-            {/* Instead of the chips, never beside them. A failed scan that
-               fell back to an empty map would render every position as
-               having no evidence, which reads as a finding about the
-               playbook rather than a failure of the app. */}
-            {healthError && (
-              <LoadErrorPanel message={healthError} onRetry={onRetryHealth} compact />
-            )}
-            {working.clauses.map((clause, idx) => {
-              const clauseHealth = health?.[clause.id];
-              return (
-                <div
-                  key={clause.id}
-                  data-clause-row
-                  onDragOver={(e) => { if (dragIndex !== null) e.preventDefault(); }}
-                  onDrop={(e) => {
-                    if (dragIndex === null) return;
-                    e.preventDefault();
-                    reorderClause(dragIndex, idx);
-                    setDragIndex(null);
-                  }}
-                  className={`group bg-card border rounded-card transition-colors ${dragIndex === idx ? 'border-accent-edge bg-accent-tint' : 'border-rule'}`}
+              {/* "Suggest what I'm missing" (spec §6, Task 8). Titles only.
+                 Each can be added or dismissed on its own, and "Add all"
+                 takes every one at once — an explicit act either way; what
+                 must never happen is a proposal entering the playbook
+                 because something else was saved. */}
+              <div className="space-y-2">
+                <button
+                  type="button"
+                  onClick={requestMissingClauses}
+                  disabled={missingBusy}
+                  className="font-ui text-meta flex items-center gap-1.5 text-draft hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                 >
-                  <div className="p-4 flex flex-col md:flex-row gap-4 items-start relative">
-                    {/* Reordering Controls. The chevrons are the accessible
-                       path and stay: a drag handle cannot be reached from a
-                       keyboard. The handle below is a second affordance over
-                       the same `reorderClause`, hidden from assistive tech
-                       because it would announce a duplicate of what the
-                       chevrons already offer. */}
-                    <div className="flex flex-col items-center gap-1 pt-1 md:border-r md:border-rule md:pr-4">
-                      <button
-                        onClick={() => moveClause(idx, 'up')}
-                        disabled={idx === 0}
-                        aria-label={`Move ${clause.title} up`}
-                        className="p-1 rounded-control hover:bg-chip-fill text-ink-4 hover:text-ink-1 transition-colors disabled:opacity-30"
-                      ><ChevronUp className="h-4 w-4" /></button>
-                      <span className="font-mono text-pin text-ink-5 font-semibold">{idx + 1}</span>
-                      <button
-                        onClick={() => moveClause(idx, 'down')}
-                        disabled={idx === working.clauses.length - 1}
-                        aria-label={`Move ${clause.title} down`}
-                        className="p-1 rounded-control hover:bg-chip-fill text-ink-4 hover:text-ink-1 transition-colors disabled:opacity-30"
-                      ><ChevronDown className="h-4 w-4" /></button>
-                      <span
-                        draggable
-                        aria-hidden="true"
-                        title="Drag to reorder"
-                        onDragStart={(e) => {
-                          setDragIndex(idx);
-                          // Firefox refuses to start a drag without payload.
-                          // Optional-chained because jsdom's synthetic drag
-                          // events carry no dataTransfer at all.
-                          (e.dataTransfer as DataTransfer | undefined)?.setData('text/plain', String(idx));
-                        }}
-                        onDragEnd={() => setDragIndex(null)}
-                        className="mt-1 cursor-grab active:cursor-grabbing text-ink-6 hover:text-ink-4"
-                      ><GripVertical className="h-4 w-4" /></span>
-                    </div>
-
-                    {/* Content */}
-                    <div className="flex-1 w-full space-y-3">
-                      <div className="flex justify-between items-start gap-2">
-                        <div className="flex items-center gap-2 flex-1 min-w-0">
-                          <input
-                            value={clause.title}
-                            onChange={(e) => updateClause(idx, { title: e.target.value })}
-                            className="bg-transparent font-prose text-clause font-medium text-ink-1 outline-none min-w-0 flex-1 focus:text-accent transition-colors border-b border-transparent focus:border-accent"
-                            placeholder="Clause Title"
-                            aria-label="Clause title"
-                          />
-                          {/* Reuses `PositionChip`'s shape (label in a 1px
-                             role-coloured border, transparent fill) so this
-                             row and a finding card agree on what that shape
-                             means — a house rule exists, or it doesn't. */}
-                          <span
-                            className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border bg-transparent shrink-0 ${
-                              clause.standardPosition
-                                ? 'text-accent border-accent-edge'
-                                : 'text-ink-4 border-rule'
-                            }`}
-                          >
-                            {clause.standardPosition ? 'Has standard position' : 'No standard position'}
-                          </span>
-                        </div>
-                        <button onClick={() => deleteClause(idx)} aria-label={`Delete ${clause.title}`} className="text-ink-4 hover:text-risk-high transition-colors p-1 opacity-0 group-hover:opacity-100 shrink-0"><X className="h-4 w-4" /></button>
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <label className="font-mono text-chip uppercase text-ink-4 block">Extraction Instruction</label>
-                          {fieldSuggestButton(idx, clause, 'extractPrompt')}
-                        </div>
-                        <AutoResizeTextarea
-                          value={clause.extractPrompt}
-                          onChange={(e) => updateClause(idx, { extractPrompt: e.target.value })}
-                          className="w-full bg-chip-fill rounded-control p-2 font-prose text-field text-ink-prose outline-none min-h-[50px] focus:ring-1 focus:ring-accent border border-transparent focus:border-accent"
-                          placeholder="What to extract..."
-                        />
-                        {fieldSuggestBox(idx, clause, 'extractPrompt')}
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-end mb-1">
-                          {fieldSuggestButton(idx, clause, 'standardPosition')}
-                        </div>
-                        <StandardPositionField
-                          position={clause.standardPosition}
-                          onChange={(position) => setPosition(idx, position)}
-                        />
-                        {fieldSuggestBox(idx, clause, 'standardPosition')}
-                      </div>
-                      {/* Nothing at all when the caller supplied no map,
-                         and nothing when the scan failed — the panel above
-                         says why. A defaulted `UNTESTED` here would be the
-                         app inventing an answer to a question it could not
-                         ask. */}
-                      {clauseHealth && !healthError && (
-                        <p className={`font-mono text-chip uppercase ${HEALTH_INK[clauseHealth.kind]}`}>
-                          {positionHealthLabel(clauseHealth)}
-                        </p>
-                      )}
-                      <div>
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <label className="font-mono text-chip uppercase text-risk-high flex items-center gap-1"><ShieldAlert className="h-3 w-3" /> Risk Scorer</label>
-                          {fieldSuggestButton(idx, clause, 'riskCriteria')}
-                        </div>
-                        <AutoResizeTextarea
-                          value={clause.riskCriteria || ''}
-                          onChange={(e) => updateClause(idx, { riskCriteria: e.target.value })}
-                          className="w-full bg-risk-high-tint border border-risk-high-edge rounded-control p-2 font-prose text-field text-ink-prose outline-none min-h-[50px] focus:border-risk-high"
-                          placeholder="Specific criteria (e.g., 'Must be mutual'). Leave blank to use Global Risk."
-                        />
-                        {fieldSuggestBox(idx, clause, 'riskCriteria')}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-            {working.clauses.length === 0 && <div className="text-center font-ui text-ui text-ink-4 py-10 border border-dashed border-rule rounded-card">No clauses defined. Add one to get started.</div>}
-
-            {/* Declared new copy (R-G6). Derivable from `working.clauses` alone, and it
-                answers the question the left rail's position coverage is for: how much
-                of this playbook actually carries a house rule. */}
-            <p className="font-ui text-meta text-ink-3">
-              {working.clauses.filter(c => c.standardPosition).length} of {working.clauses.length} clauses have a standard position
-            </p>
-
-            {/* "Suggest what I'm missing" (spec §6, Task 8). Titles only —
-               each proposal is added or dismissed on its own; there is no
-               "add all", because every clause entering a playbook is meant
-               to be a decision, not a batch import. */}
-            <div className="pt-3 mt-2 border-t border-rule space-y-2">
-              <button
-                type="button"
-                onClick={requestMissingClauses}
-                disabled={missingBusy}
-                className="font-ui text-meta flex items-center gap-1.5 text-draft hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-              >
-                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                {missingBusy ? 'Checking for gaps…' : "Suggest what I'm missing"}
-              </button>
-              {missingError && <p className="font-ui text-meta text-risk-high">{missingError}</p>}
-              {missingSuggestions.length > 0 && (
-                <ul className="space-y-2">
-                  {missingSuggestions.map((title) => (
-                    <li
-                      key={title}
-                      className="flex items-center justify-between gap-2 bg-draft-tint border border-dashed border-draft rounded-card p-2"
-                    >
-                      <span className="font-ui text-meta text-ink-2">{title}</span>
-                      <span className="flex gap-3 shrink-0">
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  {missingBusy ? 'Checking for gaps…' : "Suggest what I'm missing"}
+                </button>
+                {missingError && <p className="font-ui text-meta text-risk-high">{missingError}</p>}
+                {missingSuggestions.length > 0 && (
+                  <>
+                    {/* Only for more than one: a "use all" over a single
+                       proposal is noise beside its own Add clause. */}
+                    {missingSuggestions.length > 1 && (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-ui text-meta text-ink-4">
+                          {missingSuggestions.length} suggested
+                        </span>
                         <button
                           type="button"
-                          onClick={() => dismissMissingClause(title)}
-                          className="font-ui text-meta font-semibold text-ink-3 hover:text-ink-1"
-                        >
-                          Dismiss
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => addMissingClause(title)}
+                          onClick={() => addMissingClauses(missingSuggestions)}
                           className="font-ui text-meta font-semibold text-accent hover:text-accent-strong flex items-center gap-1"
                         >
-                          <Plus className="h-3 w-3" aria-hidden="true" /> Add clause
+                          <Plus className="h-3 w-3" aria-hidden="true" /> Add all {missingSuggestions.length}
                         </button>
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                      </div>
+                    )}
+                    <ul className="space-y-2">
+                      {missingSuggestions.map((title) => (
+                        <li
+                          key={title}
+                          className="bg-draft-tint border border-dashed border-draft rounded-card p-2 space-y-1"
+                        >
+                          <span className="block font-ui text-meta text-ink-2">{title}</span>
+                          <span className="flex gap-3">
+                            <button
+                              type="button"
+                              onClick={() => dismissMissingClause(title)}
+                              className="font-ui text-meta font-semibold text-ink-3 hover:text-ink-1"
+                            >
+                              Dismiss
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => addMissingClause(title)}
+                              className="font-ui text-meta font-semibold text-accent hover:text-accent-strong flex items-center gap-1"
+                            >
+                              <Plus className="h-3 w-3" aria-hidden="true" /> Add clause
+                            </button>
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </div>
+            </>
+          }
+        />
+
+        {/* The one clause being read. */}
+        <section className="lg:h-full lg:overflow-y-auto custom-scrollbar space-y-4" aria-label="Clause">
+          {/* Instead of the chips, never beside them. A failed scan that
+             fell back to an empty map would render every position as having
+             no evidence, which reads as a finding about the playbook rather
+             than a failure of the app. */}
+          {healthError && (
+            <LoadErrorPanel message={healthError} onRetry={onRetryHealth} compact />
+          )}
+
+          {!activeClause ? (
+            <div className="text-center font-ui text-ui text-ink-4 py-10 border border-dashed border-rule rounded-card">
+              No clauses defined. Add one to get started.
             </div>
-          </div>
-        </div>
+          ) : (
+            <div className="bg-card border border-rule rounded-panel p-5 space-y-6">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <p className="font-mono text-chip uppercase text-ink-4 mb-1">
+                    Clause {activeIndex + 1} of {working.clauses.length}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      value={activeClause.title}
+                      onChange={(e) => updateClause(activeIndex, { title: e.target.value })}
+                      className="bg-transparent font-prose text-clause font-medium text-ink-1 outline-none min-w-0 flex-1 focus:text-accent transition-colors border-b border-transparent focus:border-accent"
+                      placeholder="Clause Title"
+                      aria-label="Clause title"
+                    />
+                    {/* Reuses `PositionChip`'s shape (label in a 1px
+                       role-coloured border, transparent fill) so this row and
+                       a finding card agree on what that shape means — a house
+                       rule exists, or it doesn't. NOT a health chip: a clause
+                       with no standard position gets no health verdict at all. */}
+                    <span
+                      className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border bg-transparent shrink-0 ${
+                        activeClause.standardPosition
+                          ? 'text-accent border-accent-edge'
+                          : 'text-ink-4 border-rule'
+                      }`}
+                    >
+                      {activeClause.standardPosition ? 'Has standard position' : 'No standard position'}
+                    </span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => deleteClause(activeIndex)}
+                  aria-label={`Delete ${activeClause.title}`}
+                  className="text-ink-4 hover:text-risk-high transition-colors p-1 shrink-0"
+                ><X className="h-4 w-4" aria-hidden="true" /></button>
+              </div>
+
+              {/* Part B. One explicit act for every suggestion on this clause
+                 — the same `updateClause` funnel, taken deliberately, in one
+                 write. It appears only above more than one suggestion, never
+                 over a single box that already offers "Use this". */}
+              {showingFields.length > 1 && (
+                <div className="flex flex-wrap items-center justify-between gap-3 bg-draft-tint border border-dashed border-draft rounded-card px-3 py-2">
+                  <p className="font-ui text-meta text-ink-2">
+                    {showingFields.length} suggestions are waiting on this clause. None of them is in
+                    it until you take it.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => acceptFieldSuggestions(activeIndex, showingFields)}
+                    className="font-ui text-ui-sm font-semibold text-accent hover:text-accent-strong shrink-0"
+                  >
+                    Use all {showingFields.length}
+                  </button>
+                </div>
+              )}
+
+              {/* EXTRACT, full width and first: it is the only field a clause
+                 cannot do without. */}
+              <div>
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <label
+                    htmlFor="clause-extract"
+                    className="font-mono text-chip uppercase text-ink-4 flex items-center gap-1"
+                  ><ScanText className="h-3 w-3" aria-hidden="true" /> Extract</label>
+                  {fieldSuggestButton(activeIndex, activeClause, 'extractPrompt')}
+                </div>
+                <AutoResizeTextarea
+                  id="clause-extract"
+                  aria-label="Extract"
+                  value={activeClause.extractPrompt}
+                  onChange={(e) => updateClause(activeIndex, { extractPrompt: e.target.value })}
+                  className="w-full p-2.5 min-h-[64px]"
+                  placeholder="What to pull out of the document..."
+                />
+                {fieldSuggestBox(activeIndex, activeClause, 'extractPrompt')}
+              </div>
+
+              {/* The pairing the owner asked for: what makes this clause
+                 risky, beside what we ask for — one is read against the
+                 other. Stacked below `lg`, where two columns would only be
+                 two narrow ones. */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6" data-field-pair>
+                <div>
+                  <div className="flex items-center justify-between gap-2 mb-1">
+                    <label
+                      htmlFor="clause-risky-when"
+                      className="font-mono text-chip uppercase text-risk-high flex items-center gap-1"
+                    ><ShieldAlert className="h-3 w-3" aria-hidden="true" /> Risky when</label>
+                    {fieldSuggestButton(activeIndex, activeClause, 'riskCriteria')}
+                  </div>
+                  <AutoResizeTextarea
+                    id="clause-risky-when"
+                    aria-label="Risky when"
+                    value={activeClause.riskCriteria || ''}
+                    onChange={(e) => updateClause(activeIndex, { riskCriteria: e.target.value })}
+                    className="w-full bg-risk-high-tint p-2.5 min-h-[64px]"
+                    placeholder="e.g. Must be mutual. Leave blank to use the global risk tolerance."
+                  />
+                  {fieldSuggestBox(activeIndex, activeClause, 'riskCriteria')}
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-end mb-1">
+                    {fieldSuggestButton(activeIndex, activeClause, 'standardPosition')}
+                  </div>
+                  <StandardPositionField
+                    position={activeClause.standardPosition}
+                    onChange={(position) => setPosition(activeIndex, position)}
+                  />
+                  {fieldSuggestBox(activeIndex, activeClause, 'standardPosition')}
+                  {/* Nothing at all when the caller supplied no map, and
+                     nothing when the scan failed — the panel above says why.
+                     A defaulted `UNTESTED` here would be the app inventing an
+                     answer to a question it could not ask. */}
+                  {activeHealth && !healthError && (
+                    <p className={`mt-2 font-mono text-chip uppercase ${HEALTH_INK[activeHealth.kind]}`}>
+                      {positionHealthLabel(activeHealth)}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );

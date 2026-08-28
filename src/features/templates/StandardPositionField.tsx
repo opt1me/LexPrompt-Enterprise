@@ -67,13 +67,13 @@ export function StandardPositionField({ position, onChange, disabled }: Standard
   return (
     <div>
       <label className="font-mono text-chip uppercase text-accent flex items-center gap-1 mb-1">
-        <Scale className="h-3 w-3" aria-hidden="true" /> Standard position
+        <Scale className="h-3 w-3" aria-hidden="true" /> Our standard position
       </label>
       <AutoResizeTextarea
         value={position?.text ?? ''}
         onChange={(e) => handleText(e.target.value)}
         disabled={disabled}
-        aria-label="Standard position"
+        aria-label="Our standard position"
         className="w-full bg-accent-tint border border-accent-edge rounded-control p-2 text-field text-ink-prose outline-none min-h-[50px] focus:border-accent disabled:opacity-50"
         // A noun phrase, not a full sentence — `PositionComparison` (the
         // card) prepends its own "We ask for " label to whatever is typed

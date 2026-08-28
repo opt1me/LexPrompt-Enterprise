@@ -17,9 +17,21 @@ import { publishVersion } from '../../lib/db/playbookVersions';
 // (see src/App.interrupted.test.tsx).
 const flush = () => act(async () => { await Promise.resolve(); });
 const nameInput = (c: HTMLElement) => c.querySelector('input') as HTMLInputElement;
-const fieldFor = (c: HTMLElement, label: RegExp) =>
-  [...c.querySelectorAll('textarea')].find(t =>
-    label.test(t.closest('div')?.textContent ?? '')) as HTMLTextAreaElement | undefined;
+/** Every editable field carries the accessible name it is labelled with,
+ *  so a test names the field rather than the shape of the markup around it.
+ *  (The old `fieldFor` helper walked to `closest('div')`, which the
+ *  relayout moved.) */
+const labelled = (c: HTMLElement, name: string) =>
+  c.querySelector(`[aria-label="${name}"]`) as HTMLTextAreaElement | null;
+
+/** The playbook-wide prompt configuration (persona, format rules, global
+ *  risk tolerance) is a collapsed panel in the redesigned editor: it is set
+ *  once and rarely revisited, and expanded by default it was the busiest
+ *  thing on the screen. Opening it is what a user does to reach those
+ *  fields — and its collapsed header still SAYS whether a global risk
+ *  tolerance is set, which is the part R-D1 actually cares about (see the
+ *  test in "the mode toggle is gone" below). */
+const openPromptConfig = (c: HTMLElement) => click(buttonNamed(c, /prompt configuration/i));
 
 function version(overrides: Partial<PlaybookVersion> = {}): PlaybookVersion {
   return {
@@ -168,7 +180,8 @@ describe('TemplateEditor — a published version is never edited in place', () =
     );
 
     expect(nameInput(c).value).toBe('Half-typed name');
-    type(fieldFor(c, /system persona/i)!, 'A different persona.');
+    openPromptConfig(c);
+    type(labelled(c, 'System persona')!, 'A different persona.');
     await flush();
 
     // The name the user had already typed survives the next edit.
@@ -308,9 +321,10 @@ describe('TemplateEditor — Global Risk Tolerance ("" vs absent, Minor 5)', () 
     }
     const c = mount(<Harness />);
 
-    type(fieldFor(c, /global risk tolerance/i)!, 'Risk-averse on liability.');
+    openPromptConfig(c);
+    type(labelled(c, 'Global risk tolerance')!, 'Risk-averse on liability.');
     await flush();
-    type(fieldFor(c, /global risk tolerance/i)!, '');
+    type(labelled(c, 'Global risk tolerance')!, '');
     await flush();
 
     expect('riskTolerance' in latest!).toBe(false);
@@ -335,7 +349,8 @@ describe('TemplateEditor — Global Risk Tolerance ("" vs absent, Minor 5)', () 
     }
     const c = mount(<Harness />);
 
-    type(fieldFor(c, /global risk tolerance/i)!, 'Risk-averse on liability.');
+    openPromptConfig(c);
+    type(labelled(c, 'Global risk tolerance')!, 'Risk-averse on liability.');
     await flush();
 
     expect(latest!.riskTolerance).toBe('Risk-averse on liability.');
@@ -447,26 +462,64 @@ describe('TemplateEditor — the mode toggle is gone (R-D1)', () => {
 
   // R-D1: the PRESENCE of these fields, not a flag, decides whether a review
   // assesses risk — so a hidden field would be a hidden decision.
+  //
+  // The relayout folds the playbook-wide prompt configuration into a
+  // collapsed panel, which would reinstate exactly that if the panel said
+  // nothing. It does not: the collapsed header states whether a global risk
+  // tolerance is set, so the ANSWER is legible without opening anything and
+  // only the box that changes it is folded away. The per-clause field is
+  // still on screen unconditionally, under the handoff's shorter label
+  // ("Risky when", formerly "Risk Scorer").
+  it('says on the collapsed panel whether a global risk tolerance is set', () => {
+    const published = version({ clauses: structuredClone(twoClauses) });
+    const c = mount(
+      <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
+    );
+    expect(c.textContent).toMatch(/no global risk tolerance/i);
+  });
+
+  it('says on the collapsed panel that a global risk tolerance IS set, when one is', () => {
+    const published = version({ clauses: structuredClone(twoClauses) });
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={{ ...draftOf(published), riskTolerance: 'Risk-averse on liability.' }}
+        onDraftChange={noop}
+        {...wiring}
+      />,
+    );
+    expect(c.textContent).toMatch(/a global risk tolerance that applies to every clause/i);
+    expect(c.textContent).not.toMatch(/no global risk tolerance/i);
+  });
+
   it('always shows the risk fields, and says that their content is what decides', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
       <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
-    expect(fieldFor(c, /risk tolerance/i)).toBeTruthy();
-    expect(fieldFor(c, /risk scorer/i)).toBeTruthy();
+    // The per-clause one, with no panel opened at all.
+    expect(labelled(c, 'Risky when')).toBeTruthy();
+
+    openPromptConfig(c);
+    expect(labelled(c, 'Global risk tolerance')).toBeTruthy();
     expect(c.textContent).toMatch(/every clause/i);
     expect(c.textContent).toMatch(/no risk criteria are sent/i);
   });
 });
 
 describe('TemplateEditor — standard positions', () => {
-  it('shows a standard-position field per clause', () => {
+  // Was: "shows a standard-position field per clause", asserting TWO
+  // position fields for two clauses. The editor renders ONE clause at a
+  // time now (see TemplateEditor.layout.test.tsx), so two simultaneous
+  // position fields is the behaviour the relayout deliberately removed —
+  // the surviving claim is that the clause on screen has one.
+  it('shows a standard-position field for the clause on screen', () => {
     const published = version({ clauses: structuredClone(twoClauses) });
     const c = mount(
       <TemplateEditor version={published} draft={undefined} onDraftChange={noop} {...wiring} />,
     );
     expect([...c.querySelectorAll('textarea')].filter(t =>
-      /standard position/i.test(t.closest('div')?.textContent ?? '')).length).toBe(2);
+      /standard position/i.test(t.closest('div')?.textContent ?? '')).length).toBe(1);
   });
 
   it('writes a typed position into the draft as an authored one', async () => {
