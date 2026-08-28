@@ -8,3 +8,7 @@ export type {
   InferContext, InferRequest, InferUsage, InferResponse, ModelErrorCode,
 } from './model/protocol.ts';
 export type { ModelClient } from './model/client.ts';
+export {
+  createSseEventReader, sseFields, encodeFrame, decodeFrame, readFrames,
+} from './model/sse.ts';
+export type { Frame } from './model/sse.ts';
