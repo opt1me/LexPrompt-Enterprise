@@ -1,6 +1,7 @@
 import { loadConfig, describeConfig, ConfigError } from './config.ts';
 import { discoverJwks, makeTokenVerifier } from './oidc.ts';
 import { buildServer } from './server.ts';
+import { makeGatewayClient } from './gatewayClient.ts';
 
 async function main(): Promise<void> {
   let config;
@@ -21,8 +22,9 @@ async function main(): Promise<void> {
 
   const jwks = await discoverJwks(config.auth.issuer);
   const verify = makeTokenVerifier(config.auth, jwks);
+  const gateway = makeGatewayClient(config);
 
-  const app = buildServer({ verify });
+  const app = buildServer({ verify, gateway, workspaceId: config.workspaceId });
   await app.listen({ port: config.port, host: '0.0.0.0' });
 }
 

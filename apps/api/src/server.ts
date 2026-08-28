@@ -1,6 +1,8 @@
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { ModelError } from '@lexprompt/core';
 import type { Principal } from './oidc.ts';
+import type { GatewayClient } from './gatewayClient.ts';
+import { registerInfer } from './routes/infer.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -48,11 +50,17 @@ export function requireUser(verify: TokenVerifier) {
 
 export interface ServerDeps {
   verify: TokenVerifier;
+  /** Where a validated call is forwarded (Task 17). */
+  gateway: GatewayClient;
+  /** The single workspace §6 seeds — Stage 1 has no workspace resolution. */
+  workspaceId: string;
 }
 
 /**
- * Stage 1 boundary (§13): this derives a `Principal` and answers `/healthz`.
- * No proxy to the gateway, no role gate, no `app_user` row — all Stage 2.
+ * Stage 1 boundary (§13): this derives a `Principal`, answers `/healthz`,
+ * and forwards `/v1/infer` and `/v1/models` to the gateway with the actor
+ * overwritten from the token (Task 17) — never a role gate, never an
+ * `app_user` row, both of which stay Stage 2.
  */
 export function buildServer(deps: ServerDeps): FastifyInstance {
   const app: FastifyInstance = Fastify({ logger: false });
@@ -64,6 +72,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   });
 
   app.get('/healthz', async () => ({ ok: true }));
+  registerInfer(app, deps.gateway, deps.workspaceId);
 
   return app;
 }
