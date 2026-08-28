@@ -56,12 +56,30 @@ export function assertIssuerUsable(issuer: string): void {
   }
   if (url.protocol === 'https:') return;
   const host = url.hostname;
-  const loopback = host === 'localhost' || host === '127.0.0.1'
+  // Plaintext is permitted for loopback and for a SINGLE-LABEL hostname.
+  //
+  // The second half is wider than the spec's words (§7, S29 say "does not
+  // resolve to loopback") and it is deliberate, because the compose stack
+  // reaches Keycloak at `http://keycloak:8080` — a container-network
+  // service name, which is not loopback and cannot be made loopback from
+  // inside another container. Requiring https there would mean shipping a
+  // dev CA into the identity provider before anyone can run the stack.
+  //
+  // It is NOT called `loopback`, because it is not loopback, and a variable
+  // that names a stricter check than it performs is how the next reader
+  // concludes plaintext is impossible off localhost. A single-label name is
+  // not resolvable on the public internet, which is the property being
+  // leaned on — but it IS resolvable on a corporate network, so
+  // `http://sso` in a firm deployment would be accepted here. That is a
+  // real residual risk and it is written down rather than hidden behind a
+  // reassuring identifier.
+  const plaintextPermitted = host === 'localhost' || host === '127.0.0.1'
     || host === '::1' || host === '[::1]'
     || !host.includes('.');
-  if (!loopback) {
+  if (!plaintextPermitted) {
     throw new Error(
-      `The configured issuer ${issuer} is not https and does not resolve to loopback. `
+      `The configured issuer ${issuer} is not https, and its host ${JSON.stringify(host)} `
+      + 'is neither loopback nor a single-label container-network name. '
       + 'This is the check that makes a deployed environment pointed at a development '
       + 'issuer a startup failure rather than a silent one.',
     );
