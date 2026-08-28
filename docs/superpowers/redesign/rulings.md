@@ -1294,18 +1294,26 @@ recoverable: refuse wrongly and a call fails loudly with a 403 naming the provid
 declared jurisdiction and the allowed set — one config change, minutes, nothing lost; surface
 wrongly and the text has already crossed a border and cannot be un-sent. **Fail closed on
 UNDECLARED**: an entry with no jurisdiction is refused, there is no default allow-set, and the
-gateway refuses to START on either misconfiguration or with no log sink configured. Surfacing
+gateway refuses to START on either misconfiguration. Surfacing
 still happens, at two altitudes — the operator sees jurisdiction where the choice is made, and
 the model picker labels EVERY model with its provider and jurisdiction, never only the non-UK
 ones, because a badge shown only on the bad entries makes its ABSENCE carry meaning, which is
 the blank-CSV-cell defect exactly.
 
+*(Revised, 2026-08-28, on the Stage 1 gateway plan: this passage originally added "or with no
+log sink configured" to the gateway's startup refusals, grouped with the jurisdiction
+misconfigurations because both were framed as things a startup check refuses. The audit log
+has no configuration to refuse on — see S26's amendment note below and spec §10.5 — so that
+clause is retired here rather than carried forward. The jurisdiction refusals above are
+unchanged.)*
+
 **A no-Azure deployment is first-class, and the design says exactly how far that reaches.**
 Same gateway, same allowlist, same jurisdiction refusal, same per-call log with the same
-fields — a local deployment does not get to skip the record because it is small, and one that
-did would teach its operator to expect a gateway that does not log. What it does not get is
-the no-key property, and the README and admin screen say so in that deployment rather than
-repeating a sentence true only elsewhere. **What the design does NOT yet give it is identity
+fields, written to stdout with no configuration surface to disable it — a local deployment
+does not get to skip the record because it is small, and none can, because none has the means
+to. What it does not get is the no-key property, and the README and admin screen say so in
+that deployment rather than repeating a sentence true only elsewhere. **What the design does
+NOT yet give it is identity
 and storage**: Postgres and blob substitute cleanly, but the spec's §7 is Entra-only by S10,
 and a firm with no Azure tenant has no Entra tenant either. Stage 1 is unaffected; Stages 2
 onward are. The spec's new open question 11 asks the owner what "running it locally" is meant
@@ -1520,7 +1528,10 @@ REFUSES TO START when it is absent, naming the variable and saying what it is fo
 encodes an assumption about one particular firm's contracts, and a default that happens to
 match a firm's policy is indistinguishable at a glance from a firm that declared one. With the
 default gone, UNCONFIGURED IS AN ERROR RATHER THAN A GUESS, which is the same posture as the
-API's refusal to start with no issuer and the gateway's refusal to start with no log sink. The
+API's refusal to start with no issuer configured (the gateway's audit log takes the same
+fail-closed spirit further still: S26's amendment note records that it has no log-sink
+configuration for any deployment to leave unset, so there is nothing there for a startup
+check to refuse on). The
 deployment template carries `UK,EU` as a COMMENTED EXAMPLE with its reasoning written beside
 it, so an operator reads why the line exists and then types their own. The spec's §14 adds a
 mutation for it — reintroduce `?? 'UK,EU'` and the `jurisdiction` suite must fail — because a
