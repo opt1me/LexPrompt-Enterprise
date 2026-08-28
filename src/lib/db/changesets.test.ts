@@ -1,8 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { saveChangeset, getChangeset, listChangesets } from './changesets';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { saveChangeset, getChangeset, listChangesets, recordDecision, publishChangeset } from './changesets';
+import { newPlaybook, publishAndPoint } from './playbooks';
+import { listVersions } from './playbookVersions';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
-import type { Changeset } from '../../types';
+import type { Changeset, ChangesetItem, Playbook, PlaybookClause, PlaybookDraft, PlaybookVersion } from '../../types';
 
 function changeset(overrides: Partial<Changeset> = {}): Changeset {
   return {
@@ -17,9 +19,71 @@ function changeset(overrides: Partial<Changeset> = {}): Changeset {
   };
 }
 
+/** A `new_clause`-kind item — no `clauseId`, title carried only on its
+ *  `basis[].clauseRef` (`buildChangeset.ts`'s own contract; see
+ *  `buildChangeset.test.ts`'s "carries the basis as RedlineEdit objects
+ *  tagged with the matched clause"). */
+function newClauseItem(
+  title: string,
+  decision: ChangesetItem['decision'],
+  rewordedText?: string,
+): ChangesetItem {
+  const item: ChangesetItem = {
+    id: `i-${title}`,
+    kind: 'new_clause',
+    proposedText: `${title} — proposed text nobody should see published unless accepted or reworded.`,
+    rationale: `Raised in this deal (${title}).`,
+    basis: [{
+      documentId: 'doc-a',
+      kind: 'insertion',
+      text: 'edit text',
+      context: 'edit text',
+      clauseRef: title,
+      source: 'tracked',
+    }],
+    decision,
+  };
+  if (rewordedText !== undefined) item.rewordedText = rewordedText;
+  return item;
+}
+
+/** A `drift`-kind item against an existing clause. */
+function driftItem(
+  clauseId: string,
+  currentText: string,
+  proposedText: string,
+  decision: ChangesetItem['decision'],
+): ChangesetItem {
+  return {
+    id: `i-${clauseId}`,
+    kind: 'drift',
+    clauseId,
+    currentText,
+    proposedText,
+    rationale: 'The deal proposed something different.',
+    basis: [],
+    decision,
+  };
+}
+
+async function seedPlaybook(clauses: PlaybookClause[] = []): Promise<{ playbook: Playbook; version: PlaybookVersion }> {
+  const identity = newPlaybook('Commercial Lease');
+  const draft: PlaybookDraft = {
+    name: 'Commercial Lease',
+    contractType: 'Lease',
+    systemPrompt: 'sys',
+    formatPrompt: 'fmt',
+    clauses,
+    changeSummary: '',
+  };
+  return publishAndPoint(identity, draft, 'u1');
+}
+
 beforeEach(async () => {
   const db = await getDb();
   await db.clear(STORES.changesets);
+  await db.clear(STORES.playbooks);
+  await db.clear(STORES.playbookVersions);
 });
 
 afterEach(() => closeDb());
@@ -76,5 +140,149 @@ describe('changesets repository', () => {
     await saveChangeset(cs);
     const found = await getChangeset('cs1');
     expect('clauseId' in found!.items[0]).toBe(false);
+  });
+});
+
+describe('recordDecision', () => {
+  it('records a decision and persists it', async () => {
+    const cs = changeset({ items: [newClauseItem('New topic', 'open')] });
+    await saveChangeset(cs);
+    const updated = await recordDecision(cs, 'i-New topic', 'accepted');
+    expect(updated.items[0].decision).toBe('accepted');
+    expect((await getChangeset('cs1'))!.items[0].decision).toBe('accepted');
+  });
+
+  it('stores rewordedText only on a reworded decision, and clears it if the decision changes again', async () => {
+    const cs = changeset({ items: [newClauseItem('New topic', 'open')] });
+    const reworded = await recordDecision(cs, 'i-New topic', 'reworded', 'Human text.');
+    expect(reworded.items[0].rewordedText).toBe('Human text.');
+
+    const declined = await recordDecision(reworded, 'i-New topic', 'declined');
+    expect('rewordedText' in declined.items[0]).toBe(false);
+  });
+
+  it('leaves every other item untouched', async () => {
+    const cs = changeset({ items: [newClauseItem('A', 'open'), newClauseItem('B', 'open')] });
+    const updated = await recordDecision(cs, 'i-A', 'accepted');
+    expect(updated.items[1].decision).toBe('open');
+  });
+});
+
+describe('publishChangeset', () => {
+  it('publishes ONLY accepted and reworded items — a declined item never reaches the version', async () => {
+    const { playbook, version } = await seedPlaybook([]);
+    const items = [
+      newClauseItem('Accepted clause', 'accepted'),
+      newClauseItem('Reworded clause', 'reworded', 'The words a person wrote.'),
+      newClauseItem('Declined clause', 'declined'),
+    ];
+    const cs = changeset({ playbookId: playbook.id, fromVersionId: version.id, items });
+    await saveChangeset(cs);
+
+    await publishChangeset(cs, 'u1');
+
+    const [v2] = await listVersions(playbook.id);
+    // The declined proposal's own title must never appear at all — this is
+    // the mutation-tested line: a filter that publishes every item
+    // regardless of decision would leak "Declined clause" in here.
+    expect(v2.clauses.map((c) => c.title)).toEqual(['Accepted clause', 'Reworded clause']);
+  });
+
+  it('a reworded item publishes the human\'s text, not the model\'s proposal', async () => {
+    const { playbook, version } = await seedPlaybook([]);
+    const items = [newClauseItem('Reworded clause', 'reworded', 'The words a person wrote.')];
+    const cs = changeset({ playbookId: playbook.id, fromVersionId: version.id, items });
+    await saveChangeset(cs);
+
+    await publishChangeset(cs, 'u1');
+
+    const [v2] = await listVersions(playbook.id);
+    const clause = v2.clauses.find((c) => c.title === 'Reworded clause');
+    expect(clause!.standardPosition!.text).toBe('The words a person wrote.');
+  });
+
+  it('a declined item on an EXISTING clause leaves its standing position untouched', async () => {
+    const { playbook, version } = await seedPlaybook([{
+      id: 'c1',
+      title: 'Assignment',
+      extractPrompt: 'x',
+      standardPosition: { text: 'Original text nobody proposed changing.', origin: 'authored', reviewedByHuman: true },
+    }]);
+    const items = [driftItem('c1', 'Original text nobody proposed changing.', 'A change nobody agreed to.', 'declined')];
+    const cs = changeset({ playbookId: playbook.id, fromVersionId: version.id, items });
+    await saveChangeset(cs);
+
+    await publishChangeset(cs, 'u1');
+
+    const [v2] = await listVersions(playbook.id);
+    expect(v2.clauses[0].standardPosition!.text).toBe('Original text nobody proposed changing.');
+  });
+
+  it('publishes through D\'s path — an immutable version, monotonically numbered, with a change summary', async () => {
+    const { playbook, version } = await seedPlaybook([]);
+    const items = [newClauseItem('Accepted clause', 'accepted')];
+    const cs = changeset({ playbookId: playbook.id, fromVersionId: version.id, items });
+    await saveChangeset(cs);
+
+    const published = await publishChangeset(cs, 'u1');
+
+    expect(published.version).toBe(2);
+    expect(published.changeSummary.trim()).not.toBe('');
+    const versions = await listVersions(playbook.id);
+    expect(versions).toHaveLength(2);
+    // v1 is untouched — publishing never overwrites a prior version.
+    expect(versions.find((v) => v.version === 1)!.clauses).toEqual([]);
+  });
+
+  it('marks the changeset as published, pointing at the version it produced', async () => {
+    const { playbook, version } = await seedPlaybook([]);
+    const items = [newClauseItem('Accepted clause', 'accepted')];
+    const cs = changeset({ playbookId: playbook.id, fromVersionId: version.id, items });
+    await saveChangeset(cs);
+
+    const published = await publishChangeset(cs, 'u1');
+
+    const reloaded = await getChangeset(cs.id);
+    expect(reloaded!.publishedVersionId).toBe(published.id);
+  });
+
+  it('refuses to publish a changeset with any open item — "not yet decided" is not "declined"', async () => {
+    const { playbook, version } = await seedPlaybook([]);
+    const items = [newClauseItem('Accepted clause', 'accepted'), newClauseItem('Still open', 'open')];
+    const cs = changeset({ playbookId: playbook.id, fromVersionId: version.id, items });
+    await saveChangeset(cs);
+
+    await expect(publishChangeset(cs, 'u1')).rejects.toThrow(/undecided|open/i);
+    expect(await listVersions(playbook.id)).toHaveLength(1);
+  });
+
+  it('a failed publish preserves every decision already recorded on the changeset', async () => {
+    const { playbook, version } = await seedPlaybook([]);
+    const items = [
+      newClauseItem('Accepted clause', 'accepted'),
+      newClauseItem('Declined clause', 'declined'),
+    ];
+    const cs = changeset({ id: 'cs-fail', playbookId: playbook.id, fromVersionId: version.id, items });
+    await saveChangeset(cs);
+
+    const db = await getDb();
+    const original = db.transaction.bind(db);
+    const txSpy = vi.spyOn(db, 'transaction').mockImplementation(((storeNames: unknown, mode?: unknown, ...rest: unknown[]) => {
+      if (Array.isArray(storeNames) && storeNames.includes(STORES.playbookVersions) && mode === 'readwrite') {
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      return (original as (...args: unknown[]) => unknown)(storeNames, mode, ...rest);
+    }) as typeof db.transaction);
+
+    try {
+      await expect(publishChangeset(cs, 'u1')).rejects.toThrow();
+    } finally {
+      txSpy.mockRestore();
+    }
+
+    const reloaded = await getChangeset('cs-fail');
+    expect(reloaded!.items.map((i) => i.decision)).toEqual(['accepted', 'declined']);
+    expect('publishedVersionId' in reloaded!).toBe(false);
+    expect(await listVersions(playbook.id)).toHaveLength(1);
   });
 });
