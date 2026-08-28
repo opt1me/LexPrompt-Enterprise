@@ -8,6 +8,7 @@ import { DeleteMatterModal } from './MattersList';
 import { CollectionCard } from './CollectionCard';
 import { GroupDocumentsDialog } from './GroupDocumentsDialog';
 import { MatterStats } from './MatterStats';
+import { MatterActivity } from './MatterActivity';
 import { suggestCollections, type CollectionSuggestion } from '../../lib/collectionSuggest';
 import { progressLabel } from '../../lib/reviewProgress';
 
@@ -61,6 +62,13 @@ export interface MatterHomeProps {
   onRunReview: (playbook: Playbook, target?: ReviewTarget) => Promise<void>;
 
   onDeleteMatter: (matterId: string) => Promise<void>;
+
+  /** The local profile's id (ruling R1 — this app has one user). Threaded
+   *  through so the activity list can check attribution against it rather
+   *  than assume: an event authored by this id reads "You …"; anything
+   *  else reads with no actor at all. The only consumer is
+   *  `MatterActivity`; nothing else in this screen needs an identity. */
+  localUserId: string;
 }
 
 function formatDate(ms: number): string {
@@ -145,6 +153,7 @@ export function MatterHome({
   onRetryPlaybooks,
   onRunReview,
   onDeleteMatter,
+  localUserId,
 }: MatterHomeProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [addingDocuments, setAddingDocuments] = useState(false);
@@ -315,6 +324,15 @@ export function MatterHome({
         <MatterStats reviews={reviews} reviewsError={reviewsError} onRetryReviews={onRetryReviews} />
       </div>
 
+      {/* Lower grid (spec §10.1): documents and reviews on the left,
+          this matter's activity list on the right. The two columns read
+          from independent loads that fail independently — a reviews
+          failure replaces ONLY the activity column with the same compact
+          panel the Reviews section below already shows, never a feed
+          rendered from data that could not be read (an empty feed there
+          would silently read as "nothing has happened"). */}
+      <div className="grid gap-6 lg:grid-cols-[1.5fr_1fr] items-start">
+      <div>
       {/* Documents */}
       <section className="mb-10">
         <div className="flex justify-between items-center mb-4">
@@ -518,6 +536,14 @@ export function MatterHome({
           </div>
         )}
       </section>
+      </div>
+
+      {reviewsError ? (
+        <LoadErrorPanel compact message={reviewsError} onRetry={onRetryReviews} />
+      ) : (
+        <MatterActivity reviews={reviews} localUserId={localUserId} />
+      )}
+      </div>
 
       <DeleteMatterModal
         isOpen={deleteMatterOpen}

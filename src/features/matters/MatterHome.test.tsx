@@ -115,6 +115,7 @@ const baseProps = {
   onRetryPlaybooks: () => {},
   onRunReview: async () => {},
   onDeleteMatter: async () => {},
+  localUserId: 'u1',
 };
 
 describe('MatterHome — converged load-error panels (Important 4)', () => {
@@ -395,6 +396,32 @@ describe('MatterHome — a collections load failure does not mis-describe docume
     const text = container.textContent ?? '';
     expect(text).toContain('Lease as varied');
     expect(text).toContain('could not be loaded');
+  });
+});
+
+describe('MatterHome — activity list (Task 16)', () => {
+  it('attributes an action by the local profile as yours, wiring localUserId through', () => {
+    const review = makeReview({
+      findings: {
+        d1: {
+          c1: { clauseId: 'c1', status: 'done', citations: [], notes: [], verification: { state: 'verified', byUserId: 'u1', at: 500 } },
+        },
+      },
+    });
+    const container = mount(<MatterHome {...baseProps} reviews={[review]} />);
+    expect(container.textContent).toContain('You verified');
+  });
+
+  it('a reviews load failure replaces the activity column with the error panel, never an empty feed', () => {
+    // R-G9's honest consequence: statistics and history derived from
+    // reviews that could not be read are not statistics or history. The
+    // empty-feed idiom ("Nothing recorded…") must not appear here — that
+    // is a different fact from "we could not read what happened".
+    const container = mount(
+      <MatterHome {...baseProps} reviewsError="The reviews in this matter could not be loaded. Try again." />,
+    );
+    expect(container.textContent).not.toContain('Nothing recorded in this matter yet.');
+    expect(container.textContent).toContain('could not be loaded');
   });
 });
 

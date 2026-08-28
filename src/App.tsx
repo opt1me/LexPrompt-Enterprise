@@ -3390,6 +3390,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onRetryPlaybooks={() => loadLibrary()}
               onRunReview={(playbook, target) => handleRunReviewForMatter(matter.id, playbook, target)}
               onDeleteMatter={handleDeleteMatterFromHome}
+              localUserId={profile?.id ?? ''}
             />
           ) : null
         )}
