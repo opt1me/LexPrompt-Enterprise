@@ -184,7 +184,7 @@ export async function extractClause(
   try {
     const raw = await gatewayModelClient.chatJson<RawFinding>(
       {
-        modelChoiceId: settings.modelId,
+        modelChoiceId: settings.modelChoiceId,
         purpose: 'review.clause',
         system: `${template.systemPrompt}\n\nOUTPUT RULES: ${template.formatPrompt}`,
         user: buildClausePrompt(doc, clause, template, { text: textForPrompt, truncated }),

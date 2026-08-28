@@ -33,7 +33,7 @@ const flush = () => act(async () => { await Promise.resolve(); });
 const labelled = (c: HTMLElement, name: string) =>
   c.querySelector(`[aria-label="${name}"]`) as HTMLTextAreaElement;
 
-const testSettings: Settings = { apiKey: 'k', modelId: 'test/model', concurrency: 5 };
+const testSettings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 function version(overrides: Partial<PlaybookVersion> = {}): PlaybookVersion {
   return {

@@ -26,7 +26,7 @@ function answer(content: string) {
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
+const settings: Settings = { modelChoiceId: 'm', concurrency: 5 };
 
 const template: PlaybookVersion = {
   id: 't', name: 'T', contractType: 'Lease',

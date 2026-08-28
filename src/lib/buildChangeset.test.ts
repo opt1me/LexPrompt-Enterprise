@@ -14,7 +14,7 @@ const { buildChangeset } = await import('./buildChangeset');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { apiKey: 'k', modelId: 'test/model', concurrency: 5 };
+const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 type EditEntry = { documentId: string; edit: ParsedEdit; source: 'tracked' | 'diff' };
 

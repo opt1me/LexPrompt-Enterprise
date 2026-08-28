@@ -18,7 +18,7 @@ const { suggestField } = await import('./suggestField');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { apiKey: 'k', modelId: 'test/model', concurrency: 5 };
+const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
 const clause = { title: 'Break', extractPrompt: 'Find it.' };
 
 describe('suggestField', () => {

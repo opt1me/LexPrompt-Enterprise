@@ -45,7 +45,7 @@ const oneClause: PlaybookClause[] = [
 ];
 
 const noop = () => {};
-const testSettings: Settings = { apiKey: 'k', modelId: 'test/model', concurrency: 5 };
+const testSettings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
 const wiring = {
   onPersistDraft: noop,
   onShowVersionHistory: noop,

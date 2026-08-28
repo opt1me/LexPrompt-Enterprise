@@ -82,7 +82,7 @@ vi.mock('./lib/db/profile', () => ({
 }));
 
 // listModels would otherwise attempt a real network fetch from the
-// settings.modelId-watching effect; stubbed out since it's unrelated to
+// settings.modelChoiceId-watching effect; stubbed out since it's unrelated to
 // what these tests exercise.
 vi.mock('./lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {
@@ -176,6 +176,13 @@ function clickByText(container: HTMLDivElement, text: string | RegExp) {
 }
 
 const AUTH_TOAST = 'Your OpenRouter API key was rejected. Update it in Settings and try again.';
+// The Settings screen's own subtitle, used here purely as "we are on
+// Settings". Task 22 rewrote it when the API-key section was deleted:
+// there is no OpenRouter account to connect any more, only a model to
+// choose off the firm's allowlist. These assertions moved with the copy;
+// what they assert -- that a live rejection redirects here and a stale one
+// does not -- is unchanged.
+const ON_SETTINGS = 'Choose the model your firm has configured for reviews.';
 const STALE_FINDING_ERROR = 'Your OpenRouter API key was rejected: User not found.';
 
 function makePlaybook(): PlaybookVersion {
@@ -271,12 +278,12 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     expect(container.textContent).toContain(STALE_FINDING_ERROR);
     // ...but it must NOT have been (mis)treated as a fresh rejection: no
     // redirect to Settings, no "your key was rejected" toast.
-    expect(container.textContent).not.toContain('Connect an OpenRouter account');
+    expect(container.textContent).not.toContain(ON_SETTINGS);
     expect(container.textContent).not.toContain(AUTH_TOAST);
   });
 
   it('a genuine live 401 while a run is in flight still redirects to Settings', async () => {
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
     extractClauseMock.mockResolvedValue({
       clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR, authError: true,
@@ -289,7 +296,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
 
-    expect(container.textContent).toContain('Connect an OpenRouter account');
+    expect(container.textContent).toContain(ON_SETTINGS);
     expect(container.textContent).toContain(AUTH_TOAST);
   });
 
@@ -299,13 +306,13 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     getMatterMock.mockResolvedValue({ id: 'm1', name: 'Acme v Bolt', ownerId: 'u1', createdAt: 1, updatedAt: 1 });
     getReviewMock.mockResolvedValue(makeStaleReview());
     getDocumentMock.mockResolvedValue(makeDocumentRecord());
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
 
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
     act(() => { root.render(<App />); });
     await flush();
-    expect(container.textContent).not.toContain('Connect an OpenRouter account'); // sanity: guard is armed
+    expect(container.textContent).not.toContain(ON_SETTINGS); // sanity: guard is armed
 
     // Then: start a brand new run (Library flow) whose own live call also
     // gets rejected. Despite the earlier suppression, THIS rejection must
@@ -320,7 +327,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
 
-    expect(container.textContent).toContain('Connect an OpenRouter account');
+    expect(container.textContent).toContain(ON_SETTINGS);
     expect(container.textContent).toContain(AUTH_TOAST);
   });
 });

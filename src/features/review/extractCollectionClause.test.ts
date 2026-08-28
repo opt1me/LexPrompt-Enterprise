@@ -16,7 +16,7 @@ const chatJson = gatewayModelClient.chatJson;
 // A fully capable model, matching extractClause.test.ts's fixture posture, so
 // the happy-path tests below are unaffected by capability gating.
 const settings: Settings = {
-  apiKey: 'k', modelId: 'm', concurrency: 5,
+  modelChoiceId: 'm', concurrency: 5,
   modelSupportsImages: true, modelSupportsStructuredOutput: true, modelContextLength: 1_000_000,
 };
 

@@ -19,7 +19,7 @@ export async function suggestRevision(
 Rewrite this clause to mitigate the risk while maintaining commercial viability. Return ONLY the text.`;
 
   const answer = await gatewayModelClient.chat({
-    modelChoiceId: settings.modelId,
+    modelChoiceId: settings.modelChoiceId,
     purpose: 'export.suggest_fix',
     system,
     user,

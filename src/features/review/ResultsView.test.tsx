@@ -70,7 +70,7 @@ function makeRun(): ReviewRun {
 }
 
 const documents: DocumentFile[] = [];
-const settings: Settings = { apiKey: '', modelId: 'test/model', concurrency: 2 };
+const settings: Settings = { modelChoiceId: 'test/model', concurrency: 2 };
 
 function renderResultsView(onVerify: ReturnType<typeof vi.fn>, run: ReviewRun = makeRun()) {
   return mount(

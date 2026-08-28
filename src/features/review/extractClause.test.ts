@@ -17,7 +17,7 @@ const chatJson = gatewayModelClient.chatJson;
 // below are unaffected by the capability gating added for Critical 1/9 —
 // tests that specifically exercise the gating override these fields.
 const settings: Settings = {
-  apiKey: 'k', modelId: 'm', concurrency: 5,
+  modelChoiceId: 'm', concurrency: 5,
   modelSupportsImages: true, modelSupportsStructuredOutput: true, modelContextLength: 1_000_000,
 };
 
@@ -306,7 +306,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
       text: '',
       pageImages: [{ mime: 'image/jpeg', data: 'AAA' }],
     };
-    const unknownCapabilities: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
+    const unknownCapabilities: Settings = { modelChoiceId: 'm', concurrency: 5 };
 
     const finding = await extractClause(scan, clause, template, unknownCapabilities);
 
@@ -360,7 +360,7 @@ describe('extractClause: structured output capability', () => {
 
   it('omits the JSON schema when structured-output support is unknown', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
-    const unknown: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
+    const unknown: Settings = { modelChoiceId: 'm', concurrency: 5 };
     await extractClause(doc, clause, template, unknown);
     expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBeUndefined();
   });

@@ -76,7 +76,7 @@ vi.mock('./lib/db/profile', () => ({
 }));
 
 // listModels would otherwise attempt a real network fetch from the
-// settings.modelId-watching effect; stubbed out since it's unrelated to
+// settings.modelChoiceId-watching effect; stubbed out since it's unrelated to
 // what this test exercises.
 vi.mock('./lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {

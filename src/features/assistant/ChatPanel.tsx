@@ -48,7 +48,7 @@ export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) 
     gatewayModelClient.listModels()
       .then(models => {
         if (cancelled) return;
-        const match = models.find(m => m.id === settings.modelId);
+        const match = models.find(m => m.id === settings.modelChoiceId);
         setContextLength(match?.contextLength);
         setModelSupportsImages(match?.supportsImages ?? false);
       })
@@ -59,7 +59,7 @@ export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) 
         }
       });
     return () => { cancelled = true; };
-  }, [settings.modelId]);
+  }, [settings.modelChoiceId]);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });

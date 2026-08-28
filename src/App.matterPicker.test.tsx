@@ -159,7 +159,7 @@ describe('App — running a playbook from the Library goes through a matter pick
     // `handleCreateMatterForRun` both end in) gates on `ensureConfigured()`
     // exactly as the pre-existing Library flow did — an API key is needed
     // here purely to get past that gate, not something this file is testing.
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
     listMattersMock.mockReset().mockResolvedValue([makeMatter('m1', 'Acme v Bolt')]);

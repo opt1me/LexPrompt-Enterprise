@@ -21,7 +21,7 @@ const { generateDraft } = await import('./generateDraft');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { apiKey: 'k', modelId: 'test/model', concurrency: 5 };
+const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 const form: DraftFormValues = { contractType: 'Commercial Lease' };
 

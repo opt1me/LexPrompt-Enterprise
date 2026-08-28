@@ -69,7 +69,7 @@ export async function suggestField(
   ].filter((line): line is string => line !== undefined).join('\n');
 
   const result = await gatewayModelClient.chatJson<SuggestionResponse>({
-    modelChoiceId: settings.modelId,
+    modelChoiceId: settings.modelChoiceId,
     purpose: 'playbook.suggest',
     system:
       'You are an expert legal contract reviewer drafting a single field of a single clause in a ' +

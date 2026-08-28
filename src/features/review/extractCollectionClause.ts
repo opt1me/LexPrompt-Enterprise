@@ -475,7 +475,7 @@ export async function extractCollectionClause(
   try {
     const raw = await gatewayModelClient.chatJson<RawCollectionFinding>(
       {
-        modelChoiceId: settings.modelId,
+        modelChoiceId: settings.modelChoiceId,
         purpose: 'review.collection_clause',
         system: `${template.systemPrompt}\n\nOUTPUT RULES: ${template.formatPrompt}`,
         user: documentsPrompt + imageNote,

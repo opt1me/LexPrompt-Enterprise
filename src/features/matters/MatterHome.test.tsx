@@ -120,7 +120,7 @@ const baseProps = {
   onRunReview: async () => {},
   onDeleteMatter: async () => {},
   localUserId: 'u1',
-  modelId: 'anthropic/claude-3.5-sonnet',
+  modelChoiceId: 'anthropic/claude-3.5-sonnet',
   onOpenSettings: () => {},
   onCreatePlaybook: () => {},
 };

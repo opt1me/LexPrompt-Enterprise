@@ -31,7 +31,7 @@ function answer(content: string) {
 }
 
 
-const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
+const settings: Settings = { modelChoiceId: 'm', concurrency: 5 };
 
 function doc(overrides: Partial<DocumentFile> = {}): DocumentFile {
   return {

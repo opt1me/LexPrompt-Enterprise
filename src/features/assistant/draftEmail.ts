@@ -63,7 +63,7 @@ than dropping it: text nobody has checked, or a position across documents nobody
 must not be written to a client as settled fact.`;
 
   const answer = await gatewayModelClient.chat({
-    modelChoiceId: settings.modelId,
+    modelChoiceId: settings.modelChoiceId,
     purpose: 'export.email',
     system,
     user,

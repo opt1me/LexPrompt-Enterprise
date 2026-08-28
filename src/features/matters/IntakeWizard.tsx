@@ -27,7 +27,7 @@ export interface IntakeWizardProps {
   playbooksError: string | null;
   onRetryPlaybooks: () => void;
   onCreatePlaybook: () => void;
-  modelId: string;
+  modelChoiceId: string;
   onOpenSettings: () => void;
 }
 
@@ -38,7 +38,7 @@ const STEP = 2;
 
 export function IntakeWizard({
   matter, onAddDocuments, playbooks, playbooksError, onRetryPlaybooks, onCreatePlaybook,
-  modelId, onOpenSettings,
+  modelChoiceId, onOpenSettings,
 }: IntakeWizardProps) {
   return (
     <div className="max-w-3xl mx-auto p-8 space-y-6">
@@ -113,7 +113,15 @@ export function IntakeWizard({
       <footer className="space-y-2">
         <p className="font-ui text-ui-sm text-ink-2">{STORAGE_PRIVACY[0]}</p>
         <p className="font-ui text-meta text-ink-3">
-          Reviews will run on <span className="font-mono text-pin text-ink-2">{modelId}</span>.{' '}
+          {/* The empty case is now the COMMON one on a first load: Stage 1
+              drops the stored OpenRouter model id rather than carrying it
+              over as an allowlist choice that would never resolve, so a
+              returning user arrives here with nothing chosen. "Reviews will
+              run on ." is not a sentence, and it reads as a model whose name
+              failed to render rather than as a choice nobody has made. */}
+          {modelChoiceId
+            ? <>Reviews will run on <span className="font-mono text-pin text-ink-2">{modelChoiceId}</span>.{' '}</>
+            : <>No model has been chosen yet.{' '}</>}
           <button type="button" onClick={onOpenSettings} className="text-accent hover:underline">
             Settings
           </button>

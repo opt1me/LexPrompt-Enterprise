@@ -12,7 +12,7 @@ const wiring = {
   playbooksError: null,
   onRetryPlaybooks: () => {},
   onCreatePlaybook: () => {},
-  modelId: 'anthropic/claude-3.5-sonnet',
+  modelChoiceId: 'anthropic/claude-3.5-sonnet',
   onOpenSettings: () => {},
 };
 

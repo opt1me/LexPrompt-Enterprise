@@ -143,7 +143,7 @@ export async function sendChatMessage(params: SendChatMessageParams): Promise<st
   // and where, which the panel does not yet render.
   const answer = await gatewayModelClient.chatStream(
     {
-      modelChoiceId: params.settings.modelId,
+      modelChoiceId: params.settings.modelChoiceId,
       purpose: 'assistant.chat',
       system: SYSTEM_PROMPT,
       user,

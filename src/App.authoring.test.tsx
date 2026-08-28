@@ -216,7 +216,7 @@ function keepEveryClause() {
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ apiKey: 'sk-test', modelId: 'test/model' }));
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ modelChoiceId: 'test/model' }));
   migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
   listPlaybooksMock.mockReset().mockResolvedValue([]);
   getPlaybookMock.mockReset().mockResolvedValue(publishedPlaybook);

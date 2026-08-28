@@ -54,7 +54,7 @@ export async function suggestMissingClauses(
   ].join('\n');
 
   const raw = await gatewayModelClient.chatJson<RawMissingClauses>({
-    modelChoiceId: settings.modelId,
+    modelChoiceId: settings.modelChoiceId,
     purpose: 'playbook.suggest',
     system:
       'You are an expert legal contract reviewer checking a review playbook for missing clauses. ' +

@@ -18,7 +18,7 @@ const { suggestMissingClauses } = await import('./suggestMissingClauses');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { apiKey: 'k', modelId: 'test/model', concurrency: 5 };
+const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 describe('suggestMissingClauses', () => {
   it('does not propose a clause the playbook already has', async () => {

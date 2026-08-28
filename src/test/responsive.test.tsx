@@ -131,7 +131,7 @@ function documentPaneWidth(view: HTMLElement, viewport: number): number {
   return viewport - rail - findings - BORDERS;
 }
 
-const settings: Settings = { apiKey: '', modelId: 'test/model', concurrency: 2 };
+const settings: Settings = { modelChoiceId: 'test/model', concurrency: 2 };
 
 /** Mounts the review screen only long enough to read the pane widths off it,
  *  then unmounts: `ResultsView` binds `useVerifyKeys` to `window`, and this

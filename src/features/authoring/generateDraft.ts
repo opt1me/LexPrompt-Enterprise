@@ -152,7 +152,7 @@ export async function generateDraft(
 
   const raw = await gatewayModelClient.chatJson<RawDraft>(
     {
-      modelChoiceId: settings.modelId,
+      modelChoiceId: settings.modelChoiceId,
       purpose: 'playbook.draft',
       system: 'You are an expert legal contract reviewer drafting a review playbook. ' +
         'Use legal judgement to choose the number and content of clauses; do not pad to hit a count.',
@@ -182,7 +182,7 @@ export async function generateDraft(
     actingFor: form.actingFor,
     context: form.context,
     learnedFrom: sources.map((s) => s.name),
-    modelId: settings.modelId,
+    modelId: settings.modelChoiceId,
     clauses,
   };
 }

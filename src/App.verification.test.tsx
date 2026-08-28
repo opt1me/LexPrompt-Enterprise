@@ -403,7 +403,7 @@ describe('App — persisting a net position (Task 8)', () => {
       return new Promise((resolve) => { resolveC2 = resolve; });
     });
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
 
@@ -606,7 +606,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       return new Promise((resolve) => { resolveC2 = resolve; });
     });
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
@@ -681,7 +681,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       return new Promise((resolve) => { resolveC2 = resolve; });
     });
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
@@ -747,7 +747,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       clauses: [...makeTemplate().clauses, { id: 'c3', title: 'Indemnity', extractPrompt: 'Extract the indemnity clause.' }],
     };
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     listPlaybooksMock.mockResolvedValue([threeClauseTemplate]);
     listMattersMock.mockResolvedValue([makeMatter()]);
 
@@ -821,7 +821,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       notes: [],
     }));
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
@@ -877,7 +877,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       },
     );
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ apiKey: 'sk-or-v1-test', modelId: 'test/model', concurrency: 5 }));
+    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);

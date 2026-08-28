@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
+import { Settings as SettingsIcon, ClipboardList, Briefcase, ShieldCheck } from 'lucide-react';
 import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
-import { loadSettings, saveSettings } from './lib/storage';
+import { apiKeyWasPurgedThisSession, loadSettings, saveSettings } from './lib/storage';
+import { API_KEY_PURGED_NOTICE } from './lib/privacyCopy';
 import { applyVerification, findingKey, makeNote, resetVerification, unchecked } from './lib/verification';
 import type { VerificationChange } from './lib/verification';
 import { confirmPosition, amendPosition, resetPosition, NetPositionError } from './lib/netPosition';
@@ -490,7 +491,16 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // adding more documents) doesn't show a stale panel left over from the
   // previous run.
   const [runPanelKey, setRunPanelKey] = useState(0);
-  const [settings, setSettings] = useState<Settings>(() => loadSettings());
+  // This first read PURGES any OpenRouter key an earlier version of the app
+  // stored, and `storage.ts` explains why that is the one deliberate
+  // deletion in this project. The notice is raised from
+  // `apiKeyWasPurgedThisSession()` rather than from this initializer's own
+  // `purgedApiKey`, because React StrictMode invokes a `useState`
+  // initializer twice and the second call — by then reading a blob with no
+  // key in it — correctly reports `false`. Losing the one notice about a
+  // live credential to a dev-mode double-invoke is not a trade worth making.
+  const [settings, setSettings] = useState<Settings>(() => loadSettings().settings);
+  const [keyPurgeNoticeDismissed, setKeyPurgeNoticeDismissed] = useState(false);
   const { notify, toast } = useToast();
 
   // Render-time profile, for `authorInitials` (a note's placeholder needs a
@@ -667,7 +677,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // whenever a new run starts.
   const authErrorHandledRef = useRef(false);
 
-  const isConfigured = Boolean(settings.apiKey && settings.modelId);
+  // No key half any more: the browser holds no provider credential. The
+  // signed-in half of "configured" is not checked here because it cannot be
+  // false — `App` renders `SignInScreen` INSTEAD OF this whole shell for
+  // every auth status but `signed-in`, so re-deriving it here would add a
+  // second source of truth for a question already settled one component up.
+  const isConfigured = Boolean(settings.modelChoiceId);
 
   // Set only by the initial load below — a failure here must never resolve
   // to an empty library (indistinguishable from "you have no playbooks");
@@ -1318,15 +1333,15 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // failed fetch leaves the existing (possibly unknown/conservative)
   // capability fields alone rather than erroring.
   useEffect(() => {
-    if (!settings.modelId) return;
+    if (!settings.modelChoiceId) return;
     let cancelled = false;
     gatewayModelClient.listModels()
       .then(models => {
         if (cancelled) return;
-        const match = models.find(m => m.id === settings.modelId);
+        const match = models.find(m => m.id === settings.modelChoiceId);
         if (!match) return;
         setSettings(prev => {
-          if (prev.modelId !== match.id) return prev;
+          if (prev.modelChoiceId !== match.id) return prev;
           if (
             prev.modelSupportsImages === match.supportsImages &&
             prev.modelSupportsStructuredOutput === match.supportsStructuredOutput &&
@@ -1344,7 +1359,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       })
       .catch(() => { /* best-effort; keep whatever capabilities we already have */ });
     return () => { cancelled = true; };
-  }, [settings.modelId]);
+  }, [settings.modelChoiceId]);
 
   // Important 4: a rejected API key must route to Settings with an
   // explanation, not sit as a wall of identical red error cards. Per-clause
@@ -1372,7 +1387,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * routes to Settings with an explanatory toast instead of opening (or
    * proceeding into) a flow that can only fail with an obscure error.
    */
-  const ensureConfigured = (message = 'Add your OpenRouter key to get started.') => {
+  const ensureConfigured = (message = 'Choose a model in Settings to get started.') => {
     if (isConfigured) return true;
     notify(message, 'error');
     setView('settings');
@@ -1767,7 +1782,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       latestRunRef.current = merged;
       setRun(merged);
       if (matterId && reviewSaver) {
-        reviewSaver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
+        reviewSaver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
       }
     };
 
@@ -1798,7 +1813,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       }
       const finalRun = latestRunRef.current ?? newRun;
       try {
-        await reviewSaver.saveNow(reviewFromRun(finalRun, matterId, settings.modelId, userId));
+        await reviewSaver.saveNow(reviewFromRun(finalRun, matterId, settings.modelChoiceId, userId));
       } catch (e) {
         notify(e instanceof Error ? e.message : 'Could not save this review.', 'error');
       }
@@ -1926,7 +1941,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // never set (should not happen: reaching here requires either
       // `openReview` or `handleStartRun` to have run first).
       const userId = createdByUserIdRef.current || profile.id;
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      await saveReview(reviewFromRun(updated, matterId, settings.modelChoiceId, userId));
       // Important 1 fix (see doc comment above): re-read the ref rather than
       // trusting `current`/`updated`, which were captured before the two
       // awaits above and may already be stale.
@@ -1948,7 +1963,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // and `handleDeleteMatter` both clear `activeRunSaverRef` before that
       // can happen, so there is nothing here for a lingering timer to attach
       // to.
-      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
+      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
     } catch (e) {
       notify(
         e instanceof Error
@@ -1988,7 +2003,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // review's original creator rather than reattributing to whoever
       // just added a note.
       const userId = createdByUserIdRef.current || profile.id;
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      await saveReview(reviewFromRun(updated, matterId, settings.modelChoiceId, userId));
       const latest = latestRunRef.current ?? updated;
       const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
       const merged = withUpdatedFinding(latest, docId, clauseId, {
@@ -1997,7 +2012,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       });
       latestRunRef.current = merged;
       setRun(merged);
-      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
+      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
     } catch (e) {
       notify(e instanceof Error ? `This note was not saved: ${e.message}` : 'This note was not saved.', 'error');
     } finally {
@@ -2038,7 +2053,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
       const userId = createdByUserIdRef.current || profile.id;
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      await saveReview(reviewFromRun(updated, matterId, settings.modelChoiceId, userId));
       // Re-read the ref rather than trusting `current`/`updated`, which were
       // captured before the two awaits above and may already be stale.
       const latest = latestRunRef.current ?? updated;
@@ -2046,7 +2061,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
       latestRunRef.current = merged;
       setRun(merged);
-      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
+      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
     } catch (e) {
       notify(
         e instanceof Error ? `This confirmation was not saved: ${e.message}` : 'This confirmation was not saved.',
@@ -2087,13 +2102,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
       const userId = createdByUserIdRef.current || profile.id;
-      await saveReview(reviewFromRun(updated, matterId, settings.modelId, userId));
+      await saveReview(reviewFromRun(updated, matterId, settings.modelChoiceId, userId));
       const latest = latestRunRef.current ?? updated;
       const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
       const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
       latestRunRef.current = merged;
       setRun(merged);
-      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelId, userId));
+      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
     } catch (e) {
       notify(
         e instanceof Error ? `This amendment was not saved: ${e.message}` : 'This amendment was not saved.',
@@ -2129,7 +2144,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // this: this call has no other need of a fresh profile, and the three
       // sites are meant to agree on having SOME fallback, not on how each
       // happens to obtain it.
-      await saveReview(reviewFromRun(toPersist, matterId, settings.modelId, createdByUserIdRef.current || profile?.id || ''));
+      await saveReview(reviewFromRun(toPersist, matterId, settings.modelChoiceId, createdByUserIdRef.current || profile?.id || ''));
       loadMatterReviews(matterId);
     } catch (e) {
       notify(e instanceof Error ? e.message : 'Could not save this retry.', 'error');
@@ -2635,7 +2650,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
 
   const handleDraftWithAI = () => {
     setChooserOpen(false);
-    if (!ensureConfigured('Add your OpenRouter key to draft a playbook.')) return;
+    if (!ensureConfigured('Choose a model in Settings to draft a playbook.')) return;
     setAuthoringError(undefined);
     setAuthoringAuthFailed(false);
     setView('authoring-form');
@@ -2835,7 +2850,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
 
   const handleLearnFromRedlines = () => {
     setChooserOpen(false);
-    if (!ensureConfigured('Add your OpenRouter key to learn from redlines.')) return;
+    if (!ensureConfigured('Choose a model in Settings to learn from redlines.')) return;
     setRedlinesError(undefined);
     setView('redlines-intake');
   };
@@ -3094,7 +3109,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // hazard). Leaving the redlines views does clear this session's
     // documents and positions, which is correct — they have been read into
     // the draft, and the `File`s were never to be kept.
-    updateAuthoringDraft(positionsToDraft(included, redlinesDocumentNames, settings.modelId, contractType));
+    updateAuthoringDraft(positionsToDraft(included, redlinesDocumentNames, settings.modelChoiceId, contractType));
     setView('authoring-review');
   };
 
@@ -3235,6 +3250,42 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // already written against `h-full` and were already degrading this way.
     <div className="h-screen flex flex-col bg-paper">
       <Toast toast={toast} />
+
+      {/* Said ONCE, and only when a key was actually there to remove. The
+          only actionable half is the revocation: a key deleted from this
+          browser is still a live credential at OpenRouter until the user
+          kills it, and the copy must not let anyone read "removed" as
+          "revoked". Dismissing hides it for this session; it does not come
+          back on the next load because there is no longer a key to purge. */}
+      {!keyPurgeNoticeDismissed && apiKeyWasPurgedThisSession() && (
+        <div
+          data-key-purged-notice
+          // `aria-live`, never role="status": that selector is how ~21
+          // positional assertions in this suite find a StateChip.
+          aria-live="polite"
+          className="shrink-0 flex items-start gap-3 px-6 py-3 border-b border-accent-edge bg-accent-tint"
+        >
+          <ShieldCheck className="w-4 h-4 text-accent shrink-0 mt-0.5" aria-hidden="true" />
+          <p className="font-ui text-ui-sm text-ink-2 leading-relaxed flex-1">
+            {API_KEY_PURGED_NOTICE.before}
+            <a
+              href={API_KEY_PURGED_NOTICE.href}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent hover:text-accent-strong underline"
+            >
+              {API_KEY_PURGED_NOTICE.linkText}
+            </a>
+            {API_KEY_PURGED_NOTICE.after}
+          </p>
+          <button
+            onClick={() => setKeyPurgeNoticeDismissed(true)}
+            className="font-ui text-ui-sm text-ink-3 hover:text-ink-1 shrink-0"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       <header className="min-h-14 h-auto border-b border-rule bg-card flex flex-wrap items-center justify-between gap-y-2 px-6 py-2 shrink-0">
         <button
@@ -3495,7 +3546,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onRunReview={(playbook, target) => handleRunReviewForMatter(matter.id, playbook, target)}
               onDeleteMatter={handleDeleteMatterFromHome}
               localUserId={profile?.id ?? ''}
-              modelId={settings.modelId}
+              modelChoiceId={settings.modelChoiceId}
               onOpenSettings={() => requestView('settings')}
               onCreatePlaybook={() => setChooserOpen(true)}
             />

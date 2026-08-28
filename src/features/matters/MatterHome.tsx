@@ -76,7 +76,7 @@ export interface MatterHomeProps {
    *  footer. The only consumer is `IntakeWizard`, rendered below in place
    *  of the empty-documents placeholder — nothing else in this screen
    *  names a model. */
-  modelId: string;
+  modelChoiceId: string;
   /** Task 19: opens Settings, for the intake wizard's "change the model"
    *  link. The only consumer is `IntakeWizard`. */
   onOpenSettings: () => void;
@@ -170,7 +170,7 @@ export function MatterHome({
   onRunReview,
   onDeleteMatter,
   localUserId,
-  modelId,
+  modelChoiceId,
   onOpenSettings,
   onCreatePlaybook,
 }: MatterHomeProps) {
@@ -485,7 +485,7 @@ export function MatterHome({
                 playbooksError={playbooksError}
                 onRetryPlaybooks={onRetryPlaybooks}
                 onCreatePlaybook={onCreatePlaybook}
-                modelId={modelId}
+                modelChoiceId={modelChoiceId}
                 onOpenSettings={onOpenSettings}
               />
             ) : standaloneDocuments.length > 0 ? (

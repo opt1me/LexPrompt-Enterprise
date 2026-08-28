@@ -9,7 +9,7 @@ const { extractClause } = await import('./extractClause');
 vi.mock('./extractCollectionClause', () => ({ extractCollectionClause: vi.fn() }));
 const { extractCollectionClause } = await import('./extractCollectionClause');
 
-const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 2 };
+const settings: Settings = { modelChoiceId: 'm', concurrency: 2 };
 
 const template: PlaybookVersion = {
   id: 't1', name: 'T', contractType: 'NDA',

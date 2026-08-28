@@ -264,7 +264,7 @@ export async function inferPositions(
   edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
   const raw = await gatewayModelClient.chatJson<RawInferResponse>({
-    modelChoiceId: settings.modelId,
+    modelChoiceId: settings.modelChoiceId,
     purpose: 'redlines.infer',
     system:
       "You analyse a law firm's own past negotiated redlines to identify recurring standard positions. " +

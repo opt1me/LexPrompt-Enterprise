@@ -244,7 +244,7 @@ export async function buildChangeset(
     edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
     const raw = await gatewayModelClient.chatJson<RawResponse>({
-      modelChoiceId: settings.modelId,
+      modelChoiceId: settings.modelChoiceId,
       purpose: 'changeset.build',
       system:
         "You compare a law firm's existing contract playbook against the redlines of a NEW deal, to identify " +

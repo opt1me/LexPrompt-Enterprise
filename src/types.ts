@@ -255,23 +255,30 @@ export interface ReviewRun {
 }
 
 export interface Settings {
-  apiKey: string;
-  modelId: string;
+  /** An `AllowedModel.id` from the gateway's `GET /v1/models`. NEVER a
+   *  provider-side model name: a user cannot name a model (S15), so there is
+   *  no free-text box this can come from, only a choice off the operator's
+   *  own allowlist.
+   *
+   *  There is deliberately no `apiKey` beside it. The browser holds no
+   *  provider credential at all — every request carries the signed-in user's
+   *  bearer token to this firm's own LexPrompt service, which holds the
+   *  provider's credentials. `loadSettings` deletes any key an earlier
+   *  version stored. */
+  modelChoiceId: string;
   concurrency: number;
   /** Capabilities of the currently selected model, filled in from the
-   *  cached OpenRouter model list whenever it's available. `undefined`
-   *  means "unknown" (list not loaded yet, fetch failed, or a manually
-   *  entered model id with no matching list entry) and is always treated
-   *  conservatively — the same posture `chatContext.ts` already takes for
-   *  an unresolved model. */
+   *  gateway's allowlist whenever it's available. `undefined` means
+   *  "unknown" (list not loaded yet, fetch failed, or a stored choice with no
+   *  matching allowlist entry) and is always treated conservatively — the
+   *  same posture `chatContext.ts` already takes for an unresolved model. */
   modelSupportsImages?: boolean;
   modelSupportsStructuredOutput?: boolean;
   modelContextLength?: number;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
-  apiKey: '',
-  modelId: '',
+  modelChoiceId: '',
   concurrency: 5,
 };
 
