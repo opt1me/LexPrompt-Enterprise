@@ -470,6 +470,18 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * from somewhere that a render has not frozen.
    */
   const authoringDraftRef = useRef<AuthoringDraft | null>(null);
+  /**
+   * The in-flight draft generation, so it can be abandoned when its screen
+   * is.
+   *
+   * Integrity review (D/E), Major 5. A generation belongs to the authoring
+   * flow and to nothing else; before this it outlived it. Leaving the
+   * authoring views now aborts the request — the user is not billed for a
+   * draft nobody will see — and the resolve path checks the same signal, so
+   * a provider that ignores an abort still cannot deliver a draft onto a
+   * screen the user has left.
+   */
+  const authoringGenerationRef = useRef<AbortController | null>(null);
   /** The ONLY writer of the authoring draft. Ref first, so a handler
    *  already mid-await sees the change on its next read rather than on the
    *  next render. */
@@ -1043,6 +1055,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // effect-ordering hazard).
   useEffect(() => {
     if (isAuthoringView(view)) return;
+    // The generation dies with its screen too (Major 5). Aborting here
+    // rather than only guarding the resolve is what stops a 30-second call
+    // running on after the user has walked away from it.
+    authoringGenerationRef.current?.abort();
+    authoringGenerationRef.current = null;
     updateAuthoringDraft(null);
     setAuthoringError(undefined);
     setAuthoringAuthFailed(false);
@@ -2332,6 +2349,9 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * contributes its VERIFIED findings only.
    */
   const handleGenerateDraft = async (form: DraftFormValues, sources: FewShotSource[]) => {
+    const generation = new AbortController();
+    authoringGenerationRef.current?.abort();
+    authoringGenerationRef.current = generation;
     setAuthoringBusy(true);
     setAuthoringError(undefined);
     setAuthoringAuthFailed(false);
@@ -2350,10 +2370,21 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // happened.
       const usedSources = usedFewShotSources(templates, versions, reviews, sources);
 
-      const draft = await generateDraft(form, fewShot, usedSources, settings);
+      const draft = await generateDraft(form, fewShot, usedSources, settings, generation.signal);
+      // Abandoned: the user left the authoring flow while this was in the
+      // air. Setting the draft and the view here would MOVE THEM — out of
+      // whatever screen they navigated to, past `requestView`'s
+      // `confirmDiscardIfDirty` and past `confirmLeaveTemplate`'s three-way
+      // prompt, taking a playbook editor's unpublished edits with it (Major
+      // 5). A result nobody is waiting for is dropped, not delivered.
+      if (generation.signal.aborted) return;
       updateAuthoringDraft(draft);
       setView('authoring-review');
     } catch (e) {
+      // Same rule for the failure path: an error banner belongs to the form,
+      // and the form is gone. (`App`'s own AbortError handling elsewhere
+      // reads the same way — a cancelled request is not a failure.)
+      if (generation.signal.aborted) return;
       if (isAuthError(e)) {
         setAuthoringAuthFailed(true);
       } else {
@@ -2362,7 +2393,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         );
       }
     } finally {
-      setAuthoringBusy(false);
+      if (authoringGenerationRef.current === generation) authoringGenerationRef.current = null;
+      if (!generation.signal.aborted) setAuthoringBusy(false);
     }
   };
 

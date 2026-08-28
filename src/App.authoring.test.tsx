@@ -558,3 +558,73 @@ describe('Save as v1 publishes what the screen holds, not a stale copy (Major 4)
     expect(window.location.pathname).toBe('/playbooks/pb-new');
   });
 });
+
+// Integrity review (D/E), Major 5. `handleGenerateDraft`'s success path ran
+// `setAuthoringDraft(draft); setView('authoring-review');` unconditionally,
+// ~30s later, on whatever screen the user had since navigated to. `setView`
+// is the raw setter, so `requestView`'s `confirmDiscardIfDirty` never ran:
+// the app threw the user onto the draft-review screen with no interaction,
+// and — the worse variant — did it straight past `confirmLeaveTemplate`,
+// taking a playbook's unpublished edits with it.
+describe('a slow generation does not follow the user off the screen (Major 5)', () => {
+  /** Library -> Create Template -> Draft with AI -> fill -> generate, with
+   *  the generation left hanging. */
+  async function startAGenerationThatNeverFinishes(): Promise<(draft: AuthoringDraft) => void> {
+    let release: (draft: AuthoringDraft) => void = () => {};
+    generateDraftMock.mockReturnValue(new Promise<AuthoringDraft>((resolve) => { release = resolve; }));
+    act(() => { root.render(<App />); });
+    await flush();
+    click(buttonNamed(/^library$/i));
+    await flush();
+    click(buttonNamed(/create template/i));
+    click(buttonNamed(/draft with ai/i));
+    typeInto(contractTypeField(), 'Commercial Lease');
+    click(buttonNamed(/draft the playbook/i));
+    await flush();
+    return release;
+  }
+
+  it('leaves the user where they navigated to when the draft finally arrives', async () => {
+    const release = await startAGenerationThatNeverFinishes();
+
+    // Correctly unguarded: nothing has been generated, so there is no draft
+    // to warn about.
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    click(buttonNamed(/^matters$/i));
+    await flush();
+    expect(confirmSpy).not.toHaveBeenCalled();
+
+    await act(async () => { release(draftWithTwoClauses()); await Promise.resolve(); });
+    await flush();
+
+    expect(container.textContent).not.toMatch(/unsaved draft/i);
+    expect(container.textContent).not.toContain('Break clause');
+    // Matters is the root route (`ROUTE_FOR_VIEW`), so this is where the
+    // user actually is, unchanged by the resolve.
+    expect(window.location.pathname).toBe('/');
+  });
+
+  it('does not carry unpublished playbook edits off the editor with it', async () => {
+    const release = await startAGenerationThatNeverFinishes();
+
+    click(buttonNamed(/^library$/i));
+    await flush();
+    click(buttonNamed(/create template/i));
+    click(buttonNamed(/build by hand/i));
+    await flush();
+    const nameField = container.querySelector('input[value="Untitled playbook"]') as HTMLInputElement;
+    typeInto(nameField, 'Warehouse Lease');
+
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await act(async () => { release(draftWithTwoClauses()); await Promise.resolve(); });
+    await flush();
+
+    // Still in the editor, with the edit still there and nothing asked. The
+    // teleport bypassed confirmLeaveTemplate's three-way prompt entirely,
+    // and the next navigation then cleared `activeDraft` with no warning.
+    expect(window.location.pathname).toMatch(/^\/playbooks\//);
+    expect(container.textContent).not.toMatch(/unsaved draft/i);
+    expect((container.querySelector('input') as HTMLInputElement).value).toBe('Warehouse Lease');
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+});
