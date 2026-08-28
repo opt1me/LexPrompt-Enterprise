@@ -59,7 +59,11 @@ function makeDoc(overrides: Partial<DocumentRecord> = {}): DocumentRecord {
     matterId: 'm1',
     name: 'Lease.pdf',
     kind: 'pdf',
-    text: '',
+    // Real extracted text by default. An empty string is what a SCAN looks
+    // like, and the list now says so out loud — so a fixture that left this
+    // empty would put a scan disclosure on every row of every test here and
+    // make the one test that means it prove nothing.
+    text: '[Page 1]\nThis lease is made between the parties on the date written below, and continues.',
     byteSize: 1,
     addedAt: 1,
     addedByUserId: 'u1',
@@ -456,5 +460,72 @@ describe('MatterHome — a marked-up document is marked as such in the list', ()
   it('says nothing about markup for a document with no notice', () => {
     const container = mount(<MatterHome {...baseProps} documents={[makeDoc({ id: 'd1' })]} />);
     expect(container.textContent).not.toContain('tracked changes');
+  });
+});
+
+// These drive the REAL call site — `MatterHome` with the documents a user
+// has actually added — rather than hand-mounting `IntakeWizard` with a
+// `documents` array its only call site can never produce. That was how the
+// scan disclosure came to be tested, green, and unreachable: the wizard
+// renders only while `documents.length === 0`, so its per-document blocks
+// could not run, and the sentence existed nowhere else in `src/`.
+//
+// The stake is this app's founding defect: a scanned PDF handed to a
+// text-only model answers "the agreement is silent on this point" for every
+// clause. R-G13 dropped the mockup's OCR progress bar because the app does
+// not OCR, and made this warning the honest replacement — said once before
+// the run, not met as a per-clause refusal after the tokens are spent.
+describe('MatterHome — a scanned document says so before anyone runs a review', () => {
+  const scan = () => makeDoc({ id: 'd1', name: 'Scanned lease.pdf', text: '[Page 1]\n \n[Page 2]\n ' });
+
+  it('discloses a scan on the document row a user reaches by adding one', () => {
+    const container = mount(<MatterHome {...baseProps} documents={[scan()]} />);
+    const text = container.textContent ?? '';
+    expect(text).toContain('No text could be extracted');
+    expect(text).toContain('vision-capable model');
+  });
+
+  it('does not disclose a scan for a document that yielded text', () => {
+    const container = mount(<MatterHome {...baseProps} documents={[makeDoc({ id: 'd1' })]} />);
+    expect(container.textContent).not.toContain('No text could be extracted');
+  });
+
+  it('says it once, not twice, when the document also failed to parse', () => {
+    // A parse error already explains why there is no text. Two explanations
+    // for one fact read as two problems.
+    const container = mount(
+      <MatterHome
+        {...baseProps}
+        documents={[makeDoc({ id: 'd1', text: '', parseError: 'This PDF is encrypted and could not be read.' })]}
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('This PDF is encrypted and could not be read.');
+    expect(text).not.toContain('No text could be extracted');
+  });
+
+  it('still discloses a scan when the collections read failed and grouping is unavailable', () => {
+    // What ingestion found is a fact about the document, not about its
+    // membership: a collections failure must not silence it.
+    const container = mount(
+      <MatterHome
+        {...baseProps}
+        documents={[scan()]}
+        collectionsError="The collections in this matter could not be loaded. Try again."
+      />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('grouping unavailable');
+    expect(text).toContain('No text could be extracted');
+  });
+
+  it('shows the intake wizard, and no document disclosure, while the matter is empty', () => {
+    // The other half of the reachability claim: with no documents the
+    // wizard is what renders, and it carries no per-document text — so the
+    // disclosure above is not a second copy living in a branch nobody sees.
+    const container = mount(<MatterHome {...baseProps} documents={[]} />);
+    const text = container.textContent ?? '';
+    expect(text).toContain('Drop contracts here');
+    expect(text).not.toContain('No text could be extracted');
   });
 });

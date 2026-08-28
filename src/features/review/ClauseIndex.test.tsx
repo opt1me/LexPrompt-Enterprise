@@ -80,6 +80,88 @@ describe('ClauseIndex', () => {
   });
 });
 
+/** The `<li>` whose row carries this clause title, and the class list of the
+ *  status icon inside it. The icons are `aria-hidden` lucide SVGs, so their
+ *  ink is the thing to assert on — that is what a reader scanning the rail
+ *  actually distinguishes them by. */
+function row(c: HTMLElement, title: string) {
+  const li = Array.from(c.querySelectorAll('li')).find(el => (el.textContent || '').includes(title));
+  if (!li) throw new Error(`no row for "${title}"`);
+  return { text: li.textContent || '', icon: li.querySelector('svg')?.getAttribute('class') || '' };
+}
+
+// Spec §8.5: "a rejected-by-human finding and an errored-by-model finding
+// must not look the same" — and the same holds for the pair that actually
+// collapsed here. A clause the model FAILED on and a clause that was
+// ANSWERED but nobody has checked both carry `verification.state ===
+// 'unchecked'` (nothing derives verification), so a switch that reached the
+// verification states first drew them the identical grey circle. Those are
+// different facts leading a reviewer to do different things: one needs a
+// retry, the other needs reading.
+describe('ClauseIndex — a clause that produced no answer is not a clause awaiting a check', () => {
+  it('draws an errored clause distinctly from an answered-but-unchecked one', () => {
+    const c = mount(<ClauseIndex
+      clauses={clauses}
+      findings={{ c1: finding({ status: 'error', error: 'The model returned 500.' }), c2: finding() }}
+      activeClauseId={null}
+      onSelect={() => {}}
+    />);
+    const failed = row(c, 'Break right');
+    const unchecked = row(c, 'Rent review');
+
+    expect(failed.icon).toContain('text-risk-high');
+    expect(failed.icon).not.toEqual(unchecked.icon);
+    // Not icon-only: the icons are aria-hidden, so the row's own words have
+    // to carry the fact too.
+    expect(failed.text).toContain('Failed');
+    expect(unchecked.text).toContain('Clause 2 of 3');
+    expect(unchecked.text).not.toContain('Failed');
+  });
+
+  it('draws a cancelled clause calmly, and distinctly from both', () => {
+    // The user stopped the run; nothing went wrong. `CircleSlash` in ink-4,
+    // matching `FindingCard` and the grid's `Cell`.
+    const c = mount(<ClauseIndex
+      clauses={clauses}
+      findings={{ c1: finding({ status: 'cancelled' }), c2: finding({ status: 'error' }), c3: finding() }}
+      activeClauseId={null}
+      onSelect={() => {}}
+    />);
+    const cancelled = row(c, 'Break right');
+    expect(cancelled.text).toContain('Cancelled');
+    expect(cancelled.icon).not.toContain('text-risk-high');
+    expect(cancelled.icon).not.toEqual(row(c, 'Rent review').icon);
+    expect(cancelled.icon).not.toEqual(row(c, 'Assignment').icon);
+  });
+
+  it('keeps failed and cancelled clauses out of the "unchecked" tally, and names them instead', () => {
+    // Counting a failure as merely-unchecked overstates how much of the
+    // review is real work awaiting a human, and hides that some of it has to
+    // be re-run before anybody can read anything.
+    const c = mount(<ClauseIndex
+      clauses={clauses}
+      findings={{ c1: finding({ status: 'error' }), c2: finding({ status: 'cancelled' }), c3: finding() }}
+      activeClauseId={null}
+      onSelect={() => {}}
+    />);
+    expect(c.textContent).toContain('1 unchecked');
+    expect(c.textContent).toContain('1 failed');
+    expect(c.textContent).toContain('1 cancelled');
+  });
+
+  it('says nothing about failures when there are none', () => {
+    const c = mount(<ClauseIndex
+      clauses={clauses}
+      findings={{ c1: finding(), c2: finding(), c3: finding() }}
+      activeClauseId={null}
+      onSelect={() => {}}
+    />);
+    expect(c.textContent).toContain('3 unchecked');
+    expect(c.textContent).not.toContain('failed');
+    expect(c.textContent).not.toContain('cancelled');
+  });
+});
+
 describe('firstUncheckedClauseId', () => {
   it('returns the first clause whose finding nobody has checked', () => {
     expect(firstUncheckedClauseId(clauses, {

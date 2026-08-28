@@ -10,6 +10,7 @@ import { GroupDocumentsDialog } from './GroupDocumentsDialog';
 import { MatterStats } from './MatterStats';
 import { MatterActivity } from './MatterActivity';
 import { IntakeWizard } from './IntakeWizard';
+import { DocumentNotices, noUsableText } from './DocumentNotices';
 import { suggestCollections, type CollectionSuggestion } from '../../lib/collectionSuggest';
 import { progressLabel } from '../../lib/reviewProgress';
 
@@ -450,6 +451,10 @@ export function MatterHome({
                   <div className="font-mono text-pin text-ink-4">
                     {doc.kind.toUpperCase()} · grouping unavailable until collections load
                   </div>
+                  {/* What ingestion found is a fact about the document, not
+                      about its membership — a collections failure is no
+                      reason to stop saying a document is a scan. */}
+                  <DocumentNotices doc={doc} />
                 </div>
               </div>
             ))}
@@ -466,16 +471,10 @@ export function MatterHome({
               // matter's documents" must never look alike.
               <IntakeWizard
                 matter={matter}
-                documents={documents}
-                documentsError={documentsError}
-                onRetryDocuments={onRetryDocuments}
                 onAddDocuments={onAddDocuments}
-                onRemoveDocument={onRemoveDocument}
-                onCreateCollection={onCreateCollection}
                 playbooks={playbooks}
                 playbooksError={playbooksError}
                 onRetryPlaybooks={onRetryPlaybooks}
-                onRunReview={(playbook) => onRunReview(playbook)}
                 onCreatePlaybook={onCreatePlaybook}
                 modelId={modelId}
                 onOpenSettings={onOpenSettings}
@@ -496,7 +495,7 @@ export function MatterHome({
                     />
                     {doc.parseError
                       ? <FileWarning className="w-4 h-4 text-risk-high shrink-0" />
-                      : doc.markupNotice
+                      : (noUsableText(doc) || doc.markupNotice)
                         ? <FileWarning className="w-4 h-4 text-risk-med shrink-0" />
                         : <FileText className="w-4 h-4 text-ink-4 shrink-0" />}
                     <div className="flex-1 min-w-0">
@@ -504,19 +503,7 @@ export function MatterHome({
                       <p className="font-mono text-pin text-ink-4">
                         {doc.kind.toUpperCase()} · Added {formatDate(doc.addedAt)}
                       </p>
-                      {doc.parseError && (
-                        <p className="text-xs text-risk-high mt-0.5">Unreadable: {doc.parseError}</p>
-                      )}
-                      {/* risk-med, not risk-high, and never "unreadable":
-                          this document parsed and is reviewable — the
-                          caveat is that its text is the file with every
-                          tracked change accepted. The same wording appears
-                          beside the findings (`DocumentViewer`), because
-                          whoever reads the review may never have seen this
-                          screen. */}
-                      {doc.markupNotice && (
-                        <p className="text-xs text-risk-med mt-0.5">{doc.markupNotice}</p>
-                      )}
+                      <DocumentNotices doc={doc} />
                     </div>
                     <button
                       onClick={() => handleRemove(doc)}

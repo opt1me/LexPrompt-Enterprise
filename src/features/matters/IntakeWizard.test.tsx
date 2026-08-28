@@ -2,28 +2,15 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, click } from '../../test/mount';
 import { IntakeWizard } from './IntakeWizard';
-import type { DocumentRecord, Matter, Playbook } from '../../types';
+import type { Matter, Playbook } from '../../types';
 
 const matter: Matter = { id: 'm1', name: 'Ackroyd v Bell', ownerId: 'me', createdAt: 1, updatedAt: 1 };
 
-function doc(over: Partial<DocumentRecord> = {}): DocumentRecord {
-  return {
-    id: 'd1', matterId: 'm1', name: 'Lease.pdf', kind: 'pdf',
-    text: '[Page 1]\nThis lease is made between the parties on the date written below, and continues.',
-    byteSize: 100, addedAt: 1, addedByUserId: 'me', role: 'standalone', ...over,
-  };
-}
-
 const wiring = {
-  documentsError: null,
-  onRetryDocuments: () => {},
   onAddDocuments: async () => {},
-  onRemoveDocument: async () => {},
-  onCreateCollection: async () => {},
   playbooks: [],
   playbooksError: null,
   onRetryPlaybooks: () => {},
-  onRunReview: async () => {},
   onCreatePlaybook: () => {},
   modelId: 'anthropic/claude-3.5-sonnet',
   onOpenSettings: () => {},
@@ -31,7 +18,7 @@ const wiring = {
 
 describe('IntakeWizard — the tracker and step 1', () => {
   it('shows the three steps and names the matter', () => {
-    const c = mount(<IntakeWizard matter={matter} documents={[]} {...wiring} />);
+    const c = mount(<IntakeWizard matter={matter} {...wiring} />);
     expect(c.textContent).toContain('Matter');
     expect(c.textContent).toContain('Documents');
     expect(c.textContent).toContain('Playbook');
@@ -39,73 +26,53 @@ describe('IntakeWizard — the tracker and step 1', () => {
   });
 
   it('carries the storage disclosure in its footer, in the shipped words', () => {
-    const c = mount(<IntakeWizard matter={matter} documents={[]} {...wiring} />);
+    const c = mount(<IntakeWizard matter={matter} {...wiring} />);
     expect(c.textContent).toContain("this browser's IndexedDB — on this device, in this browser, and nowhere else");
   });
 
   it('names the model and offers a way to change it', () => {
-    const c = mount(<IntakeWizard matter={matter} documents={[]} {...wiring} />);
+    const c = mount(<IntakeWizard matter={matter} {...wiring} />);
     expect(c.textContent).toContain('anthropic/claude-3.5-sonnet');
     expect(buttonNamed(c, /Settings/)).toBeTruthy();
   });
 });
 
-describe('IntakeWizard — step 2 reports what ingestion actually produced', () => {
-  it('shows a parse failure inline, with a way to remove the document', () => {
-    const c = mount(<IntakeWizard matter={matter} documents={[doc({ parseError: 'This PDF is encrypted and could not be read.' })]} {...wiring} />);
-    expect(c.textContent).toContain('This PDF is encrypted and could not be read.');
-    expect(buttonNamed(c, /Remove/)).toBeTruthy();
+describe('IntakeWizard — step 2 offers the only thing it can', () => {
+  it('offers a file picker and nothing that presumes a document already exists', () => {
+    // This screen renders only while the matter is empty (`MatterHome`'s
+    // `documents.length === 0` branch), so a document list, a per-document
+    // disclosure or a collection suggestion here could never reach a user.
+    // Those all used to live in this file and were tested by mounting a
+    // `documents` array the call site cannot produce — a suite that proved
+    // the branches existed and nothing about their reachability. The scan
+    // disclosure was among them, and it existed nowhere else in the app.
+    // It now lives in `DocumentNotices`, rendered by the lists that can
+    // actually hold a document; the assertions below pin that this screen
+    // does not grow a second, unreachable copy of it.
+    const c = mount(<IntakeWizard matter={matter} {...wiring} />);
+    expect(c.querySelectorAll('input[type="file"]')).toHaveLength(1);
+    expect(c.textContent).not.toContain('No text could be extracted');
+    expect(c.textContent).not.toMatch(/read together/i);
+    expect(buttonNamed(c, /^Remove/)).toBeUndefined();
   });
 
   it('does not draw a progress bar for OCR the app does not perform', () => {
     // R-G13. The app does not OCR; a progress bar for work it never does is
-    // the exact failure the state-preservation rule forbids.
-    const c = mount(<IntakeWizard matter={matter} documents={[doc({ text: '' })]} {...wiring} />);
+    // the exact failure the state-preservation rule forbids. Its honest
+    // replacement is the scan sentence, and that is asserted at the call
+    // site that can actually show it (`MatterHome.test.tsx`).
+    const c = mount(<IntakeWizard matter={matter} {...wiring} />);
     expect(c.textContent).not.toMatch(/OCR|Running OCR|\d+%/);
-  });
-
-  it('says plainly that a scanned document needs a vision-capable model', () => {
-    const c = mount(<IntakeWizard matter={matter} documents={[doc({ text: '[Page 1]\n \n[Page 2]\n ' })]} {...wiring} />);
-    expect(c.textContent).toContain('No text could be extracted');
-    expect(c.textContent).toContain('vision-capable model');
-  });
-
-  it('carries a tracked-changes notice where one was recorded', () => {
-    const c = mount(<IntakeWizard matter={matter} documents={[doc({ kind: 'docx', markupNotice: 'This document contains tracked changes; they were accepted before extraction.' })]} {...wiring} />);
-    expect(c.textContent).toContain('This document contains tracked changes; they were accepted before extraction.');
-  });
-
-  it('proposes a collection without creating one', () => {
-    const onCreateCollection = vi.fn(async () => {});
-    const c = mount(<IntakeWizard
-      matter={matter}
-      documents={[doc({ id: 'd1', name: 'Ackroyd Lease.pdf' }), doc({ id: 'd2', name: 'Ackroyd Lease - Deed of Variation.pdf' })]}
-      {...wiring}
-      onCreateCollection={onCreateCollection}
-    />);
-    expect(c.textContent).toMatch(/read together|collection/i);
-    // R-C4: proposed, never created. Nothing has been grouped until the
-    // reader accepts it.
-    expect(onCreateCollection).not.toHaveBeenCalled();
-    click(buttonNamed(c, /Group these/));
-    expect(onCreateCollection).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders the load-error panel instead of the document list when documents cannot be read', () => {
-    const c = mount(<IntakeWizard matter={matter} documents={[]} {...wiring} documentsError="This matter's documents could not be loaded." />);
-    expect(c.textContent).toContain("This matter's documents could not be loaded.");
-    expect(buttonNamed(c, /^Retry$/)).toBeTruthy();
   });
 });
 
-describe('IntakeWizard — step 3 chooses a playbook', () => {
+describe('IntakeWizard — step 3 shows the playbooks without promising a run', () => {
   const playbook = (id: string, name: string, updatedAt: number): Playbook =>
     ({ id, name, createdAt: 1, updatedAt, currentVersionId: `v-${id}`, schemaVersion: 6 });
 
   it('lists the user’s playbooks, most recently used first', () => {
     const c = mount(<IntakeWizard
       matter={matter}
-      documents={[doc()]}
       {...wiring}
       playbooks={[playbook('p1', 'Old lease', 100), playbook('p2', 'Recent lease', 900)]}
     />);
@@ -113,16 +80,26 @@ describe('IntakeWizard — step 3 chooses a playbook', () => {
     expect(names).toEqual(['Recent lease', 'Old lease']);
   });
 
+  it('offers no "Run this playbook" while the matter has nothing to run it over', () => {
+    // This screen exists only for an empty matter, so a live run button
+    // promised a review of documents that do not exist — it landed the
+    // reader on the run screen with an empty file list. The step is still
+    // shown, and it says what is missing instead.
+    const c = mount(<IntakeWizard matter={matter} {...wiring} playbooks={[playbook('p1', 'Lease', 1)]} />);
+    expect(buttonNamed(c, /Run this playbook/)).toBeUndefined();
+    expect(c.textContent).toContain('Add a document above first');
+  });
+
   it('offers a route to create one when there are none, rather than an empty list', () => {
     const onCreatePlaybook = vi.fn();
-    const c = mount(<IntakeWizard matter={matter} documents={[doc()]} {...wiring} onCreatePlaybook={onCreatePlaybook} />);
+    const c = mount(<IntakeWizard matter={matter} {...wiring} onCreatePlaybook={onCreatePlaybook} />);
     expect(c.textContent).toContain('You have no playbooks yet');
     click(buttonNamed(c, /Create a playbook/));
     expect(onCreatePlaybook).toHaveBeenCalled();
   });
 
   it('renders the load-error panel instead of the playbook list when the library cannot be read', () => {
-    const c = mount(<IntakeWizard matter={matter} documents={[doc()]} {...wiring} playbooksError="The playbook library could not be loaded." />);
+    const c = mount(<IntakeWizard matter={matter} {...wiring} playbooksError="The playbook library could not be loaded." />);
     expect(c.textContent).toContain('The playbook library could not be loaded.');
     expect(c.textContent).not.toContain('You have no playbooks yet');
   });
@@ -131,14 +108,7 @@ describe('IntakeWizard — step 3 chooses a playbook', () => {
     // R-G12: "These look like a commercial lease…" is a model call with a
     // prompt contract, a cost, and a confidently-wrong-at-the-worst-moment
     // failure mode. None of that is a styling decision.
-    const c = mount(<IntakeWizard matter={matter} documents={[doc()]} {...wiring} playbooks={[playbook('p1', 'Lease', 1)]} />);
+    const c = mount(<IntakeWizard matter={matter} {...wiring} playbooks={[playbook('p1', 'Lease', 1)]} />);
     expect(c.textContent).not.toMatch(/these look like|we suggest|recommended for these/i);
-  });
-
-  it('runs the chosen playbook', async () => {
-    const onRunReview = vi.fn(async () => {});
-    const c = mount(<IntakeWizard matter={matter} documents={[doc()]} {...wiring} playbooks={[playbook('p1', 'Lease', 1)]} onRunReview={onRunReview} />);
-    click(buttonNamed(c, /Run this playbook/));
-    expect(onRunReview).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' }));
   });
 });

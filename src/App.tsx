@@ -738,7 +738,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // its published versions, and every review from every matter (health is
   // only visible across matters, per `buildPositionHealthMap`'s own doc
   // comment).
-  const [positionRows, setPositionRows] = useState<PositionRow[]>([]);
+  // `undefined`, not `[]`: before the first read there is no answer to give,
+  // and `[]` is an answer — "this firm has no standard positions". The view
+  // renders a loading branch for `undefined` and the empty state only for a
+  // read that finished and found nothing.
+  const [positionRows, setPositionRows] = useState<PositionRow[] | undefined>(undefined);
   const [positionsError, setPositionsError] = useState<string | null>(null);
 
   const loadPositions = () => {

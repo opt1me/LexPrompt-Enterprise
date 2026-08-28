@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle2, Flag, XCircle, Circle, CircleDashed, Loader } from 'lucide-react';
+import { CheckCircle2, Flag, XCircle, Circle, CircleDashed, Loader, AlertTriangle, CircleSlash } from 'lucide-react';
 import type { Finding, PlaybookClause } from '../../types';
 
 export interface ClauseIndexProps {
@@ -13,7 +13,14 @@ export interface ClauseIndexProps {
 
 /** The first clause a human has not disposed of. A clause with NO finding
  *  counts as unchecked: a clause the run never reached is not a clause
- *  anybody signed off. */
+ *  anybody signed off.
+ *
+ *  Deliberately WIDER than the rail's `unchecked` tally below, which
+ *  excludes errored and cancelled clauses. This function answers "where
+ *  does the reader go next?", and a clause that failed is somewhere they
+ *  still have to go — to retry it. The tally answers a different question,
+ *  "how much of this review is real output awaiting a human?", and a
+ *  failure is not that. */
 export function firstUncheckedClauseId(
   clauses: PlaybookClause[],
   findings: Record<string, Finding>,
@@ -32,19 +39,33 @@ export function firstUncheckedClauseId(
 /**
  * The review screen's navigation rail (Task 23, `1b`'s three-pane ledger).
  * Purely a navigation surface over the SAME `findings` map the finding
- * column's cards read — it derives no count or status of its own that the
- * cards do not already carry, because the moment a second renderer computes
- * its own version of "how many are verified" the two can disagree
- * (CLAUDE.md's sibling-drift rule, and the reason the card view and the
- * grid are already two renderers over one map rather than two pipelines).
+ * column's cards read — every count and every icon is a per-clause lookup
+ * in that one map, never a second pipeline, because the moment a second
+ * renderer computes its own version of "how many are verified" the two can
+ * disagree (CLAUDE.md's sibling-drift rule, and the reason the card view
+ * and the grid are already two renderers over one map rather than two
+ * pipelines).
+ *
+ * The status vocabulary is the one `FindingCard` and the grid's `Cell`
+ * already use, for the reason spec §8.5 gives: a clause the model FAILED on
+ * and a clause a human has not checked yet are different facts, and a rail
+ * that drew both as the same grey circle would send a reader off to verify
+ * an answer that was never produced.
  */
 export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: ClauseIndexProps) {
-  let high = 0, flagged = 0, unchecked = 0;
+  let high = 0, flagged = 0, unchecked = 0, failed = 0, cancelled = 0;
   for (const clause of clauses) {
     const f = findings[clause.id];
     if (f?.riskLevel === 'High') high++;
-    if (f?.verification?.state === 'flagged') flagged++;
-    if ((f?.verification?.state ?? 'unchecked') === 'unchecked') unchecked++;
+    // An errored or a cancelled clause produced no answer at all, so it is
+    // neither checked nor waiting to be checked. Counting either as
+    // "unchecked" overstates how much of this review is real output a human
+    // still has to read, and hides that some of it has to be RE-RUN before
+    // anybody can read anything.
+    if (f?.status === 'error') failed++;
+    else if (f?.status === 'cancelled') cancelled++;
+    else if (f?.verification?.state === 'flagged') flagged++;
+    else if ((f?.verification?.state ?? 'unchecked') === 'unchecked') unchecked++;
   }
 
   return (
@@ -56,12 +77,25 @@ export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: Cla
         <span className="font-mono text-chip uppercase text-risk-high">{high} high</span>
         <span className="font-mono text-chip uppercase text-risk-med">{flagged} flagged</span>
         <span className="font-mono text-chip uppercase text-ink-4">{unchecked} unchecked</span>
+        {/* Rendered only when non-zero: the three above between them account
+            for every clause that produced an answer, so "0 failed" is a
+            reassurance nobody asked for. When they ARE non-zero they have to
+            be said, because those clauses are missing from the other three
+            counts and the reader would otherwise never learn they exist. */}
+        {failed > 0 && (
+          <span className="font-mono text-chip uppercase text-risk-high">{failed} failed</span>
+        )}
+        {cancelled > 0 && (
+          <span className="font-mono text-chip uppercase text-ink-3">{cancelled} cancelled</span>
+        )}
       </div>
       <ul className="flex-1 overflow-y-auto min-h-0">
         {clauses.map((clause, i) => {
           const f = findings[clause.id];
           const active = clause.id === activeClauseId;
           const busy = f?.status === 'running';
+          const failedHere = f?.status === 'error';
+          const cancelledHere = f?.status === 'cancelled';
           return (
             <li key={clause.id}>
               <button
@@ -76,8 +110,17 @@ export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: Cla
                   <span className={`block font-ui text-ui-sm truncate ${active ? 'font-semibold text-ink-1' : 'text-ink-2'}`}>
                     {clause.title}
                   </span>
-                  <span className="block font-mono text-pin text-ink-4">
-                    {busy ? 'Extracting…' : `Clause ${i + 1} of ${clauses.length}`}
+                  {/* The icons are `aria-hidden`, so this line is the only
+                      status a screen reader gets — it carries the same fact
+                      the icon does, not just the clause's position. */}
+                  <span className={`block font-mono text-pin ${failedHere ? 'text-risk-high' : 'text-ink-4'}`}>
+                    {busy
+                      ? 'Extracting…'
+                      : failedHere
+                        ? 'Failed — retry'
+                        : cancelledHere
+                          ? 'Cancelled'
+                          : `Clause ${i + 1} of ${clauses.length}`}
                   </span>
                 </span>
               </button>
@@ -93,11 +136,22 @@ export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: Cla
  *  Deliberately not `role="status"`: that role belongs to the chips this
  *  screen already renders, and a positional `[role="status"]` query
  *  elsewhere in this codebase has already broken once on a second element
- *  quietly claiming the same role. */
+ *  quietly claiming the same role.
+ *
+ *  `error` and `cancelled` are tested BEFORE the verification switch, and
+ *  have to be: both carry `verification.state === 'unchecked'` (nothing
+ *  derives verification — CLAUDE.md), so falling through would draw the
+ *  plain grey circle of an answered-but-unchecked clause over a clause that
+ *  produced no answer. The two treatments are `FindingCard`'s and the
+ *  grid's, unchanged: error is a failure (`AlertTriangle`, `risk-high`),
+ *  cancelled is calm (`CircleSlash`, `ink-4`) — the user stopped the run,
+ *  nothing went wrong. */
 function StatusIcon({ finding }: { finding: Finding | undefined }) {
   const size = 'w-3.5 h-3.5 mt-0.5 shrink-0';
   if (!finding || finding.status === 'pending') return <CircleDashed className={`${size} text-ink-6 opacity-50`} aria-hidden="true" />;
   if (finding.status === 'running') return <Loader className={`${size} text-ink-6 animate-spin`} aria-hidden="true" />;
+  if (finding.status === 'error') return <AlertTriangle className={`${size} text-risk-high`} aria-hidden="true" />;
+  if (finding.status === 'cancelled') return <CircleSlash className={`${size} text-ink-4`} aria-hidden="true" />;
   switch (finding.verification?.state) {
     case 'verified': return <CheckCircle2 className={`${size} text-state-verified`} aria-hidden="true" />;
     case 'flagged': return <Flag className={`${size} text-state-flagged`} aria-hidden="true" />;

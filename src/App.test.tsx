@@ -1383,3 +1383,74 @@ describe('App — position health in the playbook editor (Task 9A)', () => {
     expect(container.textContent).not.toContain('Alpha history marker');
   });
 });
+
+// The `Standard positions` tab used to initialise its rows to `[]` and hand
+// them straight to a view with only three branches — error, empty,
+// populated. So the FIRST click rendered "No standard positions yet" for the
+// whole duration of the read (`listTemplates` + a `listVersions` per
+// playbook + `listMatters` + a `listReviews` per matter, serialised), which
+// told a firm it has no house positions when the truth was that the app had
+// not finished looking. That is CLAUDE.md's failed-migration shape on the
+// one screen whose entire job is "which of our house rules are drifting?".
+//
+// Driven from the nav button rather than by mounting the view with props,
+// because the initial `[]` was App's, not the view's.
+describe('App — the standard positions tab does not answer before it has read (Major 1)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    localStorage.clear();
+    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
+    getPlaybookMock.mockReset();
+    listVersionsMock.mockReset().mockResolvedValue([]);
+    listMattersMock.mockReset().mockResolvedValue([]);
+    listReviewsMock.mockReset().mockResolvedValue([]);
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => { root.unmount(); });
+    container.remove();
+  });
+
+  it('says it is still reading, not that the firm has none, while the read is in flight', async () => {
+    // Held open deliberately: this is the window the user actually sees, and
+    // on a real IndexedDB it is proportional to how much data they have.
+    let releaseTemplates: (rows: unknown[]) => void = () => {};
+    listPlaybooksMock.mockReset().mockImplementation(
+      () => new Promise<unknown[]>((resolve) => { releaseTemplates = resolve; }),
+    );
+
+    act(() => { root.render(<App />); });
+    await flush();
+    clickNav(container, 'Standard positions');
+
+    expect(container.textContent).toContain('Loading standard positions');
+    expect(container.textContent).not.toContain('No standard positions yet');
+
+    // And it is a transient state, not a spinner that never resolves: once
+    // the read finishes and genuinely finds nothing, the empty state is the
+    // honest answer and it appears.
+    await act(async () => { releaseTemplates([]); });
+    await flush();
+
+    expect(container.textContent).toContain('No standard positions yet');
+    expect(container.textContent).not.toContain('Loading standard positions');
+  });
+
+  it('reports a failed read as a failure, never as an empty firm', async () => {
+    listPlaybooksMock.mockReset().mockRejectedValue(new Error('disk'));
+
+    act(() => { root.render(<App />); });
+    await flush();
+    clickNav(container, 'Standard positions');
+    await flush();
+
+    expect(container.textContent).toMatch(/could not be loaded/i);
+    expect(container.textContent).not.toContain('No standard positions yet');
+    expect(container.textContent).not.toContain('Loading standard positions');
+  });
+});

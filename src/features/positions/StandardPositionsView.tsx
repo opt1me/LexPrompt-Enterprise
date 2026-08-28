@@ -5,7 +5,16 @@ import type { PositionRow } from '../../lib/standardPositions';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 
 export interface StandardPositionsViewProps {
-  rows: PositionRow[];
+  /** `undefined` means NOT READ YET — not "none". The distinction is typed
+   *  rather than passed alongside as a `loading` boolean so the defect it
+   *  closes is unreachable through the props: a caller cannot hand this
+   *  view an empty array before its read has finished without saying, in
+   *  the type, that it has finished and found nothing. (Same shape as
+   *  `ReviewVersionLine`, which makes R-D15's defect unconstructible.)
+   *
+   *  A load that FAILS must leave whatever was here alone rather than
+   *  resetting it — see `App.tsx#loadPositions`. */
+  rows: PositionRow[] | undefined;
   /** Non-null replaces the index. A failed read is not an empty firm. */
   error: string | null;
   onRetry: () => void;
@@ -49,8 +58,20 @@ const FILTERS: { label: string; kind: PositionHealth['kind'] | 'all' }[] = [
 export function StandardPositionsView({ rows, error, onRetry, onOpenPlaybook }: StandardPositionsViewProps) {
   const [filter, setFilter] = useState<PositionHealth['kind'] | 'all'>('all');
 
+  // Three distinct facts, three distinct branches, in the order that keeps
+  // them distinct. A failed read is reported as a failure even if a previous
+  // successful read left rows behind; a read that has not finished says so;
+  // only a finished read that genuinely found nothing gets the empty state.
+  // Telling a firm it has no house positions when the app has not looked yet
+  // is the "failed migration renders an empty library" defect one screen
+  // over — and this is the screen whose only job is to say which house rules
+  // are drifting.
   if (error) {
     return <LoadErrorPanel message={error} onRetry={onRetry} />;
+  }
+
+  if (rows === undefined) {
+    return <div className="p-8 font-ui text-ui text-ink-3">Loading standard positions…</div>;
   }
 
   if (rows.length === 0) {

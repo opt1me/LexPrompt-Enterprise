@@ -33,6 +33,31 @@ describe('StandardPositionsView', () => {
     expect(buttonNamed(c, /^Retry$/)).toBeTruthy();
   });
 
+  // Empty, broken and NOT-YET-KNOWN are three facts, and this screen's whole
+  // purpose is to answer "which of our house rules are drifting?". Answering
+  // "you have none" while the read is still in flight is the CLAUDE.md
+  // founding shape — a failed migration rendering an empty library,
+  // indistinguishable from a fresh install — one screen over. The read is a
+  // serialised chain of IndexedDB round-trips proportional to the user's
+  // data, so the window is not theoretical.
+  it('says it is still reading rather than claiming the firm has no positions', () => {
+    const c = mount(<StandardPositionsView rows={undefined} error={null} onRetry={() => {}} onOpenPlaybook={() => {}} />);
+    expect(c.textContent).toContain('Loading standard positions');
+    expect(c.textContent).not.toContain('No standard positions yet');
+  });
+
+  it('keeps the failed read distinct from the unfinished one', () => {
+    // A failure leaves `rows` untouched (App.tsx#loadPositions never resets
+    // it to `[]`), so `undefined` and an error can hold at once — and when
+    // they do, the failure is the thing to say. "Still loading" over a read
+    // that has already given up is a spinner that never resolves.
+    const c = mount(<StandardPositionsView rows={undefined} error="Your standard positions could not be loaded. Try again." onRetry={() => {}} onOpenPlaybook={() => {}} />);
+    expect(c.textContent).toContain('could not be loaded');
+    expect(c.textContent).not.toContain('Loading standard positions');
+    expect(c.textContent).not.toContain('No standard positions yet');
+    expect(buttonNamed(c, /^Retry$/)).toBeTruthy();
+  });
+
   it('filters by health', () => {
     const c = mount(<StandardPositionsView
       rows={[row({ clauseId: 'c1', clauseTitle: 'Break', health: { kind: 'conceded', count: 1 } }), row({ clauseId: 'c2', clauseTitle: 'Rent', health: { kind: 'held', supporting: 2, total: 2 } })]}
