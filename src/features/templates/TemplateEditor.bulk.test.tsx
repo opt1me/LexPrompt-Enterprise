@@ -5,13 +5,15 @@ import { mount, buttonNamed, buttons, click } from '../../test/mount';
 import type { PlaybookClause, PlaybookDraft, PlaybookVersion, Settings } from '../../types';
 
 // The module-mock idiom used by `TemplateEditor.suggestions.test.tsx`:
-// `isAuthError` must stay real, since the whole point of propagating errors
+// `isAuthFailure` must stay real, since the whole point of propagating errors
 // untouched is that it still recognises them.
-vi.mock('../../lib/openrouter', async () => {
-  const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
-  return { ...actual, chatJson: vi.fn() };
-});
-const { chatJson } = await import('../../lib/openrouter');
+vi.mock('../../lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
+const chatJson = gatewayModelClient.chatJson;
 const { TemplateEditor } = await import('./TemplateEditor');
 
 beforeEach(() => vi.clearAllMocks());

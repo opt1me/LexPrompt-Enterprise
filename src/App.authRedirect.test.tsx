@@ -84,9 +84,11 @@ vi.mock('./lib/db/profile', () => ({
 // listModels would otherwise attempt a real network fetch from the
 // settings.modelId-watching effect; stubbed out since it's unrelated to
 // what these tests exercise.
-vi.mock('./lib/openrouter', () => ({
-  listModels: vi.fn().mockResolvedValue([]),
-  isAuthError: () => false,
+vi.mock('./lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(),
+    listModels: vi.fn().mockResolvedValue([]),
+  },
 }));
 
 // extractClause is runReview.ts's only external dependency (both are v1

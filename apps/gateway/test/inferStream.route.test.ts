@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildTestServer, fakeStream } from './helpers/streamHarness.ts';
-import { createSseEventReader, decodeFrame, type Frame } from '@lexprompt/core';
+import { createSseEventReader, decodeFrame, type Frame, type Jurisdiction } from '@lexprompt/core';
 import type { RateLimiter } from '../src/rateLimit.ts';
 
 /** A limiter that never refuses, but remembers every `record` call — so a
@@ -29,6 +29,13 @@ function framesOf(body: string): Frame[] {
   return out;
 }
 
+/** The `done` frame now carries where the call was processed, taken from
+ *  the allowlist entry the gateway actually resolved — never from the
+ *  request. The two entries this harness defines differ in both fields, so
+ *  a route that hard-coded either would fail one of the two cases below. */
+const UK_SOUTH: Jurisdiction = { bloc: 'UK', region: 'uksouth', label: 'UK South' };
+const US: Jurisdiction = { bloc: 'US', region: 'us', label: 'US' };
+
 const OPENAI_OK =
   'data: {"choices":[{"delta":{"content":"one"}}]}\n\n'
   + 'data: {"choices":[{"delta":{"content":" two"}}]}\n\n'
@@ -45,7 +52,10 @@ describe('POST /v1/infer/stream', () => {
     expect(framesOf(res.body)).toEqual([
       { type: 'delta', text: 'one' },
       { type: 'delta', text: ' two' },
-      { type: 'done', usage: { promptTokens: 9, completionTokens: 2 }, callId: 'call-1' },
+      {
+        type: 'done', usage: { promptTokens: 9, completionTokens: 2 }, callId: 'call-1',
+        provider: 'azure-foundry', jurisdiction: UK_SOUTH,
+      },
     ]);
     await app.close();
   });
@@ -113,7 +123,10 @@ describe('POST /v1/infer/stream', () => {
       payload: { modelChoiceId: 'claude', purpose: 'assistant.chat', user: 'hi',
                  workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     const done = framesOf(res.body).find(f => f.type === 'done');
-    expect(done).toEqual({ type: 'done', usage: { promptTokens: 16, completionTokens: 5 }, callId: 'call-1' });
+    expect(done).toEqual({
+      type: 'done', usage: { promptTokens: 16, completionTokens: 5 }, callId: 'call-1',
+      provider: 'anthropic', jurisdiction: US,
+    });
     await app.close();
   });
 

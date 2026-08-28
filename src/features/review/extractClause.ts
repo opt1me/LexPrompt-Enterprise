@@ -1,4 +1,5 @@
-import { chatJson, isAuthError } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
+import { isAuthFailure } from '../../lib/model/authFailure';
 import { assessDocument, contextBudgetChars } from '../../lib/modelContext';
 import { repairCitations } from '../../lib/citationRepair';
 import { unchecked } from '../../lib/verification';
@@ -181,10 +182,10 @@ export async function extractClause(
   const textForPrompt = readability.text.slice(0, budget);
 
   try {
-    const raw = await chatJson<RawFinding>(
+    const raw = await gatewayModelClient.chatJson<RawFinding>(
       {
-        apiKey: settings.apiKey,
-        modelId: settings.modelId,
+        modelChoiceId: settings.modelId,
+        purpose: 'review.clause',
         system: `${template.systemPrompt}\n\nOUTPUT RULES: ${template.formatPrompt}`,
         user: buildClausePrompt(doc, clause, template, { text: textForPrompt, truncated }),
         images: readability.useImages ? doc.pageImages : undefined,
@@ -286,7 +287,7 @@ export async function extractClause(
       // Omitted rather than set to `undefined`, same rule as `truncated`
       // above: a persisted `authError: undefined` reads to an `in` check
       // as "an auth failure was recorded against this finding".
-      ...(isAuthError(error) ? { authError: true } : {}),
+      ...(isAuthFailure(error) ? { authError: true } : {}),
     };
   }
 }

@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Mail, FileDown, Loader, FileText, X } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun, Settings } from '../../types';
-import { isAuthError } from '../../lib/openrouter';
+import { isAuthFailure } from '../../lib/model/authFailure';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
@@ -298,7 +298,7 @@ export function ResultsView({
     // A rejected API key is never just "this one action failed" — it means
     // every subsequent call will fail the same way, so it routes to
     // Settings instead of surfacing as an ordinary toast (Important 4).
-    if (isAuthError(error)) {
+    if (isAuthFailure(error)) {
       onAuthError?.();
       return;
     }

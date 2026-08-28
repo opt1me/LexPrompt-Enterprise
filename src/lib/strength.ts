@@ -9,7 +9,7 @@
  * an opinion the same model that made the proposal also supplies.
  *
  * Pure arithmetic over the basis. No AI path, no I/O, no React — importing
- * anything from `openrouter.ts` here would reintroduce exactly the hazard
+ * anything from the model client here would reintroduce exactly the hazard
  * this module exists to keep out.
  */
 

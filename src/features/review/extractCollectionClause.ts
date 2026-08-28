@@ -1,4 +1,5 @@
-import { chatJson, isAuthError } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
+import { isAuthFailure } from '../../lib/model/authFailure';
 import { assessDocument, contextBudgetChars, type DocumentReadability } from '../../lib/modelContext';
 import { buildCollectionPrompt } from '../../lib/collectionPrompt';
 import { repairCitations } from '../../lib/citationRepair';
@@ -472,10 +473,10 @@ export async function extractCollectionClause(
     : '';
 
   try {
-    const raw = await chatJson<RawCollectionFinding>(
+    const raw = await gatewayModelClient.chatJson<RawCollectionFinding>(
       {
-        apiKey: settings.apiKey,
-        modelId: settings.modelId,
+        modelChoiceId: settings.modelId,
+        purpose: 'review.collection_clause',
         system: `${template.systemPrompt}\n\nOUTPUT RULES: ${template.formatPrompt}`,
         user: documentsPrompt + imageNote,
         images: images.length > 0 ? images : undefined,
@@ -608,7 +609,7 @@ export async function extractCollectionClause(
       // Omitted rather than set to `undefined`, same rule as `truncated`
       // above: a persisted `authError: undefined` reads to an `in` check
       // as "an auth failure was recorded against this finding".
-      ...(isAuthError(error) ? { authError: true } : {}),
+      ...(isAuthFailure(error) ? { authError: true } : {}),
     };
   }
 }

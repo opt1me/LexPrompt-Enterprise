@@ -2,9 +2,22 @@ import { describe, it, expect } from 'vitest';
 import {
   createSseEventReader, sseFields, encodeFrame, decodeFrame, readFrames,
 } from './sse.ts';
-import { ModelError } from './protocol.ts';
+import { ModelError, type Jurisdiction } from './protocol.ts';
 
 const enc = new TextEncoder();
+
+/** Every `done` frame carries where the call was processed; these two
+ *  constants keep that fact out of the way of what each case is about. */
+const UK_SOUTH: Jurisdiction = { bloc: 'UK', region: 'uksouth', label: 'UK South' };
+const WHERE = { provider: 'openai' as const, jurisdiction: UK_SOUTH };
+
+/** A `done` frame as an older producer would have written it. Hand-built as
+ *  text because `encodeFrame` can no longer produce one: `Frame` requires
+ *  both fields, which is the point. */
+const DONE_NO_WHERE =
+  '{"type":"done","usage":{"promptTokens":1,"completionTokens":1},"callId":"c1"}';
+const DONE_NO_JURISDICTION =
+  '{"type":"done","usage":{"promptTokens":1,"completionTokens":1},"callId":"c1","provider":"openai"}';
 
 async function* streamOf(...chunks: string[]): AsyncIterable<Uint8Array> {
   for (const c of chunks) yield enc.encode(c);
@@ -110,10 +123,23 @@ describe('the canonical frame codec', () => {
   });
 
   it('round-trips done and error', () => {
-    const done = { type: 'done' as const, usage: { promptTokens: 11, completionTokens: 3 }, callId: 'c1' };
+    const done = {
+      type: 'done' as const, usage: { promptTokens: 11, completionTokens: 3 }, callId: 'c1',
+      ...WHERE,
+    };
     expect(decodeFrame(encodeFrame(done).trim())).toEqual(done);
     const err = { type: 'error' as const, code: 'upstream_failed' as const, status: 502, message: 'boom', callId: 'c1' };
     expect(decodeFrame(encodeFrame(err).trim())).toEqual(err);
+  });
+
+  // A `done` frame is the browser's ONLY source of where the answer was
+  // processed. One arriving without it would force the caller to invent a
+  // provider and a region to satisfy `InferResponse`; refusing to decode it
+  // means the stream reports itself incomplete instead of resolving with an
+  // invented jurisdiction, which is what S27 exists to prevent.
+  it('refuses to decode a done frame with no provider or jurisdiction', () => {
+    expect(decodeFrame('data: ' + DONE_NO_WHERE)).toBe(null);
+    expect(decodeFrame('data: ' + DONE_NO_JURISDICTION)).toBe(null);
   });
 
   it('returns null for a non-frame event rather than throwing', () => {
@@ -129,17 +155,23 @@ describe('readFrames — a stream is complete or it is an error (P2)', () => {
       streamOf(
         encodeFrame({ type: 'delta', text: 'Hel' }),
         encodeFrame({ type: 'delta', text: 'lo' }),
-        encodeFrame({ type: 'done', usage: { promptTokens: 5, completionTokens: 2 }, callId: 'c9' }),
+        encodeFrame({
+          type: 'done', usage: { promptTokens: 5, completionTokens: 2 }, callId: 'c9', ...WHERE,
+        }),
       ),
       d => seen.push(d),
     );
     expect(seen).toEqual(['Hel', 'lo']);
-    expect(result).toEqual({ usage: { promptTokens: 5, completionTokens: 2 }, callId: 'c9' });
+    expect(result).toEqual({
+      usage: { promptTokens: 5, completionTokens: 2 }, callId: 'c9', ...WHERE,
+    });
   });
 
   it('does not drop a delta split across two network chunks', async () => {
     const whole = encodeFrame({ type: 'delta', text: 'Hello' })
-      + encodeFrame({ type: 'done', usage: { promptTokens: 1, completionTokens: 1 }, callId: 'c1' });
+      + encodeFrame({
+        type: 'done', usage: { promptTokens: 1, completionTokens: 1 }, callId: 'c1', ...WHERE,
+      });
     const seen: string[] = [];
     await readFrames(streamOf(whole.slice(0, 12), whole.slice(12)), d => seen.push(d));
     expect(seen).toEqual(['Hello']);
@@ -148,7 +180,7 @@ describe('readFrames — a stream is complete or it is an error (P2)', () => {
   it('does not drop the final delta when the done frame arrives without a trailing blank line', async () => {
     const seen: string[] = [];
     const doneNoBlank = encodeFrame({
-      type: 'done', usage: { promptTokens: 1, completionTokens: 1 }, callId: 'c1',
+      type: 'done', usage: { promptTokens: 1, completionTokens: 1 }, callId: 'c1', ...WHERE,
     }).replace(/\n\n$/, '');
     await readFrames(
       streamOf(encodeFrame({ type: 'delta', text: 'last' }), doneNoBlank),
@@ -164,6 +196,16 @@ describe('readFrames — a stream is complete or it is an error (P2)', () => {
       readFrames(streamOf(encodeFrame({ type: 'delta', text: 'half an ans' })), d => seen.push(d)),
     ).rejects.toMatchObject({ name: 'ModelError', code: 'stream_truncated' });
     expect(seen).toEqual(['half an ans']);
+  });
+
+  it('throws stream_truncated rather than resolving from a done frame with no jurisdiction', async () => {
+    await expect(readFrames(
+      streamOf(
+        encodeFrame({ type: 'delta', text: 'whole answer' }),
+        'data: ' + DONE_NO_WHERE + '\n\n',
+      ),
+      () => {},
+    )).rejects.toMatchObject({ name: 'ModelError', code: 'stream_truncated' });
   });
 
   it('throws stream_truncated on a completely empty stream, never resolving empty', async () => {
@@ -200,13 +242,17 @@ describe('readFrames — a stream is complete or it is an error (P2)', () => {
     const whole = encodeFrame({ type: 'delta', text: 'Hel' })
       + encodeFrame({ type: 'delta', text: 'lo, ' })
       + encodeFrame({ type: 'delta', text: 'world' })
-      + encodeFrame({ type: 'done', usage: { promptTokens: 4, completionTokens: 3 }, callId: 'c7' });
+      + encodeFrame({
+        type: 'done', usage: { promptTokens: 4, completionTokens: 3 }, callId: 'c7', ...WHERE,
+      });
     for (let i = 0; i <= whole.length; i++) {
       const seen: string[] = [];
       // eslint-disable-next-line no-await-in-loop
       const result = await readFrames(streamOf(whole.slice(0, i), whole.slice(i)), d => seen.push(d));
       expect(seen.join('')).toBe('Hello, world');
-      expect(result).toEqual({ usage: { promptTokens: 4, completionTokens: 3 }, callId: 'c7' });
+      expect(result).toEqual({
+        usage: { promptTokens: 4, completionTokens: 3 }, callId: 'c7', ...WHERE,
+      });
     }
   });
 

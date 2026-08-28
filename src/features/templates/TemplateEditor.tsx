@@ -12,7 +12,7 @@ import { positionHealthLabel, type PositionHealth } from '../../lib/positionHeal
 import { StandardPositionField } from './StandardPositionField';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { uid } from '../../lib/uid';
-import { isAuthError } from '../../lib/openrouter';
+import { isAuthFailure } from '../../lib/model/authFailure';
 import { suggestField, FIELD_LABEL, type SuggestableField } from './suggestField';
 import { FieldSuggestion } from './FieldSuggestion';
 import { suggestMissingClauses } from './suggestMissingClauses';
@@ -72,7 +72,7 @@ export interface TemplateEditorProps {
   settings: Settings;
   /** A rejected API key (401/403) on either AI trigger below must route to
    *  Settings, exactly as it does for `ChatPanel`/`DraftForm` (spec §7,
-   *  `openrouter.ts`'s `isAuthError` contract) — never render as inline text
+   *  `isAuthFailure`'s contract) — never render as inline text
    *  beside the field, which is not a per-clause problem a retry can fix.
    *  Entering this editor is not gated by `ensureConfigured`, so a user with
    *  no key configured yet meets these controls before anything has asked
@@ -235,7 +235,7 @@ export function TemplateEditor({
         // showing it as inline text next to the field tells the user to fix
         // the wrong thing — route it to Settings instead, exactly as
         // ChatPanel/DraftForm do.
-        if (isAuthError(err)) {
+        if (isAuthFailure(err)) {
           setFieldSuggestions((prev) => ({ ...prev, [key]: { text: prev[key]?.text, busy: false } }));
           onAuthError?.();
           return;
@@ -317,7 +317,7 @@ export function TemplateEditor({
         setMissingBusy(false);
         // Same auth routing as `requestFieldSuggestion` above — a rejected
         // key routes to Settings rather than rendering here.
-        if (isAuthError(err)) {
+        if (isAuthFailure(err)) {
           onAuthError?.();
           return;
         }

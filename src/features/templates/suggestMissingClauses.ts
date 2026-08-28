@@ -1,4 +1,4 @@
-import { chatJson } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import type { Settings } from '../../types';
 
 interface RawMissingClauses {
@@ -34,7 +34,7 @@ function normalise(title: string): string {
  *
  * An empty result is a legitimate answer — "nothing is obviously missing" —
  * not a failure, so unlike `suggestField` this never throws on an empty
- * list. Errors from `chatJson` still propagate untouched, so `isAuthError`
+ * list. Errors from `chatJson` still propagate untouched, so `isAuthFailure`
  * recognises a 401/403 on whatever this throws.
  */
 export async function suggestMissingClauses(
@@ -53,9 +53,9 @@ export async function suggestMissingClauses(
     '\nReturn just the titles, nothing else: { "titles": ["...", "..."] }.',
   ].join('\n');
 
-  const raw = await chatJson<RawMissingClauses>({
-    apiKey: settings.apiKey,
-    modelId: settings.modelId,
+  const raw = await gatewayModelClient.chatJson<RawMissingClauses>({
+    modelChoiceId: settings.modelId,
+    purpose: 'playbook.suggest',
     system:
       'You are an expert legal contract reviewer checking a review playbook for missing clauses. ' +
       'Propose clause TITLES ONLY — never an extract prompt, risk criteria or standard position.',

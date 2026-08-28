@@ -28,7 +28,7 @@
  * position an unconfirmed start).
  */
 
-import { chatJson } from './openrouter';
+import { gatewayModelClient } from './model/gatewayModelClient';
 import { uid } from './uid';
 import type { Settings, PlaybookVersion, PlaybookClause, Changeset, ChangesetItem, ChangeKind, RedlineEdit } from '../types';
 import type { ParsedEdit } from './docxRedlines';
@@ -243,9 +243,9 @@ export async function buildChangeset(
     const byId = new Map<string, EditEntry>();
     edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
-    const raw = await chatJson<RawResponse>({
-      apiKey: settings.apiKey,
-      modelId: settings.modelId,
+    const raw = await gatewayModelClient.chatJson<RawResponse>({
+      modelChoiceId: settings.modelId,
+      purpose: 'changeset.build',
       system:
         "You compare a law firm's existing contract playbook against the redlines of a NEW deal, to identify " +
         'where the deal confirms, changes, or raises something outside the standing playbook. You only ever ' +

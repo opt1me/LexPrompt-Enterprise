@@ -71,9 +71,11 @@ vi.mock('./features/authoring/generateDraft', async (importOriginal) => ({
   generateDraft: (...args: unknown[]) => generateDraftMock(...args),
 }));
 
-vi.mock('./lib/openrouter', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./lib/openrouter')>()),
-  listModels: (...args: unknown[]) => listModelsMock(...args),
+vi.mock('./lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(),
+    listModels: (...args: unknown[]) => listModelsMock(...args),
+  },
 }));
 
 import App from './App';

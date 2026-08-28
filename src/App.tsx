@@ -33,7 +33,8 @@ import {
 import { orderedMembers } from './lib/collectionOrder';
 import { findingsKeyFor, isCollectionTarget } from './lib/reviewTarget';
 import { useRoute, type Route } from './lib/router';
-import { listModels, isAuthError } from './lib/openrouter';
+import { gatewayModelClient } from './lib/model/gatewayModelClient';
+import { isAuthFailure } from './lib/model/authFailure';
 import { useToast, Toast } from './components/Toast';
 import { LoadErrorPanel } from './components/LoadErrorPanel';
 import { SettingsPanel } from './features/settings/SettingsPanel';
@@ -1308,7 +1309,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   }, [view]);
 
   // Best-effort: keeps `settings.model*` capability fields in step with the
-  // OpenRouter model list for whichever model is currently selected, even
+  // allowlist the gateway serves, for whichever model is currently selected, even
   // when the user never opens Settings this session (e.g. a model chosen
   // in an earlier session, then jumping straight to Run). This is what lets
   // extractClause's image/structured-output/context-budget gating (Critical
@@ -1319,7 +1320,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   useEffect(() => {
     if (!settings.modelId) return;
     let cancelled = false;
-    listModels()
+    gatewayModelClient.listModels()
       .then(models => {
         if (cancelled) return;
         const match = models.find(m => m.id === settings.modelId);
@@ -2691,7 +2692,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // and the form is gone. (`App`'s own AbortError handling elsewhere
       // reads the same way — a cancelled request is not a failure.)
       if (generation.signal.aborted) return;
-      if (isAuthError(e)) {
+      if (isAuthFailure(e)) {
         setAuthoringAuthFailed(true);
       } else {
         setAuthoringError(
@@ -2750,7 +2751,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // to write it.
       notify(`Published v${version.version}.`);
     } catch (e) {
-      if (isAuthError(e)) handleAuthError();
+      if (isAuthFailure(e)) handleAuthError();
       else notify(e instanceof Error ? e.message : 'The playbook could not be saved.', 'error');
     } finally {
       setSavingAuthoringDraft(false);
@@ -3009,7 +3010,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       setRedlinesQuestions(questions);
       setView('redlines-learned');
     } catch (e) {
-      if (isAuthError(e)) handleAuthError();
+      if (isAuthFailure(e)) handleAuthError();
       else setRedlinesError(e instanceof Error ? e.message : 'Positions could not be inferred from these documents.');
     } finally {
       setRedlinesBusy(false);

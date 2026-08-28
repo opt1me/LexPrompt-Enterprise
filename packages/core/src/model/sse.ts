@@ -1,4 +1,7 @@
-import { ModelError, type ModelErrorCode, type InferUsage } from './protocol.ts';
+import {
+  ModelError,
+  type ModelErrorCode, type InferUsage, type Jurisdiction, type ProviderId,
+} from './protocol.ts';
 
 /**
  * The ONE SSE event splitter in this system (P1).
@@ -86,9 +89,33 @@ function dataPayload(rawEvent: string): string | null {
   return sseFields(rawEvent).data;
 }
 
+/**
+ * `done` carries `provider` and `jurisdiction` alongside `usage` and
+ * `callId`, and both are REQUIRED.
+ *
+ * The non-streamed `InferResponse` already returns them (protocol.ts:
+ * "Returned, not just logged, so the browser can show it rather than
+ * assert it"), and a streamed answer is the same answer. Without them on
+ * the wire the browser's stream client would have to invent a provider and
+ * a region to satisfy `InferResponse` — a firm believing it is UK-only
+ * while a US region answered is precisely what S27 exists to prevent, and
+ * a plausible-looking invented value is the failure mode this project's
+ * one rule names.
+ *
+ * Required rather than optional so a producer cannot omit them: a `done`
+ * frame missing either does not decode (see `decodeFrame`), which
+ * `readFrames` then reports as a truncated stream rather than resolving
+ * with a blank jurisdiction.
+ */
 export type Frame =
   | { type: 'delta'; text: string }
-  | { type: 'done'; usage: InferUsage; callId: string }
+  | {
+      type: 'done';
+      usage: InferUsage;
+      callId: string;
+      provider: ProviderId;
+      jurisdiction: Jurisdiction;
+    }
   | { type: 'error'; code: ModelErrorCode; status: number; message: string; callId: string };
 
 /** One SSE event, terminated by the blank line that ends it. */
@@ -102,7 +129,9 @@ export function decodeFrame(rawEvent: string): Frame | null {
   try {
     const parsed = JSON.parse(payload) as Frame;
     if (parsed?.type === 'delta' && typeof parsed.text === 'string') return parsed;
-    if (parsed?.type === 'done' && parsed.usage && typeof parsed.callId === 'string') return parsed;
+    if (parsed?.type === 'done' && parsed.usage && typeof parsed.callId === 'string'
+      && typeof parsed.provider === 'string'
+      && !!parsed.jurisdiction && typeof parsed.jurisdiction.bloc === 'string') return parsed;
     if (parsed?.type === 'error' && typeof parsed.message === 'string') return parsed;
     return null;
   } catch {
@@ -124,10 +153,17 @@ export function decodeFrame(rawEvent: string): Frame | null {
  * and un-retried, exactly as `openrouter.ts`'s `chatStream` was careful to
  * do: a cancellation is a deliberate user decision.
  */
+export interface StreamEnd {
+  usage: InferUsage;
+  callId: string;
+  provider: ProviderId;
+  jurisdiction: Jurisdiction;
+}
+
 export async function readFrames(
   stream: AsyncIterable<Uint8Array>,
   onDelta: (text: string) => void,
-): Promise<{ usage: InferUsage; callId: string }> {
+): Promise<StreamEnd> {
   const reader = createSseEventReader();
   const decoder = new TextDecoder();
   let terminal: Frame | null = null;
@@ -149,7 +185,12 @@ export async function readFrames(
   for (const raw of reader.flush()) handle(raw);
 
   const end = terminal as Frame | null;
-  if (end && end.type === 'done') return { usage: end.usage, callId: end.callId };
+  if (end && end.type === 'done') {
+    return {
+      usage: end.usage, callId: end.callId,
+      provider: end.provider, jurisdiction: end.jurisdiction,
+    };
+  }
   if (end && end.type === 'error') throw new ModelError(end.message, end.code, end.status, end.callId);
   throw new ModelError(
     'The answer stopped before it finished. Nothing was lost, but what arrived is incomplete — ask again.',

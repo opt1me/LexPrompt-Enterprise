@@ -3,15 +3,20 @@ import type { Settings } from '../../types';
 import type { DraftFormValues } from './generateDraft';
 import type { FewShotSource } from './fewShot';
 
-// The real idiom, used by `src/features/review/extractClause.test.ts` and its
-// siblings: a module mock with an `importActual` spread. `isAuthError` is a
-// genuine export of `openrouter.ts` and the auth tests below depend on its
-// real behaviour, not a stub of it.
-vi.mock('../../lib/openrouter', async () => {
-  const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
-  return { ...actual, chatJson: vi.fn() };
-});
-const { chatJson, isAuthError, OpenRouterError } = await import('../../lib/openrouter');
+// The real idiom, used by `src/features/review/extractClause.test.ts` and
+// its siblings. Only the gateway client is stubbed; `isAuthFailure` lives in
+// its own module and the auth tests below depend on its real behaviour, not
+// a stub of it.
+import { ModelError } from '@lexprompt/core';
+import { isAuthFailure } from '../../lib/model/authFailure';
+
+vi.mock('../../lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
+const chatJson = gatewayModelClient.chatJson;
 const { generateDraft } = await import('./generateDraft');
 
 beforeEach(() => vi.clearAllMocks());
@@ -29,7 +34,9 @@ function mockChatJsonRejection(error: unknown): void {
 }
 
 function authRejection(status: 401 | 403) {
-  return new OpenRouterError('Your OpenRouter API key was rejected', status);
+  return status === 401
+    ? new ModelError('Your session has expired. Sign in again.', 'sign_in_required', 401)
+    : new ModelError('Your account is not permitted to use LexPrompt.', 'not_permitted', 403);
 }
 
 describe('generateDraft', () => {
@@ -117,10 +124,10 @@ describe('generateDraft', () => {
   it('marks a rejected key as an auth error, so the caller can route to Settings', async () => {
     // Spec §7: "A 401/403 routes to Settings, as everywhere else in this app."
     // `generateDraft` does not navigate — it reports, and the route decides.
-    // `isAuthError` from `openrouter.ts` is the shared predicate; do not
+    // `isAuthFailure` (`lib/model/authFailure.ts`) is the shared predicate; do not
     // re-derive "was this a 401" from a message string.
     mockChatJsonRejection(authRejection(401));
-    await expect(generateDraft(form, '', [], settings)).rejects.toSatisfy(isAuthError);
+    await expect(generateDraft(form, '', [], settings)).rejects.toSatisfy(isAuthFailure);
   });
 
   it('a non-auth failure is NOT reported as an auth error', async () => {
@@ -128,6 +135,6 @@ describe('generateDraft', () => {
     // fine, which is the same class of wrong advice as telling them to
     // reload when reloading cannot help.
     mockChatJsonRejection(new Error('502 Bad Gateway'));
-    await expect(generateDraft(form, '', [], settings)).rejects.not.toSatisfy(isAuthError);
+    await expect(generateDraft(form, '', [], settings)).rejects.not.toSatisfy(isAuthFailure);
   });
 });

@@ -10,8 +10,26 @@ import {
 } from './chatContext';
 import type { DocumentFile, Settings } from '../../types';
 
-vi.mock('../../lib/openrouter', () => ({ chatStream: vi.fn() }));
-const { chatStream } = await import('../../lib/openrouter');
+vi.mock('../../lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
+const chatStream = gatewayModelClient.chatStream;
+
+/** The client returns the whole `InferResponse` now, of which the joined
+ *  text is one field; `sendChatMessage` still resolves to that text. */
+function answer(content: string) {
+  return {
+    content,
+    usage: { promptTokens: 0, completionTokens: 0 },
+    callId: 'call-test',
+    provider: 'openai' as const,
+    jurisdiction: { bloc: 'UK' as const, region: 'uksouth', label: 'UK South' },
+  };
+}
+
 
 const settings: Settings = { apiKey: 'k', modelId: 'm', concurrency: 5 };
 
@@ -188,7 +206,7 @@ describe('sendChatMessage', () => {
   });
 
   it('sends page images to the model when there is no text and the model supports images', async () => {
-    vi.mocked(chatStream).mockResolvedValue('It runs for one year.');
+    vi.mocked(chatStream).mockResolvedValue(answer('It runs for one year.'));
     const scan = doc({ text: '[Page 1]\n\n', pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
 
     const result = await sendChatMessage({ ...baseParams, documents: [scan], modelSupportsImages: true });
@@ -199,7 +217,7 @@ describe('sendChatMessage', () => {
   });
 
   it('calls the model with the document text and no images when text is available', async () => {
-    vi.mocked(chatStream).mockResolvedValue('Twelve months.');
+    vi.mocked(chatStream).mockResolvedValue(answer('Twelve months.'));
     const result = await sendChatMessage({ ...baseParams, documents: [doc()], modelSupportsImages: false });
 
     expect(chatStream).toHaveBeenCalledTimes(1);
@@ -213,7 +231,7 @@ describe('sendChatMessage', () => {
   // that were actually captured for that page, not leak into the prompt
   // as if it were real content.
   it('sends the page images, not sub-threshold junk text, to the model', async () => {
-    vi.mocked(chatStream).mockResolvedValue('Answer from the image.');
+    vi.mocked(chatStream).mockResolvedValue(answer('Answer from the image.'));
     const junkScan = doc({ text: '[Page 1]\nAB\n\n', pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
 
     const result = await sendChatMessage({ ...baseParams, documents: [junkScan], modelSupportsImages: true });

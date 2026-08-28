@@ -2,13 +2,18 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Settings } from '../../types';
 
 // The module-mock idiom used by `generateDraft.test.ts` and
-// `extractClause.test.ts`: `isAuthError` must stay real, since the whole
+// `extractClause.test.ts`: `isAuthFailure` must stay real, since the whole
 // point of propagating errors untouched is that it still recognises them.
-vi.mock('../../lib/openrouter', async () => {
-  const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
-  return { ...actual, chatJson: vi.fn() };
-});
-const { chatJson, isAuthError, OpenRouterError } = await import('../../lib/openrouter');
+import { ModelError } from '@lexprompt/core';
+import { isAuthFailure } from '../../lib/model/authFailure';
+
+vi.mock('../../lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
+const chatJson = gatewayModelClient.chatJson;
 const { suggestField } = await import('./suggestField');
 
 beforeEach(() => vi.clearAllMocks());
@@ -48,13 +53,13 @@ describe('suggestField', () => {
     await expect(suggestField('riskCriteria', clause, 'Lease', settings)).rejects.toThrow(/empty/i);
   });
 
-  it('propagates an auth failure so isAuthError still recognises it', async () => {
-    vi.mocked(chatJson).mockRejectedValue(new OpenRouterError('rejected', 401));
-    await expect(suggestField('riskCriteria', clause, 'Lease', settings)).rejects.toSatisfy(isAuthError);
+  it('propagates an auth failure so isAuthFailure still recognises it', async () => {
+    vi.mocked(chatJson).mockRejectedValue(new ModelError('rejected', 'sign_in_required', 401));
+    await expect(suggestField('riskCriteria', clause, 'Lease', settings)).rejects.toSatisfy(isAuthFailure);
   });
 
   it('a non-auth failure is NOT reported as an auth error', async () => {
     vi.mocked(chatJson).mockRejectedValue(new Error('rate limited'));
-    await expect(suggestField('riskCriteria', clause, 'Lease', settings)).rejects.not.toSatisfy(isAuthError);
+    await expect(suggestField('riskCriteria', clause, 'Lease', settings)).rejects.not.toSatisfy(isAuthFailure);
   });
 });

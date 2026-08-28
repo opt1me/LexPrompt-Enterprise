@@ -3,11 +3,15 @@ import { extractCollectionClause, collectionClauseSchema, COLLECTION_CLAUSE_SCHE
 import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings, StandardPosition } from '../../types';
 import type { CollectionMember } from '../../lib/collectionOrder';
 
-vi.mock('../../lib/openrouter', async () => {
-  const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
-  return { ...actual, chatJson: vi.fn() };
-});
-const { chatJson, OpenRouterError } = await import('../../lib/openrouter');
+import { ModelError } from '@lexprompt/core';
+
+vi.mock('../../lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
+const chatJson = gatewayModelClient.chatJson;
 
 // A fully capable model, matching extractClause.test.ts's fixture posture, so
 // the happy-path tests below are unaffected by capability gating.
@@ -316,7 +320,7 @@ describe('extractCollectionClause', () => {
   });
 
   it('tags an auth error from OpenRouter', async () => {
-    vi.mocked(chatJson).mockRejectedValue(new OpenRouterError('Your OpenRouter API key was rejected: bad key', 401));
+    vi.mocked(chatJson).mockRejectedValue(new ModelError('Your session has expired. Sign in again.', 'sign_in_required', 401));
 
     const finding = await extractCollectionClause(members(), clause, template, settings);
 

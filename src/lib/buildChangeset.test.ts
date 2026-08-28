@@ -3,11 +3,13 @@ import type { Settings, PlaybookVersion } from '../types';
 import type { ParsedEdit } from './docxRedlines';
 
 // Same module-mock idiom as `inferPositions.test.ts`.
-vi.mock('./openrouter', async () => {
-  const actual = await vi.importActual<typeof import('./openrouter')>('./openrouter');
-  return { ...actual, chatJson: vi.fn() };
-});
-const { chatJson } = await import('./openrouter');
+vi.mock('./model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('./model/gatewayModelClient');
+const chatJson = gatewayModelClient.chatJson;
 const { buildChangeset } = await import('./buildChangeset');
 
 beforeEach(() => vi.clearAllMocks());

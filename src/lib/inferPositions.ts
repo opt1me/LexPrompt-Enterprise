@@ -28,7 +28,7 @@
  * which would be silence wearing a position's clothes.
  */
 
-import { chatJson } from './openrouter';
+import { gatewayModelClient } from './model/gatewayModelClient';
 import { uid } from './uid';
 import type { Settings } from '../types';
 import type { ParsedEdit } from './docxRedlines';
@@ -263,9 +263,9 @@ export async function inferPositions(
   const byId = new Map<string, EditEntry>();
   edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
-  const raw = await chatJson<RawInferResponse>({
-    apiKey: settings.apiKey,
-    modelId: settings.modelId,
+  const raw = await gatewayModelClient.chatJson<RawInferResponse>({
+    modelChoiceId: settings.modelId,
+    purpose: 'redlines.infer',
     system:
       "You analyse a law firm's own past negotiated redlines to identify recurring standard positions. " +
       'You only ever group evidence and state the position it implies. You never count documents, never ' +

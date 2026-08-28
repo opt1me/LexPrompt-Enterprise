@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { ExternalLink, RefreshCw, ShieldCheck } from 'lucide-react';
 import type { Settings } from '../../types';
 import { saveSettings } from '../../lib/storage';
-import { listModels, type ModelInfo } from '../../lib/openrouter';
+import type { AllowedModel } from '@lexprompt/core';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { Button } from '../../components/Button';
 import { API_KEY_PRIVACY, STORAGE_PRIVACY } from '../../lib/privacyCopy';
 
@@ -14,20 +15,15 @@ export interface SettingsPanelProps {
 type ModelsState =
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; models: ModelInfo[] };
+  | { status: 'ready'; models: AllowedModel[] };
 
-/** Sorts schema-capable models first; both groups keep their incoming (API) order otherwise. */
-function sortModels(models: ModelInfo[]): ModelInfo[] {
+/** Sorts schema-capable models first; both groups keep their incoming
+ *  (allowlist) order otherwise. */
+function sortModels(models: AllowedModel[]): AllowedModel[] {
   return [...models].sort((a, b) => {
     if (a.supportsStructuredOutput === b.supportsStructuredOutput) return 0;
     return a.supportsStructuredOutput ? -1 : 1;
   });
-}
-
-function formatPricePerMillion(price: number | null): string {
-  if (price === null) return 'variable';
-  if (price === 0) return 'free';
-  return `$${(price * 1_000_000).toFixed(2)}/M tokens`;
 }
 
 function formatContextLength(length: number): string {
@@ -40,7 +36,7 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
 
   const loadModels = () => {
     setModelsState({ status: 'loading' });
-    listModels()
+    gatewayModelClient.listModels()
       .then(models => setModelsState({ status: 'ready', models: sortModels(models) }))
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : 'Failed to load models.';
@@ -186,7 +182,7 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
               <option value="" disabled>Select a model…</option>
               {modelsState.models.map(m => (
                 <option key={m.id} value={m.id}>
-                  {m.id} — {formatContextLength(m.contextLength)} — {formatPricePerMillion(m.promptPrice)} prompt
+                  {m.id} — {formatContextLength(m.contextLength)}
                   {!m.supportsStructuredOutput ? ' — may not honour output schemas' : ''}
                 </option>
               ))}

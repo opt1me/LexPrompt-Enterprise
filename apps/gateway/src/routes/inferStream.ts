@@ -139,7 +139,15 @@ export function registerInferStream(
       // finally — a finally would emit done on a dropped socket, which is
       // exactly the truncated-but-apparently-successful answer this project
       // exists to prevent.
-      reply.raw.write(encodeFrame({ type: 'done', usage, callId }));
+      // `provider` and `jurisdiction` ride the done frame for the same
+      // reason `/v1/infer` returns them in its body: a streamed answer is
+      // the same answer, and the browser must be able to SHOW where it was
+      // processed rather than assume it. They come from the allowlist entry
+      // that was actually resolved, never from the request.
+      reply.raw.write(encodeFrame({
+        type: 'done', usage, callId,
+        provider: entry.provider, jurisdiction: entry.jurisdiction,
+      }));
     } else {
       reply.raw.write(encodeFrame({
         type: 'error', code: 'stream_truncated', status: 0, callId,

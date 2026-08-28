@@ -3,8 +3,26 @@ import { draftEmail } from './draftEmail';
 import type { Finding, ReviewRun, Settings, PlaybookVersion } from '../../types';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
 
-vi.mock('../../lib/openrouter', () => ({ chat: vi.fn() }));
-const { chat } = await import('../../lib/openrouter');
+vi.mock('../../lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
+const chat = gatewayModelClient.chat;
+
+/** The client returns the whole `InferResponse` now, of which the joined
+ *  text is one field; `sendChatMessage` still resolves to that text. */
+function answer(content: string) {
+  return {
+    content,
+    usage: { promptTokens: 0, completionTokens: 0 },
+    callId: 'call-test',
+    provider: 'openai' as const,
+    jurisdiction: { bloc: 'UK' as const, region: 'uksouth', label: 'UK South' },
+  };
+}
+
 
 beforeEach(() => vi.clearAllMocks());
 
@@ -44,7 +62,7 @@ describe('draftEmail — a collection review (Step 0)', () => {
   }
 
   it('sends the collection\'s findings to the model, not an empty set', async () => {
-    vi.mocked(chat).mockResolvedValue('Dear Client, ...');
+    vi.mocked(chat).mockResolvedValue(answer('Dear Client, ...'));
     await draftEmail(collectionRun(), 'lease', settings);
 
     expect(chat).toHaveBeenCalledTimes(1);
@@ -97,7 +115,7 @@ describe('draftEmail — the honesty labels reach the prompt', () => {
   }
 
   async function promptFor(f: Finding): Promise<string> {
-    vi.mocked(chat).mockResolvedValue('Dear Client, ...');
+    vi.mocked(chat).mockResolvedValue(answer('Dear Client, ...'));
     const run = runWith(f);
     await draftEmail(run, 'd1', settings);
     return vi.mocked(chat).mock.calls[0][0].user;

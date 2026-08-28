@@ -2,13 +2,18 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { Settings } from '../../types';
 
 // The module-mock idiom used by `suggestField.test.ts` / `generateDraft.test.ts`:
-// `isAuthError` must stay real, since the whole point of propagating errors
+// `isAuthFailure` must stay real, since the whole point of propagating errors
 // untouched is that it still recognises them.
-vi.mock('../../lib/openrouter', async () => {
-  const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
-  return { ...actual, chatJson: vi.fn() };
-});
-const { chatJson, isAuthError, OpenRouterError } = await import('../../lib/openrouter');
+import { ModelError } from '@lexprompt/core';
+import { isAuthFailure } from '../../lib/model/authFailure';
+
+vi.mock('../../lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
+const chatJson = gatewayModelClient.chatJson;
 const { suggestMissingClauses } = await import('./suggestMissingClauses');
 
 beforeEach(() => vi.clearAllMocks());
@@ -47,13 +52,13 @@ describe('suggestMissingClauses', () => {
     expect(await suggestMissingClauses(['Break'], 'Lease', settings)).toEqual([]);
   });
 
-  it('propagates an auth failure so isAuthError still recognises it', async () => {
-    vi.mocked(chatJson).mockRejectedValue(new OpenRouterError('rejected', 401));
-    await expect(suggestMissingClauses(['Break'], 'Lease', settings)).rejects.toSatisfy(isAuthError);
+  it('propagates an auth failure so isAuthFailure still recognises it', async () => {
+    vi.mocked(chatJson).mockRejectedValue(new ModelError('rejected', 'sign_in_required', 401));
+    await expect(suggestMissingClauses(['Break'], 'Lease', settings)).rejects.toSatisfy(isAuthFailure);
   });
 
   it('a non-auth failure is NOT reported as an auth error', async () => {
     vi.mocked(chatJson).mockRejectedValue(new Error('rate limited'));
-    await expect(suggestMissingClauses(['Break'], 'Lease', settings)).rejects.not.toSatisfy(isAuthError);
+    await expect(suggestMissingClauses(['Break'], 'Lease', settings)).rejects.not.toSatisfy(isAuthFailure);
   });
 });

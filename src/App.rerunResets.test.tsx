@@ -83,9 +83,11 @@ vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
 }));
 
-vi.mock('./lib/openrouter', () => ({
-  listModels: vi.fn().mockResolvedValue([]),
-  isAuthError: () => false,
+vi.mock('./lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(),
+    listModels: vi.fn().mockResolvedValue([]),
+  },
 }));
 
 // `retryCell` itself is mocked (rather than `extractClause`, which is what

@@ -3,7 +3,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Loader, MessageSquare } from 'lucide-react';
 import type { DocumentFile, Settings } from '../../types';
-import { listModels, isAuthError } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
+import { isAuthFailure } from '../../lib/model/authFailure';
 import { sendChatMessage, type ChatMessage } from './chatContext';
 
 export interface ChatPanelProps {
@@ -44,7 +45,7 @@ export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) 
   // blocking or erroring the chat panel.
   useEffect(() => {
     let cancelled = false;
-    listModels()
+    gatewayModelClient.listModels()
       .then(models => {
         if (cancelled) return;
         const match = models.find(m => m.id === settings.modelId);
@@ -97,7 +98,7 @@ export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) 
         { ...prev[prev.length - 1], content: full },
       ]);
     } catch (error) {
-      if (isAuthError(error)) {
+      if (isAuthFailure(error)) {
         // A rejected key must never be presented as if it were a model's
         // answer — drop the empty placeholder bubble entirely rather than
         // filling it with the rejection, and let the caller route to

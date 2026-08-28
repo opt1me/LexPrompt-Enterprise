@@ -5,13 +5,17 @@ import { mount, buttonNamed, click } from '../../test/mount';
 import type { PlaybookClause, PlaybookDraft, PlaybookVersion, Settings } from '../../types';
 
 // The module-mock idiom used by `suggestField.test.ts` / `generateDraft.test.ts`:
-// `isAuthError` must stay real, since the whole point of propagating errors
+// `isAuthFailure` must stay real, since the whole point of propagating errors
 // untouched is that it still recognises them.
-vi.mock('../../lib/openrouter', async () => {
-  const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
-  return { ...actual, chatJson: vi.fn() };
-});
-const { chatJson, OpenRouterError } = await import('../../lib/openrouter');
+import { ModelError } from '@lexprompt/core';
+
+vi.mock('../../lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
+const chatJson = gatewayModelClient.chatJson;
 const { TemplateEditor } = await import('./TemplateEditor');
 
 beforeEach(() => vi.clearAllMocks());
@@ -207,11 +211,11 @@ describe('TemplateEditor — per-field suggestions (Part A)', () => {
   // Major (Task 8 review): a rejected key is not a per-clause problem a
   // retry can fix — it must route to Settings via `onAuthError`, exactly as
   // `ChatPanel`/`DraftForm` do, never render as inline text beside the
-  // field. Mutation-tested: removing the `isAuthError` check in
+  // field. Mutation-tested: removing the `isAuthFailure` check in
   // `requestFieldSuggestion`'s catch makes this fail because `onAuthError`
   // is never called and the rejection message appears inline instead.
   it('a rejected API key routes to Settings instead of rendering inline', async () => {
-    vi.mocked(chatJson).mockRejectedValue(new OpenRouterError('Unauthorized', 401));
+    vi.mocked(chatJson).mockRejectedValue(new ModelError('Unauthorized', 'sign_in_required', 401));
     const onAuthError = vi.fn();
     const onDraftChange = vi.fn();
     const published = version({ clauses: structuredClone(oneClause) });
@@ -320,11 +324,11 @@ describe('TemplateEditor — "Suggest what I\'m missing" (Part B, Task 8)', () =
   // `requestFieldSuggestion` above, for "Suggest what I'm missing". Entering
   // this editor is not gated by `ensureConfigured`, so this is the first AI
   // trigger a user with no configured key may ever hit. Mutation-tested:
-  // removing the `isAuthError` check in `requestMissingClauses`'s catch
+  // removing the `isAuthFailure` check in `requestMissingClauses`'s catch
   // makes this fail because `onAuthError` is never called and the rejection
   // message appears inline instead.
   it('a rejected API key routes to Settings instead of rendering inline', async () => {
-    vi.mocked(chatJson).mockRejectedValue(new OpenRouterError('Forbidden', 403));
+    vi.mocked(chatJson).mockRejectedValue(new ModelError('Forbidden', 'not_permitted', 403));
     const onAuthError = vi.fn();
     const published = version({ clauses: structuredClone(oneClause) });
     const c = mount(

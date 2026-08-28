@@ -1,5 +1,5 @@
 import type { DocumentFile, Settings } from '../../types';
-import { chatStream } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { extractableText, usableText, contextBudgetChars } from '../../lib/modelContext';
 
 export { extractableText, contextBudgetChars };
@@ -123,7 +123,7 @@ export interface SendChatMessageParams {
  * The whole "what do we send, and do we send anything at all" decision,
  * pulled out of the component so it's testable without rendering React.
  * When nothing usable was found, this resolves to an explanatory message
- * WITHOUT calling `chatStream` — no request is spent on a document the
+ * WITHOUT calling the model at all — no request is spent on a document the
  * model can't actually read.
  */
 export async function sendChatMessage(params: SendChatMessageParams): Promise<string> {
@@ -138,14 +138,18 @@ export async function sendChatMessage(params: SendChatMessageParams): Promise<st
     .join('\n');
   const user = `CONTEXT: ${context.text}\nHISTORY: ${historyText}\nQUERY: ${params.query}`;
 
-  return chatStream(
+  // `.content` is the same joined text `openrouter.ts`'s chatStream
+  // returned; the response around it now also says which backend answered
+  // and where, which the panel does not yet render.
+  const answer = await gatewayModelClient.chatStream(
     {
-      apiKey: params.settings.apiKey,
-      modelId: params.settings.modelId,
+      modelChoiceId: params.settings.modelId,
+      purpose: 'assistant.chat',
       system: SYSTEM_PROMPT,
       user,
       images: context.images.length ? context.images : undefined,
     },
     params.onDelta,
   );
+  return answer.content;
 }

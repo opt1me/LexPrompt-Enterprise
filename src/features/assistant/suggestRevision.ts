@@ -1,4 +1,4 @@
-import { chat } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import type { Settings } from '../../types';
 
 /**
@@ -18,10 +18,11 @@ export async function suggestRevision(
   const user = `Clause: ${clauseTitle} | Original: "${original}" | Issue: ${issue}
 Rewrite this clause to mitigate the risk while maintaining commercial viability. Return ONLY the text.`;
 
-  return chat({
-    apiKey: settings.apiKey,
-    modelId: settings.modelId,
+  const answer = await gatewayModelClient.chat({
+    modelChoiceId: settings.modelId,
+    purpose: 'export.suggest_fix',
     system,
     user,
   });
+  return answer.content;
 }

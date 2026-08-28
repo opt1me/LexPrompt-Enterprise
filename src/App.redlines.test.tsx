@@ -80,9 +80,11 @@ vi.mock('./lib/db/profile', () => ({
   getProfile: async () => ({ id: 'u1', initials: 'AB', name: 'A B' }),
 }));
 
-vi.mock('./lib/openrouter', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./lib/openrouter')>()),
-  listModels: (...args: unknown[]) => listModelsMock(...args),
+vi.mock('./lib/model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(),
+    listModels: (...args: unknown[]) => listModelsMock(...args),
+  },
 }));
 
 // The only route by which a precedent document's bytes could ever reach

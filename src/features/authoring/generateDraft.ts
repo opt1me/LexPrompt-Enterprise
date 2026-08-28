@@ -1,4 +1,4 @@
-import { chatJson } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { uid } from '../../lib/uid';
 import type { AuthoringDraft, DraftClause } from '../../lib/authoringDraft';
 import type { Settings, StandardPosition } from '../../types';
@@ -118,7 +118,7 @@ function repairClause(raw: RawClause): DraftClause | undefined {
  * is exactly what this sub-project's save gate exists to prevent.
  *
  * Errors from `chatJson` are propagated untouched, deliberately: an auth
- * failure (401/403) must remain something `isAuthError` (`openrouter.ts`)
+ * failure must remain something `isAuthFailure` (`lib/model/authFailure.ts`)
  * recognises so the caller can route to Settings (spec §7), which wrapping
  * it in a new `Error` would break.
  */
@@ -150,10 +150,10 @@ export async function generateDraft(
     '\nReturn { clauses: [...] }.',
   ].filter((line): line is string => line !== undefined).join('\n');
 
-  const raw = await chatJson<RawDraft>(
+  const raw = await gatewayModelClient.chatJson<RawDraft>(
     {
-      apiKey: settings.apiKey,
-      modelId: settings.modelId,
+      modelChoiceId: settings.modelId,
+      purpose: 'playbook.draft',
       system: 'You are an expert legal contract reviewer drafting a review playbook. ' +
         'Use legal judgement to choose the number and content of clauses; do not pad to hit a count.',
       user,

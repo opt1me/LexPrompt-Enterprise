@@ -3,13 +3,16 @@ import type { Settings } from '../types';
 import type { ParsedEdit } from './docxRedlines';
 
 // The module-mock idiom used elsewhere in this codebase (e.g.
-// `suggestMissingClauses.test.ts`): `isAuthError` must stay real, since the
-// point of propagating errors untouched is that it still recognises them.
-vi.mock('./openrouter', async () => {
-  const actual = await vi.importActual<typeof import('./openrouter')>('./openrouter');
-  return { ...actual, chatJson: vi.fn() };
-});
-const { chatJson } = await import('./openrouter');
+// `suggestMissingClauses.test.ts`). Only the client is stubbed;
+// `isAuthFailure` lives in its own module and stays real, since the point of
+// propagating errors untouched is that it still recognises them.
+vi.mock('./model/gatewayModelClient', () => ({
+  gatewayModelClient: {
+    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
+  },
+}));
+const { gatewayModelClient } = await import('./model/gatewayModelClient');
+const chatJson = gatewayModelClient.chatJson;
 const { inferPositions } = await import('./inferPositions');
 
 beforeEach(() => vi.clearAllMocks());

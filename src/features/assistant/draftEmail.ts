@@ -1,4 +1,4 @@
-import { chat } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import type { ReviewRun, RiskLevel, Settings } from '../../types';
 import { buildReportRows } from '../review/exportDocx';
 
@@ -62,10 +62,11 @@ Where a finding carries a Caveat line, carry that caveat into the email in plain
 than dropping it: text nobody has checked, or a position across documents nobody has confirmed,
 must not be written to a client as settled fact.`;
 
-  return chat({
-    apiKey: settings.apiKey,
-    modelId: settings.modelId,
+  const answer = await gatewayModelClient.chat({
+    modelChoiceId: settings.modelId,
+    purpose: 'export.email',
     system,
     user,
   });
+  return answer.content;
 }

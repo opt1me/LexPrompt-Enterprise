@@ -1,4 +1,4 @@
-import { chatJson } from '../../lib/openrouter';
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import type { PlaybookClause, Settings } from '../../types';
 
 /** The three by-hand fields the editor can draft AI help for. `standardPosition`
@@ -48,7 +48,7 @@ const SUGGESTION_SCHEMA = {
  * this function. The caller (`TemplateEditor`) holds it as an unaccepted
  * suggestion until a human explicitly takes it; see `FieldSuggestion.tsx`.
  *
- * Errors from `chatJson` propagate untouched, so `isAuthError` (`openrouter.ts`)
+ * Errors from `chatJson` propagate untouched, so `isAuthFailure` (`lib/model/authFailure.ts`)
  * still recognises a 401/403 on whatever this throws.
  */
 export async function suggestField(
@@ -68,9 +68,9 @@ export async function suggestField(
     'Return just this one field as { "text": "..." }.',
   ].filter((line): line is string => line !== undefined).join('\n');
 
-  const result = await chatJson<SuggestionResponse>({
-    apiKey: settings.apiKey,
-    modelId: settings.modelId,
+  const result = await gatewayModelClient.chatJson<SuggestionResponse>({
+    modelChoiceId: settings.modelId,
+    purpose: 'playbook.suggest',
     system:
       'You are an expert legal contract reviewer drafting a single field of a single clause in a ' +
       "review playbook. Draft exactly the one field asked for, for exactly the one clause named — " +
