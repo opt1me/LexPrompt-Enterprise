@@ -13,13 +13,21 @@ export interface ColourViolation {
 }
 
 /**
- * Files the scan collects and then skips. Exactly one, and it is a real
- * exemption rather than a decorative one.
+ * Files the scan collects and then skips. Empty: there is no file that
+ * currently needs a whole-file exemption.
  *
- * `PdfCanvas.tsx` is exempt by spec §13.4 because canvas draw calls are not
- * styling; its highlight overlay DIVS are nevertheless moved onto the
- * highlight tokens by Task 9 (R-GP1), so the exemption covers only what it
- * is meant to.
+ * `PdfCanvas.tsx` used to be listed under spec §13.4, on the reasoning that
+ * canvas draw calls are not styling (R-GP1). That was true only of the
+ * `<canvas>` element itself — the exemption was file-level, so it also hid
+ * the scroll gutter, the zoom toolbar and the two honesty notices around
+ * the canvas, none of which had any restyling reason to dodge the guard.
+ * They sat on the old dark palette (`bg-slate-800`, `bg-black/60`,
+ * `yellow-500`/`red-500`) undetected until a manual pass caught it — see
+ * the redesign-G PdfCanvas chrome report. The canvas's own background is
+ * now `bg-page`, so nothing in the file needs an exemption at all; if a
+ * future change to `<canvas>` genuinely requires a raw value, exempt only
+ * that value (a scoped `// palette-scan-ignore`-style marker, not a file
+ * entry) rather than reintroducing a blind spot this wide.
  *
  * `index.css` is deliberately NOT listed. It is where the tokens are
  * defined and the palette layer legitimately lives, but the walker below
@@ -32,9 +40,7 @@ export interface ColourViolation {
  * scanner and the token reader, both of which contain colour patterns as
  * DATA.
  */
-export const SCAN_EXEMPT: readonly string[] = [
-  'features/review/PdfCanvas.tsx',
-];
+export const SCAN_EXEMPT: readonly string[] = [];
 
 const TAILWIND_HUES =
   'slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose';

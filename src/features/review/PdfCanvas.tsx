@@ -75,8 +75,8 @@ function PdfPage({ pdfDoc, pageNum, scale, highlightRects }: PdfPageProps) {
   }, [highlightRects]);
 
   return (
-    <div className="relative shadow-lg mb-4" style={{ width: viewport?.width, height: viewport?.height }}>
-      <canvas ref={canvasRef} className="bg-white rounded" />
+    <div className="relative shadow-page mb-4" style={{ width: viewport?.width, height: viewport?.height }}>
+      <canvas ref={canvasRef} className="bg-page rounded-inset" />
       {viewport && highlightRects.map((rect, i) => {
         // pdfjs-dist v6 dropped PageViewport.convertToViewportRectangle;
         // it was defined as exactly these two convertToViewportPoint calls,
@@ -175,46 +175,55 @@ export function PdfCanvas({ file, highlights }: PdfCanvasProps) {
 
   if (error) {
     return (
-      <div className="h-full flex items-center justify-center text-red-400 text-sm p-8 text-center">
+      <div className="h-full flex items-center justify-center bg-doc-gutter font-ui text-ui-sm text-risk-high p-8 text-center">
         Could not open PDF: {error}
       </div>
     );
   }
 
   if (!pdfDoc) {
-    return <div className="h-full flex items-center justify-center text-gray-500 text-sm">Loading PDF…</div>;
+    return (
+      <div className="h-full flex items-center justify-center bg-doc-gutter font-ui text-ui-sm text-ink-4">
+        Loading PDF…
+      </div>
+    );
   }
 
   const pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
 
   return (
-    <div className="h-full w-full relative bg-slate-800 overflow-auto flex flex-col items-center p-8">
-      <div className="sticky top-4 z-50 flex gap-2 bg-black/60 backdrop-blur px-4 py-2 rounded-full mb-6 shadow-xl border border-white/10">
+    <div className="h-full w-full relative bg-doc-gutter overflow-auto flex flex-col items-center p-8">
+      <div className="sticky top-4 z-50 flex items-center gap-2 bg-card border border-rule shadow-tab px-4 py-2 rounded-full mb-6">
         <button
           onClick={() => setScale(s => Math.max(0.5, s - 0.2))}
-          className="text-white hover:text-violet-400 p-1"
+          className="text-ink-4 hover:text-ink-1 hover:bg-chip-fill p-1 rounded-control"
           aria-label="Zoom out"
         >
           <ZoomOut className="w-4 h-4" />
         </button>
-        <span className="text-xs text-gray-300 w-12 text-center pt-1">{Math.round(scale * 100)}%</span>
+        <span className="font-ui text-ui-sm text-ink-3 w-12 text-center pt-1">{Math.round(scale * 100)}%</span>
         <button
           onClick={() => setScale(s => Math.min(3, s + 0.2))}
-          className="text-white hover:text-violet-400 p-1"
+          className="text-ink-4 hover:text-ink-1 hover:bg-chip-fill p-1 rounded-control"
           aria-label="Zoom in"
         >
           <ZoomIn className="w-4 h-4" />
         </button>
       </div>
+      {/* risk-med here, matching DocumentViewer's MarkupNotice — a document-wide
+          caveat about what the app can vouch for, not yet a failed lookup.
+          citationNotFound below is risk-high: a specific citation that could
+          not be placed. Different ink so the two are never confused with
+          each other (R-G19). */}
       {noTextLayer && (
-        <div className="sticky top-[4.5rem] z-40 flex items-center gap-2 bg-yellow-500/10 border border-yellow-500/20 text-yellow-300 text-xs px-4 py-2 rounded-lg mb-6 max-w-md text-center shadow-lg">
+        <div className="sticky top-[4.5rem] z-40 flex items-center gap-2 bg-risk-med-tint border border-risk-med-edge text-risk-med font-ui text-ui-sm px-4 py-2 rounded-panel mb-6 max-w-md text-center shadow-tab">
           <ScanSearch className="w-4 h-4 shrink-0" />
           <span>This document is a scan with no searchable text, so citations can&apos;t be located in it.</span>
         </div>
       )}
       {citationNotFound && (
         <div
-          className={`sticky z-40 flex items-center gap-2 bg-red-500/10 border border-red-500/20 text-red-300 text-xs px-4 py-2 rounded-lg mb-6 max-w-md text-center shadow-lg ${noTextLayer ? 'top-[8rem]' : 'top-[4.5rem]'}`}
+          className={`sticky z-40 flex items-center gap-2 bg-risk-high-tint border border-risk-high-edge text-risk-high font-ui text-ui-sm px-4 py-2 rounded-panel mb-6 max-w-md text-center shadow-tab ${noTextLayer ? 'top-[8rem]' : 'top-[4.5rem]'}`}
         >
           <SearchX className="w-4 h-4 shrink-0" />
           <span>

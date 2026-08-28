@@ -76,24 +76,28 @@ describe('collectScannableFiles', () => {
     expect(files.some(f => f.endsWith('.test.tsx'))).toBe(false);
     expect(files.some(f => f.endsWith('.test.ts'))).toBe(false);
     expect(files.some(f => f.startsWith('test/'))).toBe(false);
-    expect(files).not.toContain('features/review/PdfCanvas.tsx');
+    // PdfCanvas.tsx used to be exempt at the file level (a whole-file
+    // exemption meant only to protect its <canvas> draw calls), which hid
+    // its unrestyled gutter, toolbar and notices from the guard entirely.
+    // Its chrome is now on semantic tokens, so it is collected and scanned
+    // like anything else — see redesign-G's PdfCanvas chrome report.
+    expect(files).toContain('features/review/PdfCanvas.tsx');
   });
 
-  it('exempts exactly the two files it means to, and says which', () => {
-    // Replaces an earlier case that asserted no `.css` file was collected —
-    // true by construction, since the walker only ever collects .ts/.tsx,
-    // so it reported an exemption that was really an absence
-    // (F14 + F17c, R-GP10).
-    expect([...SCAN_EXEMPT]).toEqual(['features/review/PdfCanvas.tsx']);
-    expect(collectScannableFiles(SRC)).not.toContain('features/review/PdfCanvas.tsx');
+  it('has no whole-file exemptions', () => {
+    // A file-level entry here is exactly what hid PdfCanvas.tsx's chrome
+    // from the guard (F14 + F17c, R-GP10): it reads as "this file is
+    // covered" while actually skipping it outright. There is currently
+    // nothing that needs one.
+    expect([...SCAN_EXEMPT]).toEqual([]);
   });
 });
 
 // ── The repo-wide guard. Live as of Task 14: every screen has been
 // restyled onto semantic role tokens, and this now runs on every test
-// pass. From here, a raw colour anywhere under `src/` (outside
-// index.css, where the tokens live, and PdfCanvas.tsx's canvas draw
-// calls) is a test failure — no later task may reintroduce one.
+// pass. From here, a raw colour anywhere under `src/` (outside index.css,
+// where the tokens live) is a test failure — no later task may
+// reintroduce one.
 describe('palette guard', () => {
   it('no application source references a raw colour', () => {
     const violations = collectScannableFiles(SRC)
