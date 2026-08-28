@@ -66,7 +66,7 @@ describe('toAllowedModel — nothing internal crosses the wire', () => {
   });
 
   it('drops endpoint, apiVersion and credential', () => {
-    const wire = toAllowedModel(claude) as Record<string, unknown>;
+    const wire = toAllowedModel(claude) as unknown as Record<string, unknown>;
     expect('endpoint' in wire).toBe(false);
     expect('apiVersion' in wire).toBe(false);
     expect('credential' in wire).toBe(false);

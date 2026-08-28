@@ -113,7 +113,7 @@ describe('the audit record (§10)', () => {
     const sink = new Collecting();
     const log = new AuditLogger(sink, () => new Date(), () => 'c');
     await log.start({ ...START, context: {} });
-    const r = sink.records[0] as Record<string, unknown>;
+    const r = sink.records[0] as unknown as Record<string, unknown>;
     expect('matterId' in r).toBe(false);
     expect('documentIds' in r).toBe(false);
   });

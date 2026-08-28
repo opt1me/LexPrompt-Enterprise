@@ -3,7 +3,10 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "workspaces": ["packages/*", "apps/*"],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
     "dev": "vite",
     "test": "vitest run",
@@ -14,7 +17,7 @@
     "hosting:on": "npm run build && npx firebase-tools@13 deploy",
     "gateway:dev": "npm run dev -w @lexprompt/gateway",
     "api:dev": "npm run dev -w @lexprompt/api",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p apps/gateway/tsconfig.json && tsc --noEmit -p apps/api/tsconfig.json"
+    "typecheck": "node scripts/typecheck.mjs"
   },
   "dependencies": {
     "@lexprompt/core": "*",
