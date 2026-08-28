@@ -4,11 +4,11 @@
 
 **Goal:** Make a firm-deployed inference gateway the single route from LexPrompt to a model — five pluggable provider backends behind one adapter interface, an operator-configured allowlist of provider+model pairs each declaring its processing jurisdiction, credentials that never leave the gateway, and an audit record per call — while the rest of the app stays browser-only.
 
-**Architecture:** Three new npm workspaces (`packages/core`, `apps/gateway`, `apps/api`) beside the existing web app. `apps/gateway` is the only component that may egress: it holds the allowlist, resolves each provider's credential from the platform secret store (or from an Azure managed identity where the provider supports one), writes the call log, and speaks **one** canonical SSE frame format outwards regardless of which provider answered. Every provider difference — request shape, auth header, event framing, structured-output mechanism — lives inside that provider's adapter and nowhere else. `apps/api` validates the user's Entra token, injects the actor identity from that token and forwards to the gateway — and, for streams, is a byte-transparent pipe that parses nothing. The browser calls `apps/api` through a `ModelClient` whose shape is `openrouter.ts`'s shape minus the key. `src/lib/openrouter.ts` is deleted.
+**Architecture:** Three new npm workspaces (`packages/core`, `apps/gateway`, `apps/api`) beside the existing web app. `apps/gateway` is the only component that may egress: it holds the allowlist, resolves each provider's credential from the platform secret store (or from an Azure managed identity where the provider supports one), writes the call log, and speaks **one** canonical SSE frame format outwards regardless of which provider answered. Every provider difference — request shape, auth header, event framing, structured-output mechanism — lives inside that provider's adapter and nowhere else. `apps/api` validates the user's OIDC token against a **configured** issuer — Entra ID in a firm deployment, Keycloak in `docker compose` — injects the actor identity from that token and forwards to the gateway — and, for streams, is a byte-transparent pipe that parses nothing. The browser calls `apps/api` through a `ModelClient` whose shape is `openrouter.ts`'s shape minus the key. `src/lib/openrouter.ts` is deleted.
 
-**Tech Stack:** TypeScript 5.8, Vitest 3.2 (`test.projects`: jsdom for `src/**`, node for `packages/**` and `apps/**`), Node 22 in containers (nothing newer than Node 20.19 APIs is used, because the development machine runs 20.20.1), Fastify 5, undici, `@azure/identity`, `@azure/keyvault-secrets`, `jose`, `@azure/msal-browser`, Docker Compose, `azd` + Bicep. React 19 / Vite 6 / Tailwind 4 unchanged. **No provider SDK is added** — every adapter speaks its provider's HTTP API through `undici`, because five SDKs would be five dependency trees, five auth abstractions and five retry policies to keep in agreement with §10's.
+**Tech Stack:** TypeScript 5.8, Vitest 3.2 (`test.projects`: jsdom for `src/**`, node for `packages/**` and `apps/**`), Node 22 in containers (nothing newer than Node 20.19 APIs is used, because the development machine runs 20.20.1), Fastify 5, undici, `@azure/identity`, `@azure/keyvault-secrets`, `jose`, `oidc-client-ts`, Keycloak (local OIDC issuer), Docker Compose, `azd` + Bicep. **`@azure/msal-browser` is deliberately not used** — see Revision 2 below. React 19 / Vite 6 / Tailwind 4 unchanged. **No provider SDK is added** — every adapter speaks its provider's HTTP API through `undici`, because five SDKs would be five dependency trees, five auth abstractions and five retry policies to keep in agreement with §10's.
 
-**Spec:** `docs/superpowers/specs/2026-08-28-lexprompt-server-design.md` (binding authority). Stage 1's boundary is §13; the gateway's specification is §10; the Risk story it exists to make true is §12; rulings **S1**, **S2**, **S15** and the testing bar in §14.
+**Spec:** `docs/superpowers/specs/2026-08-28-lexprompt-server-design.md` (binding authority). Stage 1's boundary is §13; the gateway's specification is §10; the local/deployed equivalence it must preserve is §5.1; auth is §7; the Risk story it exists to make true is §12; rulings **S1**, **S2**, **S10 (amended)**, **S15**, **S25–S31** and the testing bar in §14.
 
 ---
 
@@ -32,7 +32,7 @@ Five consequences, each binding on this plan:
 
    Both are true. Conflating them is how a security claim quietly becomes false for half its deployments, which is this project's founding defect pointed at a Risk reviewer.
 
-3. **Every configured provider declares its processing jurisdiction**, surfaced to the operator **where the choice is made** — at gateway startup, in `GET /v1/models`, and on every option in the model picker — and recorded per call in the audit record. The owner's constraint is **UK/EU with US processing avoided**, and OpenRouter, Anthropic direct and OpenAI direct are **US**. A firm must not be able to believe it is UK-only while routing privileged text to a US region. Task 5 makes an out-of-jurisdiction entry **refuse to start the gateway** unless the operator has explicitly written that jurisdiction into `GATEWAY_ALLOWED_JURISDICTIONS`, and prints the whole table on boot.
+3. **Every configured provider declares its processing jurisdiction**, surfaced to the operator **where the choice is made** — at gateway startup, in `GET /v1/models`, and on every option in the model picker — and recorded per call in the audit record. A firm must not be able to believe it is processing in one place while routing privileged text to another. **Which jurisdictions are acceptable is the operator's judgement, not this design's** (owner decision 5, D4): a firm may hold entirely sound provisions with a US provider — SCCs, a DPA, negotiated retention and training terms — settled with legal input long before anyone edits a config file, and **the key is the interface to a service whose guarantees live in the contract behind it.** So `GATEWAY_ALLOWED_JURISDICTIONS` has **no default anywhere** and the gateway refuses to start unset; an entry outside the declared set **refuses to start the gateway**; and the whole table prints on boot. The mechanism is unchanged and strict — what it enforces is the operator's declared policy.
 
 4. **S15's allowlist becomes provider+model pairs**, each carrying its declared region. **A user still cannot name an arbitrary model** — that property is unchanged and is what S15 is for.
 
@@ -41,6 +41,34 @@ Five consequences, each binding on this plan:
 **And the constraint that binds all five: this must not become five parallel implementations.** One adapter interface, one audit path, one allowlist check, one streaming path. Where a provider genuinely differs — Anthropic's `system` is a top-level parameter rather than a message and its `max_tokens` is required; Anthropic's stream frames content as `content_block_delta` where OpenAI-compatible providers frame it as `choices[0].delta.content`; Anthropic's structured output is a forced tool call where the others use `response_format` — **that difference lives inside that provider's adapter and is visible nowhere else in the codebase**. Duplicated per-provider logic is this project's most expensive recurring defect and it would be worse here than anywhere, because the two copies would be reachable only by two different operators' configurations and neither would ever see the other's.
 
 **What this changes in the spec as written.** §1's second claim, §10's "How it authenticates to Foundry", §10's deployment allowlist, §12 Q5's subprocessor answer, §18.2's Stage-1 definition of done and ruling **S2**. §2's *"OpenRouter is removed as a subprocessor"* becomes *"OpenRouter is no longer a mandatory subprocessor; it is one configurable backend among five, and whichever backends are configured are named, with their jurisdictions, in §12 Q5."* Everything else in the spec stands unamended.
+
+---
+
+## The owner's one-system-two-environments decision (spec Revision 2, §17 Q11)
+
+The spec was revised again after this plan was first written. **Q11 is answered, and the answer is structural rather than a choice between deployment modes.** The owner:
+
+> *"I want it to work cohesively when deployed within a firm, but also make it easy for someone to build and test on their own machine for testing. So ideally best of both."*
+
+The local path is not a deployment mode; **it is a development environment for the one system the spec specifies.** The claim §5.1 exists to make true — *the code that runs on a developer's laptop is the code that runs in the firm's tenant* — is what this plan must not break. Six consequences, each binding here:
+
+1. **One authentication path — OIDC — with two issuers.** Entra ID in a firm deployment, **Keycloak** in `docker compose`. The application reads a discovery document, validates against the JWKS it names, and reads group membership from a **configured** claim. **There is no Entra branch anywhere in the codebase** (S28). Entra's tenant check is a **configured required claim** — `{ tid: <tenant id> }` — never a code path, and that distinction is exactly what makes "never special-cases Entra" literally true rather than merely intended.
+
+2. **MSAL is out.** It is Entra's own library. Keeping it would tie the sign-in path to one issuer, or produce a second sign-in path for the other — two implementations of one idea at the front door, which is this project's most repeated defect in the worst possible place. **The browser uses `oidc-client-ts` or an equivalent standards-only client.** Recorded emphatically because "use MSAL for Entra" is the obvious choice and it is the wrong one here, and because a removed dependency is the kind of thing a later reader reinstates by accident.
+
+3. **There is no development bypass** (S29). No `SKIP_AUTH`, no anonymous local mode, no trusted header, no configuration that disables authentication. Two reasons and the second is decisive for this project: a bypass is the flag that reaches production enabled, and **a bypass tests a different code path from the one that ships** — the same class of error as a test that passes against unfixed code. A green local run under a bypass would prove nothing, which removes the only reason to have a faithful local stack at all. §14 requires the absence to be **mutation-tested**: add a `SKIP_AUTH` path and the `auth` suite must fail.
+
+4. **Keycloak seeds four users, and the reason is not convenience** (S31). A reviewer (trainee), a partner, an admin, **and a user in no mapped group**. Every collaborative behaviour this design adds — first sight of a colleague, a Partner override, the stale-version refusal, assignment, presence — is *unobservable with one user*, so a single-user local stack would run green on exactly the half of the system that does not need testing. Stages 3–5 are unbuildable without it, and the fourth account tests a Stage 1 behaviour: being told plainly that you have no access. **They ship in Stage 1** because Stage 1 is the first stage requiring a signed-in user and there is no bypass to stand in for one.
+
+5. **The recorded-response stub becomes a registered adapter, not a bypass.** It appears in the registry, passes `adapterConformance`, declares a jurisdiction, and is refused in a firm deployment by S27's *existing* mechanism rather than a new one. Every response it produces is marked — on the finding, on the `run` row (`provider = 'recorded'`), and behind a loud non-dismissible banner. It is the one component of the local stack capable of producing a **confident wrong answer**, so it is the one that must say loudest what it is.
+
+6. **§5.1's divergence list is exhaustive, and §18 item 10 checks it mechanically.** Deployment-varying values are read in exactly one typed configuration module per app; no module branches on the environment (no `isLocal`, no `if (dev)`, no `NODE_ENV` outside build tooling, no `process.env` outside that module); and the set of configuration keys differing between the two environments is *exactly* §5.1's table — **a differing key with no row fails, and a row with no key behind it fails too**, so the table cannot rot into optimism. §5.1 is the one guarantee in this design not otherwise enforced by a test at rest.
+
+**Which of §5.1's nine rows Stage 1 touches:** row 1 (issuer — Tasks 16, 19, 24), row 2 (provider adapter and credential — Tasks 7, 8, 13, the one deliberate different code path, already ruled by D3/S2), row 3 (secret source — Task 7), row 7 (`api` egress denial — Tasks 24, 25), row 8 (gateway log sink — Tasks 6, 24), row 9 (ingress — Tasks 24, 25). Rows 4, 5 and 6 — Postgres, Azurite, Redis — are Stage 2 and later and **must not appear in this stage's compose file**, since a row with no key behind it fails §18 item 10(b).
+
+**What running locally does not prove**, carried into Task 26's README so a developer meets it where they need it: managed-identity acquisition; Entra's group-claim shape, consent and **overage**; admin consent, conditional access, MFA and tenant token lifetimes; Azure networking and the real egress denial; Postgres Flexible Server's own behaviour; Azurite's gaps; real provider latency, rate limits and stream behaviour; Container Apps scale-to-zero and multi-replica WebSockets. **Keycloak is not an Entra emulator** — Azurite *emulates* Blob Storage, Keycloak *implements the same protocol* Entra implements, and that distinction is precisely where this list bites.
+
+**Nothing in this revision changes the gateway, the adapters, streaming, the allowlist, jurisdiction enforcement or the audit record** — with the two exceptions the revision itself forces: `recorded` joins `PROVIDER_IDS` as a real adapter (Tasks 2, 10, 13), and the audit record's actor becomes `(actorIssuer, actorSubject)` rather than an Entra-shaped id (Tasks 6, 17).
 
 ---
 
@@ -71,6 +99,15 @@ Copied verbatim from the spec and from `CLAUDE.md`. Every task's requirements im
 - **What it logs, per call:** timestamp, purpose, **provider**, **model**, **jurisdiction**, allowlist entry id, workspace id, actor user id, matter/review/clause/document ids, prompt token count, completion token count, latency, HTTP status, retry count, whether images were attached and how many, and `sha256` of the prompt. Retained 90 days. (§10, extended by owner decision 3)
 - **One adapter interface, one audit path, one allowlist check, one streaming path.** Provider differences are confined behind the adapter. Adding a sixth provider touches `adapters/` and the conformance fixture table, and nothing else. A provider-specific `if` anywhere outside `apps/gateway/src/adapters/` is a defect.
 - **Running with an OpenAI or OpenRouter key and no Azure at all is a first-class path**, with the same allowlist check, the same jurisdiction gate, the same audit sink and the same failure behaviour as a deployed one. It is never a mode that skips a check.
+- **One authentication path — OIDC authorization code with PKCE against a *configured* issuer.** Entra ID in a firm deployment, Keycloak in `docker compose`, and the application does not know which. **There is no Entra branch anywhere in the codebase**, and the `auth` suite asserts it rather than trusting it. (§7, S28)
+- **Entra's tenant check is a configured required claim, never a code path.** The auth configuration is exactly `issuer`, `audience`, `subjectClaim`, `groupsClaim`, `requiredClaims` — and `{ tid: <tenant id> }` is a value in the last of those. (§7)
+- **The browser uses a standards-only OIDC client, never MSAL.** (§7, S28)
+- **Identity is `(issuer, subject)`, never the email**, with the subject claim named in configuration — `oid` for Entra, `sub` elsewhere. A Keycloak subject and an Entra `oid` are both opaque stable strings and neither is ever compared with the other. (§7)
+- **A missing group claim is not an empty one.** Entra omits `groups` entirely on overage and emits `_claim_names`. Read naively that is "in no mapped group", so a partner in forty groups would be told they have no access — a wrong answer delivered confidently. **The absent-claim case is detected and reported as its own error.** It cannot be reproduced locally. (§7, §5.1)
+- **There is no development bypass and no configuration that disables authentication** — no `SKIP_AUTH`, no anonymous local mode, no trusted header. The API refuses to start with no issuer configured, and refuses a non-HTTPS issuer that does not resolve to loopback. **The absence is mutation-tested.** (§7, S29)
+- **Local dependencies are faithful emulators, not near-equivalents**, and **no module branches on the environment**: no `isLocal`, no `if (dev)`, no `NODE_ENV` read outside build tooling, and no `process.env` read outside each app's single typed configuration module. (§5.1, S30)
+- **The configuration diff *is* §5.1's divergence list.** A key that differs between the local and deployed configurations and is not in §5.1's table fails the build — **and so does a table row with no key behind it.** (§18 item 10, S30)
+- **The recorded-response stub is a registered adapter, not a bypass.** It passes `adapterConformance`, declares a jurisdiction, is refused in a firm deployment by S27's existing mechanism, and every response it produces is marked on the finding, on the run and behind a non-dismissible banner. (§5.1, §10.2)
 - **What it does not log: prompt content and completion content, ever.** A content-logging debug mode is not built. A redaction test asserts no log line can carry document text. (§10, §14)
 - **Who may call it: only `apps/api`, authenticated by its Azure managed identity (or mTLS in local compose). The gateway has no public ingress and no route from the internet.** (§10)
 - **`api` may not egress.** Its only outbound routes are to the gateway (Stage 1) and, from Stage 2, Postgres and Blob Storage over private endpoints; the public internet is denied by network policy, not by code review. (§5)
@@ -106,8 +143,17 @@ Today, a connection dropped mid-stream resolves `chatStream` with whatever arriv
 **D3 — The audit record is written *before* the upstream call, and a sink failure refuses the call.**
 "It writes an audit record per call" cannot be satisfied by logging afterwards: a process that dies mid-call would then have made an unlogged egress, which is the one thing this component exists to make impossible. So each call writes a `call.started` record (everything except the outcome, including provider and jurisdiction) which is **awaited before the upstream request is issued**, and a `call.finished` record (status, tokens, latency, retries) afterwards. If the started record cannot be written, the gateway answers `503 service_misconfigured` and **makes no upstream call at all**. This holds identically in local development — owner decision 5. Task 6 mutation-tests the ordering.
 
-**D4 — The jurisdiction gate is startup configuration, not a runtime warning, and its default is UK/EU.**
-The owner's constraint is UK/EU with US processing avoided, and three of the five providers are US-only. A runtime banner would be read once and then not; a documentation note would not be read at all. So `GATEWAY_ALLOWED_JURISDICTIONS` (default `UK,EU`) is compared against every allowlist entry **at startup**, and an entry outside it **stops the process** with a message naming the entry, its provider and its jurisdiction. Routing privileged text to the US is therefore always a thing an operator wrote down, and the boot log prints the resulting table every time so the answer to "where does our text go" is in the first screen of the gateway's logs. Task 5 mutation-tests it.
+**D4 — The jurisdiction gate is startup configuration with NO default, and it enforces the operator's declared policy rather than a view of our own.**
+
+The owner's fifth decision settles whose judgement this is:
+
+> *"It's basically for the person running the solution to be happy with the provider they're using, and the associated contracts and data provisions that those providers will give them (the API key is just the interface into the service, backed by those guarantees)."*
+
+A firm may hold entirely sound provisions with a US provider — SCCs, a DPA, negotiated retention and training terms — settled with legal input long before anyone edits a config file. **The key is the interface to a service whose guarantees live in the contract behind it.** This design has no standing to decide which jurisdictions are acceptable to a particular firm, and **a default value would be exactly that decision, made silently, on their behalf.**
+
+So: `GATEWAY_ALLOWED_JURISDICTIONS` **ships unset and has no default anywhere** — not in the config loader, not in the compose file, not in `.env.example`, not in Bicep. The gateway **refuses to start** when it is unset, naming the variable and what it is for. Unconfigured is a startup failure, not a silent guess, which is strictly more fail-closed than a default would have been: a default is a value nobody chose that the system then enforces as though somebody had.
+
+The mechanism is unchanged and stays strict. Every allowlist entry's declared jurisdiction is compared against the operator's set **at startup**; an entry outside it **stops the process**, naming the entry, its provider and its jurisdiction; the boot log prints the resulting table every time, so the answer to "where does our text go" is in the first screen of the gateway's logs. Tasks 4 and 5 mutation-test both halves — the refusal, and **the absence of the default**, which no happy-path test can see.
 
 **D5 — Every provider's stream decoding is proved by one table-driven conformance suite over recorded fixtures, and a provider with no fixture fails the build.**
 Task 10's `adapterConformance.test.ts` runs the same battery over every registered adapter: the recorded fixture as-is; the same fixture with every `\n\n` replaced by `\r\n\r\n`; the same fixture delivered one byte at a time; the same fixture with the final blank line removed. All four must yield identical text. A separate test asserts every id in `PROVIDER_IDS` has a conformance entry, so a sixth provider added without a fixture turns the suite red rather than shipping untested.
@@ -156,7 +202,9 @@ apps/gateway/
   src/adapters/openai.ts           OpenAI direct
   src/adapters/anthropic.ts        Anthropic — the one genuinely different shape
   src/adapters/openrouter.ts       OpenRouter
-  src/adapters/stub.ts             recorded-response replay; refuses to exist in production
+  src/adapters/recorded.ts         the 'recorded' provider: a REGISTERED adapter that
+                                   replays fixtures, declares a jurisdiction, passes
+                                   conformance, and is refused by S27 in a firm deployment
   src/adapters/registry.ts         THE registration point; adding a sixth provider = one line
   src/callModel.ts                 the ONE call path: retry, timeout, abort, usage
   src/routes/infer.ts              POST /v1/infer
@@ -169,12 +217,14 @@ apps/gateway/
   test/*.test.ts
   test/fixtures/streams/*.txt      recorded raw SSE per provider (D5)
   test/fixtures/requests/*.json    recorded expected request bodies per provider
-  fixtures/stub/*.json             recorded responses for offline development
+  fixtures/recorded/*.json         recorded responses for offline development
 
 apps/api/
   package.json  tsconfig.json  Dockerfile  .dockerignore
-  src/config.ts
-  src/entra.ts                     access-token validation: sig/iss/aud/tid/exp
+  src/config.ts                    THE only process.env reader in this app (S30)
+  src/oidc.ts                      OIDC token validation against a CONFIGURED issuer:
+                                   discovery, JWKS, iss/aud/exp, requiredClaims,
+                                   subjectClaim, groupsClaim, group-overage detection
   src/gatewayClient.ts             THE only outbound client in this service
   src/routes/infer.ts              POST /v1/infer, GET /v1/deployments
   src/routes/inferStream.ts        POST /v1/infer/stream — a byte pipe
@@ -183,7 +233,9 @@ apps/api/
 
 src/lib/model/gatewayModelClient.ts   NEW  browser ModelClient over apps/api
 src/lib/model/gatewayModelClient.test.ts
-src/lib/auth/msal.ts                  NEW  MSAL instance + token acquisition
+src/lib/config.ts                     NEW  THE only import.meta.env reader in the web app
+src/lib/auth/oidc.ts                  NEW  oidc-client-ts UserManager + token acquisition
+                                           (NOT MSAL — S28)
 src/lib/auth/useAuth.ts               NEW  sign-in state hook: signing-in / failed / signed-in
 src/lib/auth/useAuth.test.tsx
 src/features/settings/ModelPicker.tsx              NEW  three load states over GET /v1/models,
@@ -213,7 +265,9 @@ src/lib/inferPositions.ts                         MODIFY  purpose redlines.infer
 docker-compose.yml                 NEW
 docker-compose.egress.test.ts      NEW  (apps/api/test/egress.compose.test.ts)
 infra/main.bicep  infra/*.bicep    NEW
+infra/keycloak/lexprompt-realm.json NEW  version-controlled realm: 4 seeded users (S31)
 azure.yaml                         NEW
+apps/api/test/configSurface.test.ts NEW  §18 item 10(a) and 10(b)
 README.md                          MODIFY  §2's Stage-1 rows
 docs/superpowers/redesign/rulings.md  MODIFY  S1/S2/S15 as executed, plus D1–D3
 ```
@@ -521,13 +575,13 @@ export outside the package.
 - Consumes: nothing.
 - Produces:
   - `PURPOSES: readonly Purpose[]`, `type Purpose`, `isPurpose(v: unknown): v is Purpose`
-  - `PROVIDER_IDS: readonly ProviderId[]`, `type ProviderId = 'azure-foundry' | 'azure-openai' | 'openai' | 'anthropic' | 'openrouter'`, `isProviderId(v: unknown): v is ProviderId`
+  - `PROVIDER_IDS: readonly ProviderId[]`, `type ProviderId = 'azure-foundry' | 'azure-openai' | 'openai' | 'anthropic' | 'openrouter' | 'recorded'`, `isProviderId(v: unknown): v is ProviderId`
   - `type Bloc = 'UK' | 'EU' | 'US' | 'other'`, `interface Jurisdiction { bloc: Bloc; region: string; label: string }`, `jurisdictionLabel(j: Jurisdiction): string`
   - `interface AllowedModel { id: string; provider: ProviderId; model: string; label: string; jurisdiction: Jurisdiction; contextLength: number; supportsImages: boolean; supportsStructuredOutput: boolean; isDefault: boolean }`
   - `interface InferContext { matterId?: string; reviewId?: string; clauseId?: string; documentIds?: string[] }`
   - `interface InferRequest { modelChoiceId: string; purpose: Purpose; system?: string; user: string; images?: { mime: string; data: string }[]; jsonSchema?: object; temperature?: number; maxTokens?: number; context?: InferContext }`
   - `interface InferUsage { promptTokens: number; completionTokens: number }`
-  - `interface InferResponse { content: string; usage: InferUsage; callId: string; provider: ProviderId; jurisdiction: Jurisdiction; stubbed: boolean }`
+  - `interface InferResponse { content: string; usage: InferUsage; callId: string; provider: ProviderId; jurisdiction: Jurisdiction }` — no `stubbed` flag: `provider === 'recorded'` is that fact and carrying it twice is drift
   - `type ModelErrorCode`, `class ModelError`, `isSignInError`, `isServiceConfigError`, `isRetryableStatus`
   - `interface ModelClient` with `chat`, `chatJson`, `chatStream`, `listModels`
 
@@ -545,10 +599,17 @@ import {
 } from './protocol.ts';
 
 describe('providers (owner decision 1)', () => {
-  it('is exactly the five the owner named', () => {
+  it('is the five the owner named, plus the recorded adapter', () => {
     expect([...PROVIDER_IDS]).toEqual([
-      'azure-foundry', 'azure-openai', 'openai', 'anthropic', 'openrouter',
+      'azure-foundry', 'azure-openai', 'openai', 'anthropic', 'openrouter', 'recorded',
     ]);
+  });
+
+  // Spec Revision 2 / §5.1: the offline stub is an ADAPTER, not a bypass.
+  // Being on this list is what forces it through the registry completeness
+  // test, the conformance suite and the jurisdiction gate like any other.
+  it('includes recorded, so the offline stub cannot escape the adapter machinery', () => {
+    expect(isProviderId('recorded')).toBe(true);
   });
 
   it('accepts a known provider and refuses anything else', () => {
@@ -614,6 +675,13 @@ describe('error classification — who is being told, and what they can do', () 
   it('a refused model or purpose is a firm-configuration problem, not the user\'s', () => {
     expect(isServiceConfigError(new ModelError('x', 'model_not_allowed', 400))).toBe(true);
     expect(isServiceConfigError(new ModelError('x', 'purpose_not_allowed', 400))).toBe(true);
+  });
+
+  // §7: a partner in forty groups must never be told they have no access.
+  it('group overage is an admin problem, and is NOT a sign-in problem', () => {
+    const e = new ModelError('overage', 'group_overage', 403);
+    expect(isSignInError(e)).toBe(false);
+    expect(isServiceConfigError(e)).toBe(true);
   });
 
   it('a transient upstream failure is neither', () => {
@@ -683,6 +751,12 @@ export const PROVIDER_IDS = [
   'openai',
   'anthropic',
   'openrouter',
+  // The offline recorded-response provider (§5.1). It is an ADAPTER, not a
+  // bypass: being on this list is what puts it through the registry
+  // completeness test, the stream conformance suite and the jurisdiction
+  // gate exactly like the other five, and what lets a firm deployment refuse
+  // it through S27's existing mechanism rather than through a new one.
+  'recorded',
 ] as const;
 
 export type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -781,14 +855,18 @@ export interface InferResponse {
    *  logged, so the browser can show it rather than assert it. */
   provider: ProviderId;
   jurisdiction: Jurisdiction;
-  /** True whenever a recorded development response answered — never
-   *  silently, see Task 9. */
-  stubbed: boolean;
 }
+
+// There is deliberately NO `stubbed` flag. `provider === 'recorded'` is the
+// fact, and a second field carrying the same fact is the sibling drift S14
+// exists to prevent — in the one place where the two copies disagreeing
+// would mean the app telling a lawyer an answer came from a model when it
+// came from a file (§5.1).
 
 export type ModelErrorCode =
   | 'sign_in_required'
   | 'not_permitted'
+  | 'group_overage'
   | 'model_not_allowed'
   | 'purpose_not_allowed'
   | 'prompt_too_large'
@@ -828,6 +906,12 @@ export class ModelError extends Error {
 const SIGN_IN_CODES: ReadonlySet<ModelErrorCode> = new Set(['sign_in_required', 'not_permitted']);
 const SERVICE_CONFIG_CODES: ReadonlySet<ModelErrorCode> = new Set([
   'service_misconfigured', 'model_not_allowed', 'purpose_not_allowed',
+  // Group overage (§7): the token carried no `groups` claim because the user
+  // is in too many groups for one to fit. An admin fixes it; signing in again
+  // cannot, and nothing in Settings can. So it classifies here and NOT as a
+  // sign-in error — the whole point of detecting it separately is that
+  // "you have no access" would be a wrong answer told confidently.
+  'group_overage',
 ]);
 
 /**
@@ -895,7 +979,7 @@ export type { ModelClient } from './model/client.ts';
 - [ ] **Step 6: Run the test**
 
 Run: `npx vitest run --project core packages/core/src/model/protocol.test.ts`
-Expected: PASS, 11 tests.
+Expected: PASS, 14 tests.
 
 - [ ] **Step 7: Mutation test the classifier split**
 
@@ -1388,7 +1472,7 @@ success (2 fail). All restored.
   - `type CredentialConfig` — a discriminated union on `source`: `{ source: 'managed-identity'; scope: string }` | `{ source: 'key-vault'; vaultUrl: string; secretName: string }` | `{ source: 'env'; var: string }` | `{ source: 'file'; path: string }`
   - `interface ModelEntry extends AllowedModel { endpoint: string; apiVersion?: string; credential: CredentialConfig }` — the **gateway-internal** entry. `endpoint` and `credential` never leave the process.
   - `type CallerAuthConfig` — `{ mode: 'none' }` | `{ mode: 'mtls'; caFile; certFile; keyFile; allowedSubject }` | `{ mode: 'entra'; tenantId; audience; allowedObjectIds }`
-  - `interface GatewayConfig { port: number; models: ModelEntry[]; allowedJurisdictions: Bloc[]; maxPromptChars: number; requestTimeoutMs: number; defaultMaxTokens: number; environment: 'development' | 'production'; upstream: 'live' | 'stub'; stubDir: string; caller: CallerAuthConfig }`
+  - `interface GatewayConfig { port: number; models: ModelEntry[]; allowedJurisdictions: Bloc[]; maxPromptChars: number; requestTimeoutMs: number; defaultMaxTokens: number; caller: CallerAuthConfig }` — **no `environment`, no `upstream`, no `stubDir`.** S30 forbids a module branching on the environment, and a config field named `environment` is how one starts. Offline working is a provider on the allowlist (Task 13), not a mode.
   - `loadConfig(env: NodeJS.ProcessEnv, readFile: (p: string) => string): GatewayConfig` — pure over its two inputs, so it is testable without a filesystem. Throws `ConfigError` naming the field.
   - `describeConfig(cfg: GatewayConfig): string` — the boot banner.
   - `class ConfigError extends Error`
@@ -1477,7 +1561,14 @@ const US_MODEL = {
 const BASE = {
   GATEWAY_PORT: '8081',
   GATEWAY_MODELS_FILE: '/etc/lexprompt/models.json',
-  GATEWAY_CALLER_AUTH: 'none',
+  // No default exists, so every fixture states the operator's policy
+  // explicitly — which is what a real deployment must also do.
+  GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU',
+  GATEWAY_CALLER_AUTH: 'mtls',
+  GATEWAY_MTLS_CA_FILE: '/certs/ca.pem',
+  GATEWAY_MTLS_CERT_FILE: '/certs/gateway.pem',
+  GATEWAY_MTLS_KEY_FILE: '/certs/gateway.key',
+  GATEWAY_MTLS_ALLOWED_SUBJECT: 'lexprompt-api',
 };
 
 const read = (body: string) => (p: string) => {
@@ -1488,7 +1579,7 @@ const read = (body: string) => (p: string) => {
 const file = (...models: unknown[]) => JSON.stringify({ models });
 
 describe('loadConfig', () => {
-  it('loads a UK model with the default jurisdictions', () => {
+  it('loads a model whose jurisdiction the operator has declared permitted', () => {
     const cfg = loadConfig({ ...BASE }, read(file(UK_MODEL)));
     expect(cfg.port).toBe(8081);
     expect(cfg.allowedJurisdictions).toEqual(['UK', 'EU']);
@@ -1496,13 +1587,31 @@ describe('loadConfig', () => {
     expect(cfg.models[0].endpoint).toBe('https://lexprompt-uks.services.ai.azure.com');
   });
 
-  // D4 — the jurisdiction gate. The owner's third requirement rests on it.
+  // D4, and the owner's fifth decision. THERE IS NO DEFAULT: which
+  // jurisdictions a firm accepts is a judgement about contracts and data
+  // provisions that this design has no standing to make on their behalf, and
+  // a default value would make it silently.
+  it('REFUSES TO START when GATEWAY_ALLOWED_JURISDICTIONS is unset, rather than assuming one', () => {
+    const { GATEWAY_ALLOWED_JURISDICTIONS, ...unset } = BASE;
+    expect(() => loadConfig(unset, read(file(UK_MODEL))))
+      .toThrow(/GATEWAY_ALLOWED_JURISDICTIONS[\s\S]*no default/i);
+  });
+
+  it('REFUSES TO START when it is set but empty, which is the same silence with a keystroke', () => {
+    expect(() => loadConfig({ ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: '   ' }, read(file(UK_MODEL))))
+      .toThrow(/GATEWAY_ALLOWED_JURISDICTIONS/);
+  });
+
+  // D4 — the jurisdiction gate itself.
   it('REFUSES TO START when a model is outside the permitted jurisdictions, naming it', () => {
     expect(() => loadConfig({ ...BASE }, read(file(US_MODEL))))
       .toThrow(/oai-gpt4o[\s\S]*openai[\s\S]*US[\s\S]*United States[\s\S]*GATEWAY_ALLOWED_JURISDICTIONS/);
   });
 
-  it('starts with a US model only when the operator wrote US into the permitted list', () => {
+  // Not because US is exceptional — because it is a jurisdiction this
+  // operator had not declared. The same test would hold for EU under a
+  // UK-only policy.
+  it('starts with a US model when the operator has declared US permitted', () => {
     const cfg = loadConfig(
       { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU,US' },
       read(file(US_MODEL)),
@@ -1552,8 +1661,8 @@ describe('loadConfig', () => {
   });
 
   it('refuses a missing models file reference rather than serving nothing', () => {
-    expect(() => loadConfig({ GATEWAY_PORT: '8081', GATEWAY_CALLER_AUTH: 'none' }, read(file(UK_MODEL))))
-      .toThrow(/GATEWAY_MODELS_FILE/);
+    const { GATEWAY_MODELS_FILE, ...noFile } = BASE;
+    expect(() => loadConfig(noFile, read(file(UK_MODEL)))).toThrow(/GATEWAY_MODELS_FILE/);
   });
 
   it('reports a malformed models file as a config error, not a JSON parse crash', () => {
@@ -1581,6 +1690,18 @@ describe('loadConfig', () => {
   it('refuses an unknown caller-auth mode rather than defaulting to none', () => {
     expect(() => loadConfig({ ...BASE, GATEWAY_CALLER_AUTH: 'trustme' }, read(file(UK_MODEL))))
       .toThrow(/GATEWAY_CALLER_AUTH/);
+  });
+
+  // S29's shape at the gateway's own front door, and S30's "no environment
+  // branch": there is no configuration value that turns the caller check
+  // off, so there is nothing to accidentally ship enabled and nothing that
+  // behaves differently in one environment.
+  it('has NO configuration value that disables the caller check, in any environment', () => {
+    for (const nodeEnv of ['development', 'production', undefined]) {
+      expect(() => loadConfig(
+        { ...BASE, GATEWAY_CALLER_AUTH: 'none', NODE_ENV: nodeEnv }, read(file(UK_MODEL)),
+      )).toThrow(/no value that disables the caller check/i);
+    }
   });
 });
 ```
@@ -1635,11 +1756,13 @@ export interface GatewayConfig {
   maxPromptChars: number;
   requestTimeoutMs: number;
   defaultMaxTokens: number;
-  environment: 'development' | 'production';
-  upstream: 'live' | 'stub';
-  stubDir: string;
   caller: CallerAuthConfig;
 }
+// Deliberately absent: `environment`, `upstream`, `stubDir`. S30 forbids any
+// module branching on the environment, and a config field called
+// `environment` is where that starts. Offline working is a provider on the
+// allowlist (Task 13), not a mode; the caller-auth check below is the one
+// allowlist (Task 13), not a mode. NOTHING in this file reads NODE_ENV.
 
 const BLOCS: readonly Bloc[] = ['UK', 'EU', 'US', 'other'];
 
@@ -1706,7 +1829,14 @@ function parseCredential(raw: unknown, entryId: string): CredentialConfig {
 
 function parseCaller(env: NodeJS.ProcessEnv): CallerAuthConfig {
   const mode = env.GATEWAY_CALLER_AUTH;
-  if (mode === 'none') return { mode: 'none' };
+  // `mode: 'none'` is deliberately NOT reachable from configuration. It
+  // exists as a type so unit tests can construct one directly, and there is
+  // no environment variable that produces it — which is stronger than
+  // refusing it under NODE_ENV=production, and is the only version
+  // compatible with S30's "no module branches on the environment". Local
+  // development uses mTLS like the compose stack does; there is no mode that
+  // turns the caller check off (S29's shape, applied to the gateway's own
+  // front door).
   if (mode === 'mtls') {
     return {
       mode: 'mtls',
@@ -1726,7 +1856,8 @@ function parseCaller(env: NodeJS.ProcessEnv): CallerAuthConfig {
     };
   }
   throw new ConfigError(
-    `GATEWAY_CALLER_AUTH must be mtls, entra or none; got ${JSON.stringify(mode)}.`,
+    `GATEWAY_CALLER_AUTH must be mtls or entra; got ${JSON.stringify(mode)}. `
+    + 'There is no value that disables the caller check.',
   );
 }
 
@@ -1791,7 +1922,25 @@ export function loadConfig(
     throw new ConfigError('Exactly one model must be marked isDefault.');
   }
 
-  const allowedJurisdictions = (env.GATEWAY_ALLOWED_JURISDICTIONS ?? 'UK,EU')
+  // NO DEFAULT, deliberately (owner decision 5). Which jurisdictions a firm
+  // accepts is a judgement about the contracts and data provisions it holds
+  // with its providers — settled with legal input, long before anyone edits
+  // this file. A default would make that judgement silently, on their
+  // behalf, and the system would then enforce it as though somebody had
+  // chosen it. Unset is a startup failure instead: strictly more fail-closed
+  // than any default could be, because a refusal cannot be mistaken for a
+  // decision.
+  const declared = (env.GATEWAY_ALLOWED_JURISDICTIONS ?? '').trim();
+  if (!declared) {
+    throw new ConfigError(
+      'GATEWAY_ALLOWED_JURISDICTIONS is not set, and it has no default. It lists the '
+      + `processing jurisdictions this deployment permits (any of ${BLOCS.join(', ')}), `
+      + 'and it must state the policy the operator has settled with their providers — '
+      + 'LexPrompt will not guess it. Set it to the jurisdictions your contracts and data '
+      + 'provisions cover.',
+    );
+  }
+  const allowedJurisdictions = declared
     .split(',').map(s => s.trim()).filter(Boolean) as Bloc[];
   for (const bloc of allowedJurisdictions) {
     if (!BLOCS.includes(bloc)) {
@@ -1812,8 +1961,8 @@ export function loadConfig(
         + `${m.jurisdiction.bloc} · ${m.jurisdiction.label}, which is not in `
         + `GATEWAY_ALLOWED_JURISDICTIONS (${allowedJurisdictions.join(', ')}). `
         + `Remove the model, or add ${m.jurisdiction.bloc} to `
-        + 'GATEWAY_ALLOWED_JURISDICTIONS to say deliberately that contract text '
-        + 'may be processed there.',
+        + 'GATEWAY_ALLOWED_JURISDICTIONS to record that your provisions with this '
+        + 'provider cover processing there.',
       );
     }
   }
@@ -1825,9 +1974,6 @@ export function loadConfig(
     maxPromptChars: int(env, 'GATEWAY_MAX_PROMPT_CHARS', 400_000),
     requestTimeoutMs: int(env, 'GATEWAY_REQUEST_TIMEOUT_MS', 120_000),
     defaultMaxTokens: int(env, 'GATEWAY_DEFAULT_MAX_TOKENS', 4096),
-    environment: env.NODE_ENV === 'production' ? 'production' : 'development',
-    upstream: env.GATEWAY_UPSTREAM === 'stub' ? 'stub' : 'live',
-    stubDir: env.GATEWAY_STUB_DIR ?? 'fixtures/stub',
     caller: parseCaller(env),
   };
 }
@@ -1842,7 +1988,7 @@ export function describeConfig(cfg: GatewayConfig): string {
     `  ${m.isDefault ? '*' : ' '} ${m.id.padEnd(24)} ${m.provider.padEnd(15)} `
     + `${m.jurisdiction.bloc} · ${m.jurisdiction.label} (auth: ${m.credential.source})`);
   return [
-    `LexPrompt gateway — ${cfg.environment}, upstream=${cfg.upstream}, caller-auth=${cfg.caller.mode}`,
+    `LexPrompt gateway — caller-auth=${cfg.caller.mode}`,
     `Permitted jurisdictions: ${cfg.allowedJurisdictions.join(', ')}`,
     'Allowlisted models:',
     ...rows,
@@ -1939,20 +2085,29 @@ CMD ["node", "--experimental-strip-types", "apps/gateway/src/main.ts"]
 ```
 node_modules
 test
-fixtures/stub
 ```
 
-**`fixtures/stub` is excluded from the image on purpose.** A production image that cannot physically read a recorded response is a second layer under Task 13's production guard.
+**`fixtures/recorded` is deliberately NOT excluded.** The image is the same image in both environments (§5.1) — building a different one for production would be the environment branch S30 forbids, moved into the build. What keeps recorded responses out of a firm deployment is S27's jurisdiction refusal (Task 13), which is a check that already exists and that every provider passes through, rather than a second mechanism built for one of them.
 
 - [ ] **Step 7: Run the tests**
 
 Run: `npx vitest run --project gateway`
-Expected: PASS, 15 tests.
+Expected: PASS, 18 tests.
 
-- [ ] **Step 8: Mutation test the jurisdiction gate (D4)**
+- [ ] **Step 8: Mutation test the jurisdiction gate, and the absence of its default (D4)**
 
-Comment out the whole `for (const m of models) { if (!allowedJurisdictions.includes(m.jurisdiction.bloc)) … }` block. Run `npx vitest run --project gateway`.
+**Mutation 1 — the gate.** Comment out the whole `for (const m of models) { if (!allowedJurisdictions.includes(m.jurisdiction.bloc)) … }` block. Run `npx vitest run --project gateway`.
 Expected: FAIL on *"REFUSES TO START when a model is outside the permitted jurisdictions, naming it"*. Restore and re-run: PASS.
+
+**Mutation 2 — the absence of a default.** Restore the default: change the loader to
+
+```ts
+  const declared = (env.GATEWAY_ALLOWED_JURISDICTIONS ?? 'UK,EU').trim();
+```
+
+and delete the `if (!declared)` throw. Run. Expected: FAIL on *"REFUSES TO START when GATEWAY_ALLOWED_JURISDICTIONS is unset"* and *"REFUSES TO START when it is set but empty"*. Restore.
+
+**This mutation matters more than it looks, and that is why it is named rather than left to judgement.** The absence of a default is invisible to every happy-path test: with `UK,EU` restored, every other test in this file still passes, the gateway still starts, the gate still refuses a US model, and the boot banner still prints a table. Nothing looks wrong. Without this specific mutation a later, entirely well-meant "sensible default" would slip in green — and it would encode an assumption about one firm's contracts as though it were a property of the software.
 
 - [ ] **Step 9: Verify it actually starts and actually refuses**
 
@@ -1963,16 +2118,22 @@ mkdir -p /tmp/lexprompt && cat > /tmp/lexprompt/models.json <<'JSON'
 "supportsImages":true,"supportsStructuredOutput":true,"isDefault":true,
 "endpoint":"https://api.openai.com","credential":{"source":"env","var":"OPENAI_API_KEY"}}]}
 JSON
-GATEWAY_MODELS_FILE=/tmp/lexprompt/models.json GATEWAY_CALLER_AUTH=none \
+GATEWAY_MODELS_FILE=/tmp/lexprompt/models.json \
+GATEWAY_CALLER_AUTH=mtls GATEWAY_MTLS_CA_FILE=certs/ca.pem \
+GATEWAY_MTLS_CERT_FILE=certs/gateway.pem GATEWAY_MTLS_KEY_FILE=certs/gateway.key \
+GATEWAY_MTLS_ALLOWED_SUBJECT=lexprompt-api \
   npx tsx apps/gateway/src/main.ts; echo "exit=$?"
 ```
 
-Expected: `LexPrompt gateway will not start.` followed by a message naming `oai-gpt4o`, `openai`, `US · United States` and `GATEWAY_ALLOWED_JURISDICTIONS`; `exit=1`.
+Expected: `LexPrompt gateway will not start.` and a message saying `GATEWAY_ALLOWED_JURISDICTIONS` is not set and has no default; `exit=1`. Then set it to `UK,EU` and re-run: it now fails for the *second* reason, naming `oai-gpt4o`, `openai`, `US · United States`; `exit=1`.
 
 Then:
 
 ```bash
-GATEWAY_MODELS_FILE=/tmp/lexprompt/models.json GATEWAY_CALLER_AUTH=none \
+GATEWAY_MODELS_FILE=/tmp/lexprompt/models.json \
+GATEWAY_CALLER_AUTH=mtls GATEWAY_MTLS_CA_FILE=certs/ca.pem \
+GATEWAY_MTLS_CERT_FILE=certs/gateway.pem GATEWAY_MTLS_KEY_FILE=certs/gateway.key \
+GATEWAY_MTLS_ALLOWED_SUBJECT=lexprompt-api \
 GATEWAY_ALLOWED_JURISDICTIONS=UK,EU,US npx tsx apps/gateway/src/main.ts &
 sleep 1 && curl -s localhost:8081/healthz; kill %1
 ```
@@ -1993,13 +2154,20 @@ Configuration is validated at startup and the process refuses to start when
 it is wrong: an unstated jurisdiction, an unknown provider, a missing
 credential source, an empty allowlist, two defaults.
 
-The jurisdiction gate is what the owner's UK/EU constraint rests on. A model
-processed outside GATEWAY_ALLOWED_JURISDICTIONS stops the gateway, naming
-the model, its provider and where it processes — so routing privileged text
-to the US is always something an operator wrote down. The boot banner prints
-the whole table on every start.
+The jurisdiction gate enforces the OPERATOR's declared policy and has NO
+default (owner decision 5): which jurisdictions a firm accepts is a judgement
+about the contracts and data provisions it holds with its providers, and a
+default would make that judgement silently on their behalf. Unset is a
+startup failure, which is strictly more fail-closed than a default — a
+refusal cannot be mistaken for a decision. A model processed outside the
+declared set stops the gateway, naming the model, its provider and where it
+processes. The boot banner prints the whole table on every start.
 
-Mutation-tested: gate removed, the config test fails; restored.
+Mutation-tested twice: the gate removed (1 test fails); and the `?? 'UK,EU'`
+default restored (2 fail). The second matters more than it looks — with a
+default in place every other test still passes and nothing looks wrong, so
+without that mutation a later well-meant "sensible default" would slip in
+green.
 ```
 
 ---
@@ -2231,7 +2399,7 @@ Mutation-tested: rewritten as a rest-spread, three tests fail; restored.
 **Interfaces:**
 - Consumes: `ModelEntry` (Task 4); `Purpose`, `ProviderId`, `Jurisdiction`, `InferContext`, `InferUsage`, `ModelError` (Task 2).
 - Produces:
-  - `interface AuditStart { kind: 'call.started'; callId: string; at: string; purpose: Purpose; provider: ProviderId; model: string; modelChoiceId: string; jurisdiction: Jurisdiction; credentialSource: CredentialConfig['source']; workspaceId: string; actorUserId: string; matterId?: string; reviewId?: string; clauseId?: string; documentIds?: string[]; promptSha256: string; promptChars: number; imageCount: number; streaming: boolean; stubbed: boolean }`
+  - `interface AuditStart { kind: 'call.started'; callId: string; at: string; purpose: Purpose; provider: ProviderId; model: string; modelChoiceId: string; jurisdiction: Jurisdiction; credentialSource: CredentialConfig['source']; workspaceId: string; actorIssuer: string; actorSubject: string; matterId?: string; reviewId?: string; clauseId?: string; documentIds?: string[]; promptSha256: string; promptChars: number; imageCount: number; streaming: boolean }` — no `stubbed`: `provider` already carries it
   - `interface AuditFinish { kind: 'call.finished'; callId: string; at: string; status: number; ok: boolean; errorCode?: ModelErrorCode; promptTokens: number; completionTokens: number; latencyMs: number; retries: number }`
   - `type AuditRecord = AuditStart | AuditFinish`
   - `interface AuditSink { write(record: AuditRecord): Promise<void> }`
@@ -2269,17 +2437,17 @@ const START = {
     credential: { source: 'managed-identity' as const, scope: 'https://cognitiveservices.azure.com/.default' },
   },
   workspaceId: 'ws-1',
-  actorUserId: 'oid-abc',
+  actorIssuer: 'https://login.microsoftonline.com/t/v2.0',
+  actorSubject: 'oid-abc',
   context: { matterId: 'm-1', reviewId: 'r-1', clauseId: 'c-14', documentIds: ['d-1', 'd-2'] },
   system: 'You are a contract reviewer.',
   user: CANARY,
   imageCount: 2,
   streaming: false,
-  stubbed: false,
 };
 
 describe('the audit record (§10)', () => {
-  it('records every field §10 names, plus provider and jurisdiction', async () => {
+  it('records every field §10 names, plus provider, jurisdiction and (issuer, subject)', async () => {
     const sink = new Collecting();
     const log = new AuditLogger(sink, () => new Date('2026-08-28T16:41:00Z'), () => 'call-1');
     const callId = await log.start(START);
@@ -2298,7 +2466,8 @@ describe('the audit record (§10)', () => {
       jurisdiction: { bloc: 'UK', region: 'uksouth', label: 'UK South' },
       credentialSource: 'managed-identity',
       workspaceId: 'ws-1',
-      actorUserId: 'oid-abc',
+      actorIssuer: 'https://login.microsoftonline.com/t/v2.0',
+      actorSubject: 'oid-abc',
       matterId: 'm-1',
       reviewId: 'r-1',
       clauseId: 'c-14',
@@ -2307,7 +2476,6 @@ describe('the audit record (§10)', () => {
       promptChars: ('You are a contract reviewer.\n\n' + CANARY).length,
       imageCount: 2,
       streaming: false,
-      stubbed: false,
     });
 
     expect(sink.records[1]).toEqual({
@@ -2436,7 +2604,13 @@ export interface AuditStart {
   jurisdiction: Jurisdiction;
   credentialSource: CredentialConfig['source'];
   workspaceId: string;
-  actorUserId: string;
+  /** Identity is (issuer, subject), never an email and never an
+   *  Entra-shaped id (§7, S28). The subject is the value of the issuer's
+   *  configured `subjectClaim` — `oid` for Entra, `sub` for Keycloak — and
+   *  the two halves are stored separately so Stage 2 can key `app_user` on
+   *  the pair without parsing a composite string back apart. */
+  actorIssuer: string;
+  actorSubject: string;
   matterId?: string;
   reviewId?: string;
   clauseId?: string;
@@ -2445,7 +2619,6 @@ export interface AuditStart {
   promptChars: number;
   imageCount: number;
   streaming: boolean;
-  stubbed: boolean;
 }
 
 export interface AuditFinish {
@@ -2488,13 +2661,13 @@ export interface AuditStartInput {
   purpose: Purpose;
   entry: ModelEntry;
   workspaceId: string;
-  actorUserId: string;
+  actorIssuer: string;
+  actorSubject: string;
   context: InferContext;
   system?: string;
   user: string;
   imageCount: number;
   streaming: boolean;
-  stubbed: boolean;
 }
 
 export interface AuditFinishInput {
@@ -2551,7 +2724,8 @@ export class AuditLogger {
       jurisdiction: input.entry.jurisdiction,
       credentialSource: input.entry.credential.source,
       workspaceId: input.workspaceId,
-      actorUserId: input.actorUserId,
+      actorIssuer: input.actorIssuer,
+      actorSubject: input.actorSubject,
       ...(input.context.matterId ? { matterId: input.context.matterId } : {}),
       ...(input.context.reviewId ? { reviewId: input.context.reviewId } : {}),
       ...(input.context.clauseId ? { clauseId: input.context.clauseId } : {}),
@@ -2560,7 +2734,6 @@ export class AuditLogger {
       promptChars: prompt.length,
       imageCount: input.imageCount,
       streaming: input.streaming,
-      stubbed: input.stubbed,
     };
 
     try {
@@ -2630,8 +2803,9 @@ call" cannot be satisfied by logging afterwards — a process that dies
 mid-call would have made an unlogged egress, which is the one thing this
 component exists to prevent. It holds identically in local development.
 
-Records carry provider and jurisdiction as well as §10's fields, and never
-carry prompt or completion content: both start and finish build their
+Records carry provider, jurisdiction and the actor as (issuer, subject) —
+never an email and never an Entra-shaped id (§7) — as well as §10's fields,
+and never carry prompt or completion content: both start and finish build their
 records from named fields, so a caller handing over a completion cannot get
 it into the log.
 
@@ -3487,6 +3661,7 @@ import { azureOpenaiAdapter } from './azureOpenai.ts';
 import { openaiAdapter } from './openai.ts';
 import { anthropicAdapter } from './anthropic.ts';
 import { openrouterAdapter } from './openrouter.ts';
+import { recordedAdapter } from './recorded.ts';
 
 /**
  * THE registration point. Adding a sixth provider is: add its id to
@@ -3500,6 +3675,11 @@ export const ALL_ADAPTERS: readonly ProviderAdapter[] = [
   openaiAdapter,
   anthropicAdapter,
   openrouterAdapter,
+  // Registered like any other, deliberately (§5.1). The offline stub being
+  // an adapter rather than a bypass is what puts it through the conformance
+  // suite, gives it a jurisdiction to declare, and lets a firm deployment
+  // refuse it through S27's existing mechanism rather than a new one.
+  recordedAdapter,
 ];
 
 const BY_ID = new Map<ProviderId, ProviderAdapter>(ALL_ADAPTERS.map(a => [a.id, a]));
@@ -3516,7 +3696,7 @@ export function getAdapter(id: ProviderId): ProviderAdapter {
 }
 ```
 
-`registry.ts` imports `anthropicAdapter`, which Task 9 writes. **Write Task 9's file before running this task's tests** — or, if you are executing tasks strictly in order, create `apps/gateway/src/adapters/anthropic.ts` now with `export const anthropicAdapter = openAiCompatible({ id: 'anthropic', url: e => e.endpoint, headers: () => ({}) });` as a placeholder and replace it wholesale in Task 9. **Prefer the first**: a placeholder that happens to type-check is exactly the kind of thing that survives.
+`registry.ts` imports `anthropicAdapter` (Task 9) and `recordedAdapter` (Task 13). **Write Task 9's file before running this task's tests** — or, if you are executing tasks strictly in order, create `apps/gateway/src/adapters/anthropic.ts` now with `export const anthropicAdapter = openAiCompatible({ id: 'anthropic', url: e => e.endpoint, headers: () => ({}) });` as a placeholder and replace it wholesale in Task 9. **Prefer the first**: a placeholder that happens to type-check is exactly the kind of thing that survives.
 
 - [ ] **Step 7: Run the tests**
 
@@ -3901,7 +4081,7 @@ Restored.
 **Type:** test
 
 **Files:**
-- Create: `apps/gateway/test/fixtures/streams/azure-foundry.txt`, `azure-openai.txt`, `openai.txt`, `anthropic.txt`, `openrouter.txt`
+- Create: `apps/gateway/test/fixtures/streams/azure-foundry.txt`, `azure-openai.txt`, `openai.txt`, `anthropic.txt`, `openrouter.txt`, `recorded.txt`
 - Create: `apps/gateway/test/fixtures/streams/expected.json`
 - Create: `apps/gateway/test/adapterConformance.test.ts`
 
@@ -3931,7 +4111,8 @@ curl -N https://api.openai.com/v1/chat/completions \
   "azure-openai":  { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true },
   "openai":        { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true },
   "anthropic":     { "text": "one two three", "promptTokens": 16, "completionTokens": 5, "synthetic": true },
-  "openrouter":    { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true }
+  "openrouter":    { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true },
+  "recorded":      { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true }
 }
 ```
 
@@ -3993,6 +4174,8 @@ event: message_stop
 data: {"type":"message_stop"}
 
 ```
+
+`recorded.txt` is the stream one of Task 13's fixtures replays, and it is `synthetic: true` permanently and by definition — there is no live provider to record it from, and saying so in the file keeps the honest/recorded distinction meaningful for the five that do have one.
 
 `azure-foundry.txt`, `azure-openai.txt` and `openrouter.txt` use the same OpenAI-shaped body as `openai.txt` — copy it, change only the header comment. (They genuinely are the same wire format; that is why one adapter base serves four providers, and a conformance fixture that pretends otherwise would be testing a fiction.)
 
@@ -4101,12 +4284,12 @@ describe.each(ALL_ADAPTERS.map(a => [a.id, a] as const))('%s stream conformance'
 - [ ] **Step 4: Run it**
 
 Run: `npx vitest run --project gateway apps/gateway/test/adapterConformance.test.ts`
-Expected: PASS — 1 registry test plus 6 tests × 5 providers = 31 tests.
+Expected: PASS — 1 registry test plus 6 tests × 6 providers = 37 tests. The `recorded` rows are not ceremony: they are what proves the offline stub's stream behaves exactly like a provider's, which is the property that stops a fixture-backed local run from being a different code path.
 
 - [ ] **Step 5: Mutation test — the two per-provider bugs, at the shared surface**
 
 1. Delete `for (const raw of reader.flush()) handle(raw);` from `drive`. Expected: FAIL on *"does not lose the last event when the stream ends without a trailing blank line"* for **all five** providers — which is the point: one splitter means one fix, and this suite proves the fix reaches every adapter.
-2. In `openaiCompatible.decodeEvent`, change `if (data === '[DONE]') return { kind: 'end' };` to `return null`. Expected: FAIL on *"decodes the recorded stream to the expected text, usage and end"* for the four OpenAI-shaped providers and **not** for Anthropic — which is also the point: a provider-specific regression is isolated to that provider's rows.
+2. In `openaiCompatible.decodeEvent`, change `if (data === '[DONE]') return { kind: 'end' };` to `return null`. Expected: FAIL on *"decodes the recorded stream to the expected text, usage and end"* for the four OpenAI-shaped providers and for `recorded` (which reuses the same base), and **not** for Anthropic — which is also the point: a provider-specific regression is isolated to that provider's rows.
 
 Restore both.
 
@@ -4153,7 +4336,7 @@ OpenAI-shaped and not Anthropic (a provider regression stays isolated).
   - `interface Transport { fetch(url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }): Promise<TransportResponse> }`
   - `interface TransportResponse { status: number; ok: boolean; json(): Promise<unknown>; text(): Promise<string>; body: AsyncIterable<Uint8Array> | null }`
   - `callModel(ctx: CallContext, req: InferRequest, signal?: AbortSignal): Promise<InferResponse>`
-  - `interface CallContext { config: GatewayConfig; allowlist: Allowlist; audit: AuditLogger; credentials: CredentialResolver; transport: Transport; limiter: RateLimiter; workspaceId: string; actorUserId: string }`
+  - `interface CallContext { config: GatewayConfig; allowlist: Allowlist; audit: AuditLogger; credentials: CredentialResolver; transport: Transport; limiter: RateLimiter; workspaceId: string; actorIssuer: string; actorSubject: string }`
   - `registerInfer(app, makeContext)`, `registerModels(app, allowlist)`
 
 - [ ] **Step 1: Write the failing tests**
@@ -4197,7 +4380,6 @@ function ctx(transport: Transport, sink = new Sink()) {
   return {
     config: {
       maxPromptChars: 100, requestTimeoutMs: 5000, defaultMaxTokens: 4096,
-      environment: 'production' as const, upstream: 'live' as const,
     } as never,
     allowlist: new Allowlist([entry]),
     audit: new AuditLogger(sink, () => new Date(), (() => { let n = 0; return () => `call-${++n}`; })()),
@@ -4205,7 +4387,8 @@ function ctx(transport: Transport, sink = new Sink()) {
     transport,
     limiter: { check: () => {}, record: () => {} } as never,
     workspaceId: 'ws-1',
-    actorUserId: 'oid-1',
+    actorIssuer: 'https://keycloak.local/realms/lexprompt',
+    actorSubject: 'oid-1',
     sink,
   };
 }
@@ -4221,7 +4404,6 @@ describe('callModel — the one call path', () => {
       callId: 'call-1',
       provider: 'azure-foundry',
       jurisdiction: { bloc: 'UK', region: 'uksouth', label: 'UK South' },
-      stubbed: false,
     });
   });
 
@@ -4385,7 +4567,8 @@ export interface CallContext {
   transport: Transport;
   limiter: RateLimiter;
   workspaceId: string;
-  actorUserId: string;
+  actorIssuer: string;
+  actorSubject: string;
 }
 
 /** Everything a call needs, resolved and checked, before anything is sent.
@@ -4410,7 +4593,7 @@ export async function prepare(ctx: CallContext, req: InferRequest, streaming: bo
     );
   }
 
-  ctx.limiter.check(ctx.workspaceId, ctx.actorUserId);
+  ctx.limiter.check(ctx.workspaceId, ctx.actorSubject);
 
   // Order matters and is load-bearing: the credential is resolved BEFORE
   // the audit record is written, so a credential failure never produces a
@@ -4422,13 +4605,13 @@ export async function prepare(ctx: CallContext, req: InferRequest, streaming: bo
     purpose: req.purpose,
     entry,
     workspaceId: ctx.workspaceId,
-    actorUserId: ctx.actorUserId,
+    actorIssuer: ctx.actorIssuer,
+    actorSubject: ctx.actorSubject,
     context: req.context ?? {},
     system: req.system,
     user: req.user,
     imageCount: req.images?.length ?? 0,
     streaming,
-    stubbed: ctx.config.upstream === 'stub',
   });
 
   const adapter = getAdapter(entry.provider);
@@ -4537,14 +4720,13 @@ export async function callModel(
         completionTokens: read.usage.completionTokens,
         latencyMs: Date.now() - started, retries,
       });
-      ctx.limiter.record(ctx.workspaceId, ctx.actorUserId, read.usage);
+      ctx.limiter.record(ctx.workspaceId, ctx.actorSubject, read.usage);
       return {
         content: read.content,
         usage: read.usage,
         callId,
         provider: entry.provider,
         jurisdiction: entry.jurisdiction,
-        stubbed: ctx.config.upstream === 'stub',
       };
     }
 
@@ -4594,7 +4776,8 @@ import { callModel, type CallContext } from '../callModel.ts';
 
 export interface InferBody {
   workspaceId?: string;
-  actorUserId?: string;
+  actorIssuer?: string;
+  actorSubject?: string;
   [key: string]: unknown;
 }
 
@@ -4622,11 +4805,11 @@ export function registerInfer(
 }
 ```
 
-`makeContext` reads `workspaceId` and `actorUserId` from the **request body**, which `apps/api` fills from the validated token (Task 17). The gateway does not validate a user token — it trusts its one caller, which is the whole point of the caller-auth boundary in Task 15.
+`makeContext` reads `workspaceId`, `actorIssuer` and `actorSubject` from the **request body**, which `apps/api` fills from the validated token (Task 17). The gateway does not validate a user token — it trusts its one caller, which is the whole point of the caller-auth boundary in Task 15.
 
 - [ ] **Step 5: Wire the server**
 
-In `server.ts`, extend `ServerDeps` with `allowlist`, `audit`, `credentials`, `transport`, `limiter`, and register `registerModels(app, deps.allowlist)` and `registerInfer(app, req => ({ ...deps, workspaceId: String((req.body as InferBody).workspaceId ?? ''), actorUserId: String((req.body as InferBody).actorUserId ?? '') }))`. In `main.ts`, construct `JsonlAuditSink(process.stdout)`, `DefaultCredentialResolver` from the three Azure helpers, and an `undici`-backed `Transport`:
+In `server.ts`, extend `ServerDeps` with `allowlist`, `audit`, `credentials`, `transport`, `limiter`, and register `registerModels(app, deps.allowlist)` and `registerInfer(app, req => ({ ...deps, workspaceId: String((req.body as InferBody).workspaceId ?? ''), actorIssuer: String((req.body as InferBody).actorIssuer ?? ''), actorSubject: String((req.body as InferBody).actorSubject ?? '') }))`. In `main.ts`, construct `JsonlAuditSink(process.stdout)`, `DefaultCredentialResolver` from the three Azure helpers, and an `undici`-backed `Transport`:
 
 ```ts
 import { request as undiciRequest } from 'undici';
@@ -4663,7 +4846,7 @@ Expected: PASS across `config`, `allowlist`, `audit`, `credentials`, `openaiComp
 Run it when you have a credential:
 
 ```bash
-GATEWAY_MODELS_FILE=./models.json GATEWAY_CALLER_AUTH=none npm run smoke -w @lexprompt/gateway
+GATEWAY_MODELS_FILE=./models.json GATEWAY_CALLER_AUTH=mtls npm run smoke -w @lexprompt/gateway
 ```
 
 **This is the only step in Stage 1 that cannot be proved offline** (D5). If you cannot run it, say so plainly in the task's completion note rather than implying you did — `CLAUDE.md`'s rule, and the fixtures stay marked `synthetic`.
@@ -4752,7 +4935,7 @@ describe('POST /v1/infer/stream', () => {
     const app = buildTestServer({ stream: fakeStream(200, OPENAI_OK) });
     const res = await app.inject({ method: 'POST', url: '/v1/infer/stream',
       payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
-                 workspaceId: 'ws', actorUserId: 'oid' } });
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     expect(res.headers['content-type']).toContain('text/event-stream');
     expect(framesOf(res.body)).toEqual([
       { type: 'delta', text: 'one' },
@@ -4768,7 +4951,7 @@ describe('POST /v1/infer/stream', () => {
     });
     const res = await app.inject({ method: 'POST', url: '/v1/infer/stream',
       payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
-                 workspaceId: 'ws', actorUserId: 'oid' } });
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     const frames = framesOf(res.body);
     expect(frames[0]).toEqual({ type: 'delta', text: 'half an ans' });
     expect(frames[1]).toMatchObject({ type: 'error', code: 'stream_truncated' });
@@ -4783,7 +4966,7 @@ describe('POST /v1/infer/stream', () => {
     });
     const res = await app.inject({ method: 'POST', url: '/v1/infer/stream',
       payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
-                 workspaceId: 'ws', actorUserId: 'oid' } });
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     expect(framesOf(res.body)[1]).toMatchObject({
       type: 'error', code: 'upstream_failed', message: 'upstream exploded',
     });
@@ -4793,7 +4976,7 @@ describe('POST /v1/infer/stream', () => {
     const app = buildTestServer({ stream: fakeStream(401, '{"error":{"message":"bad key"}}') });
     const res = await app.inject({ method: 'POST', url: '/v1/infer/stream',
       payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
-                 workspaceId: 'ws', actorUserId: 'oid' } });
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ error: { code: 'service_misconfigured' } });
   });
@@ -4802,7 +4985,7 @@ describe('POST /v1/infer/stream', () => {
     const app = buildTestServer({ stream: fakeStream(200, OPENAI_OK) });
     const res = await app.inject({ method: 'POST', url: '/v1/infer/stream',
       payload: { modelChoiceId: 'gpt-5', purpose: 'assistant.chat', user: 'hi',
-                 workspaceId: 'ws', actorUserId: 'oid' } });
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ error: { code: 'model_not_allowed' } });
   });
@@ -4819,7 +5002,7 @@ describe('POST /v1/infer/stream', () => {
     });
     const res = await app.inject({ method: 'POST', url: '/v1/infer/stream',
       payload: { modelChoiceId: 'claude', purpose: 'assistant.chat', user: 'hi',
-                 workspaceId: 'ws', actorUserId: 'oid' } });
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     const done = framesOf(res.body).find(f => f.type === 'done');
     expect(done).toEqual({ type: 'done', usage: { promptTokens: 16, completionTokens: 5 }, callId: 'call-1' });
   });
@@ -4828,7 +5011,7 @@ describe('POST /v1/infer/stream', () => {
     const app = buildTestServer({ stream: fakeStream(200, OPENAI_OK) });
     await app.inject({ method: 'POST', url: '/v1/infer/stream',
       payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
-                 workspaceId: 'ws', actorUserId: 'oid' } });
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     const finished = app.auditSink.records.find(r => r.kind === 'call.finished');
     expect(finished).toMatchObject({ ok: true, promptTokens: 9, completionTokens: 2 });
   });
@@ -4837,7 +5020,7 @@ describe('POST /v1/infer/stream', () => {
     const app = buildTestServer({ stream: fakeStream(200, 'data: {"choices":[{"delta":{"content":"x"}}]}\n\n') });
     await app.inject({ method: 'POST', url: '/v1/infer/stream',
       payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
-                 workspaceId: 'ws', actorUserId: 'oid' } });
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
     expect(app.auditSink.records.find(r => r.kind === 'call.finished'))
       .toMatchObject({ ok: false, errorCode: 'stream_truncated' });
   });
@@ -4985,7 +5168,7 @@ export function registerInferStream(
       latencyMs: Date.now() - started,
       retries: 0,
     });
-    ctx.limiter.record(ctx.workspaceId, ctx.actorUserId, usage);
+    ctx.limiter.record(ctx.workspaceId, ctx.actorSubject, usage);
   });
 }
 ```
@@ -5029,217 +5212,355 @@ replaced rather than max-merged (1). Restored.
 
 ---
 
-## Task 13: The stub upstream, and the guard that keeps it out of production
+## Task 13: The `recorded` provider — an adapter, not a bypass, and marked everywhere
 
 **Type:** application code
 
 **Files:**
-- Create: `apps/gateway/src/adapters/stub.ts`, `apps/gateway/fixtures/stub/*.json`
-- Create: `apps/gateway/test/stub.test.ts`
-- Modify: `apps/gateway/src/main.ts` (select the transport), `apps/gateway/src/config.ts` (the production guard)
+- Create: `apps/gateway/src/adapters/recorded.ts`, `apps/gateway/fixtures/recorded/*.json`, `apps/gateway/fixtures/recorded/streams/*.txt`
+- Create: `apps/gateway/test/recorded.test.ts`
+- Modify: `apps/gateway/src/adapters/registry.ts` (Task 8 already imports it), `apps/gateway/src/routes/infer.ts` and `inferStream.ts` (the `X-LexPrompt-Provider` header)
+- Modify: `models.local-recorded.example.json` (Task 24 ships it)
 
 **Interfaces:**
-- Consumes: `Transport`, `TransportResponse` (Task 11); `GatewayConfig` (Task 4).
-- Produces: `makeStubTransport(dir: string, readFile: (p: string) => string): Transport`; `selectTransport(config, live, stub): Transport` (throws when `environment === 'production'` and `upstream === 'stub'`).
+- Consumes: `ProviderAdapter`, `AdapterRequest`, `AdapterEvent` (Task 8); `sseFields` (Task 3).
+- Produces: `recordedAdapter: ProviderAdapter` with `id: 'recorded'`; `makeRecordedAdapter(dir, readFile)` for tests.
 
-**What the stub is for, and what it is not.** Owner decision 5 makes running with a real OpenAI or OpenRouter key and no Azure a first-class path — so the stub is **not** the local story any more. It is narrower and still worth having: developing with **no credential of any kind**, on a plane, in CI, and for the browser tests in Task 20. Every check still runs: the allowlist, the jurisdiction gate, the purpose check, the prompt cap, the rate limiter and the audit record. Only the socket is replaced.
+**This task changed with spec Revision 2 (§5.1), and the change is the point of it.** The stub was a *transport* selected by an environment flag — which is a second code path, chosen by a branch on the environment, and §5.1 and S30 forbid exactly that. It is now a **registered provider adapter**: it appears in `ALL_ADAPTERS`, an operator selects it by putting it in `models.json` like any other, it passes `adapterConformance` like any other, and it declares a jurisdiction like any other — so a firm deployment refuses it through **S27's existing mechanism** rather than through a new guard.
 
-**And a stubbed answer says so, everywhere.** `InferResponse.stubbed` is `true`, the audit record's `stubbed` is `true`, the response carries `X-LexPrompt-Upstream: stub`, and Task 22's Settings screen shows a persistent banner while it is set. A recorded answer that looked like a real one is exactly the "mistaken for a successful result" failure this project's first rule is about.
+That is strictly stronger than the flag-and-guard version this task previously described. The guard was a check somebody had to remember to write; the jurisdiction refusal is a check that already exists and that every provider passes through.
+
+**Its declared jurisdiction is the honest one.** `{ bloc: 'other', region: 'local', label: 'this machine — recorded responses, not a model' }`. Any deployment whose declared set does not include `other` therefore refuses it at startup, naming it, with no new code — and since `GATEWAY_ALLOWED_JURISDICTIONS` has no default (D4), that is every deployment whose operator has not written `other` themselves. Which is a thing they cannot type by accident.
+
+**And every response it produces is marked, in four places.** It is the one component of the local stack capable of producing a *confident wrong answer* — fluent, plausible, and about no document anybody uploaded — so it says loudest what it is:
+
+1. `InferResponse.provider === 'recorded'`, returned, not merely logged.
+2. The audit record's `provider` and `jurisdiction`, from the same allowlist entry as every other call.
+3. `X-LexPrompt-Provider: recorded` on the HTTP response, so the marking survives a caller that ignores the body.
+4. The browser renders a **loud, non-dismissible banner** while the selected model's provider is `recorded`, and Stage 3 additionally stores the flag on the finding and `run.provider` (§5.1) — noted here as the interface Stage 3 must honour, and not built now, because Stage 1 has no `run` row.
 
 - [ ] **Step 1: Write the failing test**
 
-`apps/gateway/test/stub.test.ts`:
+`apps/gateway/test/recorded.test.ts`:
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { makeStubTransport, selectTransport } from '../src/adapters/stub.ts';
+import { makeRecordedAdapter } from '../src/adapters/recorded.ts';
+import { loadConfig } from '../src/config.ts';
+import type { ModelEntry } from '../src/config.ts';
+import type { AdapterRequest } from '../src/adapters/types.ts';
+
+const RECORDED_JURISDICTION = {
+  bloc: 'other' as const, region: 'local',
+  label: 'this machine — recorded responses, not a model',
+};
+
+const entry: ModelEntry = {
+  id: 'offline', provider: 'recorded', model: 'recorded', label: 'Recorded responses (offline)',
+  jurisdiction: RECORDED_JURISDICTION,
+  contextLength: 128000, supportsImages: true, supportsStructuredOutput: true, isDefault: true,
+  endpoint: 'file:///fixtures/recorded',
+  credential: { source: 'env', var: 'UNUSED' },
+};
 
 const files: Record<string, string> = {
-  'fixtures/stub/review.clause.json': JSON.stringify({
-    choices: [{ message: { content: '{"summary":"A stubbed answer.","riskLevel":"low"}' } }],
+  'fixtures/recorded/review.clause.json': JSON.stringify({
+    choices: [{ message: { content: '{"summary":"RECORDED - this is a stored development response, not a review.","riskLevel":"low"}' } }],
     usage: { prompt_tokens: 5, completion_tokens: 9 },
   }),
-  'fixtures/stub/default.json': JSON.stringify({
-    choices: [{ message: { content: 'A stubbed answer.' } }],
+  'fixtures/recorded/default.json': JSON.stringify({
+    choices: [{ message: { content: 'RECORDED - this is a stored development response, not a review.' } }],
     usage: { prompt_tokens: 1, completion_tokens: 1 },
   }),
 };
-const read = (p: string) => {
-  const body = files[p.replace(/\\/g, '/')];
-  if (!body) throw new Error(`ENOENT ${p}`);
+const read = (path: string) => {
+  const body = files[path.replace(/\\/g, '/')];
+  if (!body) throw new Error(`ENOENT ${path}`);
   return body;
 };
 
-describe('the stub transport', () => {
-  it('answers from the fixture named for the purpose', async () => {
-    const t = makeStubTransport('fixtures/stub', read);
-    const res = await t.fetch('https://ignored', {
-      method: 'POST', headers: { 'x-lexprompt-purpose': 'review.clause' },
-      body: '{}', signal: new AbortController().signal,
-    });
-    expect(res.ok).toBe(true);
-    expect(await res.json()).toMatchObject({ choices: [{ message: { content: expect.any(String) } }] });
+const req = (over: Partial<AdapterRequest> = {}): AdapterRequest => ({
+  entry, user: 'hi', maxTokens: 4096, stream: false, ...over,
+});
+
+describe('the recorded adapter is an adapter (spec Revision 2, §5.1)', () => {
+  const a = makeRecordedAdapter('fixtures/recorded', read);
+
+  it('is registered under the provider id `recorded`', () => {
+    expect(a.id).toBe('recorded');
   });
 
-  it('falls back to default.json for a purpose with no fixture', async () => {
-    const t = makeStubTransport('fixtures/stub', read);
-    const res = await t.fetch('https://ignored', {
-      method: 'POST', headers: { 'x-lexprompt-purpose': 'export.email' },
-      body: '{}', signal: new AbortController().signal,
-    });
-    expect((await res.json() as { choices: { message: { content: string } }[] })
-      .choices[0].message.content).toBe('A stubbed answer.');
+  it('implements the same three functions as every other adapter', () => {
+    expect(typeof a.buildCall).toBe('function');
+    expect(typeof a.readResponse).toBe('function');
+    expect(typeof a.decodeEvent).toBe('function');
   });
 
-  it('fails LOUDLY when no fixture and no default exist, rather than answering empty', async () => {
-    const t = makeStubTransport('fixtures/stub', () => { throw new Error('ENOENT'); });
-    const res = await t.fetch('https://ignored', {
-      method: 'POST', headers: {}, body: '{}', signal: new AbortController().signal,
-    });
-    expect(res.ok).toBe(false);
-    expect(res.status).toBe(503);
+  it('decodes an OpenAI-shaped event, so it passes adapterConformance unmodified', () => {
+    expect(a.decodeEvent('data: {"choices":[{"delta":{"content":"Hi"}}]}'))
+      .toEqual({ kind: 'delta', text: 'Hi' });
+    expect(a.decodeEvent('data: [DONE]')).toEqual({ kind: 'end' });
+  });
+
+  it('routes buildCall to the fixture chosen by the purpose, and to default otherwise', () => {
+    expect(a.buildCall(req({ purpose: 'review.clause' } as never), { kind: 'api-key', key: '' }).url)
+      .toBe('fixtures/recorded/review.clause.json');
+    expect(a.buildCall(req({ purpose: 'export.email' } as never), { kind: 'api-key', key: '' }).url)
+      .toBe('fixtures/recorded/default.json');
+  });
+
+  it('carries no credential into its headers, because it needs none', () => {
+    const call = a.buildCall(req(), { kind: 'api-key', key: 'sk-should-not-appear' });
+    expect(JSON.stringify(call.headers)).not.toContain('sk-should-not-appear');
+  });
+
+  it('THROWS on a missing fixture rather than answering empty', () => {
+    const bare = makeRecordedAdapter('fixtures/recorded', () => { throw new Error('ENOENT'); });
+    expect(() => bare.readResponse(bare.buildCall(req(), { kind: 'api-key', key: '' })))
+      .toThrow(/no recorded fixture/i);
+  });
+
+  it('THROWS when a fixture has no message content, like every other adapter', () => {
+    const empty = makeRecordedAdapter('d', () => JSON.stringify({ choices: [] }));
+    expect(() => empty.readResponse({ choices: [] })).toThrow(/no message content/i);
   });
 });
 
-describe('the production guard (S2)', () => {
-  const live = { fetch: async () => { throw new Error('live'); } };
-  const stub = { fetch: async () => { throw new Error('stub'); } };
+describe('S27 refuses it in a firm deployment, through the mechanism that already exists', () => {
+  const modelsFile = (jurisdiction: unknown) => JSON.stringify({
+    models: [{ ...entry, jurisdiction }],
+  });
+  const BASE = {
+    GATEWAY_PORT: '8081', GATEWAY_MODELS_FILE: '/m.json', GATEWAY_CALLER_AUTH: 'none',
+  };
+  const read1 = (body: string) => () => body;
 
-  it('selects the stub in development when asked', () => {
-    expect(selectTransport({ environment: 'development', upstream: 'stub' } as never, live, stub))
-      .toBe(stub);
+  // No new guard. The jurisdiction gate D4 already built does the whole job.
+  it('a deployment that has not declared `other` refuses to start with it, naming it', () => {
+    expect(() => loadConfig({ ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU' },
+      read1(modelsFile(RECORDED_JURISDICTION))))
+      .toThrow(/offline[\s\S]*recorded[\s\S]*other[\s\S]*GATEWAY_ALLOWED_JURISDICTIONS/);
   });
 
-  it('selects live in development by default', () => {
-    expect(selectTransport({ environment: 'development', upstream: 'live' } as never, live, stub))
-      .toBe(live);
+  it('starts only when the operator wrote `other` into the allowed set themselves', () => {
+    const cfg = loadConfig(
+      { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU,other' },
+      read1(modelsFile(RECORDED_JURISDICTION)),
+    );
+    expect(cfg.models[0].provider).toBe('recorded');
   });
 
-  // The guard. A recorded answer must never be able to reach a lawyer.
-  it('THROWS in production when the stub is asked for, rather than quietly using live', () => {
-    expect(() => selectTransport({ environment: 'production', upstream: 'stub' } as never, live, stub))
-      .toThrow(/GATEWAY_UPSTREAM=stub[\s\S]*NODE_ENV=production/);
-  });
-
-  it('selects live in production', () => {
-    expect(selectTransport({ environment: 'production', upstream: 'live' } as never, live, stub))
-      .toBe(live);
+  // The one thing a recorded adapter must not be allowed to do: hide.
+  it('refuses a recorded entry that declares a real-looking jurisdiction', () => {
+    expect(() => loadConfig(
+      { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU' },
+      read1(modelsFile({ bloc: 'UK', region: 'uksouth', label: 'UK South' })),
+    )).toThrow(/recorded[\s\S]*must declare/i);
   });
 });
 ```
 
 - [ ] **Step 2: Run and watch it fail**
 
-Run: `npx vitest run --project gateway apps/gateway/test/stub.test.ts`
-Expected: FAIL — `Failed to resolve import "../src/adapters/stub.ts"`.
+Run: `npx vitest run --project gateway apps/gateway/test/recorded.test.ts`
+Expected: FAIL — `Failed to resolve import "../src/adapters/recorded.ts"`.
 
-- [ ] **Step 3: Implement**
+- [ ] **Step 3: Implement `adapters/recorded.ts`**
 
 ```ts
 import path from 'node:path';
-import type { GatewayConfig } from '../config.ts';
-import type { Transport, TransportResponse } from '../callModel.ts';
+import { readFileSync } from 'node:fs';
+import { openAiCompatible } from './openaiCompatible.ts';
+import type { AdapterCall, AdapterRequest, ProviderAdapter } from './types.ts';
+import type { ResolvedCredential } from '../credentials/types.ts';
+
+export const RECORDED_JURISDICTION = {
+  bloc: 'other' as const,
+  region: 'local',
+  label: 'this machine — recorded responses, not a model',
+};
 
 /**
- * Replaces the socket and nothing else.
+ * The offline provider (§5.1). An ADAPTER, not a bypass.
  *
- * Every check still runs — the allowlist, the jurisdiction gate, the
- * purpose check, the prompt cap, the rate limiter, the audit record — and a
- * missing fixture is a 503 rather than an empty answer, because "the model
- * returned nothing" is the one result this app must never fabricate.
+ * It was a transport chosen by an environment flag, which is a second code
+ * path selected by a branch on the environment — precisely what §5.1 and
+ * S30 forbid, and what would make a green local run evidence about a system
+ * nobody deploys. It is now registered, selected by an operator writing it
+ * into `models.json` like any other provider, and refused in a firm
+ * deployment by the jurisdiction gate that already exists (S27) rather than
+ * by a guard somebody had to remember to write.
+ *
+ * It reuses `openAiCompatible`'s response and event decoders verbatim, which
+ * is not laziness: it is what makes the fixture path decode through the same
+ * code the four OpenAI-shaped providers decode through, so `adapterConformance`
+ * is testing something rather than agreeing with itself.
+ *
+ * This is the one component of the local stack that can produce a confident
+ * wrong answer — fluent, plausible, and about no document anybody uploaded —
+ * so it is marked in four places: the returned `provider`, the audit record,
+ * an `X-LexPrompt-Provider` response header, and a non-dismissible banner in
+ * the app.
  */
-export function makeStubTransport(dir: string, readFile: (p: string) => string): Transport {
+export function makeRecordedAdapter(
+  dir: string,
+  readFile: (p: string) => string,
+): ProviderAdapter {
+  const base = openAiCompatible({
+    id: 'recorded',
+    url: () => dir,
+    headers: () => ({}),
+  });
+
   return {
-    async fetch(_url, init): Promise<TransportResponse> {
-      const purpose = init.headers['x-lexprompt-purpose'] ?? 'default';
-      for (const name of [`${purpose}.json`, 'default.json']) {
-        try {
-          const body = JSON.parse(readFile(path.join(dir, name))) as unknown;
-          return {
-            status: 200, ok: true, body: null,
-            json: async () => body,
-            text: async () => JSON.stringify(body),
-          };
-        } catch { /* try the next */ }
+    id: 'recorded',
+
+    buildCall(req: AdapterRequest, _credential: ResolvedCredential): AdapterCall {
+      // The credential is deliberately ignored and never enters the headers:
+      // a recorded provider needs none, and a call that carried one would
+      // put a real key on a path that never reaches a network.
+      const purpose = (req as unknown as { purpose?: string }).purpose ?? 'default';
+      const candidates = [`${purpose}.json`, 'default.json'];
+      const found = candidates.find((name) => {
+        try { readFile(path.join(dir, name)); return true; } catch { return false; }
+      });
+      if (!found) {
+        throw new Error(
+          `No recorded fixture for purpose ${purpose} in ${dir}. `
+          + 'A missing fixture is a failure, never an empty answer.',
+        );
       }
-      const message = { error: { message: `No stub fixture for purpose ${purpose} in ${dir}.` } };
-      return {
-        status: 503, ok: false, body: null,
-        json: async () => message, text: async () => JSON.stringify(message),
-      };
+      return { url: path.join(dir, found).replace(/\\/g, '/'), headers: {}, body: {} };
     },
+
+    // Both reused verbatim from the OpenAI-shaped base, including its refusal
+    // to return an empty answer when a fixture has no message content.
+    readResponse: base.readResponse,
+    decodeEvent: base.decodeEvent,
   };
 }
 
-/**
- * The production guard.
- *
- * A recorded answer reaching a lawyer would be the purest form of this
- * project's founding defect — fluent, plausible, and about no document
- * anybody uploaded. Three layers stop it, and this is the first: the
- * process refuses to start. The second is that `apps/gateway/.dockerignore`
- * excludes `fixtures/stub`, so the production image cannot read one. The
- * third is that a stubbed answer is stamped `stubbed: true` in the response,
- * the audit record and a response header, and the app shows a banner.
- */
-export function selectTransport(config: GatewayConfig, live: Transport, stub: Transport): Transport {
-  if (config.environment === 'production' && config.upstream === 'stub') {
-    throw new Error(
-      'GATEWAY_UPSTREAM=stub was requested with NODE_ENV=production. Recorded responses '
-      + 'must never be served to real users: they are fluent, plausible, and about no '
-      + 'document anybody uploaded. Refusing to start.',
-    );
-  }
-  return config.upstream === 'stub' ? stub : live;
-}
+export const recordedAdapter = makeRecordedAdapter(
+  process.env.GATEWAY_RECORDED_DIR ?? 'apps/gateway/fixtures/recorded',
+  p => readFileSync(p, 'utf8'),
+);
 ```
 
-Then, in `callModel.ts`'s `prepare`, add `'x-lexprompt-purpose': req.purpose` to `call.headers` **only when `ctx.config.upstream === 'stub'`** — a purpose header on a real provider request is a piece of the app's internals leaving the building for no reason.
+**`callModel`'s transport reads a `file:` URL for this adapter and nothing else changes.** Extend `main.ts`'s `undici` transport with one branch on the URL *scheme* — not on the provider id, which would be the provider branch outside `adapters/` that Task 26's sweep forbids:
 
-And in `routes/infer.ts` / `inferStream.ts`, set `reply.header('X-LexPrompt-Upstream', ctx.config.upstream === 'stub' ? 'stub' : 'live')`.
+```ts
+    if (!/^https?:/.test(url)) {
+      // A fixture path, produced only by the recorded adapter's buildCall.
+      const body = JSON.parse(readFileSync(url, 'utf8')) as unknown;
+      return { status: 200, ok: true, body: null,
+        json: async () => body, text: async () => JSON.stringify(body) };
+    }
+```
 
-- [ ] **Step 4: Write the fixtures**
+For the streamed route, the same branch returns an async generator over `fixtures/recorded/streams/<purpose>.txt` in three uneven chunks, so a local stream exercises the chunk-boundary path rather than arriving whole.
 
-`apps/gateway/fixtures/stub/default.json`, plus one per purpose that needs a schema-shaped answer — at minimum `review.clause.json`, `review.collection_clause.json`, `playbook.draft.json`, `playbook.suggest.json`, `redlines.infer.json`, `changeset.build.json`. Each is a complete OpenAI-shaped response envelope whose `content` is a JSON string matching that call site's schema, so `chatJson` parses it. Copy the schemas from `extractClause.ts`, `extractCollectionClause.ts`, `generateDraft.ts`, `suggestField.ts`, `inferPositions.ts` and `buildChangeset.ts`, and make the values obviously fake — `"summary": "STUB — this is a recorded development response, not a review."` — so a screenshot taken in stub mode cannot be mistaken for a real one.
+- [ ] **Step 4: Add the jurisdiction honesty check to `config.ts`**
 
-- [ ] **Step 5: Run the tests, then verify by hand**
+The third S27 test needs one new rule, and it is the only new code this task adds to the gateway core:
 
-Run: `npx vitest run --project gateway apps/gateway/test/stub.test.ts` — Expected: PASS, 7 tests.
+```ts
+  // A recorded model must declare that it is recorded. Everything else in
+  // this design lets an operator declare a jurisdiction and be trusted; here
+  // the value is a fact about the software rather than about a deployment,
+  // and an entry claiming `UK South` for stored fixtures would defeat every
+  // one of the four markings at once.
+  for (const m of models) {
+    if (m.provider === 'recorded' && m.jurisdiction.bloc !== 'other') {
+      throw new ConfigError(
+        `Model "${m.id}" uses the recorded provider and must declare `
+        + `jurisdiction.bloc "other" — recorded responses come from this machine, `
+        + `not from ${m.jurisdiction.label}.`,
+      );
+    }
+  }
+```
+
+This is a check on the `provider` field's *value*, in the configuration validator, not a provider-specific code path in the call path — `config.ts` already validates provider ids and is where per-entry rules belong.
+
+- [ ] **Step 5: Write the fixtures**
+
+`apps/gateway/fixtures/recorded/default.json`, plus one per purpose that needs a schema-shaped answer: `review.clause.json`, `review.collection_clause.json`, `playbook.draft.json`, `playbook.suggest.json`, `redlines.infer.json`, `changeset.build.json`. Each is a complete OpenAI-shaped envelope whose `content` is a JSON string matching that call site's schema — copy the schemas from `extractClause.ts`, `extractCollectionClause.ts`, `generateDraft.ts`, `suggestField.ts`, `inferPositions.ts` and `buildChangeset.ts`.
+
+**Make every value obviously fake and say so in the value itself** — `"summary": "RECORDED — a stored development response, not a review of this document."` — so a screenshot taken against the recorded provider cannot be mistaken for a real one even with the banner cropped out.
+
+`apps/gateway/fixtures/recorded/streams/assistant.chat.txt` is the SSE fixture, in the same OpenAI-shaped format as Task 10's `openai.txt`.
+
+- [ ] **Step 6: Mark it on the wire and in the app**
+
+In `routes/infer.ts` and `routes/inferStream.ts`, add `reply.header('X-LexPrompt-Provider', entry.provider)` — for every provider, not only this one. A header present only for `recorded` would make its *absence* carry meaning, which is the blank-CSV-cell defect S27's own reasoning names.
+
+In `src/features/settings/ModelPicker.tsx` and the app shell (Task 22), render a **non-dismissible** banner whenever the selected model's `provider === 'recorded'`:
+
+> **These answers are recorded fixtures, not a model.** LexPrompt is configured with the offline `recorded` provider. Nothing here has been read by an AI, and nothing here is about your documents.
+
+- [ ] **Step 7: Run the tests**
+
+Run: `npx vitest run --project gateway`
+Expected: PASS — `recorded.test.ts` 10 tests, and `adapterConformance` now 37 (Task 10), including six rows for `recorded`.
+
+- [ ] **Step 8: Verify by hand**
 
 ```bash
-NODE_ENV=production GATEWAY_UPSTREAM=stub GATEWAY_MODELS_FILE=/tmp/lexprompt/models.json \
-GATEWAY_CALLER_AUTH=none GATEWAY_ALLOWED_JURISDICTIONS=UK,EU,US \
+cat > /tmp/lexprompt/models.json <<'JSON'
+{"models":[{"id":"offline","provider":"recorded","model":"recorded",
+"label":"Recorded responses (offline)",
+"jurisdiction":{"bloc":"other","region":"local","label":"this machine — recorded responses, not a model"},
+"contextLength":128000,"supportsImages":true,"supportsStructuredOutput":true,"isDefault":true,
+"endpoint":"file:///fixtures/recorded","credential":{"source":"env","var":"UNUSED"}}]}
+JSON
+GATEWAY_MODELS_FILE=/tmp/lexprompt/models.json \
+GATEWAY_CALLER_AUTH=mtls GATEWAY_MTLS_CA_FILE=certs/ca.pem \
+GATEWAY_MTLS_CERT_FILE=certs/gateway.pem GATEWAY_MTLS_KEY_FILE=certs/gateway.key \
+GATEWAY_MTLS_ALLOWED_SUBJECT=lexprompt-api \
   npx tsx apps/gateway/src/main.ts; echo "exit=$?"
 ```
 
-Expected: the refusal message quoted above, `exit=1`.
+Expected: refusal naming `offline`, `recorded`, `other · this machine — recorded responses, not a model` and `GATEWAY_ALLOWED_JURISDICTIONS`; `exit=1`. Re-run with `GATEWAY_ALLOWED_JURISDICTIONS=other` and it starts, with the boot banner naming the recorded row.
 
-- [ ] **Step 6: Mutation test the guard**
+- [ ] **Step 9: Mutation test — two mutations**
 
-Change `if (config.environment === 'production' && config.upstream === 'stub')` to `if (false)`. Run the test. Expected: FAIL on *"THROWS in production when the stub is asked for"*. Restore.
+1. **The S27 refusal.** Add `'other'` to `allowedJurisdictions` inside `loadConfig` after parsing, rather than requiring the operator to write it. Run. Expected: FAIL on *"a deployment that has not declared `other` refuses to start with it, naming it"*. Restore.
+2. **The honesty check.** Delete the `provider === 'recorded' && bloc !== 'other'` loop. Run. Expected: FAIL on *"refuses a recorded entry that declares a real-looking jurisdiction"*. Restore.
 
-- [ ] **Step 7: Commit**
+The second is the mutation that matters: without it, an operator can hide the recorded provider behind `UK South`, and all four markings then agree with each other about something false.
+
+- [ ] **Step 10: Commit**
 
 ```bash
-git add apps/gateway/src/adapters/stub.ts apps/gateway/fixtures apps/gateway/test/stub.test.ts apps/gateway/src/callModel.ts apps/gateway/src/routes
+git add apps/gateway/src/adapters/recorded.ts apps/gateway/src/adapters/registry.ts apps/gateway/src/config.ts apps/gateway/src/routes apps/gateway/src/main.ts apps/gateway/fixtures apps/gateway/test/recorded.test.ts
 git commit -F .git/COMMIT_MSG_TASK13
 ```
 
 ```
-feat(gateway): a stub upstream for credential-free development, fenced off
+feat(gateway): the recorded provider is an adapter, not a bypass
 
-Owner decision 5 makes running against a real OpenAI or OpenRouter key with
-no Azure a first-class path, so the stub is narrower now: developing with no
-credential at all, in CI, and for the browser tests. It replaces the socket
-and nothing else — every check still runs, and a missing fixture is a 503
-rather than an empty answer.
+Spec Revision 2 / §5.1 changed this and the change is the point. It was a
+transport chosen by an environment flag — a second code path selected by a
+branch on the environment, which is exactly what S30 forbids and what would
+make a green local run evidence about a system nobody deploys.
 
-Three layers keep a recorded answer away from a lawyer: the process refuses
-to start with NODE_ENV=production and GATEWAY_UPSTREAM=stub; the production
-image excludes fixtures/stub; and a stubbed answer is stamped in the
-response, the audit record and a header, with a banner in the app.
+It is now registered like any other provider: an operator selects it in
+models.json, it passes adapterConformance through the same decoders the four
+OpenAI-shaped providers use, and a firm deployment refuses it through S27's
+jurisdiction gate rather than a guard somebody had to remember to write.
 
-Mutation-tested: the guard disabled, one test fails; restored.
+Its declared jurisdiction is 'other · this machine — recorded responses, not
+a model', and config.ts refuses a recorded entry that claims anything else —
+without that, an operator could hide it behind UK South and all four
+markings would agree with each other about something false.
+
+Marked in four places: the returned provider, the audit record, an
+X-LexPrompt-Provider header sent for EVERY provider (present only for this
+one would make its absence carry meaning), and a non-dismissible banner. It
+is the one local component that can produce a confident wrong answer.
+
+Mutation-tested: 'other' added to the default allowed set (1 test fails);
+the jurisdiction honesty check removed (1). Restored.
 ```
 
 ---
@@ -5255,7 +5576,7 @@ Mutation-tested: the guard disabled, one test fails; restored.
 **Interfaces:**
 - Consumes: `InferUsage`, `ModelError` (Task 2).
 - Produces:
-  - `interface RateLimiter { check(workspaceId: string, actorUserId: string): void; record(workspaceId: string, actorUserId: string, usage: InferUsage): void }`
+  - `interface RateLimiter { check(workspaceId: string, actorSubject: string): void; record(workspaceId: string, actorSubject: string, usage: InferUsage): void }`
   - `class WindowRateLimiter implements RateLimiter` — constructed with `{ requestsPerMinutePerActor, requestsPerMinutePerWorkspace, tokensPerHourPerActor, tokensPerHourPerWorkspace, now }`
   - Config: `GATEWAY_RPM_PER_ACTOR` (default 60), `GATEWAY_RPM_PER_WORKSPACE` (600), `GATEWAY_TOKENS_PER_HOUR_PER_ACTOR` (2_000_000), `GATEWAY_TOKENS_PER_HOUR_PER_WORKSPACE` (20_000_000)
 
@@ -5350,8 +5671,8 @@ Expected: FAIL — `Failed to resolve import "../src/rateLimit.ts"`.
 import { ModelError, type InferUsage } from '@lexprompt/core';
 
 export interface RateLimiter {
-  check(workspaceId: string, actorUserId: string): void;
-  record(workspaceId: string, actorUserId: string, usage: InferUsage): void;
+  check(workspaceId: string, actorSubject: string): void;
+  record(workspaceId: string, actorSubject: string, usage: InferUsage): void;
 }
 
 interface Window { at: number; tokens: number }
@@ -5384,8 +5705,11 @@ export class WindowRateLimiter implements RateLimiter {
     return kept;
   }
 
-  check(workspaceId: string, actorUserId: string): void {
-    const actor = `a:${workspaceId}:${actorUserId}`;
+  check(workspaceId: string, actorSubject: string): void {
+    // Keyed on (workspace, subject). The subject is issuer-scoped, so two
+    // issuers' subjects can never collide in one deployment — and a
+    // deployment has one issuer anyway.
+    const actor = `a:${workspaceId}:${actorSubject}`;
     const ws = `w:${workspaceId}`;
     const o = this.#opts;
 
@@ -5417,10 +5741,10 @@ export class WindowRateLimiter implements RateLimiter {
     }
   }
 
-  record(workspaceId: string, actorUserId: string, usage: InferUsage): void {
+  record(workspaceId: string, actorSubject: string, usage: InferUsage): void {
     const at = this.#opts.now();
     const tokens = usage.promptTokens + usage.completionTokens;
-    for (const key of [`a:${workspaceId}:${actorUserId}`, `w:${workspaceId}`]) {
+    for (const key of [`a:${workspaceId}:${actorSubject}`, `w:${workspaceId}`]) {
       this.#events.set(key, [...(this.#events.get(key) ?? []), { at, tokens }]);
     }
   }
@@ -5436,7 +5760,7 @@ Expected: PASS, 8 tests.
 
 - [ ] **Step 5: Mutation test the per-actor scoping**
 
-Change `const actor = \`a:${workspaceId}:${actorUserId}\`` to `const actor = \`a:${workspaceId}\``. Run. Expected: FAIL on *"does not let one actor exhaust another actor's allowance"*. Restore.
+Change `const actor = \`a:${workspaceId}:${actorSubject}\`` to `const actor = \`a:${workspaceId}\``. Run. Expected: FAIL on *"does not let one actor exhaust another actor's allowance"*. Restore.
 
 - [ ] **Step 6: Commit**
 
@@ -5474,12 +5798,12 @@ Mutation-tested: per-actor key collapsed to per-workspace, one test fails.
 - Consumes: `CallerAuthConfig` (Task 4).
 - Produces: `makeCallerAuthHook(config: CallerAuthConfig, verifyEntra): (req, reply) => Promise<void>` — a Fastify `preHandler` that rejects with 401 before any route body runs.
 
-**Two modes, per §10.** In Azure the gateway has **internal-only ingress** and validates an Entra token whose audience is the gateway's own app registration and whose `oid` is `apps/api`'s managed identity. In compose it uses **mTLS**: the gateway is an HTTPS server with `requestCert: true, rejectUnauthorized: true` against a locally generated CA, and additionally checks the client certificate's subject CN. `mode: 'none'` exists **only** for unit tests and is refused at startup when `NODE_ENV=production` — add that check to `parseCaller` in this task.
+**Two modes, per §10.** In Azure the gateway has **internal-only ingress** and validates an OIDC token whose audience is the gateway's own app registration and whose subject is `apps/api`'s workload identity. In compose it uses **mTLS**: the gateway is an HTTPS server with `requestCert: true, rejectUnauthorized: true` against a locally generated CA, and additionally checks the client certificate's subject CN. **`mode: 'none'` is not reachable from configuration at all** (Task 4) — it exists as a type so a unit test can construct one, and no `GATEWAY_CALLER_AUTH` value produces it. That is stronger than refusing it under `NODE_ENV=production`, and it is the only version compatible with S30's "no module branches on the environment": a mode that behaves differently in one environment is the environment branch, wearing a security control's clothes.
 
 - [ ] **Step 1: Write the failing test**
 
 `apps/gateway/test/callerAuth.test.ts` — cases:
-1. `mode: 'none'` allows any request (and a separate assertion that `loadConfig` **throws** for `GATEWAY_CALLER_AUTH=none` with `NODE_ENV=production`).
+1. `mode: 'none'`, **constructed directly rather than through `loadConfig`**, allows any request — and a separate assertion that no `GATEWAY_CALLER_AUTH` value produces it (Task 4's test), so the permissive branch exists only where a unit test can reach it.
 2. `mode: 'mtls'` rejects 401 when `req.socket.authorized` is false, naming that a client certificate is required.
 3. `mode: 'mtls'` rejects 401 when the certificate's `subject.CN` is not `allowedSubject`, **naming the CN it saw**.
 4. `mode: 'mtls'` allows when authorized and the CN matches.
@@ -5507,7 +5831,7 @@ export type VerifyEntra = (token: string, tenantId: string, audience: string)
  *
  * The gateway does NOT validate a user's token — it has no user model and
  * no roles. It validates its one caller. That is what makes
- * `workspaceId`/`actorUserId` in the request body trustworthy: they were
+ * `workspaceId` and the actor in the request body trustworthy: they were
  * put there by `apps/api` from a token `apps/api` validated, and nothing
  * else can reach this port.
  *
@@ -5565,21 +5889,7 @@ export function makeCallerAuthHook(config: CallerAuthConfig, verifyEntra: Verify
 
 Register it in `buildServer` with `app.addHook('preHandler', makeCallerAuthHook(deps.config.caller, deps.verifyEntra))`, and **exclude `/healthz`** by checking `req.url === '/healthz'` first — a liveness probe has no certificate and no token.
 
-Add to `parseCaller` in `config.ts`:
-
-```ts
-  if (mode === 'none') {
-    if (env.NODE_ENV === 'production') {
-      throw new ConfigError(
-        'GATEWAY_CALLER_AUTH=none is not permitted with NODE_ENV=production. The gateway '
-        + 'would accept a model call from anything that can reach its port.',
-      );
-    }
-    return { mode: 'none' };
-  }
-```
-
-and a config test for it.
+`parseCaller` in `config.ts` already refuses `none` **in every environment** (Task 4) — there is no configuration value that turns the caller check off, which is stronger than refusing it under `NODE_ENV=production` and is the only version compatible with S30's "no module branches on the environment". Confirm Task 4's test *"has NO configuration value that disables the caller check, in any environment"* is present and passing before continuing; do not add a second check here.
 
 - [ ] **Step 3: Write the dev certificate script**
 
@@ -5596,7 +5906,7 @@ bash scripts/dev-certs.sh
 GATEWAY_CALLER_AUTH=mtls GATEWAY_MTLS_CA_FILE=certs/ca.pem \
 GATEWAY_MTLS_CERT_FILE=certs/gateway.pem GATEWAY_MTLS_KEY_FILE=certs/gateway.key \
 GATEWAY_MTLS_ALLOWED_SUBJECT=lexprompt-api \
-GATEWAY_MODELS_FILE=/tmp/lexprompt/models.json GATEWAY_UPSTREAM=stub \
+GATEWAY_MODELS_FILE=/tmp/lexprompt/models.json \
 GATEWAY_ALLOWED_JURISDICTIONS=UK,EU,US npx tsx apps/gateway/src/main.ts &
 sleep 1
 curl -sk https://localhost:8081/v1/models; echo "  <-- expect a TLS handshake failure"
@@ -5621,63 +5931,88 @@ git commit -F .git/COMMIT_MSG_TASK15
 feat(gateway): only apps/api may call it — mTLS locally, Entra in Azure
 
 The gateway validates its one caller, not a user: it has no user model and
-no roles. That is what makes workspaceId and actorUserId in the request body
+no roles. That is what makes workspaceId and the actor in the request body
 trustworthy — apps/api put them there from a token it validated, and nothing
 else can reach this port.
 
-The two modes never fall back to each other, and GATEWAY_CALLER_AUTH=none is
-refused outright under NODE_ENV=production. /healthz is excluded, because a
-liveness probe has neither a certificate nor a token.
+The two modes never fall back to each other, and no GATEWAY_CALLER_AUTH value
+turns the check off — `none` exists as a type for unit tests and is
+unreachable from configuration, which is stronger than refusing it under
+NODE_ENV and is the only version compatible with S30. /healthz is excluded,
+because a liveness probe has neither a certificate nor a token.
 
 Mutation-tested: an Entra fallback added to the mTLS branch, one test fails.
 ```
 
 ---
 
-## Task 16: The `apps/api` workspace and Entra access-token validation
+## Task 16: The `apps/api` workspace and OIDC token validation against a configured issuer
 
 **Type:** infrastructure
 
 **Files:**
 - Create: `apps/api/package.json`, `tsconfig.json`, `Dockerfile`, `.dockerignore`
-- Create: `apps/api/src/config.ts`, `src/entra.ts`, `src/server.ts`, `src/main.ts`
-- Create: `apps/api/test/entra.test.ts`
+- Create: `apps/api/src/config.ts`, `src/oidc.ts`, `src/server.ts`, `src/main.ts`
+- Create: `apps/api/test/oidc.test.ts`
 - Modify: root `tsconfig.json` (include), root `package.json` (script)
 
 **Interfaces:**
 - Consumes: `ModelError` (Task 2).
 - Produces:
-  - `interface Principal { oid: string; tid: string; name?: string; email?: string }`
-  - `makeTokenVerifier(config: { tenantId: string; audience: string; jwks: JWTVerifyGetKey }): (token: string) => Promise<Principal>` — throws `ModelError('sign_in_required', 401)`
+  - `interface AuthConfig { issuer: string; audience: string; subjectClaim: string; groupsClaim: string; requiredClaims: Record<string, string> }`
+  - `interface Principal { issuer: string; subject: string; groups: string[]; name?: string; email?: string }`
+  - `makeTokenVerifier(config: AuthConfig, jwks: JWTVerifyGetKey): (token: string) => Promise<Principal>` — throws `ModelError('sign_in_required', 401)`, or `ModelError('group_overage', 403)` on an overage token
+  - `discoverJwks(issuer: string): Promise<JWTVerifyGetKey>` — reads `/.well-known/openid-configuration` and builds a remote key set from the `jwks_uri` it names
+  - `assertIssuerUsable(issuer: string): void` — refuses an empty issuer and a non-HTTPS issuer that does not resolve to loopback
   - `requireUser(verify): FastifyPreHandler` — attaches `request.principal`
-  - `interface ApiConfig { port: number; tenantId: string; audience: string; gatewayUrl: string; workspaceId: string; mtls?: { caFile: string; certFile: string; keyFile: string }; gatewayScope?: string }`
+  - `interface ApiConfig { port: number; auth: AuthConfig; gatewayUrl: string; workspaceId: string; mtls?: { caFile: string; certFile: string; keyFile: string } }`
 
-**Stage boundary:** this task validates a token and derives a `Principal` from it. It does **not** create an `app_user` row, map a role, or gate any action by role — all of that is Stage 2 (§13). `workspaceId` is a single value from configuration, the one workspace §6 seeds. That keeps Stage 1 honestly single-user while making the audit record's actor real.
+**This task changed with spec Revision 2 (§7, S28).** It was Entra-specific. It is now **standards OIDC against a configured issuer** — Entra ID in a firm deployment, Keycloak in `docker compose`, and **the application does not know which**. There is no Entra branch, and the three things that used to be one are now three configuration values:
+
+| Was | Is |
+|---|---|
+| `issuer` built as `https://login.microsoftonline.com/${tenantId}/v2.0` | `issuer` is configuration, and the JWKS URI comes from **its own discovery document**, not from a URL template |
+| `if (payload.tid !== config.tenantId) throw` | `requiredClaims: { tid: '<tenant id>' }`, compared in a loop over whatever the configuration names |
+| `payload.oid` | `payload[config.subjectClaim]` — `oid` for Entra, `sub` for Keycloak |
+
+**That last column is the whole of S28.** A tenant check written as a code branch is an Entra special case however carefully it is commented; a tenant check written as a configured required claim is a general mechanism that happens to be configured with a tenant id. The `auth` suite asserts the difference rather than trusting it.
+
+**Stage boundary:** this derives a `Principal` and nothing else. No `app_user` row, no role mapping, no role gate — all Stage 2 (§13). `workspaceId` is a single configured value, the one workspace §6 seeds. That keeps Stage 1 honestly single-user while making the audit record's actor real and issuer-scoped.
 
 - [ ] **Step 1: Create the workspace**
 
-`apps/api/package.json` — same shape as the gateway's, with dependencies `@lexprompt/core`, `fastify`, `undici`, `jose`, and `@azure/identity` (needed only for the gateway-bound managed-identity token in Azure).
+`apps/api/package.json` — same shape as the gateway's, with dependencies `@lexprompt/core`, `fastify`, `undici`, `jose`. **No `@azure/identity`** unless Task 25's gateway-bound workload-identity token needs it, and no MSAL anywhere.
 
-`apps/api/tsconfig.json` — copy the gateway's, changing nothing but the `include`. Add `"apps/api/src"`, `"apps/api/test"` to the root `tsconfig.json`.
+`apps/api/tsconfig.json` — copy the gateway's, changing only the `include`. Add `"apps/api/src"`, `"apps/api/test"` to the root `tsconfig.json`. `apps/api/Dockerfile` — copy the gateway's, substituting `@lexprompt/api`, port 8080 and `apps/api/src/main.ts`.
 
-`apps/api/Dockerfile` — copy the gateway's, substituting `@lexprompt/api`, port 8080 and `apps/api/src/main.ts`.
+- [ ] **Step 2: Write the failing tests**
 
-- [ ] **Step 2: Write the failing test**
-
-`apps/api/test/entra.test.ts`. Generate a key pair in the test with `jose`'s `generateKeyPair('RS256')`, sign tokens with `new SignJWT(...)`, and pass a local `createLocalJWKSet`-style resolver, so no network and no tenant are needed:
+`apps/api/test/oidc.test.ts`. Generate a key pair with `jose`'s `generateKeyPair('RS256')`, sign tokens with `SignJWT`, and pass a local key set, so no network and no tenant are needed:
 
 ```ts
 import { describe, it, expect, beforeAll } from 'vitest';
 import { SignJWT, exportJWK, generateKeyPair, createLocalJWKSet, type KeyLike } from 'jose';
-import { makeTokenVerifier } from '../src/entra.ts';
+import { makeTokenVerifier, assertIssuerUsable, type AuthConfig } from '../src/oidc.ts';
 
-const TENANT = '11111111-1111-1111-1111-111111111111';
-const AUDIENCE = 'api://lexprompt';
-const ISSUER = `https://login.microsoftonline.com/${TENANT}/v2.0`;
+const ENTRA: AuthConfig = {
+  issuer: 'https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0',
+  audience: 'api://lexprompt',
+  subjectClaim: 'oid',
+  groupsClaim: 'groups',
+  requiredClaims: { tid: '11111111-1111-1111-1111-111111111111' },
+};
+
+const KEYCLOAK: AuthConfig = {
+  issuer: 'https://keycloak.local/realms/lexprompt',
+  audience: 'lexprompt-api',
+  subjectClaim: 'sub',
+  groupsClaim: 'groups',
+  requiredClaims: {},
+};
 
 let privateKey: KeyLike;
-let jwks: ReturnType<typeof createLocalJWKSet>;
 let otherKey: KeyLike;
+let jwks: ReturnType<typeof createLocalJWKSet>;
 
 beforeAll(async () => {
   const pair = await generateKeyPair('RS256');
@@ -5688,59 +6023,88 @@ beforeAll(async () => {
   otherKey = (await generateKeyPair('RS256')).privateKey;
 });
 
-const sign = (claims: Record<string, unknown>, key = privateKey, expIn = '10m') =>
-  new SignJWT({ tid: TENANT, oid: 'oid-1', name: 'A. Gray', preferred_username: 'a@firm.com', ...claims })
+const sign = (cfg: AuthConfig, claims: Record<string, unknown>, key?: KeyLike, expIn = '10m') =>
+  new SignJWT(claims)
     .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
-    .setIssuer(ISSUER).setAudience(AUDIENCE).setIssuedAt().setExpirationTime(expIn)
-    .sign(key);
+    .setIssuer(cfg.issuer).setAudience(cfg.audience)
+    .setIssuedAt().setExpirationTime(expIn)
+    .sign(key ?? privateKey);
 
-describe('Entra access-token validation (§7)', () => {
-  const verify = () => makeTokenVerifier({ tenantId: TENANT, audience: AUDIENCE, jwks });
+const entraToken = (over: Record<string, unknown> = {}) => sign(ENTRA, {
+  tid: '11111111-1111-1111-1111-111111111111',
+  oid: 'oid-1', groups: ['group-a'], name: 'A. Gray', preferred_username: 'a@firm.com', ...over,
+});
 
-  it('accepts a well-formed token and returns the principal', async () => {
-    expect(await verify()(await sign({}))).toEqual({
-      oid: 'oid-1', tid: TENANT, name: 'A. Gray', email: 'a@firm.com',
+const keycloakToken = (over: Record<string, unknown> = {}) => sign(KEYCLOAK, {
+  sub: 'kc-sub-1', groups: ['/reviewers'], name: 'A. Trainee', email: 't@firm.local', ...over,
+});
+
+describe('one code path, two issuers (§7, S28)', () => {
+  it('validates an Entra token and reads oid as the subject', async () => {
+    expect(await makeTokenVerifier(ENTRA, jwks)(await entraToken())).toEqual({
+      issuer: ENTRA.issuer, subject: 'oid-1', groups: ['group-a'],
+      name: 'A. Gray', email: 'a@firm.com',
     });
   });
 
+  it('validates a Keycloak token and reads sub as the subject, with the SAME function', async () => {
+    expect(await makeTokenVerifier(KEYCLOAK, jwks)(await keycloakToken())).toEqual({
+      issuer: KEYCLOAK.issuer, subject: 'kc-sub-1', groups: ['/reviewers'],
+      name: 'A. Trainee', email: 't@firm.local',
+    });
+  });
+
+  // The point of S28: neither issuer's token is accepted by the other's
+  // configuration, and it is the SAME code refusing both.
+  it('rejects a Keycloak token under the Entra configuration, and the reverse', async () => {
+    await expect(makeTokenVerifier(ENTRA, jwks)(await keycloakToken()))
+      .rejects.toMatchObject({ code: 'sign_in_required' });
+    await expect(makeTokenVerifier(KEYCLOAK, jwks)(await entraToken()))
+      .rejects.toMatchObject({ code: 'sign_in_required' });
+  });
+});
+
+describe('token validation', () => {
+  const verify = () => makeTokenVerifier(ENTRA, jwks);
+
   it('rejects a token signed by another key', async () => {
-    await expect(verify()(await sign({}, otherKey)))
+    await expect(verify()(await entraToken() && await sign(ENTRA, { oid: 'o', tid: ENTRA.requiredClaims.tid }, otherKey)))
       .rejects.toMatchObject({ code: 'sign_in_required', status: 401 });
   });
 
   it('rejects a token for another audience', async () => {
-    const t = await new SignJWT({ tid: TENANT, oid: 'o' })
+    const t = await new SignJWT({ oid: 'o', tid: ENTRA.requiredClaims.tid })
       .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
-      .setIssuer(ISSUER).setAudience('api://something-else').setIssuedAt()
-      .setExpirationTime('10m').sign(privateKey);
+      .setIssuer(ENTRA.issuer).setAudience('api://something-else')
+      .setIssuedAt().setExpirationTime('10m').sign(privateKey);
     await expect(verify()(t)).rejects.toMatchObject({ code: 'sign_in_required' });
-  });
-
-  it('rejects a token from another issuer', async () => {
-    const t = await new SignJWT({ tid: TENANT, oid: 'o' })
-      .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
-      .setIssuer('https://evil.example/v2.0').setAudience(AUDIENCE).setIssuedAt()
-      .setExpirationTime('10m').sign(privateKey);
-    await expect(verify()(t)).rejects.toMatchObject({ code: 'sign_in_required' });
-  });
-
-  // The check jose does NOT do for you, and the one that matters most in a
-  // multi-tenant directory: a valid token from a DIFFERENT tenant.
-  it('rejects a valid token whose tid is another tenant', async () => {
-    await expect(verify()(await sign({ tid: '22222222-2222-2222-2222-222222222222' })))
-      .rejects.toMatchObject({ code: 'sign_in_required' });
   });
 
   it('rejects an expired token', async () => {
-    await expect(verify()(await sign({}, privateKey, '-1m')))
+    await expect(verify()(await entraToken({}, ) && await sign(ENTRA,
+      { oid: 'o', tid: ENTRA.requiredClaims.tid }, privateKey, '-1m')))
       .rejects.toMatchObject({ code: 'sign_in_required' });
   });
 
-  it('rejects a token with no oid, rather than inventing an actor for the audit log', async () => {
-    const t = await new SignJWT({ tid: TENANT })
-      .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
-      .setIssuer(ISSUER).setAudience(AUDIENCE).setIssuedAt().setExpirationTime('10m').sign(privateKey);
-    await expect(verify()(t)).rejects.toThrow(/oid/i);
+  // The tenant check, as a CONFIGURED required claim rather than a code
+  // branch. This test is the difference between "never special-cases Entra"
+  // being true and being intended.
+  it('rejects a token whose required claim does not match', async () => {
+    await expect(verify()(await entraToken({ tid: '22222222-2222-2222-2222-222222222222' })))
+      .rejects.toMatchObject({ code: 'sign_in_required' });
+  });
+
+  it('enforces required claims generically, not just tid', async () => {
+    const cfg = { ...KEYCLOAK, requiredClaims: { realm: 'lexprompt' } };
+    await expect(makeTokenVerifier(cfg, jwks)(await sign(cfg, { sub: 's', realm: 'other' })))
+      .rejects.toMatchObject({ code: 'sign_in_required' });
+    await expect(makeTokenVerifier(cfg, jwks)(await sign(cfg, { sub: 's', realm: 'lexprompt' })))
+      .resolves.toMatchObject({ subject: 's' });
+  });
+
+  it('rejects a token missing the configured subject claim, rather than inventing an actor', async () => {
+    await expect(verify()(await sign(ENTRA, { tid: ENTRA.requiredClaims.tid })))
+      .rejects.toThrow(/oid/);
   });
 
   it('rejects an empty or malformed token without throwing something unhandled', async () => {
@@ -5749,92 +6113,306 @@ describe('Entra access-token validation (§7)', () => {
   });
 
   it('never puts the token into the error message', async () => {
-    const token = await sign({}, otherKey);
+    const token = await sign(ENTRA, { oid: 'o' }, otherKey);
     await expect(verify()(token)).rejects.not.toThrow(new RegExp(token.slice(0, 24)));
+  });
+});
+
+// ===================================================================
+// Entra group overage (§7). Keycloak CANNOT reproduce this — no seeded
+// user is in enough groups — so this is a unit test over a crafted token,
+// and it is the clearest case in Stage 1 where a green local run proves
+// nothing about the tenant.
+// ===================================================================
+describe('group overage is its own error, never "in no mapped group"', () => {
+  const verify = () => makeTokenVerifier(ENTRA, jwks);
+
+  it('reports overage when the groups claim is ABSENT and _claim_names points at it', async () => {
+    const t = await entraToken({
+      groups: undefined,
+      _claim_names: { groups: 'src1' },
+      _claim_sources: { src1: { endpoint: 'https://graph.microsoft.com/v1.0/users/oid-1/getMemberObjects' } },
+    });
+    await expect(verify()(t)).rejects.toMatchObject({ code: 'group_overage', status: 403 });
+  });
+
+  it('names overage and tells the user to contact an admin, not to sign in again', async () => {
+    const t = await entraToken({ groups: undefined, _claim_names: { groups: 'src1' } });
+    await expect(verify()(t)).rejects.toThrow(/too many groups[\s\S]*administrator/i);
+  });
+
+  // The distinction the whole case exists for. Three states, three outcomes.
+  it('an EMPTY groups array is not overage — it is genuinely no groups', async () => {
+    const p = await verify()(await entraToken({ groups: [] }));
+    expect(p.groups).toEqual([]);
+  });
+
+  it('an ABSENT groups claim with no _claim_names is not overage either', async () => {
+    const p = await verify()(await entraToken({ groups: undefined }));
+    expect(p.groups).toEqual([]);
+  });
+
+  it('a populated groups claim is neither', async () => {
+    const p = await verify()(await entraToken({ groups: ['a', 'b'] }));
+    expect(p.groups).toEqual(['a', 'b']);
+  });
+
+  it('detects overage on any configured groups claim name, not just "groups"', async () => {
+    const cfg = { ...ENTRA, groupsClaim: 'roles' };
+    const t = await sign(cfg, {
+      oid: 'o', tid: cfg.requiredClaims.tid, _claim_names: { roles: 'src1' },
+    });
+    await expect(makeTokenVerifier(cfg, jwks)(t))
+      .rejects.toMatchObject({ code: 'group_overage' });
+  });
+});
+
+describe('the API refuses to start on an unusable issuer (S29)', () => {
+  it('refuses an empty issuer', () => {
+    expect(() => assertIssuerUsable('')).toThrow(/no issuer/i);
+  });
+
+  it('refuses a non-HTTPS issuer that is not loopback', () => {
+    expect(() => assertIssuerUsable('http://idp.example.com/realms/x'))
+      .toThrow(/https[\s\S]*loopback/i);
+  });
+
+  it('allows http on loopback, which is what compose serves', () => {
+    expect(() => assertIssuerUsable('http://localhost:8088/realms/lexprompt')).not.toThrow();
+    expect(() => assertIssuerUsable('http://127.0.0.1:8088/realms/lexprompt')).not.toThrow();
+    expect(() => assertIssuerUsable('http://keycloak:8080/realms/lexprompt')).not.toThrow();
+  });
+
+  it('allows any https issuer', () => {
+    expect(() => assertIssuerUsable('https://login.microsoftonline.com/t/v2.0')).not.toThrow();
+  });
+});
+
+// S29's absence, mutation-tested in Step 7 and asserted here at rest.
+describe('there is no authentication bypass anywhere in apps/api', () => {
+  it('no source file mentions a bypass flag, an anonymous mode or a trusted header', async () => {
+    const { readFileSync, readdirSync, statSync } = await import('node:fs');
+    const path = await import('node:path');
+    const SRC = path.resolve(__dirname, '../src');
+    const walk = (dir: string, out: string[] = []): string[] => {
+      for (const e of readdirSync(dir)) {
+        const full = path.join(dir, e);
+        if (statSync(full).isDirectory()) walk(full, out);
+        else if (full.endsWith('.ts')) out.push(full);
+      }
+      return out;
+    };
+    const offenders: string[] = [];
+    for (const file of walk(SRC)) {
+      const text = readFileSync(file, 'utf8');
+      for (const bad of ['SKIP_AUTH', 'DISABLE_AUTH', 'ALLOW_ANONYMOUS', 'x-trusted-user', 'AUTH_BYPASS']) {
+        if (text.includes(bad)) offenders.push(`${path.basename(file)} mentions ${bad}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });
 ```
 
-- [ ] **Step 3: Run and watch it fail**
+**Note on `assertIssuerUsable` and `keycloak:8080`:** a compose service name is not literally loopback, and treating it as such would widen the rule. Implement it as *loopback, or a hostname with no dots* — a bare service name cannot be a public host, and a public issuer always has a dotted domain. Say so in the code comment, because the rule looks arbitrary otherwise.
+
+- [ ] **Step 3: Run and watch them fail**
 
 Run: `npx vitest run --project api`
-Expected: FAIL — `Failed to resolve import "../src/entra.ts"`.
+Expected: FAIL — `Failed to resolve import "../src/oidc.ts"`.
 
-- [ ] **Step 4: Implement `entra.ts`**
+- [ ] **Step 4: Implement `oidc.ts`**
 
 ```ts
 import { jwtVerify, createRemoteJWKSet, type JWTVerifyGetKey } from 'jose';
 import { ModelError } from '@lexprompt/core';
 
+/**
+ * The whole of what varies between the two environments (§7, §5.1 row 1).
+ * Entra ID and Keycloak differ in these five values and in nothing else —
+ * no branch, no flag, no second module.
+ */
+export interface AuthConfig {
+  issuer: string;
+  audience: string;
+  /** 'oid' for Entra (stable across the tenant); 'sub' elsewhere. */
+  subjectClaim: string;
+  /** Named, never assumed. */
+  groupsClaim: string;
+  /** { tid: <tenant id> } for Entra. Compared generically. */
+  requiredClaims: Record<string, string>;
+}
+
+/**
+ * Identity is (issuer, subject), never the email (§7).
+ *
+ * An email can be reassigned; an issuer-scoped subject cannot. The pair is
+ * also what makes one implementation correct against both issuers: a
+ * Keycloak `sub` and an Entra `oid` are both opaque stable strings, and
+ * neither is ever compared with the other.
+ */
 export interface Principal {
-  oid: string;
-  tid: string;
+  issuer: string;
+  subject: string;
+  groups: string[];
   name?: string;
   email?: string;
 }
 
-export function remoteJwks(tenantId: string): JWTVerifyGetKey {
-  return createRemoteJWKSet(
-    new URL(`https://login.microsoftonline.com/${tenantId}/discovery/v2.0/keys`),
-  );
+/**
+ * Refuses an issuer the API must not start with (S29).
+ *
+ * "Loopback, or a hostname with no dots": a bare compose service name
+ * (`keycloak`) cannot be a public host, and a public issuer always has a
+ * dotted domain. The rule looks arbitrary without that sentence, which is
+ * why the sentence is here.
+ */
+export function assertIssuerUsable(issuer: string): void {
+  if (!issuer) {
+    throw new Error(
+      'No issuer is configured. The API will not start without one: a misconfiguration '
+      + 'must not become a system that runs and mostly works.',
+    );
+  }
+  let url: URL;
+  try {
+    url = new URL(issuer);
+  } catch {
+    throw new Error(`The configured issuer ${JSON.stringify(issuer)} is not a URL.`);
+  }
+  if (url.protocol === 'https:') return;
+  const host = url.hostname;
+  const loopback = host === 'localhost' || host === '127.0.0.1' || host === '::1'
+    || !host.includes('.');
+  if (!loopback) {
+    throw new Error(
+      `The configured issuer ${issuer} is not https and does not resolve to loopback. `
+      + 'This is the check that makes a deployed environment pointed at a development '
+      + 'issuer a startup failure rather than a silent one.',
+    );
+  }
+}
+
+/** Reads the issuer's own discovery document and builds a key set from the
+ *  `jwks_uri` it names — never from a URL template, which would be an
+ *  issuer-specific assumption wearing a helper's clothes. */
+export async function discoverJwks(issuer: string): Promise<JWTVerifyGetKey> {
+  const url = `${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`OIDC discovery failed for ${issuer}: HTTP ${response.status}.`);
+  }
+  const doc = await response.json() as { jwks_uri?: string };
+  if (!doc.jwks_uri) throw new Error(`OIDC discovery for ${issuer} names no jwks_uri.`);
+  return createRemoteJWKSet(new URL(doc.jwks_uri));
 }
 
 /**
- * Validates signature, issuer, audience, expiry — and `tid`, which `jose`
- * does not check for you and which is the one that matters in a
- * multi-tenant directory: a perfectly valid token from another tenant
- * satisfies every other check.
- *
- * `oid` is the identity, never the email (§7): an email can be reassigned,
- * an object id cannot. A token with no `oid` is refused rather than
- * defaulted, because the alternative is an audit record naming an actor
- * this service invented.
+ * Validates a token against a CONFIGURED issuer. There is no Entra branch
+ * here and there must never be one (S28): the tenant check is a required
+ * claim, the subject is a named claim, and the group claim is a named claim.
  */
-export function makeTokenVerifier(config: {
-  tenantId: string; audience: string; jwks: JWTVerifyGetKey;
-}): (token: string) => Promise<Principal> {
-  const issuer = `https://login.microsoftonline.com/${config.tenantId}/v2.0`;
+export function makeTokenVerifier(
+  config: AuthConfig,
+  jwks: JWTVerifyGetKey,
+): (token: string) => Promise<Principal> {
   return async (token: string): Promise<Principal> => {
+    let payload: Record<string, unknown>;
     try {
-      const { payload } = await jwtVerify(token, config.jwks, {
-        issuer, audience: config.audience, algorithms: ['RS256'],
-      });
-      if (payload.tid !== config.tenantId) {
-        throw new Error('the token is for a different tenant');
-      }
-      const oid = typeof payload.oid === 'string' ? payload.oid : '';
-      if (!oid) throw new Error('the token carries no oid claim');
-      return {
-        oid,
-        tid: String(payload.tid),
-        name: typeof payload.name === 'string' ? payload.name : undefined,
-        email: typeof payload.preferred_username === 'string' ? payload.preferred_username : undefined,
-      };
+      ({ payload } = await jwtVerify(token, jwks, {
+        issuer: config.issuer, audience: config.audience, algorithms: ['RS256'],
+      }) as unknown as { payload: Record<string, unknown> });
     } catch (err) {
-      // The token itself never reaches the message — an error string ends
-      // up in logs, in a browser console and in a support ticket.
+      // The token never reaches the message: an error string ends up in a
+      // log, a browser console and a support ticket.
       throw new ModelError(
         `Your sign-in could not be verified (${(err as Error).message}). Sign in again.`,
-        'sign_in_required',
-        401,
+        'sign_in_required', 401,
       );
     }
+
+    for (const [claim, expected] of Object.entries(config.requiredClaims)) {
+      if (payload[claim] !== expected) {
+        throw new ModelError(
+          `Your sign-in could not be verified (the ${claim} claim does not match this `
+          + 'deployment). Sign in again.',
+          'sign_in_required', 401,
+        );
+      }
+    }
+
+    const subject = payload[config.subjectClaim];
+    if (typeof subject !== 'string' || !subject) {
+      throw new ModelError(
+        `Your sign-in could not be verified (the token carries no ${config.subjectClaim} `
+        + 'claim). Sign in again.',
+        'sign_in_required', 401,
+      );
+    }
+
+    // §7: a missing group claim is not the same fact as an empty one.
+    //
+    // When a user belongs to more groups than a token can carry, Entra omits
+    // `groups` entirely and emits `_claim_names` pointing at Microsoft Graph.
+    // Read naively that is indistinguishable from "in no mapped group" — so a
+    // partner in forty groups would be told they have no access, which is a
+    // wrong answer delivered confidently. Three states, three outcomes:
+    // populated, genuinely empty, and overage.
+    //
+    // Keycloak cannot reproduce this (§5.1): no seeded user is in enough
+    // groups, so the local path is always the simple one and always works.
+    // That is why this is specified and unit-tested rather than discovered.
+    const raw = payload[config.groupsClaim];
+    const claimNames = payload._claim_names as Record<string, unknown> | undefined;
+    if (raw === undefined && claimNames && config.groupsClaim in claimNames) {
+      throw new ModelError(
+        'Your account is in too many groups for LexPrompt to read them from your sign-in '
+        + '(group overage). This is not a problem you can fix by signing in again — ask '
+        + 'your administrator to grant LexPrompt directory read access, or to reduce your '
+        + 'group memberships.',
+        'group_overage', 403,
+      );
+    }
+
+    return {
+      issuer: config.issuer,
+      subject,
+      groups: Array.isArray(raw) ? raw.filter((g): g is string => typeof g === 'string') : [],
+      name: typeof payload.name === 'string' ? payload.name : undefined,
+      email: typeof payload.email === 'string' ? payload.email
+        : typeof payload.preferred_username === 'string' ? payload.preferred_username : undefined,
+    };
   };
 }
 ```
 
-Plus a `requireUser` `preHandler` in `server.ts` that reads `Authorization: Bearer`, calls the verifier, sets `request.principal`, and answers `401 { error: { code: 'sign_in_required' } }` on failure.
+`config.ts` calls `assertIssuerUsable(auth.issuer)` at load, and `main.ts` exits non-zero with the message on failure, exactly as the gateway does for a jurisdiction. `server.ts` adds `requireUser`, a `preHandler` reading `Authorization: Bearer`, calling the verifier, setting `request.principal`, and answering with the `ModelError`'s own status and code — so a `group_overage` reaches the browser as 403 `group_overage` and not as 401 `sign_in_required`.
 
 - [ ] **Step 5: Run the tests**
 
 Run: `npx vitest run --project api`
-Expected: PASS, 9 tests.
+Expected: PASS, 23 tests.
 
-- [ ] **Step 6: Mutation test the tenant check**
+- [ ] **Step 6: Mutation test the two things that would silently misclassify a person**
 
-Delete `if (payload.tid !== config.tenantId) throw …`. Run. Expected: FAIL on *"rejects a valid token whose tid is another tenant"*. Restore.
+1. **Overage folded into "no groups".** Delete the `_claim_names` check, leaving `groups: []`. Run. Expected: FAIL on *"reports overage when the groups claim is ABSENT and _claim_names points at it"*, *"names overage and tells the user to contact an admin"* and *"detects overage on any configured groups claim name"*. Restore.
+   This is the mutation worth naming twice: without it a partner in forty groups is told they have no access to the firm's own tool, and the message is wrong with complete confidence.
+2. **The required-claim loop replaced by a tenant branch.** Replace the loop with `if (config.issuer.includes('microsoftonline') && payload.tid !== …)`. Run. Expected: FAIL on *"enforces required claims generically, not just tid"*. Restore.
+   That branch is the Entra special case S28 forbids, and it type-checks perfectly.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: Mutation test the absence of a bypass (S29)**
+
+Add to `server.ts`:
+
+```ts
+  if (process.env.SKIP_AUTH === '1') return;   // MUTATION — remove after the test fails
+```
+
+Run: `npx vitest run --project api`. Expected: FAIL on *"no source file mentions a bypass flag, an anonymous mode or a trusted header"*. Remove it.
+
+**Mutation-testing an absence is unusual and it is deliberate** (§14, S29): it is the only way an absence stays true, because nothing else in a test suite fails when a bypass is *added*.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add apps/api package.json package-lock.json tsconfig.json
@@ -5842,19 +6420,35 @@ git commit -F .git/COMMIT_MSG_TASK16
 ```
 
 ```
-feat(api): the workspace and Entra access-token validation
+feat(api): OIDC token validation against a configured issuer
 
-Signature, issuer, audience, expiry — and tid, which jose does not check
-and which is the one that matters in a multi-tenant directory: a perfectly
-valid token from another tenant satisfies every other check. oid is the
-identity, never the email, and a token with no oid is refused rather than
-defaulted, because the alternative is an audit record naming an actor this
-service invented. The token never reaches an error message.
+Standards OIDC, not Entra: discovery names the JWKS, the tenant check is a
+CONFIGURED required claim rather than a code branch, and the subject is a
+named claim — oid for Entra, sub for Keycloak. The same function validates
+both issuers' tokens and refuses each under the other's configuration, which
+is what makes "never special-cases Entra" true rather than intended (S28).
 
-Stage boundary: this derives a Principal and nothing else. No app_user row,
-no role mapping, no role gate — all Stage 2.
+Identity is (issuer, subject), never the email. A Keycloak sub and an Entra
+oid are both opaque stable strings and neither is ever compared with the
+other.
 
-Mutation-tested: tid check removed, one test fails.
+Group overage is its own error. Entra omits `groups` entirely for a user in
+too many groups and emits _claim_names instead; read naively that is "in no
+mapped group", so a partner in forty groups would be told they have no
+access — a wrong answer delivered confidently. Three states, three outcomes.
+Keycloak cannot reproduce it, so it is a unit test over a crafted token, and
+it is the clearest case in Stage 1 where a green local run proves nothing.
+
+The API refuses to start with no issuer, and with a non-HTTPS issuer that is
+not loopback — the check that makes a deployed environment pointed at a
+development issuer a startup failure rather than a silent one.
+
+Stage boundary: a Principal and nothing else. No app_user, no role mapping,
+no role gate — all Stage 2.
+
+Mutation-tested: overage folded into "no groups" (3 tests fail); the
+required-claim loop replaced by a tid branch (1); and the absence of a
+bypass, by adding SKIP_AUTH (1). All restored.
 ```
 
 ---
@@ -5869,12 +6463,14 @@ Mutation-tested: tid check removed, one test fails.
 - Modify: `apps/api/src/server.ts`
 
 **Interfaces:**
-- Consumes: `Principal`, `requireUser` (Task 16); the gateway's `POST /v1/infer`, `GET /v1/models` (Tasks 11).
+- Consumes: `Principal` — `{ issuer, subject, groups, name?, email? }` — and `requireUser` (Task 16); the gateway's `POST /v1/infer`, `GET /v1/models` (Task 11).
 - Produces:
   - `interface GatewayClient { infer(body: unknown): Promise<{ status: number; json: unknown }>; models(): Promise<{ status: number; json: unknown }>; stream(body: unknown, signal: AbortSignal): Promise<{ status: number; headers: Record<string, string>; body: AsyncIterable<Uint8Array> | null; text(): Promise<string> }> }`
   - `registerInfer(app, gateway, workspaceId)`
 
-**The one rule of this task.** The gateway trusts `workspaceId` and `actorUserId` in the request body. `apps/api` therefore **overwrites** them from the validated token — it does not merge, does not default, and does not accept a body-supplied value under any circumstance. A client that could set `actorUserId` could put a colleague's name on every call in the firm's audit log, which is a worse defect than any of the loud ones this stage is defending against, because it corrupts the record that answers §12's questions.
+**The one rule of this task.** The gateway trusts `workspaceId`, `actorIssuer` and `actorSubject` in the request body. `apps/api` therefore **overwrites** all three from the validated token — it does not merge, does not default, and does not accept a body-supplied value under any circumstance. A client that could set the actor could put a colleague's name on every call in the firm's audit log, which is a worse defect than any of the loud ones this stage is defending against, because it corrupts the record that answers §12's questions.
+
+**And the actor is `(issuer, subject)`, never an Entra-shaped identifier** (§7, S28). `principal.subject` is whatever the issuer's configured `subjectClaim` named — `oid` under Entra, `sub` under Keycloak — and `principal.issuer` travels with it, unparsed and uncombined. Stage 2 keys `app_user` on the pair and `role_mapping` on `(issuer, group_value, role)`; **no schema in this system may carry an `entra_*` column.** Writing the two halves separately now is what lets Stage 2 join to records written before `app_user` existed, and it is why they are two fields rather than one composite string.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -5884,14 +6480,18 @@ Mutation-tested: tid check removed, one test fails.
 import { describe, it, expect } from 'vitest';
 import { buildTestApi } from './helpers/apiHarness.ts';
 
-const PRINCIPAL = { oid: 'oid-real', tid: 't', name: 'A. Gray', email: 'a@firm.com' };
+const ISSUER = 'http://keycloak:8080/realms/lexprompt';
+const PRINCIPAL = {
+  issuer: ISSUER, subject: 'sub-real', groups: ['/reviewers'],
+  name: 'A. Gray', email: 'a@firm.com',
+};
 
 describe('POST /v1/infer', () => {
   it('forwards the request and returns the gateway\'s response verbatim', async () => {
     const { app, calls } = buildTestApi({ principal: PRINCIPAL,
       inferResponse: { status: 200, json: { content: 'A.', usage: { promptTokens: 1, completionTokens: 1 },
-        callId: 'c1', provider: 'openai', jurisdiction: { bloc: 'US', region: 'us', label: 'United States' },
-        stubbed: false } } });
+        callId: 'c1', provider: 'openai',
+        jurisdiction: { bloc: 'US', region: 'us', label: 'United States' } } } });
     const res = await app.inject({ method: 'POST', url: '/v1/infer',
       headers: { authorization: 'Bearer t' },
       payload: { modelChoiceId: 'm', purpose: 'review.clause', user: 'hi' } });
@@ -5900,21 +6500,48 @@ describe('POST /v1/infer', () => {
     expect(calls.infer[0]).toMatchObject({ modelChoiceId: 'm', purpose: 'review.clause', user: 'hi' });
   });
 
-  it('sets actorUserId from the token', async () => {
+  it('sets the actor as (issuer, subject) from the token', async () => {
     const { app, calls } = buildTestApi({ principal: PRINCIPAL });
     await app.inject({ method: 'POST', url: '/v1/infer', headers: { authorization: 'Bearer t' },
       payload: { modelChoiceId: 'm', purpose: 'review.clause', user: 'hi' } });
-    expect(calls.infer[0].actorUserId).toBe('oid-real');
+    expect(calls.infer[0].actorIssuer).toBe(ISSUER);
+    expect(calls.infer[0].actorSubject).toBe('sub-real');
   });
 
   // THE rule of this task.
-  it('OVERWRITES a client-supplied actorUserId rather than trusting it', async () => {
+  it('OVERWRITES a client-supplied actor rather than trusting it', async () => {
     const { app, calls } = buildTestApi({ principal: PRINCIPAL });
     await app.inject({ method: 'POST', url: '/v1/infer', headers: { authorization: 'Bearer t' },
       payload: { modelChoiceId: 'm', purpose: 'review.clause', user: 'hi',
-                 actorUserId: 'oid-a-colleague', workspaceId: 'another-firm' } });
-    expect(calls.infer[0].actorUserId).toBe('oid-real');
+                 actorSubject: 'sub-a-colleague', actorIssuer: 'https://evil.example',
+                 workspaceId: 'another-firm' } });
+    expect(calls.infer[0].actorSubject).toBe('sub-real');
+    expect(calls.infer[0].actorIssuer).toBe(ISSUER);
     expect(calls.infer[0].workspaceId).toBe('ws-configured');
+  });
+
+  // The identity is issuer-scoped, and nothing anywhere assumes Entra's
+  // shape. The same test with an Entra-shaped principal must pass unchanged.
+  it('carries an Entra principal identically, with oid as the subject', async () => {
+    const entra = { issuer: 'https://login.microsoftonline.com/t/v2.0', subject: 'oid-1', groups: [] };
+    const { app, calls } = buildTestApi({ principal: entra });
+    await app.inject({ method: 'POST', url: '/v1/infer', headers: { authorization: 'Bearer t' },
+      payload: { modelChoiceId: 'm', purpose: 'review.clause', user: 'hi' } });
+    expect(calls.infer[0].actorIssuer).toBe('https://login.microsoftonline.com/t/v2.0');
+    expect(calls.infer[0].actorSubject).toBe('oid-1');
+  });
+
+  it('passes a group_overage refusal through as 403, not as 401', async () => {
+    const { app, calls } = buildTestApi({ principal: null, principalError: {
+      name: 'ModelError', code: 'group_overage', status: 403,
+      message: 'Your account is in too many groups…',
+    } });
+    const res = await app.inject({ method: 'POST', url: '/v1/infer',
+      headers: { authorization: 'Bearer t' },
+      payload: { modelChoiceId: 'm', purpose: 'review.clause', user: 'hi' } });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ error: { code: 'group_overage' } });
+    expect(calls.infer).toHaveLength(0);
   });
 
   it('refuses with 401 and never calls the gateway when there is no token', async () => {
@@ -6050,12 +6677,21 @@ export function registerInfer(
     const principal = (request as { principal: Principal }).principal;
     const client = (request.body ?? {}) as Record<string, unknown>;
 
-    // Spread FIRST, then overwrite. A client that could set actorUserId
-    // could put a colleague's name on every call in the firm's audit log —
-    // which corrupts the record that answers §12's questions, silently, and
-    // is worse than any of the loud failures this stage defends against.
-    // Never `{ workspaceId, actorUserId, ...client }`.
-    const body = { ...client, workspaceId, actorUserId: principal.oid };
+    // Spread FIRST, then overwrite. A client that could set the actor could
+    // put a colleague's name on every call in the firm's audit log — which
+    // corrupts the record that answers §12's questions, silently, and is
+    // worse than any of the loud failures this stage defends against.
+    // Never `{ workspaceId, actorIssuer, actorSubject, ...client }`.
+    //
+    // (issuer, subject), never an Entra-shaped id: `principal.subject` is
+    // whatever the configured subjectClaim named, and the two halves stay
+    // separate so Stage 2 can key app_user on the pair.
+    const body = {
+      ...client,
+      workspaceId,
+      actorIssuer: principal.issuer,
+      actorSubject: principal.subject,
+    };
 
     try {
       const { status, json } = await gateway.infer(body);
@@ -6088,7 +6724,7 @@ Expected: PASS, 18 tests (9 from Task 16, 9 here).
 
 - [ ] **Step 6: Mutation test the overwrite**
 
-Change `const body = { ...client, workspaceId, actorUserId: principal.oid };` to `const body = { workspaceId, actorUserId: principal.oid, ...client };`. Run. Expected: FAIL on *"OVERWRITES a client-supplied actorUserId rather than trusting it"*. Restore.
+Move the spread after the overwrite: `const body = { workspaceId, actorIssuer: principal.issuer, actorSubject: principal.subject, ...client };`. Run. Expected: FAIL on *"OVERWRITES a client-supplied actor rather than trusting it"* and on the stream route's equivalent. Restore.
 
 This is a one-character-class mutation — moving a spread — that a reviewer's eye slides over and that silently makes the audit log forgeable. It is the reason the test exists rather than a comment.
 
@@ -6102,11 +6738,16 @@ git commit -F .git/COMMIT_MSG_TASK17
 ```
 feat(api): forward /v1/infer and /v1/models, with the actor from the token
 
-The gateway trusts workspaceId and actorUserId in the request body, so
-apps/api overwrites them from the validated token — spread first, then
-overwrite, never the other way round. A client that could set actorUserId
-could put a colleague's name on every call in the firm's audit log, which
-corrupts the record that answers §12's questions and does it silently.
+The gateway trusts workspaceId and the actor in the request body, so apps/api
+overwrites them from the validated token — spread first, then overwrite,
+never the other way round. A client that could set the actor could put a
+colleague's name on every call in the firm's audit log, which corrupts the
+record that answers §12's questions and does it silently.
+
+The actor is (issuer, subject) and never an Entra-shaped id: the subject is
+whatever the configured subjectClaim named — oid under Entra, sub under
+Keycloak — and the two halves stay separate so Stage 2 can key app_user on
+the pair. No schema in this system carries an entra_* column.
 
 /v1/models proxies the gateway rather than holding a copy (S14), and an
 empty allowlist comes back as an empty list with a 200, so the browser can
@@ -6153,18 +6794,18 @@ const post = (app: ReturnType<typeof buildTestApi>['app']) => app.inject({
 
 describe('POST /v1/infer/stream — a byte pipe (D1)', () => {
   it('returns exactly the bytes the gateway sent', async () => {
-    const { app } = buildTestApi({ principal: { oid: 'o', tid: 't' }, streamChunks: [BODY] });
+    const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] }, streamChunks: [BODY] });
     expect((await post(app)).body).toBe(BODY);
   });
 
   it('returns exactly the bytes when they arrive in three uneven chunks', async () => {
-    const { app } = buildTestApi({ principal: { oid: 'o', tid: 't' },
+    const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] },
       streamChunks: [BODY.slice(0, 17), BODY.slice(17, 61), BODY.slice(61)] });
     expect((await post(app)).body).toBe(BODY);
   });
 
   it('returns exactly the bytes when they arrive one byte at a time', async () => {
-    const { app } = buildTestApi({ principal: { oid: 'o', tid: 't' }, streamChunks: [...BODY] });
+    const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] }, streamChunks: [...BODY] });
     expect((await post(app)).body).toBe(BODY);
   });
 
@@ -6173,40 +6814,43 @@ describe('POST /v1/infer/stream — a byte pipe (D1)', () => {
   // proxy becomes a participant in a bug nobody can locate.
   it('preserves CRLF separators byte for byte rather than normalising them', async () => {
     const crlf = BODY.replace(/\n/g, '\r\n');
-    const { app } = buildTestApi({ principal: { oid: 'o', tid: 't' }, streamChunks: [crlf] });
+    const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] }, streamChunks: [crlf] });
     expect((await post(app)).body).toBe(crlf);
   });
 
   it('preserves a stream that ends with no trailing blank line', async () => {
     const cut = BODY.replace(/\n\n$/, '');
-    const { app } = buildTestApi({ principal: { oid: 'o', tid: 't' }, streamChunks: [cut] });
+    const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] }, streamChunks: [cut] });
     expect((await post(app)).body).toBe(cut);
   });
 
   it('preserves a truncated stream unchanged, so the browser sees the truncation', async () => {
     const truncated = 'data: {"type":"delta","text":"half"}\n\n';
-    const { app } = buildTestApi({ principal: { oid: 'o', tid: 't' }, streamChunks: [truncated] });
+    const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] }, streamChunks: [truncated] });
     expect((await post(app)).body).toBe(truncated);
   });
 
   it('passes the gateway\'s content-type through', async () => {
-    const { app } = buildTestApi({ principal: { oid: 'o', tid: 't' }, streamChunks: [BODY] });
+    const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] }, streamChunks: [BODY] });
     expect((await post(app)).headers['content-type']).toContain('text/event-stream');
   });
 
   it('answers a pre-stream failure with the gateway\'s status and body', async () => {
-    const { app } = buildTestApi({ principal: { oid: 'o', tid: 't' },
+    const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] },
       streamStatus: 400, streamChunks: ['{"error":{"code":"model_not_allowed","message":"no"}}'] });
     const res = await post(app);
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ error: { code: 'model_not_allowed' } });
   });
 
-  it('sets actorUserId from the token here too', async () => {
-    const { app, calls } = buildTestApi({ principal: { oid: 'oid-real', tid: 't' }, streamChunks: [BODY] });
+  it('sets the actor from the token here too, and overwrites a supplied one', async () => {
+    const principal = { issuer: 'http://keycloak:8080/realms/lexprompt', subject: 'sub-real', groups: [] };
+    const { app, calls } = buildTestApi({ principal, streamChunks: [BODY] });
     await app.inject({ method: 'POST', url: '/v1/infer/stream', headers: { authorization: 'Bearer t' },
-      payload: { modelChoiceId: 'm', purpose: 'assistant.chat', user: 'hi', actorUserId: 'oid-someone-else' } });
-    expect(calls.stream[0].actorUserId).toBe('oid-real');
+      payload: { modelChoiceId: 'm', purpose: 'assistant.chat', user: 'hi',
+                 actorSubject: 'sub-someone-else' } });
+    expect(calls.stream[0].actorSubject).toBe('sub-real');
+    expect(calls.stream[0].actorIssuer).toBe('http://keycloak:8080/realms/lexprompt');
   });
 });
 
@@ -6264,7 +6908,10 @@ export function registerInferStream(
   app.post('/v1/infer/stream', async (request, reply) => {
     const principal = (request as { principal: Principal }).principal;
     const client = (request.body ?? {}) as Record<string, unknown>;
-    const body = { ...client, workspaceId, actorUserId: principal.oid };
+    const body = {
+      ...client, workspaceId,
+      actorIssuer: principal.issuer, actorSubject: principal.subject,
+    };
 
     const controller = new AbortController();
     // A client that goes away must not leave a provider call running: the
@@ -6346,13 +6993,13 @@ a frame-codec import added (1). Restored.
 
 ---
 
-## Task 19: Entra sign-in in the browser, with its three states
+## Task 19: OIDC sign-in in the browser — standards only, never MSAL
 
 **Type:** application code
 
 **Files:**
-- Create: `src/lib/auth/msal.ts`, `src/lib/auth/useAuth.ts`, `src/lib/auth/useAuth.test.tsx`, `src/features/auth/SignInScreen.tsx`
-- Modify: `src/App.tsx` (the sign-in gate), `package.json` (`@azure/msal-browser`)
+- Create: `src/lib/config.ts`, `src/lib/auth/oidc.ts`, `src/lib/auth/useAuth.ts`, `src/lib/auth/useAuth.test.tsx`, `src/features/auth/SignInScreen.tsx`
+- Modify: `src/App.tsx` (the sign-in gate), `package.json` (`oidc-client-ts`)
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
@@ -6361,19 +7008,31 @@ a frame-codec import added (1). Restored.
   - `useAuth(): { state: AuthState; signIn(): void; signOut(): void; retry(): void }`
   - `getAccessToken(): Promise<string>` — the single token source for every request in Task 20; acquires silently and falls back to a redirect only on `InteractionRequiredAuthError`
 
-**Stage boundary and R-G1.** Sign-in here authenticates a caller. It does **not** introduce colleagues. The header avatar keeps showing *your own* initials — now from the token instead of the local profile — and no screen gains an assignee, a second actor or a "shared with" affordance. R-G1 binds until Stage 4.
+**MSAL is deliberately not used, and this is the task where that decision lands** (§7, S28). MSAL is Entra's own library. Reaching for it would either tie the sign-in path to one issuer or produce a second sign-in path for Keycloak — two implementations of one idea, at the front door, which is this project's most repeated defect in the worst place to put it. `oidc-client-ts` speaks discovery, authorization code and PKCE to any conformant issuer, **Entra included**.
+
+*This is a change from the pre-revision plan and is flagged as one, because "use MSAL for Entra" is the obvious choice and it is the wrong one here — and because a removed dependency is exactly the kind of thing a later reader reinstates by accident.* What is genuinely given up: MSAL's Entra-specific conveniences — broker accounts, tenant discovery, its own token cache. Note which way each choice fails. If the generalisation is wrong it fails **loudly, at sign-in, in the environment that is wrong**; if the app had special-cased Entra and a second issuer were ever needed, the cost would be a rewrite rather than an edit to a configuration file — and the second issuer was needed within a day.
+
+**`src/lib/config.ts` is created here and is the web app's ONLY reader of `import.meta.env`** (S30, §18 item 10(a)). Task 26's `configSurface` test enforces it. Creating it in this task rather than later is deliberate: the first component to reach for an env var directly will be written the week the sign-in screen lands.
+
+**Stage boundary and R-G1.** Sign-in here authenticates a caller. It does **not** introduce colleagues. The header avatar keeps showing *your own* initials — now from the token instead of the local profile — and no screen gains an assignee, a second actor or a "shared with" affordance. R-G1 binds until Stage 4. **Roles are not read and not enforced here**; the token's group claim is carried but unused until Stage 2.
 
 **The three load states, at the front door.** `signing-in` renders a busy screen; `failed` renders an explicit failure with a Retry and the tenant it tried; `signed-out` renders the sign-in prompt. **None of them renders the app with no data**, which is the "empty is not broken" rule at the one place a user meets it first.
 
 - [ ] **Step 1: Add the dependency**
 
 ```bash
-npm install @azure/msal-browser@^3.28.0
+npm install oidc-client-ts@^3.1.0
+```
+
+Then confirm the wrong one is absent, and stays absent:
+
+```bash
+grep -r "msal" package.json src/ ; echo "exit=$?   <-- expect no matches"
 ```
 
 - [ ] **Step 2: Write the failing test**
 
-`src/lib/auth/useAuth.test.tsx` — mock `../msal` with `vi.mock` and drive `useAuth` through `mountOnce` from `src/test/mount.tsx` (R-B8: `createRoot`/`act`, no `@testing-library/react`). Cases:
+`src/lib/auth/useAuth.test.tsx` — mock `../oidc` with `vi.mock` and drive `useAuth` through `mountOnce` from `src/test/mount.tsx` (R-B8: `createRoot`/`act`, no `@testing-library/react`). Cases:
 
 1. It starts in `signing-in` while `handleRedirectPromise` is pending — asserted by rendering a probe component that writes `state.status` into the DOM and checking it before the promise resolves.
 2. It reaches `signed-in` with `oid`, `name`, `email` and computed `initials` when an account is returned.
@@ -6384,102 +7043,159 @@ npm install @azure/msal-browser@^3.28.0
 7. `getAccessToken` returns the silent token when `acquireTokenSilent` resolves.
 8. `getAccessToken` triggers a redirect and rejects when `acquireTokenSilent` throws `InteractionRequiredAuthError`, rather than returning an empty string.
 9. `getAccessToken` rejects with a `ModelError` of code `sign_in_required` on any other failure.
+10. **The same hook and the same code reach both issuers.** Run cases 2, 3 and 7 twice — once with an Entra-shaped config (`issuer: 'https://login.microsoftonline.com/t/v2.0'`, profile carrying `oid`) and once with a Keycloak-shaped one (`issuer: 'http://localhost:8088/realms/lexprompt'`, profile carrying `sub`) — and assert identical behaviour. The browser reads the subject from `profile.sub` in **both** cases (OIDC's `sub` is always present, and for Entra it is the pairwise subject); the **`subjectClaim` configuration lives server-side only** (Task 16), because the browser never makes an authorisation decision and must not be given a second place to get identity from.
 
-- [ ] **Step 3: Implement `msal.ts`**
+- [ ] **Step 3: Implement `src/lib/config.ts`**
 
 ```ts
-import {
-  PublicClientApplication, InteractionRequiredAuthError, type AccountInfo,
-} from '@azure/msal-browser';
+/**
+ * The web app's ONE reader of `import.meta.env` (S30, §18 item 10(a)).
+ *
+ * Every deployment-varying value the browser needs is read here and nowhere
+ * else, and `configSurface` (Task 26) fails the build on a second reader.
+ * There is no `isLocal`, no `if (dev)` and no environment branch: the four
+ * values below are all that differ between a laptop and a firm's tenant.
+ */
+export interface WebConfig {
+  apiBaseUrl: string;
+  oidcIssuer: string;
+  oidcClientId: string;
+  oidcScope: string;
+}
+
+function required(name: string, value: unknown): string {
+  if (typeof value !== 'string' || !value) {
+    throw new Error(
+      `${name} is not configured. LexPrompt will not start without it — a missing `
+      + 'identity configuration must not become an app that runs and mostly works.',
+    );
+  }
+  return value;
+}
+
+export const config: WebConfig = {
+  apiBaseUrl: required('VITE_API_BASE_URL', import.meta.env.VITE_API_BASE_URL),
+  oidcIssuer: required('VITE_OIDC_ISSUER', import.meta.env.VITE_OIDC_ISSUER),
+  oidcClientId: required('VITE_OIDC_CLIENT_ID', import.meta.env.VITE_OIDC_CLIENT_ID),
+  oidcScope: required('VITE_OIDC_SCOPE', import.meta.env.VITE_OIDC_SCOPE),
+};
+```
+
+- [ ] **Step 4: Implement `auth/oidc.ts`**
+
+```ts
+import { UserManager, WebStorageStateStore, type User } from 'oidc-client-ts';
 import { ModelError } from '@lexprompt/core';
+import { config } from '../config.ts';
 
-const TENANT_ID = import.meta.env.VITE_ENTRA_TENANT_ID as string;
-const CLIENT_ID = import.meta.env.VITE_ENTRA_CLIENT_ID as string;
-const API_SCOPE = import.meta.env.VITE_ENTRA_API_SCOPE as string;
-
-export const msal = new PublicClientApplication({
-  auth: {
-    clientId: CLIENT_ID,
-    authority: `https://login.microsoftonline.com/${TENANT_ID}`,
-    redirectUri: window.location.origin,
-  },
+/**
+ * Standards OIDC — authorization code with PKCE, against a CONFIGURED
+ * issuer (§7, S28). Entra ID in a firm deployment, Keycloak in compose, and
+ * this file does not know which: `authority` is a configured URL and
+ * everything else comes from that issuer's discovery document.
+ *
+ * NOT MSAL, deliberately. MSAL is Entra's own library, and using it would
+ * either tie this path to one issuer or produce a second path for the
+ * other — two implementations of one idea, at the front door. If you are
+ * reading this because you were about to add `@azure/msal-browser` back:
+ * that is the change S28 exists to prevent.
+ */
+export const userManager = new UserManager({
+  authority: config.oidcIssuer,
+  client_id: config.oidcClientId,
+  redirect_uri: window.location.origin,
+  post_logout_redirect_uri: window.location.origin,
+  response_type: 'code',              // authorization code…
+  scope: config.oidcScope,            // …with PKCE, which oidc-client-ts does by default
   // sessionStorage, not localStorage: a token is the one thing in this app
   // that should NOT outlive the tab. Everything else the app stores is the
   // user's own work; this is a credential.
-  cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false },
+  userStore: new WebStorageStateStore({ store: window.sessionStorage }),
+  stateStore: new WebStorageStateStore({ store: window.sessionStorage }),
+  automaticSilentRenew: true,
+  loadUserInfo: false,                // the access token carries what we need
 });
-
-let account: AccountInfo | null = null;
-export const setActiveAccount = (a: AccountInfo | null): void => { account = a; };
 
 /**
  * The single source of a bearer token for every request the browser makes.
  *
- * Silent first; a redirect only on `InteractionRequiredAuthError`, which is
- * MSAL's way of saying the refresh genuinely needs the user. Any other
- * failure is a `sign_in_required` ModelError — never an empty string, which
- * would produce a 401 from `apps/api` and a message about the firm's
+ * A silent renew is attempted by `UserManager` on a schedule; this reads the
+ * stored user and refreshes on demand when it is expired. A failure is a
+ * `sign_in_required` ModelError — never an empty string, which would produce
+ * a 401 from `apps/api` and show the user a message about the firm's
  * configuration for what is actually an expired session.
  */
 export async function getAccessToken(): Promise<string> {
-  if (!account) {
+  let user: User | null = await userManager.getUser();
+  if (user?.expired) {
+    try {
+      user = await userManager.signinSilent();
+    } catch (err) {
+      throw new ModelError(
+        `Your sign-in could not be renewed (${(err as Error).message}). Sign in again.`,
+        'sign_in_required', 401,
+      );
+    }
+  }
+  if (!user?.access_token) {
     throw new ModelError('You are not signed in. Sign in to continue.', 'sign_in_required', 401);
   }
-  try {
-    const result = await msal.acquireTokenSilent({ scopes: [API_SCOPE], account });
-    return result.accessToken;
-  } catch (err) {
-    if (err instanceof InteractionRequiredAuthError) {
-      await msal.acquireTokenRedirect({ scopes: [API_SCOPE], account });
-      throw new ModelError('Your sign-in has expired. Signing you in again…', 'sign_in_required', 401);
-    }
-    throw new ModelError(
-      `Your sign-in could not be renewed (${(err as Error).message}). Sign in again.`,
-      'sign_in_required', 401,
-    );
-  }
+  return user.access_token;
 }
 ```
 
-- [ ] **Step 4: Implement `useAuth.ts` and `SignInScreen.tsx`**
+- [ ] **Step 5: Implement `useAuth.ts` and `SignInScreen.tsx`**
 
-`useAuth` initialises MSAL, calls `handleRedirectPromise`, sets the active account, and exposes the four-state `AuthState`. `SignInScreen` renders each non-signed-in state with the existing design vocabulary — reuse `LoadErrorPanel` for `failed` rather than writing a new panel (`CLAUDE.md`: *"do not hand-roll a new one"*), and give the `failed` copy the tenant name and a Retry.
+`useAuth` calls `userManager.signinRedirectCallback()` when the URL carries a `code`, otherwise `userManager.getUser()`, and exposes the four-state `AuthState`. The account's `oid`/`sub` comes from `user.profile.sub` — the one claim OIDC guarantees, on every issuer. `SignInScreen` renders each non-signed-in state with the existing design vocabulary — reuse `LoadErrorPanel` for `failed` rather than writing a new panel (`CLAUDE.md`: *"do not hand-roll a new one"*), and give the `failed` copy the tenant name and a Retry.
 
 In `App.tsx`, render `<SignInScreen …/>` instead of the app for every status but `signed-in`. **Do not render the app shell behind a modal** — a shell full of empty lists behind a sign-in dialog is the "empty is not broken" failure at the front door.
 
-- [ ] **Step 5: Run the tests**
+- [ ] **Step 6: Run the tests**
 
 Run: `npx vitest run --project web src/lib/auth/useAuth.test.tsx`
-Expected: PASS, 9 tests.
+Expected: PASS, 13 tests (9, plus case 10's three re-runs against the Keycloak-shaped config).
 
-- [ ] **Step 6: Mutation test the failed-vs-signed-out distinction**
+- [ ] **Step 7: Mutation test the failed-vs-signed-out distinction**
 
-In `useAuth`, change the `catch` around `handleRedirectPromise` to `setState({ status: 'signed-out' })`. Run. Expected: FAIL on *"reaches failed with the message when handleRedirectPromise rejects"*. Restore.
+In `useAuth`, change the `catch` around `signinRedirectCallback` to `setState({ status: 'signed-out' })`. Run. Expected: FAIL on *"reaches failed with the message when the redirect callback rejects"*. Restore.
 
-- [ ] **Step 7: Verify in a browser**
+- [ ] **Step 8: Verify in a browser, against Keycloak**
 
-Run `npm run dev` against a real Entra app registration (or a `VITE_ENTRA_*` pointing at a test tenant) and confirm: the sign-in screen appears; signing in returns to the app with your own initials in the header; signing out returns to the sign-in screen; and reloading mid-session does not flash the app's empty state. **If you cannot reach a tenant, say so plainly rather than implying you did.**
+`npm run compose:up` (Task 24) and open `http://localhost:3005`. Confirm: the sign-in screen appears; signing in as `trainee` / `trainee` returns to the app with your own initials in the header; signing out returns to the sign-in screen; reloading mid-session does not flash the app's empty state; and a second browser profile can sign in as `partner` at the same time.
 
-- [ ] **Step 8: Commit**
+**This needs no Entra tenant, which is the whole point of S31** — the deployed sign-in path runs on the laptop. What it does not prove is §5.1's list: Entra's group-claim shape, overage (unit-tested in Task 16 because Keycloak cannot reproduce it), consent, conditional access, MFA and tenant token lifetimes. Verify against a real tenant too if you have one, and **if you cannot, say so plainly rather than implying you did.**
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/lib/auth src/features/auth src/App.tsx package.json package-lock.json
+git add src/lib/config.ts src/lib/auth src/features/auth src/App.tsx package.json package-lock.json
 git commit -F .git/COMMIT_MSG_TASK19
 ```
 
 ```
-feat(web): Entra sign-in, with four honest states at the front door
+feat(web): standards OIDC sign-in, with four honest states at the front door
 
-signing-in, signed-out, failed and signed-in each render differently, and
-none of them renders the app with no data — "empty is not broken" at the
-place a user meets it first. Being signed out is not an error; a failure to
+oidc-client-ts, not MSAL (S28). MSAL is Entra's own library; using it would
+tie this path to one issuer or produce a second path for Keycloak — two
+implementations of one idea at the front door, which is this project's most
+repeated defect in the worst place to put it. What is given up is MSAL's
+Entra-specific conveniences; what is gained is that the sign-in a developer
+tests is the sign-in a firm runs.
+
+Four states — signing-in, signed-out, failed, signed-in — each render
+differently, and none renders the app with no data: "empty is not broken" at
+the place a user meets it first. Being signed out is not an error; failing to
 determine whether you are signed in is, and says so with a Retry.
 
-Tokens live in sessionStorage, not localStorage: a token is the one thing
-in this app that should not outlive the tab.
+src/lib/config.ts is the web app's only reader of import.meta.env (S30). No
+isLocal, no if(dev): four configured values are all that differ between a
+laptop and a tenant.
+
+Tokens live in sessionStorage: a token is the one thing in this app that
+should not outlive the tab.
 
 R-G1 still binds — this authenticates a caller, it does not introduce
-colleagues. No assignee, no second actor, no shared-with affordance.
+colleagues. Roles are carried but not read until Stage 2.
 
 Mutation-tested: the failure path collapsed into signed-out, one test fails.
 ```
@@ -6532,7 +7248,8 @@ import {
   ModelError, parseJsonLoose, readFrames,
   type AllowedModel, type InferRequest, type InferResponse, type ModelClient, type ModelErrorCode,
 } from '@lexprompt/core';
-import { getAccessToken } from '../auth/msal.ts';
+import { getAccessToken } from '../auth/oidc.ts';
+import { config } from '../config.ts';
 
 export interface GatewayClientDeps {
   baseUrl: string;
@@ -6616,7 +7333,7 @@ export function makeGatewayModelClient(deps: GatewayClientDeps): ModelClient {
       const { usage, callId } = await readFrames(
         response.body as unknown as AsyncIterable<Uint8Array>, onDelta,
       );
-      return { content: '', usage, callId, provider: 'openai', jurisdiction: { bloc: 'other', region: '', label: '' }, stubbed: false };
+      return { content: '', usage, callId, provider: 'openai', jurisdiction: { bloc: 'other', region: '', label: '' } };
     },
 
     async listModels(): Promise<AllowedModel[]> {
@@ -6640,13 +7357,16 @@ export function makeGatewayModelClient(deps: GatewayClientDeps): ModelClient {
 }
 
 export const gatewayModelClient = makeGatewayModelClient({
-  baseUrl: (import.meta.env.VITE_API_BASE_URL as string) ?? '/api',
+  // Through src/lib/config.ts, never `import.meta.env` directly: that module
+  // is the web app's only reader of it (S30), and `configSurface` (Task 26)
+  // fails the build on a second one.
+  baseUrl: config.apiBaseUrl,
   getToken: getAccessToken,
   fetch: globalThis.fetch.bind(globalThis),
 });
 ```
 
-**Fix the `chatStream` return before you finish this step.** The placeholder above returns invented `provider`/`jurisdiction` values, which is precisely the kind of plausible-looking wrong data this project exists to prevent. Change the `done` frame in Task 12 to carry `provider`, `jurisdiction` and `stubbed` alongside `usage` and `callId`, extend `Frame`'s `done` variant in `packages/core`, extend Task 3's round-trip test, and return the real values here. The accumulated text is also returned as `content`, built by the `onDelta` accumulator.
+**Fix the `chatStream` return before you finish this step.** The placeholder above returns invented `provider`/`jurisdiction` values, which is precisely the kind of plausible-looking wrong data this project exists to prevent. Change the `done` frame in Task 12 to carry `provider` and `jurisdiction` alongside `usage` and `callId`, extend `Frame`'s `done` variant in `packages/core`, extend Task 3's round-trip test, and return the real values here. The accumulated text is also returned as `content`, built by the `onDelta` accumulator.
 
 - [ ] **Step 4: Delete `openrouter.ts` and re-point every import**
 
@@ -6888,7 +7608,8 @@ call site still passes an apiKey or a modelId.
 3. On an **empty** list it renders the "no model has been configured" sentence, renders **no** select, and renders **no** error panel — asserted by `expect(container.querySelector('select')).toBe(null)` and `expect(container.textContent).not.toContain('could not be loaded')`.
 4. On a populated list it renders one option per model.
 5. **Every option names its jurisdiction** — `expect(option.textContent).toContain('UK · UK South')` for each. (Owner decision 3: visible where the choice is made.)
-6. An option outside the UK and EU is additionally marked — `expect(usOption.textContent).toContain('processed in the United States')` — because that is the sentence a lawyer needs at the moment of choosing, not a two-letter code.
+6. **Every** option states where processing occurs in words, not only the non-UK ones — `expect(ukOption.textContent).toContain('Processed in UK South')` and `expect(usOption.textContent).toContain('Processed in the United States')`. Labelling only some would make the **absence** of a label carry meaning, which is the blank-CSV-cell defect exactly (S27's own reasoning).
+7. **The label is factual and never evaluative.** It says where processing occurs and nothing about whether that is good — no "warning", no colour that reads as risk, no "outside the UK/EU". Whether a jurisdiction is acceptable is settled by the operator's contracts and their `GATEWAY_ALLOWED_JURISDICTIONS`, and every option on this list has already passed that gate. Asserted: `expect(container.textContent).not.toMatch(/warning|caution|risk|unsafe|outside/i)`.
 7. Selecting a model calls `onChange` with `modelChoiceId` and the three capability fields from that model.
 8. It preselects the model marked `isDefault` when `settings.modelChoiceId` is empty.
 9. It **does not** preselect, and shows the "choose a model" prompt, when a stored `modelChoiceId` is no longer on the list — a stale choice must not silently resolve to a different model.
@@ -6955,7 +7676,7 @@ Every caller of `loadSettings` changes shape. Update them in this task; `App.tsx
 
 - [ ] **Step 4: Implement `ModelPicker.tsx` and rewrite `SettingsPanel.tsx`**
 
-`ModelPicker` owns the three-state load over `listModels()` and renders each option as ``${m.label} — ${jurisdictionLabel(m.jurisdiction)}``, appending `` — processed in the United States`` (or the jurisdiction's `label`) for any entry whose `bloc` is not `UK` or `EU`.
+`ModelPicker` owns the three-state load over `listModels()` and renders **every** option as ``${m.label} — Processed in ${m.jurisdiction.label}`` — unconditionally, for every entry, in the same neutral style. The wording is **factual, never evaluative**: it states where processing occurs and passes no judgement, because every model on this list has already passed the operator's own jurisdiction gate and whether that jurisdiction is acceptable was settled by their contracts, not by this screen. No warning icon, no risk colour, no "outside the UK/EU".
 
 In `SettingsPanel.tsx`: delete the whole "OpenRouter API key" section, the "Get an API key" link and the `API_KEY_PRIVACY` block; delete the manual model-id input and its warning; replace the model `<select>` with `<ModelPicker …/>`; change the screen's subtitle from *"Connect an OpenRouter account to run reviews."* to *"Choose the model your firm has configured for reviews."*; and add a section headed **Where your requests go** rendering the selected model's provider and jurisdiction as a sentence.
 
@@ -7013,7 +7734,8 @@ anything.
 
 The free-text model box goes with it (S15). Its replacement is a select
 over GET /v1/models where every option names where it is processed, and an
-option outside the UK/EU says so in words rather than a two-letter code —
+every option — not only some — says where it processes, in factual words
+rather than a two-letter code, in the same neutral style —
 owner decision 3: visible where the choice is made.
 
 Three load states, and the empty one is new: an empty allowlist reads "no
@@ -7049,7 +7771,8 @@ fails); the apiKey purge removed (2). Restored.
 | Old | New | Copy | Where it goes |
 |---|---|---|---|
 | 401 — the user's key was rejected | `sign_in_required` — the user's Entra session expired | *"Your sign-in has expired. Sign in again to continue."* | The **sign-in action** — not Settings, which no longer holds a credential |
-| 403 — the key lacks access | `not_permitted` — the account has no access to LexPrompt | *"Your account does not have access to LexPrompt. Ask your IT team to add you."* | In place, with no Retry |
+| 403 — the key lacks access | `not_permitted` — the account is in no mapped group | *"Your account does not have access to LexPrompt. Ask your IT team to add you."* | In place, with no Retry |
+| *(did not exist)* | `group_overage` — the token carried **no** `groups` claim because the account is in too many groups (§7) | *"Your account is in too many groups for LexPrompt to read them from your sign-in. This is not something signing in again will fix — ask your IT team to grant LexPrompt directory read access, or to reduce your group memberships."* | **In place**, with no Retry. **Never the `not_permitted` message**, which would tell a partner in forty groups they have no access to their own firm's tool |
 | *(did not exist)* | `service_misconfigured` — the firm's gateway cannot reach a provider, or its credential was rejected | *"LexPrompt can't reach your firm's AI service. This is a configuration problem in the deployment, not something you can fix here. Tell your IT team, and quote reference `{callId}`."* | **In place**, with a Retry and the reference id. **Never Settings** |
 | *(did not exist)* | `model_not_allowed` / `purpose_not_allowed` | *"The model this review was set up with is no longer available. Choose another in Settings."* | Settings — this one genuinely is |
 
@@ -7070,6 +7793,7 @@ In `src/App.authRedirect.test.tsx`, keep all three existing cases (they cover th
 6. A live `sign_in_required` during a run shows the sign-in message and does **not** navigate to Settings.
 7. A live `service_misconfigured` during a run shows the configuration message **in place**, does **not** navigate to Settings, and shows the `callId`.
 8. A live `model_not_allowed` **does** navigate to Settings.
+8b. A live `group_overage` shows the overage message, does **not** navigate to Settings, does **not** offer sign-in, and does **not** show the `not_permitted` wording — `expect(container.textContent).not.toContain('does not have access')`.
 9. Reopening a review whose only finding already has `authError` still does not redirect anywhere and still renders its findings — the existing behaviour, re-asserted against the new routing.
 
 - [ ] **Step 2: Run and watch them fail**
@@ -7087,6 +7811,17 @@ In `App.tsx`:
 const SIGN_IN_ERROR_MESSAGE = 'Your sign-in has expired. Sign in again to continue.';
 const NOT_PERMITTED_MESSAGE =
   'Your account does not have access to LexPrompt. Ask your IT team to add you.';
+/**
+ * §7's group overage. Kept as a separate string from NOT_PERMITTED_MESSAGE
+ * on purpose: they are two different facts about two different people, and
+ * the whole reason `oidc.ts` detects overage separately is that showing the
+ * one above to a partner in forty groups would be a wrong answer told with
+ * complete confidence.
+ */
+const GROUP_OVERAGE_MESSAGE =
+  'Your account is in too many groups for LexPrompt to read them from your sign-in. '
+  + 'This is not something signing in again will fix — ask your IT team to grant LexPrompt '
+  + 'directory read access, or to reduce your group memberships.';
 const MODEL_UNAVAILABLE_MESSAGE =
   'The model this review was set up with is no longer available. Choose another in Settings.';
 
@@ -7109,6 +7844,10 @@ const handleModelError = (error: unknown): void => {
   }
   if (isServiceConfigError(error)) {
     const e = error as ModelError;
+    if (e.code === 'group_overage') {
+      notify(GROUP_OVERAGE_MESSAGE, 'error');
+      return;   // not Settings, not sign-in: neither can fix it
+    }
     if (e.code === 'model_not_allowed' || e.code === 'purpose_not_allowed') {
       notify(MODEL_UNAVAILABLE_MESSAGE, 'error');
       setView('settings');
@@ -7158,6 +7897,11 @@ lawyer to a screen with nothing on it that could help is a wrong
 instruction delivered with authority. A refused model DOES route to
 Settings, because that one genuinely is fixable there.
 
+Group overage gets its own message and its own destination — neither Settings
+nor sign-in, because neither can fix it. Telling a partner in forty groups
+that they have no access to their own firm's tool is a wrong answer told with
+complete confidence, and it is the reason oidc.ts detects the case at all.
+
 AUTH_ERROR_MESSAGE is retired. Finding.authError keeps its name and its
 persisted meaning; only the sentence a reader sees changes.
 
@@ -7167,24 +7911,36 @@ fails.
 
 ---
 
-## Task 24: `docker compose` — the same shape locally, and the egress test
+## Task 24: `docker compose` — Keycloak, the same shape locally, and the egress test
 
 **Type:** infrastructure
 
 **Files:**
-- Create: `docker-compose.yml`, `.env.example`, `models.example.json`, `models.local-openai.example.json`, `apps/web/Dockerfile` (at the repo root as `Dockerfile.web` until Stage 0 moves `src/`)
+- Create: `docker-compose.yml`, `.env.example`, `models.example.json`, `models.local-openai.example.json`, `models.local-recorded.example.json`, `Dockerfile.web`
+- Create: `infra/keycloak/lexprompt-realm.json`
 - Create: `apps/api/test/egress.compose.test.ts`
 - Modify: `package.json` (compose scripts), `README.md` (the running-it section)
 
 **Interfaces:**
 - Consumes: everything built so far.
-- Produces: `npm run compose:up`, `npm run compose:down`, `npm run test:compose`.
+- Produces: `npm run compose:up`, `npm run compose:down`, `npm run test:compose`; a Keycloak issuer at `http://keycloak:8080/realms/lexprompt` (and `http://localhost:8088/realms/lexprompt` from the host) with four seeded accounts.
 
-**Two networks, and that is the whole point.** `api` sits on `frontend` (reachable from the host) and `internal` (reaching the gateway). `gateway` sits on `internal` and `egress`. `api` **is not on `egress`**, so it has no route to the public internet — §5's central claim, exercised in development rather than only asserted in production. `internal` is `internal: true`, so Docker adds no default route to it.
+**Three networks, and that is the whole point.** `api` sits on `frontend` (reachable from the host) and `internal` (reaching the gateway and Keycloak). `gateway` sits on `internal` and `egress`. `api` **is not on `egress`**, so it has no route to the public internet — §5's central claim, exercised in development rather than only asserted in production. `internal` is `internal: true`, so Docker adds no default route to it.
 
-**Two example configurations, because owner decision 5 makes the second one first-class:**
+**Keycloak ships in this stage, and the sequencing is forced rather than chosen** (§13). Stage 1 is the first stage that requires a signed-in user, and there is no bypass to stand in for one (S29) — so without a local issuer, **Stage 1 is a stage nobody can run on a laptop.**
+
+**It seeds four accounts, and the reason is not convenience** (S31). A reviewer (trainee), a partner, an admin, **and a user in no mapped group**. Stage 1 enforces no roles — that is Stage 2 — so it would be easy to seed one account now and three later. Do not: **every collaborative behaviour this design adds is unobservable with one user.** First sight of a colleague, a Partner overriding a trainee's verification, the stale-version refusal, assignment reaching a person, presence, a card changing attribution without a reload — each needs two browsers signed in as two different people. A single-user local stack would not be a cheaper version of this; it would be a stack that runs green on exactly the half of the system that needs testing most, and Stages 3 to 5 would be unbuildable on a laptop. Seeding four now is two extra blocks in one version-controlled file; seeding them in Stage 3 is the same two blocks plus a stage spent without them. The fourth account earns its place in **this** stage: being told plainly that you have no access is a Stage 1 behaviour (§7).
+
+**Keycloak is not an Entra emulator, and the compose file must not be read as claiming it is.** Azurite *emulates* Blob Storage; Keycloak *implements the same protocol* Entra implements. Everything in §5.1's "what local does not prove" list stands — group-claim shape, overage (Task 16), consent, conditional access, MFA, tenant token lifetimes.
+
+**Three example model configurations, because owner decision 5 makes the second and third first-class:**
 - `models.example.json` — Azure Foundry, UK South, managed identity. Needs `az login`.
-- `models.local-openai.example.json` — OpenAI direct, US, `credential.source: env`, and `GATEWAY_ALLOWED_JURISDICTIONS=UK,EU,US` **written out in `.env.example` with a comment saying exactly what that line means**. A firm or an individual running this locally with an OpenAI key must have to type `US` themselves; the comment is where they find out why.
+- `models.local-openai.example.json` — OpenAI direct, US, `credential.source: env`, plus an Anthropic entry so the picker has two options and the jurisdiction display has something to show.
+- `models.local-recorded.example.json` — the `recorded` provider (Task 13), for work with no network and no credential of any kind.
+
+**`GATEWAY_ALLOWED_JURISDICTIONS` has no default and appears in `.env.example` only as a commented example.** Whoever runs this — a firm or one person on a laptop — types their own value, for the same reason the gateway refuses to start without one (D4): which jurisdictions are acceptable follows from the contracts and data provisions they hold with their provider, and neither this compose file nor this plan is entitled to guess.
+
+**§5.1 rows 4, 5 and 6 — Postgres, Azurite, Redis — must NOT appear in this compose file.** They are Stage 2 and later, and §18 item 10(b) fails a divergence row with no configuration key behind it just as it fails a key with no row.
 
 - [ ] **Step 1: Write `docker-compose.yml`**
 
@@ -7198,15 +7954,36 @@ networks:
   egress:
 
 services:
+  # The local OIDC issuer (S31). NOT an Entra emulator — it implements the
+  # same protocol Entra implements, which is a different and weaker claim,
+  # and §5.1's "what local does not prove" list is where the difference bites.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    ports: ["8088:8080"]          # published so a BROWSER can redirect to it
+    networks: [frontend, internal]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - "./infra/keycloak:/opt/keycloak/data/import:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"]
+      interval: 5s
+      retries: 30
+
   web:
     build: { context: ., dockerfile: Dockerfile.web }
     ports: ["3005:80"]
     networks: [frontend]
     environment:
       VITE_API_BASE_URL: http://localhost:8080
-      VITE_ENTRA_TENANT_ID: ${ENTRA_TENANT_ID}
-      VITE_ENTRA_CLIENT_ID: ${ENTRA_CLIENT_ID}
-      VITE_ENTRA_API_SCOPE: ${ENTRA_API_SCOPE}
+      # The issuer the BROWSER redirects to, so it is the published host
+      # address rather than the compose service name.
+      VITE_OIDC_ISSUER: ${OIDC_ISSUER_BROWSER}
+      VITE_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      VITE_OIDC_SCOPE: ${OIDC_SCOPE}
 
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
@@ -7216,15 +7993,22 @@ services:
     networks: [frontend, internal]
     environment:
       API_PORT: "8080"
-      API_TENANT_ID: ${ENTRA_TENANT_ID}
-      API_AUDIENCE: ${ENTRA_API_SCOPE}
+      # §5.1 row 1: the ONLY thing that differs from a firm deployment is
+      # these five values. There is no local auth mode and no bypass (S29).
+      API_OIDC_ISSUER: ${OIDC_ISSUER_API}
+      API_OIDC_AUDIENCE: ${OIDC_AUDIENCE}
+      API_OIDC_SUBJECT_CLAIM: ${OIDC_SUBJECT_CLAIM}
+      API_OIDC_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM}
+      API_OIDC_REQUIRED_CLAIMS: ${OIDC_REQUIRED_CLAIMS}
       API_WORKSPACE_ID: 00000000-0000-0000-0000-000000000001
       API_GATEWAY_URL: https://gateway:8081
       API_MTLS_CA_FILE: /certs/ca.pem
       API_MTLS_CERT_FILE: /certs/api.pem
       API_MTLS_KEY_FILE: /certs/api.key
     volumes: ["./certs:/certs:ro"]
-    depends_on: [gateway]
+    depends_on:
+      gateway: { condition: service_started }
+      keycloak: { condition: service_healthy }
 
   gateway:
     build: { context: ., dockerfile: apps/gateway/Dockerfile }
@@ -7233,8 +8017,14 @@ services:
     environment:
       GATEWAY_PORT: "8081"
       GATEWAY_MODELS_FILE: /config/models.json
-      GATEWAY_ALLOWED_JURISDICTIONS: ${GATEWAY_ALLOWED_JURISDICTIONS:-UK,EU}
-      GATEWAY_UPSTREAM: ${GATEWAY_UPSTREAM:-live}
+      # NO DEFAULT (D4, owner decision 5). Unset means the gateway refuses to
+      # start, which is what we want: which jurisdictions are permitted
+      # follows from the operator's own contracts with their provider, and a
+      # compose file has no standing to guess. There is also no
+      # GATEWAY_UPSTREAM — offline working is the `recorded` provider on the
+      # allowlist (Task 13), not a mode, because a mode would be an
+      # environment branch (S30).
+      GATEWAY_ALLOWED_JURISDICTIONS: ${GATEWAY_ALLOWED_JURISDICTIONS}
       GATEWAY_CALLER_AUTH: mtls
       GATEWAY_MTLS_CA_FILE: /certs/ca.pem
       GATEWAY_MTLS_CERT_FILE: /certs/gateway.pem
@@ -7251,40 +8041,97 @@ services:
 - [ ] **Step 2: Write `.env.example`**
 
 ```sh
-# Entra app registration (the SPA and the API expose the same scope).
-ENTRA_TENANT_ID=00000000-0000-0000-0000-000000000000
-ENTRA_CLIENT_ID=00000000-0000-0000-0000-000000000000
-ENTRA_API_SCOPE=api://lexprompt/.default
-
-# Which jurisdictions this deployment permits its models to be processed in.
-# The gateway REFUSES TO START if any model in models.json is processed
-# outside this list. The default is UK,EU.
+# ---------------------------------------------------------------------------
+# Identity (§5.1 row 1). These five values are the WHOLE of what differs
+# between this stack and a firm deployment. There is no local auth mode and
+# no bypass: no SKIP_AUTH, no anonymous mode, no trusted header (S29).
 #
-# OpenAI direct, Anthropic direct and OpenRouter all process in the UNITED
-# STATES. If you are running locally against one of those — which is a
-# supported and expected way to run this — you must add US here yourself.
-# That is deliberate: it should not be possible to route privileged client
-# text to a US provider without having written this line.
-GATEWAY_ALLOWED_JURISDICTIONS=UK,EU
+# Locally: Keycloak, seeded from infra/keycloak/lexprompt-realm.json.
+# In a firm: Entra, and the same five variables read
+#   OIDC_ISSUER_API=https://login.microsoftonline.com/<tenant>/v2.0
+#   OIDC_SUBJECT_CLAIM=oid
+#   OIDC_REQUIRED_CLAIMS={"tid":"<tenant>"}
+# ---------------------------------------------------------------------------
+OIDC_ISSUER_API=http://keycloak:8080/realms/lexprompt
+OIDC_ISSUER_BROWSER=http://localhost:8088/realms/lexprompt
+OIDC_AUDIENCE=lexprompt-api
+OIDC_CLIENT_ID=lexprompt-web
+OIDC_SCOPE=openid profile email lexprompt-api
+OIDC_SUBJECT_CLAIM=sub
+OIDC_GROUPS_CLAIM=groups
+OIDC_REQUIRED_CLAIMS={}
+
+# ---------------------------------------------------------------------------
+# Which processing jurisdictions this deployment permits.
+#
+# THERE IS NO DEFAULT, AND THIS LINE IS DELIBERATELY COMMENTED OUT. The
+# gateway refuses to start until you set it. That is not an obstacle to work
+# around; it is the one value nobody but you can supply.
+#
+# Which jurisdictions are acceptable follows from the contracts and data
+# provisions YOU hold with YOUR provider — SCCs, a DPA, negotiated retention
+# and training terms, settled with legal input long before anyone edited this
+# file. The API key is just the interface to a service whose guarantees live
+# in that contract. LexPrompt enforces the policy you declare here; it has no
+# view of its own about which jurisdictions are acceptable, and a default
+# value would be exactly such a view, applied silently on your behalf.
+#
+# Valid values: UK, EU, US, other (comma-separated).
+#   OpenAI direct, Anthropic direct and OpenRouter process in the US.
+#   The `recorded` provider (offline fixtures) declares `other`.
+#
+# Uncomment and set to match your own provisions, for example:
+# GATEWAY_ALLOWED_JURISDICTIONS=UK,EU
+# GATEWAY_ALLOWED_JURISDICTIONS=UK,EU,US
+# ---------------------------------------------------------------------------
 
 # One key per provider you have configured in models.json. Leave the rest
 # empty. None of these ever leaves the gateway container.
 OPENAI_API_KEY=
 ANTHROPIC_API_KEY=
 OPENROUTER_API_KEY=
-
-# 'stub' replays recorded responses and needs no credential at all.
-# It refuses to run with NODE_ENV=production.
-GATEWAY_UPSTREAM=live
 ```
 
-- [ ] **Step 3: Write the two example model files**
+**There is deliberately no `GATEWAY_UPSTREAM`.** Working offline is the `recorded` provider on the allowlist (Task 13), not a mode — a mode would be an environment branch, which S30 forbids and §18 item 10(a) fails.
+
+- [ ] **Step 3: Write the seeded Keycloak realm**
+
+`infra/keycloak/lexprompt-realm.json`, version-controlled, imported by `--import-realm`. It must define:
+
+- **Realm** `lexprompt`, `enabled: true`, `sslRequired: "none"` (loopback only — the API's `assertIssuerUsable` allows `http` on loopback and a dotless compose host, and nothing else).
+- **A `groups` client scope** with a **group-membership mapper** named `groups`, `full.path: false`, `add.to.access.token: true`. Without this Keycloak issues no group claim at all and every seeded account looks like the no-access one — the single most likely way to lose an afternoon on this task.
+- **Two clients.** `lexprompt-web`: public, `standardFlowEnabled: true`, `publicClient: true`, PKCE required (`pkce.code.challenge.method: S256`), redirect URIs `http://localhost:3005/*`, web origins `http://localhost:3005`, and the `groups` scope as a default. `lexprompt-api`: bearer-only, and the **audience** `lexprompt-api` added to `lexprompt-web`'s tokens by an audience mapper — without it every token is rejected for the wrong audience and the failure reads like a code bug.
+- **Three groups:** `reviewers`, `partners`, `admins`.
+- **Four users**, each `enabled: true`, `emailVerified: true`, with a non-temporary password:
+
+| Username | Password | Group | Exists to test |
+|---|---|---|---|
+| `trainee` | `trainee` | `reviewers` | the ordinary case |
+| `partner` | `partner` | `partners` | Stage 2's role gate; Stage 4's override |
+| `admin` | `admin` | `admins` | Stage 2's admin routes |
+| `nogroups` | `nogroups` | *(none)* | **a Stage 1 behaviour**: being told plainly you have no access (§7) |
+
+Print all four from `docker compose up` — add an `echo` step to `compose:up` in `package.json` rather than expecting anyone to open the realm file:
+
+```
+LexPrompt local accounts (Keycloak realm 'lexprompt'):
+  trainee / trainee    reviewers
+  partner / partner    partners
+  admin   / admin      admins
+  nogroups / nogroups  (no group — expect to be refused, on purpose)
+```
+
+**These are development credentials in version control, deliberately.** They reach a realm that only exists inside `docker compose`, on an issuer the API refuses unless it is loopback — and the alternative, generating them per developer, would mean the seeded set differs per machine, which is the local/deployed divergence problem one level down.
+
+- [ ] **Step 4: Write the three example model files**
 
 `models.example.json` — one `azure-foundry` entry, `uksouth`, `credential: { source: 'managed-identity', scope: 'https://cognitiveservices.azure.com/.default' }`, `isDefault: true`.
 
 `models.local-openai.example.json` — one `openai` entry, jurisdiction `{ bloc: 'US', region: 'us', label: 'United States' }`, `credential: { source: 'env', var: 'OPENAI_API_KEY' }`, `isDefault: true`, with a sibling `anthropic` entry (`isDefault: false`, `credential.var: ANTHROPIC_API_KEY`) so the picker has two options and the jurisdiction display has something to show.
 
-- [ ] **Step 4: Write the egress test**
+`models.local-recorded.example.json` — one `recorded` entry (Task 13), jurisdiction `{ bloc: 'other', region: 'local', label: 'this machine — recorded responses, not a model' }`, `credential: { source: 'env', var: 'UNUSED' }`, `isDefault: true`. Using it requires `GATEWAY_ALLOWED_JURISDICTIONS=other`, which the operator types, like every other value of that variable.
+
+- [ ] **Step 5: Write the egress test**
 
 `apps/api/test/egress.compose.test.ts` (excluded from the default `api` project by Task 1's `exclude`; run by `npm run test:compose`):
 
@@ -7358,31 +8205,46 @@ Add to the root `package.json`:
 
 with `vitest.compose.config.ts` a two-line config including only `apps/api/test/**/*.compose.test.ts` under a node environment.
 
-- [ ] **Step 5: Run the stack and the test**
+- [ ] **Step 6: Run the stack and the test**
 
 ```bash
 bash scripts/dev-certs.sh
 cp .env.example .env && cp models.local-openai.example.json models.json
-# then set OPENAI_API_KEY and GATEWAY_ALLOWED_JURISDICTIONS=UK,EU,US in .env
+npm run compose:up
+```
+
+Expected on the first run: **the gateway refuses to start**, because `GATEWAY_ALLOWED_JURISDICTIONS` is commented out in `.env.example` and has no default. That is the intended first experience, not a snag — read the message, decide which jurisdictions your provisions cover, and set it. Then:
+
+```bash
+# set OPENAI_API_KEY, and uncomment GATEWAY_ALLOWED_JURISDICTIONS with your own value
 npm run compose:up
 docker compose logs gateway | head -20
+docker compose logs keycloak | grep -i "imported\|Running the server"
 npm run test:compose
 ```
 
-Expected: the gateway's boot banner in the logs, listing the permitted jurisdictions and the model table; then 4 tests PASS.
+Expected: the gateway's boot banner listing the permitted jurisdictions and the model table; Keycloak reporting the realm imported; then 4 tests PASS.
 
-Then open `http://localhost:3005`, sign in, and run a review end to end. **If you have no Entra tenant or no provider key, say so plainly** rather than implying you ran it; `GATEWAY_UPSTREAM=stub` gets you everything but the real answer.
+Then open `http://localhost:3005`, sign in as `trainee` / `trainee`, and run a review end to end. **Sign in as `nogroups` too** and confirm you are told plainly that you have no access rather than shown an empty app (§7) — that is a Stage 1 behaviour and this is the account that tests it.
 
-- [ ] **Step 6: Mutation test the egress restriction**
+**No Entra tenant is needed for any of this**, which is the point of S31: the deployed authentication path runs on the laptop. What it does not prove is in §5.1's list and in Task 26's README — managed identity, Entra's group-claim shape and overage, consent, conditional access, Azure networking. **If you skip any step, say so plainly** rather than implying you ran it; `models.local-recorded.example.json` gets you everything but a real model answer.
+
+- [ ] **Step 7: Mutation test the egress restriction**
 
 Add `egress` to `api`'s `networks` in `docker-compose.yml`, `npm run compose:up`, `npm run test:compose`. Expected: FAIL on *"CANNOT reach a model provider directly"* and *"CANNOT reach the public internet at all"*. Remove it, bring the stack back up, re-run: PASS.
 
 This is the mutation §14 names under `egress` and §19 calls the difference between the design's central claim being architecture and being a promise. Record that you ran it.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Mutation test the seeded group claim**
+
+Set `add.to.access.token: false` on the realm's `groups` mapper, `npm run compose:up`, and sign in as `trainee`. Expected: the API reports **no groups**, which in Stage 2 will be indistinguishable from `nogroups`. Restore.
+
+Run this once, by hand, and record that you did: it is not a unit test, and it is the failure mode that will otherwise be discovered in Stage 2 by someone who assumes the realm file is right because it imported without error.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add docker-compose.yml Dockerfile.web .env.example models.example.json models.local-openai.example.json apps/api/test/egress.compose.test.ts vitest.compose.config.ts package.json README.md
+git add docker-compose.yml Dockerfile.web .env.example models.example.json models.local-openai.example.json models.local-recorded.example.json infra/keycloak apps/api/test/egress.compose.test.ts vitest.compose.config.ts package.json README.md
 git commit -F .git/COMMIT_MSG_TASK24
 ```
 
@@ -7396,12 +8258,33 @@ assert it — api cannot reach a provider, cannot reach the internet, CAN
 reach the gateway, and the gateway CAN reach the internet, so a stack that
 is simply unplugged does not pass.
 
-Two example configurations, because running locally with an OpenAI or
-OpenRouter key and no Azure is a first-class path: .env.example makes the
-operator type US into GATEWAY_ALLOWED_JURISDICTIONS themselves, with the
-comment explaining why, rather than discovering it later.
+Keycloak ships here and the sequencing is forced: Stage 1 is the first stage
+needing a signed-in user and there is no bypass to stand in for one (S29), so
+without it Stage 1 is a stage nobody can run on a laptop. Its realm seeds
+four accounts — trainee, partner, admin, and one in no group — because every
+collaborative behaviour this design adds is unobservable with one user, and
+the fourth tests a Stage 1 behaviour: being told plainly you have no access.
 
-Mutation-tested: api attached to the egress network, two tests fail.
+Three example model configurations, because running with an OpenAI or
+OpenRouter key and no Azure — or with recorded fixtures and no credential at
+all — are first-class paths, not degraded ones.
+
+GATEWAY_ALLOWED_JURISDICTIONS has no default and appears in .env.example only
+as a commented example with the reasoning beside it, so the first
+`compose up` fails and asks. That is the intended first experience: which
+jurisdictions are acceptable follows from the operator's own contracts with
+their provider, and neither this compose file nor this plan is entitled to
+guess. There is no GATEWAY_UPSTREAM either — offline working is the
+`recorded` provider on the allowlist, not a mode, because a mode would be
+an environment branch (S30).
+
+Rows 4, 5 and 6 of §5.1 — Postgres, Azurite, Redis — are deliberately absent:
+they are Stage 2 and later, and §18 item 10(b) fails a divergence row with no
+key behind it just as it fails a key with no row.
+
+Mutation-tested: api attached to the egress network, two tests fail. Plus one
+by hand: the realm's group mapper set to add.to.access.token=false, which
+makes every seeded account look like the no-access one.
 ```
 
 ---
@@ -7420,7 +8303,9 @@ Mutation-tested: api attached to the egress network, two tests fail.
 
 **What the Bicep must express, and each is a requirement rather than a preference:**
 
-1. **The gateway has `ingress.external: false`** and is reachable only from inside the Container Apps environment. Its `GATEWAY_CALLER_AUTH` is `entra`, its audience is its own app registration, and its `GATEWAY_ENTRA_ALLOWED_OIDS` is `api`'s user-assigned managed identity principal id.
+1. **The gateway has `ingress.external: false`** and is reachable only from inside the Container Apps environment. Its `GATEWAY_CALLER_AUTH` is `entra`, its audience is its own app registration, and its allowed subject is `api`'s user-assigned managed identity principal id.
+1b. **`GATEWAY_ALLOWED_JURISDICTIONS` is a required parameter with NO default value in the Bicep** (D4, owner decision 5). `@description` states what it is for and that it must match the operator's own contracts and data provisions; there is no `= 'UK,EU'`. `azd up` therefore prompts for it, which is the right moment to be asked. A Bicep default would reintroduce, in infrastructure, exactly the assumption the config loader refuses to make in code.
+1c. **The three OIDC values are parameters too** — `oidcIssuer`, `oidcAudience`, `oidcSubjectClaim` (`oid` for Entra), `oidcGroupsClaim`, `oidcRequiredClaims` (`{"tid":"<tenant>"}`). They are the same five keys the compose file sets to Keycloak's values (§5.1 row 1), passed to the same code. **Nothing in the Bicep is read by an Entra-specific code path**, because there is not one.
 2. **`api` has no outbound access to the public internet.** Express it, and **record honestly in the file's own comment whether that is enforced at this layer or awaits Spike 2** (§15): Container Apps' egress controls depend on the environment's VNet integration and a route table or NAT configuration, and the plan does not pretend to have proved which. Task 24's compose test is what holds in the meantime, and §18.7's "asserted by a test" is not satisfied for Azure until Spike 2 lands. **Say so in the README rather than implying the deployment is proven.**
 3. **The gateway has a user-assigned managed identity** with `Cognitive Services OpenAI User` on the Foundry/Azure OpenAI resource, and `Key Vault Secrets User` on the vault. **No key is a parameter, an output, or an app setting** — vaulted keys are referenced by `credential.source: 'key-vault'` in `models.json` and fetched at runtime.
 4. **`models.json` is a Container Apps secret volume or a config-map-style mounted secret**, not an inline environment variable, so it is not visible in the portal's app-settings blade or in `azd env get-values`.
@@ -7477,8 +8362,9 @@ services:
 
 ```bash
 azd auth login
-azd up
+azd up      # prompts for allowedJurisdictions — there is no default; answer from your own provisions
 azd env get-values | grep -i -E 'key|secret|password' ; echo "exit=$?  <-- expect no matches"
+azd env get-values | grep -i 'allowedJurisdictions'   # <-- expect the value YOU supplied
 ```
 
 Then, against the deployed environment:
@@ -7508,6 +8394,15 @@ with az keyvault secret set, so they are in neither the repository nor
 models.json is a mounted secret rather than an env var, so the allowlist and
 its endpoints are not in the portal's app-settings blade.
 
+GATEWAY_ALLOWED_JURISDICTIONS is a required parameter with no default, so
+azd up prompts for it. A Bicep default would reintroduce in infrastructure
+exactly the assumption the config loader refuses to make in code: which
+jurisdictions a firm accepts follows from its own contracts, and this
+template has no standing to guess.
+
+The five OIDC values are parameters, identical in shape to the ones compose
+sets to Keycloak's — §5.1 row 1, one code path, two issuers.
+
 No Postgres and no Blob: those are Stage 2, and provisioning them now would
 be infrastructure nobody has tested and a bill nobody expected.
 
@@ -7519,7 +8414,7 @@ what holds until then.
 
 ---
 
-## Task 26: The README, the rulings, and the Stage 1 definition-of-done sweep
+## Task 26: `configSurface`, the README, the rulings, and the Stage 1 definition-of-done sweep
 
 **Type:** test + documentation
 
@@ -7527,10 +8422,13 @@ what holds until then.
 - Modify: `README.md`
 - Modify: `docs/superpowers/redesign/rulings.md`
 - Create: `src/lib/model/stage1DoD.test.ts`
+- Create: `apps/api/test/configSurface.test.ts`, `apps/api/test/divergence.json`
 
 **Interfaces:**
-- Consumes: everything.
-- Produces: a test that fails if any part of Stage 1's definition of done regresses.
+- Consumes: everything, and the three configuration modules — `src/lib/config.ts` (Task 19), `apps/api/src/config.ts` (Task 16), `apps/gateway/src/config.ts` (Task 4).
+- Produces: a test that fails if any part of Stage 1's definition of done regresses, and the `configSurface` suite §18 item 10 requires.
+
+**This task grew with spec Revision 2.** It gains §18 item 10 — the check that makes §5.1's divergence table verifiable rather than aspirational, and **the one guarantee in this design not otherwise enforced by a test at rest.** It is folded in here rather than given its own task because it is the same job as the rest of this task: a mechanical sweep that fails when a claim made elsewhere stops being true.
 
 **The README rows §2 assigns to Stage 1** (the rest are Stage 2's and are not touched):
 
@@ -7538,12 +8436,15 @@ what holds until then.
 |---|---|
 | Line 3, intro — "no backend … talks directly to OpenRouter" | *"a static web app, an HTTP API and an inference gateway you deploy into your own cloud. Your matters and documents still live in your browser (that changes in a later release); model calls go through the gateway."* |
 | §"No backend, no accounts" | Rewritten, not deleted: matters and documents **are** still in the browser in Stage 1. It becomes "No database yet", explains what the three services do, and says the browser is still the store. |
-| §"You need an OpenRouter API key" (105–113) | **Deleted.** Replaced by §"Configuring a model provider": the allowlist, the five providers, the four credential sources, and `GATEWAY_ALLOWED_JURISDICTIONS`. |
+| §"You need an OpenRouter API key" (105–113) | **Deleted.** Replaced by §"Choosing a model provider" — see the new sections below. |
 | §Privacy bullet 2 — "except to the model you chose, via OpenRouter" | *"Nothing is uploaded anywhere except to your firm's own LexPrompt gateway, which forwards it to the model provider your administrator configured. Which provider that is, and where it processes your text, is shown on every model in Settings."* |
 | §Visual system (96) — "nothing leaves the browser except calls to OpenRouter" | *"nothing leaves the browser except calls to your firm's own API"* |
 | §"How it's built" — "No backend, no server-side anything" | The monorepo: `packages/core`, `apps/api`, `apps/gateway`, and the web app. |
 | §"Building and deploying" | `docker compose up` and `azd up`, with the SPA-rewrite note kept for the web app's hosting. |
 | §Known limitations | Add: *"`api`'s inability to reach the internet is enforced and tested under `docker compose`; in Azure it is expressed in the Bicep but is not yet asserted by an automated test — that is Spike 2."* |
+| **New section: §"Running it locally"** | `docker compose up` brings up the whole stack including **Keycloak**, with four seeded accounts printed on start (`trainee`, `partner`, `admin`, `nogroups`). **There is no way to run LexPrompt without signing in** — no `SKIP_AUTH`, no anonymous mode — because a bypass would test a different code path from the one that ships (S29). The four accounts exist because every collaborative behaviour this design adds is unobservable with one user (S31). |
+| **New section: §"Choosing a model provider"** | The allowlist, the six providers (five real plus `recorded`), the four credential sources, and `GATEWAY_ALLOWED_JURISDICTIONS` — **which has no default and which the gateway refuses to start without.** State why in the operator's own terms: *"Which jurisdictions you permit follows from the contracts and data provisions you hold with your provider. LexPrompt enforces the policy you declare; it has no view of its own, and a default would be exactly such a view applied silently on your behalf."* Also: **the per-provider retention note is your record of terms you agreed**, carrying the date you last checked them — the staleness marker prompts you to re-read your own contract and passes no judgement on the provider. |
+| **New section: §"What running locally does not prove"** | §5.1's list, verbatim in substance: managed-identity acquisition; Entra's group-claim shape, consent and **overage**; admin consent, conditional access, MFA and tenant token lifetimes; Azure networking and the real egress denial; Postgres Flexible Server's behaviour; Azurite's gaps; real provider latency, rate limits and stream behaviour; Container Apps scale-to-zero and multi-replica WebSockets. And the sentence the whole section turns on: **"Keycloak is not an Entra emulator. Azurite *emulates* Blob Storage; Keycloak *implements the same protocol* Entra implements."** §5.1 says this list belongs in the README as well as the spec, because the reader who needs it is the developer who has just had a green local run, and they are not reading a design document at that moment. |
 
 **The two sentences that must appear, adjacent and distinct** (owner decision 2):
 
@@ -7553,7 +8454,170 @@ what holds until then.
 
 Do not merge them into one sentence and do not put the second one in a footnote. Both are true; conflating them is how a security claim quietly becomes false for half its deployments.
 
-- [ ] **Step 1: Write the sweep test**
+- [ ] **Step 1: Write the `configSurface` suite (§18 item 10)**
+
+`apps/api/test/divergence.json` — §5.1's table, as data, listing only the rows Stage 1 touches. **A row here with no configuration key behind it fails, exactly as a key with no row does**, which is what stops the table decaying into a list of good intentions:
+
+```json
+{
+  "rows": [
+    { "n": 1, "what": "Identity issuer", "keys": [
+      "OIDC_ISSUER_API", "OIDC_ISSUER_BROWSER", "OIDC_AUDIENCE",
+      "OIDC_CLIENT_ID", "OIDC_SCOPE", "OIDC_SUBJECT_CLAIM",
+      "OIDC_GROUPS_CLAIM", "OIDC_REQUIRED_CLAIMS"
+    ] },
+    { "n": 2, "what": "Inference provider and credential", "keys": ["GATEWAY_MODELS_FILE"] },
+    { "n": 3, "what": "Provider secret source", "keys": [
+      "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"
+    ] },
+    { "n": 7, "what": "api egress denial", "keys": [] },
+    { "n": 8, "what": "Gateway log sink", "keys": [] },
+    { "n": 9, "what": "Ingress and TLS", "keys": [
+      "API_MTLS_CA_FILE", "API_MTLS_CERT_FILE", "API_MTLS_KEY_FILE",
+      "GATEWAY_MTLS_CA_FILE", "GATEWAY_MTLS_CERT_FILE",
+      "GATEWAY_MTLS_KEY_FILE", "GATEWAY_MTLS_ALLOWED_SUBJECT",
+      "GATEWAY_CALLER_AUTH", "API_GATEWAY_URL", "VITE_API_BASE_URL"
+    ] }
+  ],
+  "rowsWithNoKeys": {
+    "7": "Infrastructure, not application code: compose networks versus Container Apps egress rules. Asserted by apps/api/test/egress.compose.test.ts (Task 24) and by Spike 2 in Azure.",
+    "8": "The gateway writes the same JSON lines to stdout in both environments (§10.5). What differs is the collector, which reads them; no application key varies."
+  },
+  "sameEverywhere": [
+    "GATEWAY_ALLOWED_JURISDICTIONS",
+    "GATEWAY_PORT", "API_PORT", "API_WORKSPACE_ID",
+    "GATEWAY_MAX_PROMPT_CHARS", "GATEWAY_REQUEST_TIMEOUT_MS",
+    "GATEWAY_DEFAULT_MAX_TOKENS", "GATEWAY_RPM_PER_ACTOR",
+    "GATEWAY_RPM_PER_WORKSPACE", "GATEWAY_TOKENS_PER_HOUR_PER_ACTOR",
+    "GATEWAY_TOKENS_PER_HOUR_PER_WORKSPACE"
+  ]
+}
+```
+
+**`GATEWAY_ALLOWED_JURISDICTIONS` is in `sameEverywhere`, not in a divergence row**, and that is a deliberate and load-bearing placement. It is not a value that differs *because* one environment is local; it is a value the operator supplies in **both**, from the same source — their own contracts and data provisions — and neither has a default (D4). Filing it as a divergence would say the two environments are entitled to different policies, which is the opposite of what the owner decided.
+
+`apps/api/test/configSurface.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import path from 'node:path';
+
+const ROOT = path.resolve(__dirname, '../../..');
+const DIVERGENCE = JSON.parse(readFileSync(path.join(__dirname, 'divergence.json'), 'utf8')) as {
+  rows: { n: number; what: string; keys: string[] }[];
+  rowsWithNoKeys: Record<string, string>;
+  sameEverywhere: string[];
+};
+
+const walk = (dir: string, out: string[] = []): string[] => {
+  if (!existsSync(dir)) return out;
+  for (const e of readdirSync(dir)) {
+    if (e === 'node_modules' || e === 'dist') continue;
+    const full = path.join(dir, e);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else if (/\.tsx?$/.test(full) && !/\.test\.tsx?$/.test(full)) out.push(full);
+  }
+  return out;
+};
+
+const CONFIG_MODULES = [
+  'src/lib/config.ts',
+  'apps/api/src/config.ts',
+  'apps/gateway/src/config.ts',
+].map(f => path.join(ROOT, f));
+
+const APP_SOURCES = [
+  ...walk(path.join(ROOT, 'src')),
+  ...walk(path.join(ROOT, 'apps/api/src')),
+  ...walk(path.join(ROOT, 'apps/gateway/src')),
+];
+
+// ---- §18 item 10(a): no module branches on the environment ----
+describe('no module branches on the environment (S30)', () => {
+  it('nothing reads NODE_ENV, isLocal, or if (dev)', () => {
+    const offenders: string[] = [];
+    for (const file of APP_SOURCES) {
+      const text = readFileSync(file, 'utf8');
+      const rel = path.relative(ROOT, file);
+      if (/\bNODE_ENV\b/.test(text)) offenders.push(`${rel} reads NODE_ENV`);
+      if (/\bisLocal\b|\bisDev\b|\bisProduction\b/.test(text)) offenders.push(`${rel} branches on the environment`);
+      if (/\bimport\.meta\.env\.DEV\b|\bimport\.meta\.env\.PROD\b/.test(text)) offenders.push(`${rel} reads a Vite mode flag`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('nothing outside the three config modules reads process.env or import.meta.env', () => {
+    const offenders: string[] = [];
+    for (const file of APP_SOURCES) {
+      if (CONFIG_MODULES.includes(file)) continue;
+      const text = readFileSync(file, 'utf8');
+      const rel = path.relative(ROOT, file);
+      if (/process\.env/.test(text)) offenders.push(`${rel} reads process.env`);
+      if (/import\.meta\.env/.test(text)) offenders.push(`${rel} reads import.meta.env`);
+    }
+    expect(offenders).toEqual([]);
+  });
+});
+
+// ---- §18 item 10(b): the configuration diff IS the divergence list ----
+describe('the configuration diff is exactly §5.1s divergence list (S30)', () => {
+  const envKeys = (file: string): Set<string> => {
+    const text = readFileSync(path.join(ROOT, file), 'utf8');
+    return new Set([...text.matchAll(/^\s*([A-Z][A-Z0-9_]+)\s*[:=]/gm)].map(m => m[1]));
+  };
+
+  const local = new Set([...envKeys('.env.example'), ...envKeys('docker-compose.yml')]);
+  const deployed = envKeys('infra/main.parameters.json');
+  const tabled = new Set(DIVERGENCE.rows.flatMap(r => r.keys));
+  const same = new Set(DIVERGENCE.sameEverywhere);
+
+  it('every key that differs between the environments is named by a table row', () => {
+    const differing = [...local].filter(k => !deployed.has(k) && !same.has(k))
+      .concat([...deployed].filter(k => !local.has(k) && !same.has(k)));
+    expect(differing.filter(k => !tabled.has(k))).toEqual([]);
+  });
+
+  // The half that stops the table rotting into optimism.
+  it('every table row has a key behind it, or an explicit reason why not', () => {
+    const orphans = DIVERGENCE.rows
+      .filter(r => r.keys.length === 0 && !(String(r.n) in DIVERGENCE.rowsWithNoKeys))
+      .map(r => `row ${r.n} (${r.what}) names no key and gives no reason`);
+    expect(orphans).toEqual([]);
+  });
+
+  it('every tabled key actually appears in at least one environment', () => {
+    const ghosts = [...tabled].filter(k => !local.has(k) && !deployed.has(k));
+    expect(ghosts).toEqual([]);
+  });
+
+  // Owner decision 5: this is a value the operator supplies in BOTH
+  // environments, from the same source, so it is not a divergence — and it
+  // must have no default in either.
+  it('GATEWAY_ALLOWED_JURISDICTIONS is the same-everywhere kind, and has no default', () => {
+    expect(same.has('GATEWAY_ALLOWED_JURISDICTIONS')).toBe(true);
+    expect(tabled.has('GATEWAY_ALLOWED_JURISDICTIONS')).toBe(false);
+
+    const gatewayConfig = readFileSync(path.join(ROOT, 'apps/gateway/src/config.ts'), 'utf8');
+    expect(gatewayConfig).not.toMatch(/GATEWAY_ALLOWED_JURISDICTIONS\s*\?\?/);
+
+    const compose = readFileSync(path.join(ROOT, 'docker-compose.yml'), 'utf8');
+    expect(compose).not.toMatch(/GATEWAY_ALLOWED_JURISDICTIONS[^\n]*:-/);
+
+    // In .env.example it may appear ONLY as a comment.
+    for (const line of readFileSync(path.join(ROOT, '.env.example'), 'utf8').split('\n')) {
+      if (line.includes('GATEWAY_ALLOWED_JURISDICTIONS')) {
+        expect(line.trimStart().startsWith('#')).toBe(true);
+      }
+    }
+
+    const bicep = readFileSync(path.join(ROOT, 'infra/main.bicep'), 'utf8');
+    expect(bicep).not.toMatch(/param allowedJurisdictions[^\n]*=/);
+  });
+});
+```
+
+- [ ] **Step 2: Write the sweep test**
 
 `src/lib/model/stage1DoD.test.ts`:
 
@@ -7609,6 +8673,54 @@ describe('Stage 1 definition of done (§18.2)', () => {
     expect(offenders).toEqual([]);
   });
 
+  it('MSAL is nowhere in the repository (S28)', () => {
+    const pkg = readFileSync(path.join(ROOT, 'package.json'), 'utf8');
+    expect(pkg).not.toContain('msal');
+    const offenders = CLIENT_FILES
+      .filter(f => !f.endsWith('stage1DoD.test.ts'))
+      .filter(f => /msal/i.test(readFileSync(f, 'utf8')))
+      .map(f => path.relative(ROOT, f));
+    expect(offenders).toEqual([]);
+  });
+
+  it('there is no authentication bypass anywhere (S29)', () => {
+    const scan = [...CLIENT_FILES, ...walk(path.join(ROOT, 'apps/api/src')),
+      ...walk(path.join(ROOT, 'apps/gateway/src'))];
+    const offenders: string[] = [];
+    for (const file of scan) {
+      if (file.endsWith('stage1DoD.test.ts')) continue;
+      const text = readFileSync(file, 'utf8');
+      for (const bad of ['SKIP_AUTH', 'DISABLE_AUTH', 'ALLOW_ANONYMOUS', 'AUTH_BYPASS', 'x-trusted-user']) {
+        if (text.includes(bad)) offenders.push(`${path.relative(ROOT, file)} mentions ${bad}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // Owner decision 5, checked at rest and in five places at once. The
+  // absence of a default is invisible to every happy-path test, which is
+  // exactly why it needs a test of its own.
+  it('GATEWAY_ALLOWED_JURISDICTIONS has no default value ANYWHERE', () => {
+    const offenders: string[] = [];
+    const gw = readFileSync(path.join(ROOT, 'apps/gateway/src/config.ts'), 'utf8');
+    if (/GATEWAY_ALLOWED_JURISDICTIONS\s*\?\?\s*['"`]/.test(gw)) offenders.push('config.ts defaults it');
+    if (!/no default/i.test(gw)) offenders.push('config.ts does not refuse it when unset');
+
+    const compose = readFileSync(path.join(ROOT, 'docker-compose.yml'), 'utf8');
+    if (/GATEWAY_ALLOWED_JURISDICTIONS[^\n]*:-/.test(compose)) offenders.push('docker-compose.yml defaults it');
+
+    for (const line of readFileSync(path.join(ROOT, '.env.example'), 'utf8').split('\n')) {
+      if (line.includes('GATEWAY_ALLOWED_JURISDICTIONS') && !line.trimStart().startsWith('#')) {
+        offenders.push('.env.example sets it uncommented');
+      }
+    }
+
+    const bicep = readFileSync(path.join(ROOT, 'infra/main.bicep'), 'utf8');
+    if (/param allowedJurisdictions[^\n]*=/.test(bicep)) offenders.push('main.bicep defaults it');
+
+    expect(offenders).toEqual([]);
+  });
+
   it('the gateway never logs prompt or completion content', () => {
     const audit = readFileSync(path.join(ROOT, 'apps/gateway/src/audit.ts'), 'utf8');
     // The record is built from named fields; a spread of the caller's input
@@ -7632,6 +8744,16 @@ describe('Stage 1 definition of done (§18.2)', () => {
     expect(readme).not.toContain('You need an OpenRouter API key');
   });
 
+  it('README carries §5.1s "what running locally does not prove" list', () => {
+    const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+    for (const phrase of [
+      'does not prove', 'Managed-identity acquisition', 'group overage',
+      'conditional access', 'Keycloak is not an Entra emulator',
+    ]) {
+      expect(readme).toContain(phrase);
+    }
+  });
+
   it('no provider-specific branch exists outside apps/gateway/src/adapters', () => {
     const offenders: string[] = [];
     const scan = [...CLIENT_FILES, ...walk(path.join(ROOT, 'apps/api/src')),
@@ -7649,16 +8771,18 @@ describe('Stage 1 definition of done (§18.2)', () => {
 });
 ```
 
-- [ ] **Step 2: Run it and watch it fail**
+- [ ] **Step 3: Run them and watch them fail**
+
+Run: `npx vitest run --project api apps/api/test/configSurface.test.ts` — Expected: FAIL until `.env.example`, `docker-compose.yml` and `infra/main.parameters.json` all exist (Tasks 24 and 25) and `src/lib/config.ts` is the web app's only env reader (Task 19).
 
 Run: `npx vitest run --project web src/lib/model/stage1DoD.test.ts`
 Expected: FAIL on the two README cases (the README is not yet rewritten). Every other case should already pass if Tasks 1–25 are done — **if any other case fails, that is a real regression, not a test to adjust.**
 
-- [ ] **Step 3: Rewrite the README rows**
+- [ ] **Step 4: Rewrite the README rows**
 
 Apply the table above. Keep every sentence that is still true — the citation guarantees, the scan detection, the page-image rule, the palette guards, the fonts decision (its reasoning strengthens: the app should not contact a third-party host on a page view, and now the sentence is about the firm's own API).
 
-- [ ] **Step 4: Record the rulings**
+- [ ] **Step 5: Record the rulings**
 
 Append to `docs/superpowers/redesign/rulings.md`, in its established format, with a cost-if-wrong for each:
 
@@ -7667,10 +8791,14 @@ Append to `docs/superpowers/redesign/rulings.md`, in its established format, wit
 - **D1.** One SSE event splitter in `packages/core`; each adapter contributes only a pure `decodeEvent`; `apps/api` parses nothing. *Cost if wrong: five copies of a parser this project has already fixed twice, at a boundary where the failure is a short answer rather than an error.*
 - **D2.** A stream that ends without a terminator frame is an error, not a short answer. *Cost if wrong: a truncated answer about a contract, indistinguishable from a complete one.*
 - **D3.** The audit record is written before the upstream call and a sink failure refuses the call. *Cost if wrong: an unlogged egress, which is the one thing the gateway exists to prevent — and "what of ours went where" stops being answerable.*
-- **D4.** The jurisdiction gate is startup configuration with a UK/EU default; an out-of-bloc model stops the process. *Cost if wrong: a firm believes it is UK-only while routing privileged text to a US provider, and nothing on any screen says otherwise.*
+- **D4 (revised, owner decision 5).** The jurisdiction gate is startup configuration with **no default anywhere**; the gateway refuses to start with `GATEWAY_ALLOWED_JURISDICTIONS` unset, and a model outside the declared set stops the process. It enforces the **operator's** declared policy — which jurisdictions their contracts and data provisions cover — and passes no judgement of its own; the model picker's jurisdiction label is factual for the same reason. *Cost if wrong: an operator must type one variable before the gateway starts. Against that, two failures a default would cause. A default encodes an assumption about one firm's contracts as though it were a property of the software, and the system then enforces a policy nobody chose — while a firm whose provisions genuinely cover a US provider is told, wrongly, that their configuration is unacceptable. And the absence of a default is invisible to every happy-path test, which is why its removal is mutation-tested rather than trusted.*
 - **D5.** Every provider's stream decoding is proved by one conformance battery over recorded fixtures; a provider with no fixture fails the build; a synthetic fixture says so in the file. *Cost if wrong: a provider changes its event shape and the suite stays green.*
+- **S28 (as executed).** One OIDC path, two issuers, no Entra branch: the tenant check is a configured required claim, the identity is `(issuer, subject)` with the subject claim named in configuration, and the browser uses `oidc-client-ts` rather than MSAL. *Cost if wrong: an OIDC library instead of the vendor's, and MSAL's Entra-specific conveniences given up. Against that, two sign-in paths — this project's most repeated defect at the front door, where the divergence would be between the authentication a developer tests and the one a firm runs.*
+- **S29 (as executed).** No development bypass and no configuration that disables authentication; the API refuses to start with no issuer, or a non-HTTPS issuer that is not loopback; the gateway has no caller-auth value that turns its check off. **The absence is mutation-tested** (Task 16 Step 7). *Cost if wrong: a developer runs one more container. Against it: a bypass reaches production enabled, and it tests a different code path from the one that ships — a green local run under one would prove nothing, which removes the only reason to have a faithful local stack.*
+- **S31 (as executed).** Keycloak, from a version-controlled realm seeding four accounts across the three roles plus one in no group. *Cost if wrong: ~450 MB of image and ~20 seconds of cold start per boot. If it ever becomes the bottleneck the swap is one compose service and one realm file, because §7 is issuer-agnostic — which is the point.*
+- **S30 (as executed).** One typed configuration module per app; no module branches on the environment; the configuration diff **is** §5.1's divergence list, checked in both directions by `configSurface` (Task 26). *Cost if wrong: one boundary test and one diff test to keep green. Without them §5.1 is the one guarantee in this design with nothing enforcing it at rest, and its symptom is a green `docker compose up` that says nothing about the tenant.*
 
-- [ ] **Step 5: Run everything, in full**
+- [ ] **Step 6: Run everything, in full**
 
 ```bash
 npx tsc --noEmit
@@ -7681,16 +8809,29 @@ npm run compose:up && npm run test:compose && npm run compose:down
 
 Expected: `tsc` clean; all four vitest projects green; build clean with no externalization warning; 4 compose tests passing.
 
-- [ ] **Step 6: Mutation test the sweep**
+- [ ] **Step 7: Mutation test the sweep and the configuration surface**
 
 Add `const apiKey = 'sk-or-v1-test';` to `src/features/settings/SettingsPanel.tsx`. Run the DoD test. Expected: FAIL on *"no OpenRouter API key exists anywhere in the browser codebase"*. Remove it.
 
 Then add `if (provider === 'anthropic') { /* … */ }` to `apps/gateway/src/callModel.ts`. Expected: FAIL on *"no provider-specific branch exists outside apps/gateway/src/adapters"*. Remove it.
 
-- [ ] **Step 7: Commit**
+Then, **the four mutations this task exists for**:
+
+3. **Reintroduce the jurisdiction default.** Change `apps/gateway/src/config.ts` to `(env.GATEWAY_ALLOWED_JURISDICTIONS ?? 'UK,EU')` and delete its unset check. Run `npx vitest run`. Expected: FAIL on *"GATEWAY_ALLOWED_JURISDICTIONS has no default value ANYWHERE"* (this task), on *"GATEWAY_ALLOWED_JURISDICTIONS is the same-everywhere kind, and has no default"* (`configSurface`) and on Task 4's two refusal tests. Restore.
+
+   **Do the same for the other three homes, one at a time** — `${GATEWAY_ALLOWED_JURISDICTIONS:-UK,EU}` in `docker-compose.yml`, an uncommented line in `.env.example`, and `param allowedJurisdictions string = 'UK,EU'` in `main.bicep`. Each must fail on its own. **This is the mutation that matters most in the whole plan and it is the least obvious.** With a default in place, every happy-path test passes, the gateway starts, the gate still refuses an undeclared model, and the boot banner still prints a table — *nothing looks wrong*. Without these four checks a later, entirely well-meant "sensible default" slips in green and the system then enforces, as though it were a property of the software, an assumption about one particular firm's contracts.
+
+4. **Read an env var outside a config module.** Add `const x = process.env.FOO;` to `apps/gateway/src/callModel.ts`. Expected: FAIL on *"nothing outside the three config modules reads process.env or import.meta.env"*. Remove it.
+
+5. **Branch on the environment.** Add `const isLocal = true;` to `apps/api/src/routes/infer.ts`. Expected: FAIL on *"nothing reads NODE_ENV, isLocal, or if (dev)"*. Remove it.
+
+6. **Orphan a divergence row.** Empty row 1's `keys` array in `divergence.json` without adding a `rowsWithNoKeys` entry. Expected: FAIL on *"every table row has a key behind it, or an explicit reason why not"*. Restore.
+   That is the half of §18 item 10(b) that stops §5.1's table decaying into a list of good intentions, and it is why the check runs in both directions.
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add README.md docs/superpowers/redesign/rulings.md src/lib/model/stage1DoD.test.ts
+git add README.md docs/superpowers/redesign/rulings.md src/lib/model/stage1DoD.test.ts apps/api/test/configSurface.test.ts apps/api/test/divergence.json
 git commit -F .git/COMMIT_MSG_TASK26
 ```
 
@@ -7724,7 +8865,7 @@ Recorded here so a later stage extends rather than duplicates. Each is a thing t
 
 1. **`packages/core` exists and is the single home for shared logic (S14).** Stage 0's remaining extraction and every later stage **add to it**. Do not create a second shared package. Extend `packages/core/test/importBoundary.test.ts`'s `exported` array with every new export.
 2. **`GET /v1/models` is the allowlist's only wire surface, and the gateway is its only home.** Stage 2's admin workspace-configuration UI reads through this route. It must not hold a second list, and `apps/api` must not start validating a model choice.
-3. **`workspaceId` and `actorUserId` reach the gateway in the request body, put there by `apps/api` from a validated token — never from the client.** Stage 2 replaces the configured `workspaceId` and the raw `oid` with an `app_user.id` lookup. The overwrite-after-spread in `apps/api/src/routes/infer.ts` must survive that change, and `AuditStart.actorUserId` should then carry the `app_user.id` with the `oid` alongside it, so records written before and after Stage 2 remain joinable.
+3. **`workspaceId`, `actorIssuer` and `actorSubject` reach the gateway in the request body, put there by `apps/api` from a validated token — never from the client.** Stage 2 replaces the configured `workspaceId` with a real one and resolves `(issuer, subject)` to an `app_user.id`. The overwrite-after-spread in `apps/api/src/routes/infer.ts` must survive that change, and `AuditStart` should then gain `actorUserId` **alongside** `actorIssuer`/`actorSubject` rather than replacing them, so records written before and after Stage 2 remain joinable.
 4. **`Purpose` is a closed set in `packages/core`.** A new call site in Stage 3 or 4 adds its purpose there and to no other list. The gateway refuses an unknown one.
 5. **`Settings.modelChoiceId` and `Settings.concurrency` are per-user `localStorage` in Stage 1.** §6.6 makes both workspace configuration in Stage 2. When they move, re-validate a stored `modelChoiceId` against `GET /v1/models` on load — Task 22's ninth `ModelPicker` test is the behaviour to preserve.
 6. **The gateway's call log (`AuditSink`, stdout JSONL) and Stage 2's `audit_event` are two different logs and must stay two.** §12 Q3 is explicit that they are deliberately separate, and S22's reasoning about two append-only records of one fact applies here too. The gateway must not gain a database credential to write `audit_event` — it has no database credential by design (§5).
@@ -7733,7 +8874,10 @@ Recorded here so a later stage extends rather than duplicates. Each is a thing t
 9. **Stage 3's run worker calls the gateway through `apps/api`'s `gatewayClient.ts`.** Not a second client, and not directly from the worker — `apps/api` is one service and its single outbound module is what makes S1 checkable by reading one file.
 10. **`Frame` is the gateway's outward stream format and is provider-independent.** Stage 3's `run.started` / `finding.done` events are a *different* channel (§9) and must not be squeezed into this one; Stage 4's WebSocket is a third. Three transports, three formats, each with one job.
 11. **`Finding.authError` keeps its persisted meaning: a failure Retry cannot fix.** Stage 3's `finding.auth_error` column carries it forward unchanged.
-12. **`callerAuth.ts`'s two modes never fall back to each other**, and `GATEWAY_CALLER_AUTH=none` is refused under `NODE_ENV=production`. A Stage 2 deployment adding a second caller adds an oid to `GATEWAY_ENTRA_ALLOWED_OIDS`; it does not add a third mode.
+12. **`callerAuth.ts`'s two modes never fall back to each other**, and no configuration value turns the check off — `mode: 'none'` is unreachable from configuration and exists only as a type for unit tests. A Stage 2 deployment adding a second caller adds a subject to `GATEWAY_CALLER_ALLOWED_SUBJECTS`; it does not add a third mode and does not add an environment branch.
+13. **Identity is `(issuer, subject)` everywhere, and no schema may carry an `entra_*` column.** Stage 2's `app_user` is keyed on the pair; `role_mapping` is `(issuer, group_value, role)`; the subject claim is named in configuration (`oid` for Entra, `sub` for Keycloak) and the two issuers' subjects are never compared with each other. Stage 1 creates none of those tables, but `AuditStart.actorIssuer` / `actorSubject` (Tasks 6, 17) are already the pair, so Stage 2's `app_user.id` can be joined to records written before it existed.
+14. **The `auth` and `configSurface` suites are table-driven over the route list and the configuration key sets** (Task 16, Task 26). A Stage 2+ route with no `auth` entry fails the build; a configuration key that differs between environments and is not in §5.1's table fails the build, and so does a table row with no key behind it.
+15. **The seeded Keycloak realm ships in Stage 1 with all four accounts** (Task 24). Stage 2 maps their groups to roles; Stages 3–5 use the same four. Do not add accounts per stage — the realm file is version-controlled and one edit now is cheaper than four later.
 
 ---
 
@@ -7770,15 +8914,28 @@ Every Stage 1 requirement, with the task that implements it.
 | Enough to answer "what of ours went where, and when" | Stage 1 brief | 6 (context ids), 21 (call sites supply them) |
 | Never logs prompt or completion content | §10, §14 | 6, 26 |
 | Only `apps/api` may call the gateway | §10 | 15 |
-| The browser signs in with Entra | §13 | 19 |
-| The API validates the token (signature, iss, aud, tid, exp) | §7 | 16 |
+| One OIDC path, two issuers, no Entra branch | §7, S28 | 16, 19 |
+| The tenant check is a configured required claim, never a code path | §7, S28 | 16 |
+| Identity is `(issuer, subject)`, never the email or an Entra-shaped id | §7, S28 | 16, 17, 6 |
+| The browser uses a standards-only OIDC client, not MSAL | §7, S28 | 19, 26 (sweep) |
+| The API validates signature, iss, aud, exp and the configured required claims | §7 | 16 |
+| Group overage is detected and reported as its own error | §7 | 16, 23 |
+| No development bypass; the absence is mutation-tested | §7, S29 | 16 (Step 7), 15, 4, 26 |
+| The API refuses to start with no issuer, or a non-loopback non-HTTPS one | §7, S29 | 16 |
+| Keycloak seeds four accounts across the three roles plus one with none | §5.1, S31 | 24 |
+| The recorded stub is a registered adapter, refused by S27, marked everywhere | §5.1, §10.2 | 2, 8, 10, 13 |
+| One typed config module per app; no module branches on the environment | §5.1, S30 | 4, 16, 19, 26 |
+| The configuration diff **is** §5.1's divergence list, both directions | §18 item 10 | 26 |
+| `GATEWAY_ALLOWED_JURISDICTIONS` has no default, in any of its five homes | D4, owner decision 5 | 4, 24, 25, 26 |
+| The model picker's jurisdiction label is factual, never evaluative | S27, owner decision 5 | 22 |
+| The README carries "what running locally does not prove" | §5.1 | 26 |
 | `openrouter.ts` becomes a `ModelClient` | §13 | 2 (interface), 20 (implementation) |
 | A minimal `api` whose only route is the inference proxy | §13 | 16, 17, 18 |
 | Everything else stays in IndexedDB | §13 | Global constraint; no task touches persistence |
 | Streaming survives the new boundary | §14, brief | 3, 10, 12, 18, 20 |
 | `docker compose up` locally, same shape | §5, §4.10 | 24 |
-| Local development without Azure | S2, owner decision 5 | 7 (env/file), 13 (stub), 24 (example config) |
-| Local development is not a degraded mode | Owner decision 5 | 13, 24 |
+| Local development without Azure | S2 | 7 (env/file), 13 (recorded), 24 (example configs) |
+| Local development is not a degraded mode, and runs the same code path | S30, §5.1 | 13, 19, 24, 26 |
 | `azd up` to Azure | §4.10 | 25 |
 | No OpenRouter key in the codebase or any browser | §18.2 | 22 (purge), 26 (sweep) |
 | Empty / broken / in-flight render distinctly | §3 | 19 (sign-in), 22 (model picker), 17/20 (empty list at the wire) |
@@ -7801,7 +8958,7 @@ Searched for `TBD`, `TODO`, `implement later`, `fill in`, `appropriate error han
 - Task 12's `await import('../callModel.ts')` was a placeholder; the step now instructs a static export and says it must not survive.
 - Task 20's `chatStream` return invented `provider`/`jurisdiction`; the step now requires the `done` frame to carry them and `packages/core`'s `Frame` and its round-trip test to be extended.
 
-Two deliberate delegations remain and are marked as such rather than hidden: Task 15 Step 1 and Task 19 Step 2 describe their test cases as a numbered list rather than quoting every assertion, and Task 25's Bicep names what each module must express rather than transcribing the ARM. Both are cases where the exact text depends on a local certificate path, a tenant id or a subscription's resource naming — writing invented values would be worse than naming the requirement precisely.
+Three deliberate delegations remain and are marked as such rather than hidden: Task 15 Step 1 and Task 19 Step 2 describe their test cases as a numbered list rather than quoting every assertion; Task 24 Step 3 specifies the Keycloak realm as a table of required objects rather than 400 lines of realm JSON; and Task 25's Bicep names what each module must express rather than transcribing the ARM. Both are cases where the exact text depends on a local certificate path, a tenant id or a subscription's resource naming — writing invented values would be worse than naming the requirement precisely.
 
 ### 3. Type and name consistency
 
@@ -7818,4 +8975,9 @@ Checked across all 26 tasks:
 - `Principal` (Task 16) — used in Tasks 17 and 18.
 - `getAccessToken` (Task 19) — the one token source in Task 20.
 - `isSignInError` / `isServiceConfigError` (Task 2) — used in Tasks 20, 21, 23. `isAuthError` survives nowhere.
-- `GATEWAY_ALLOWED_JURISDICTIONS` — spelled identically in Tasks 4, 24, 25, 26.
+- `GATEWAY_ALLOWED_JURISDICTIONS` — spelled identically in Tasks 4, 24, 25, 26, and **has no default in any of them**; Task 26's sweep and `configSurface` check all five homes (config loader, compose, `.env.example`, Bicep, and the `sameEverywhere` list).
+- `AuthConfig` / `Principal` (Task 16) — `Principal` is `{ issuer, subject, groups, name?, email? }` and is used with those field names in Tasks 17 and 18. **`oid` and `tid` appear nowhere outside a test fixture and a configuration value**; the pre-revision `Principal { oid, tid }` is gone.
+- `actorIssuer` / `actorSubject` — the pair, spelled identically in Tasks 6 (`AuditStart`, `AuditStartInput`), 11 (`CallContext`, `InferBody`), 12 and 17. **`actorUserId` survives nowhere in Stage 1** — it appears only in the Stage 2 interface note above, as the field Stage 2 adds *beside* the pair rather than in place of it.
+- `getAccessToken` (Task 19) lives in `src/lib/auth/oidc.ts`, not `msal.ts`, and Task 20 imports it from there.
+- `recorded` — the provider id in Task 2's `PROVIDER_IDS`, the adapter file `adapters/recorded.ts` and its export `recordedAdapter` (Tasks 8, 13), the conformance fixture `recorded.txt` (Task 10), and the fixture directory `fixtures/recorded/` (Tasks 4, 13). **`stub` survives only as an English word describing a test double, never as an identifier**; `selectTransport`, `GATEWAY_UPSTREAM`, `stubDir` and `InferResponse.stubbed` are all gone.
+- `config` — `src/lib/config.ts` (Task 19), `apps/api/src/config.ts` (Task 16), `apps/gateway/src/config.ts` (Task 4). Exactly three, and `configSurface` (Task 26) names exactly those three.
