@@ -730,3 +730,186 @@ made for the identical reason — so neither number is read as belonging to two 
   `useUnsavedDraftGuard` E's `AuthoringDraft` uses (`redlinesSessionDirty` in `App.tsx`),
   not a second hand-rolled guard. *Cost if wrong: a long intake-and-inference session lost
   to an accidental reload — which is why the guard is reused rather than skipped.*
+
+---
+
+# Sub-project G, Task 24 — closing rulings and the browser-verification record (2026-08-28)
+
+G's plan (`docs/superpowers/plans/2026-08-28-redesign-g-visual-reskin.md`) recorded ten
+rulings and three owner decisions while it was being written, ahead of any implementation,
+under the heading "Rulings made while writing this plan." They bind exactly as R-G1–R-G22
+above do, and are transcribed here because that plan is task-by-task execution scratch,
+not this project's durable record of "decided without review, with cost-if-wrong." Checked
+against the shipped source before transcription, not copied blind from the plan — three
+(R-GP1, R-GP2, R-GP9) are called out below with the file that confirms them.
+
+## The three owner decisions of spec §17
+
+- **D1 — Phone parity is NOT in G; it is sub-project H, to be specced separately.** G ships
+  ≥768px responsive behaviour of every existing screen and no phone-specific screen. Recorded
+  here so a later reader finds this scheduled rather than inferring it was forgotten.
+- **D2 — The three-pane review ledger (`1b`) IS in G**, sequenced last as Task 23, in its own
+  commit boundary, deliberately reachable by `git revert` without touching any other task.
+- **D3 — The `Standard positions` nav tab IS built** (R-G18, Task 20). It reads entirely from
+  D's existing derived `positionHealth`/`buildPositionHealthMap`: no new stored data, no new
+  writes, no model call.
+
+## R-GP1 through R-GP10
+
+- **R-GP1. `PdfCanvas.tsx`'s highlight overlay divs are restyled; its canvas draw calls are
+  not touched.** The spec calls `PdfCanvas` a partial exception and exempted the whole file
+  from the palette guard, but the citation highlight is DOM, not a canvas draw call —
+  `backgroundColor`/`borderBottom` inline styles carrying the old hardcoded yellow
+  (`rgba(255, 235, 59, 0.35)` / `rgba(255, 193, 7, 0.8)`), not the design's tokens. Left alone,
+  the one graphic the spec's own verification checklist names would have shipped in the wrong
+  colour, hidden behind a guard exemption covering an entire file. Those two style values
+  become `var(--color-highlight-fill)`/`var(--color-highlight-edge)`; confirmed present at
+  `PdfCanvas.tsx:100-101` in the shipped source. *Cost if wrong: two lines of a file the spec
+  called untouched are touched, in the direction the spec's own token table asks for.*
+- **R-GP2. `[role="status"]` means "a chip", and nothing else in this app may claim it. Busy
+  elements and the toast carry `aria-live` + a `data-*` hook instead.** The spec's own
+  guidance — `role="status"` on every busy element and on the toast — is unsafe here for a
+  reason the spec could not have known: roughly 21 assertions across three test files already
+  read `[role="status"]` positionally to mean "the Nth chip on screen." A busy element takes
+  `data-busy="true"` + `aria-live="polite"`; `Toast.tsx` (confirmed at
+  `src/components/Toast.tsx:48-53`) carries `data-toast` + `aria-live` (`assertive` for an
+  error, `polite` otherwise) and no `role` at all — the spec's claim that `Toast` "keeps
+  `role="status"`" is factually wrong about the current source, since it never had one.
+  `role="status"` is defined as exactly `aria-live="polite"` + `aria-atomic="true"`, so the
+  announcement behaviour a screen reader gives the user is identical either way. *Cost if
+  wrong: a busy region and a toast are announced by `aria-live` rather than by an implicit
+  role — the same announcement — and `[role="status"]` keeps meaning "a chip," which is what
+  21 assertions already assume.*
+- **R-GP3. The busy card's `Extracting…` label is the one string R-G6's enumerated copy
+  changes gains.** R-G20 requires a busy state to stay legible with motion off; `FindingCard`'s
+  running branch previously showed a spinner and pulsing skeleton bars with no word at all,
+  which under `prefers-reduced-motion` is a dimmed card indistinguishable from an empty one.
+  Confirmed present at `FindingCard.tsx:153`. *Cost if wrong: one more string than R-G6
+  enumerated, in service of a ruling (R-G20) R-G6 does not override.*
+- **R-GP4. The contrast test asserts three tiers, `ink-5`/`ink-6` included, against a
+  documented decorative floor rather than an exemption list.** `ink-5` on `paper` is ~2.3:1 by
+  design and would fail either a 4.5:1 or 3:1 WCAG threshold; an exemption list is how a
+  palette silently drifts to invisible instead. Every declared pair is asserted at the tier
+  its role assigns (`body` ≥ 4.5, `chip`/`large` ≥ 3.0, `decorative` ≥ 2.2, and a fourth
+  `disabled` tier at ≥ 1.7 added for `ink-6`, one member only) — confirmed in
+  `src/test/contrast.test.ts`'s 47-pair `PAIRS` table, all 47 passing. R-G19 (no failure,
+  disclosure, or warning text at `ink-4` or below) is the rule arithmetic cannot check, and is
+  enforced by review, not by this test. *Cost if wrong: the decorative tier is a documented
+  floor rather than a WCAG threshold, which is what "decorative" means.*
+- **R-GP5. An activity entry whose `byUserId` does not match the local profile renders with
+  no actor, never an invented one.** There is no store of other display names — `profile.ts`
+  holds exactly one record — so a mismatch can only arise from a re-created profile pointing
+  at a dead id. The honest rendering omits the actor ("Rejected · 21 Aug 11:02") rather than
+  inventing "by someone else" or a placeholder initial. *Cost if wrong: a handful of
+  pre-existing entries lose the word "you"; the alternative is naming a colleague who does not
+  exist.*
+- **R-GP6. The `Review / Compare` control is absent both for a collection review and for a
+  standalone review with fewer than two documents.** `TabularReview` already refused a
+  collection target outright; the single-document half needed its own gate, since a
+  one-document review would otherwise render a one-column grid. Confirmed in
+  `ResultsView.tsx`: `onOpenTabular` is optional and the control renders only when the caller
+  supplies it. *Cost if wrong: a one-document review loses a grid view that showed one
+  column.*
+- **R-GP7. The chat panel moves into the finding column's header as a two-way segmented
+  control (`Finding` / `Assistant`), not out of the app.** The three-pane ledger (Task 23)
+  left no room for a rail-level tab pair, and dropping the assistant module would be a
+  behaviour change smuggled into a layout task. Every prop `ChatPanel` receives is unchanged;
+  confirmed in `ResultsView.tsx` (the `Finding`/`Assistant` segmented control, `ChatPanel`
+  still lazy-loaded). *Cost if wrong: the assistant is one click further from the document
+  pane than it was.*
+- **R-GP8. R-G6's `Library` → `Playbooks` rename covers every user-facing string that names
+  the tab, not only the tab control itself.** `App.tsx`'s `Back to Library` button and
+  `MatterHome.tsx`'s "Create one in the Library first…" sentence both named the same control
+  and would otherwise have directed a user to a tab that no longer exists after the rename.
+  Neither is asserted by any test, which is exactly why nothing would ever have forced their
+  discovery. *Cost if wrong: two screens confidently name a control that does not exist.*
+- **R-GP9. `accent-strong` is a real darkened teal, not an alias of `accent`.** An early draft
+  set `--color-accent-strong: var(--lex-teal)` — identical to `--color-accent` — while several
+  components used `hover:bg-accent-strong`/`hover:text-accent-strong`, which would have made
+  every primary button's and every link's hover state change nothing, invisible to the whole
+  suite. Confirmed in `src/index.css:23`: `--lex-teal-strong: #0e3f39`, the same hue roughly
+  25% darker, asserted as its own foreground pair in the contrast test so it cannot drift back
+  to an alias. *Cost if wrong: one more palette-layer value than the handoff's token table
+  lists, in a hue the handoff already fixes.*
+- **R-GP10. A test that cannot fail is deleted or replaced, never kept for coverage.** Three
+  cases caught in the plan's own self-review asserted nothing — a banner mounted without the
+  prop that would create the control it claimed to check, a "no write affordance" case on a
+  component whose only controls are buttons, and an "excludes `.css`" case against a walker
+  that only ever collects `.tsx?` files. Each was replaced with an assertion of the behaviour
+  it actually names, and every new test the plan introduced was required to state the mutation
+  that makes it fail. *Cost if wrong: three fewer assertions, each of which was worth
+  nothing.*
+
+## Three places the spec described source that does not exist
+
+Not rulings and not disagreements — the spec describing code that was never there, recorded
+so nobody "fixes" working code to match a mistaken description.
+
+1. **`NetPosition` has no `confirmedAt`/`confirmedBy`.** The spec derives part of the activity
+   feed from those field names; the real fields are `at` and `byUserId` (`src/types.ts`).
+   `matterActivity.ts` (Task 16) uses the real names and is correct as shipped. *If
+   unrecorded: someone renames working code to match a spec typo, or writes a migration for
+   fields that never existed.*
+2. **`Toast` has no `role="status"`.** Covered above under R-GP2 — the spec's claim that it
+   "keeps" the role is wrong about the current source, since `Toast.tsx` never carried one.
+3. **`title="Retry"` belongs to `TabularReview`'s four per-cell retry controls, not to
+   `LoadErrorPanel`.** The spec lists it as a structural contract without saying where it
+   lives. Task 4 additionally hardened both `LoadErrorPanel` variants to carry the same
+   attribute, which is why an App-level `querySelector('button[title="Retry"]')` could now
+   match either, though none of the three existing assertions that read it mounts a
+   `LoadErrorPanel`.
+
+Also recorded: the plan's first draft described the stack as "TypeScript 5.8 (strict)".
+`tsconfig.json` sets neither `strict` nor `noUnusedLocals` — confirmed by reading the file —
+so `tsc --noEmit` catches shape and name errors but not an unread optional field or an unused
+prop. Every task's "gates: tsc clean" is a real but materially weaker check than that phrasing
+implied.
+
+## R-G23 — the review screen keeps every finding card rendering; the clause index is an added way to move the same cursor, not a replacement renderer
+
+Task 23's brief called for the review screen's middle column to show only the active clause's
+card, matching the handoff's mockup. Implemented literally, that breaks two existing,
+unedited tests: `App.rerunResets.test.tsx`'s "leaves the verification of other findings
+alone" reads two different findings' `[role="status"]` chips with no keyboard movement at
+all, and `ResultsView.test.tsx`'s "a standalone review still renders exactly as before" reads
+a second clause's summary text, also with no navigation — both require every card present
+simultaneously. The implementer flagged this rather than editing either assertion, kept the
+finding column exactly as the two-pane layout had it (every clause's card renders, in
+template order), and made `ClauseIndex` a genuine second way to move the same `focusIndex`
+keyboard cursor `useVerifyKeys` already owns — a rail row click jumps/scrolls to that card
+exactly as `j`/`k` do.
+
+**Ruling: this stands.** Those two tests pin real behaviour — that verifying or re-running one
+clause leaves every other clause's state visibly intact, checked without requiring any
+navigation to prove it — and rewriting regression coverage to accommodate a layout preference
+is the wrong trade. *Cost if wrong: the review screen keeps a continuously scrolling finding
+column rather than the single-card column the handoff's mockup shows; if the single-card
+version is later wanted, `App.rerunResets.test.tsx` and `ResultsView.test.tsx`'s two
+assertions above must first be replaced with equivalents that do not depend on simultaneous
+rendering — deliberately, as their own reviewed change, not as a side effect of a layout
+task.*
+
+## Browser verification
+
+The owner drove the running app directly and confirmed, on 2026-08-28: the light palette
+across matters, playbooks, review, and the redlines intake; the export-gate banner; the
+`Standard positions` tab reading `HELD 1 of 1` for a position published, reviewed, and
+verified by hand; and the document pane after the `PdfCanvas` restyle (R-GP1) — the gutter,
+toolbar, page shadow, and highlight colour all confirmed in the running app, not only in the
+unit suite. That is the extent of the verification performed for this record; it is not a
+claim that every item this sub-project's spec asks to be checked in a browser (fonts blocked,
+reduced motion, 768px/1024px across every screen, a scanned PDF and a marked-up DOCX through
+the intake wizard, every load-error branch forced live, a run mid-flight, cancellation, and a
+reopened interrupted review) was independently re-verified here — several of those were
+verified by individual task implementers and reported in their own task reports
+(`.superpowers/sdd/2026-08-28-redesign-g-visual-reskin/task-*-report.md`, gitignored scratch),
+most thoroughly by Task 23's own live-app pass (keyboard loop, citation highlighting, and the
+responsive collapse at ~992px and ~700px). This entry does not repeat or re-attest to those;
+it records only what was verified in the course of writing this documentation, attributed
+accurately.
+
+At Task 24's own commit: `npx tsc --noEmit` clean; `npx vitest run` — 130 test files, 1710
+tests, 0 skipped, all green; the palette scanner's `SCAN_EXEMPT` list is empty and the guard
+passes at zero violations repo-wide; the contrast test's 47 declared role pairs all pass at
+their assigned tier; the font payload totals 354,180 bytes, inside the 350 KiB (358,400-byte)
+budget `src/test/fonts.test.ts` enforces.
