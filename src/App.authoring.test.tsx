@@ -253,7 +253,11 @@ describe('the authoring route is reachable from the library', () => {
     expect(container.textContent).toContain('Rent review');
   });
 
-  it('offers all three routes on the chooser, with learn-from-redlines honestly inert (R-E6)', async () => {
+  it('offers all three routes on the chooser, with learn-from-redlines now wired live (Task 10A)', async () => {
+    // R-E6 kept this card rendered and honestly inert before sub-project F
+    // landed; App.redlines.test.tsx is what now exercises the live route
+    // end to end — this test only asserts the chooser itself is honest
+    // about the third card no longer being a dead end.
     act(() => { root.render(<App />); });
     await flush();
     click(buttonNamed(/^playbooks$/i));
@@ -264,10 +268,8 @@ describe('the authoring route is reachable from the library', () => {
     expect(buttonNamed(/build by hand/i)).toBeTruthy();
     const redlines = buttonNamed(/learn from redlines/i);
     expect(redlines).toBeTruthy();
-    // Rendered, not hidden — and saying why it does nothing rather than
-    // being mysteriously inert.
-    expect(redlines!.getAttribute('aria-disabled')).toBe('true');
-    expect(redlines!.textContent).toMatch(/not built yet/i);
+    expect(redlines!.getAttribute('aria-disabled')).toBe('false');
+    expect(redlines!.textContent).not.toMatch(/not built yet/i);
   });
 
   it('Build by hand opens D\'s editor on a new, empty, unsaved playbook', async () => {

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
-import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
+import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition, Changeset, ChangesetItem } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
 import { applyVerification, findingKey, makeNote, resetVerification, unchecked } from './lib/verification';
 import type { VerificationChange } from './lib/verification';
@@ -56,7 +56,27 @@ import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, R
 import { ResultsView } from './features/review/ResultsView';
 import { emptyRun, runReview, retryCell, type CollectionRunInput } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
-import { parseFiles, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
+import { parseFiles, parseFile, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
+// --- Sub-project F: learning from redlines ---------------------------------
+//
+// Task 10A wires the whole path — the chooser's redlines card was the
+// mechanism with no path to it (CLAUDE.md's "sibling drift"/"correct
+// mechanism, no path" pattern, its fifteenth instance in this project). None
+// of these library functions are modified here; App.tsx only calls them in
+// sequence, exactly as it already does for D's publish path and E's
+// authoring flow.
+import { proposeRole, proposeChains, type PrecedentDocument, type PrecedentRole } from './lib/chains';
+import { parseDocxRedlines, type ParsedEdit } from './lib/docxRedlines';
+import { diffExtractedText } from './lib/pdfRedlineDiff';
+import { inferPositions, type InferredPosition, type OpenQuestion } from './lib/inferPositions';
+import { buildChangeset } from './lib/buildChangeset';
+import { saveChangeset, recordDecision, publishChangeset, getChangeset } from './lib/db/changesets';
+import { PrecedentUploadPanel } from './features/redlines/PrecedentUploadPanel';
+import { PrecedentIntake, type UnreadableDocument } from './features/redlines/PrecedentIntake';
+import { WhatWeLearned } from './features/redlines/WhatWeLearned';
+import { TheWorkings } from './features/redlines/TheWorkings';
+import { ChangesetReview } from './features/redlines/ChangesetReview';
+import { Button } from './components/Button';
 
 /** `authoring-form` and `authoring-review` are sub-project E's two
  *  session-only screens. They deliberately have **no `Route`**: a draft
@@ -65,7 +85,8 @@ import { parseFiles, toDocumentRecord, documentFileForViewing, documentFileForRe
  *  and R-E1. */
 type View =
   | 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter' | 'not-found'
-  | 'authoring-form' | 'authoring-review';
+  | 'authoring-form' | 'authoring-review'
+  | 'redlines-intake' | 'redlines-learned' | 'redlines-workings' | 'redlines-changeset';
 
 /** The two views that hold a session-only `AuthoringDraft`. Leaving either
  *  of them, by any path, destroys it (see the effect that clears the
@@ -76,12 +97,32 @@ function isAuthoringView(view: View): boolean {
   return AUTHORING_VIEWS.includes(view);
 }
 
+/** Sub-project F's four session-only screens, mirroring `AUTHORING_VIEWS`
+ *  above — same reasoning (R-F6: "a learning session is session-only,
+ *  exactly as E's `AuthoringDraft` is"), same absence of a `Route`: a deep
+ *  link cannot restore a set of in-memory `File`s, so none of the four gets
+ *  one. `redlines-changeset` is the exception in spirit, not in mechanism —
+ *  once a `Changeset` is built it IS durable (`saveChangeset`), but this app
+ *  has no reopen-an-existing-changeset screen yet, so leaving still drops
+ *  the session's precedent documents and positions exactly like the other
+ *  three. */
+const REDLINES_VIEWS: readonly View[] = [
+  'redlines-intake', 'redlines-learned', 'redlines-workings', 'redlines-changeset',
+];
+
+function isRedlinesView(view: View): boolean {
+  return REDLINES_VIEWS.includes(view);
+}
+
 /** Wording for the two unsaved-work guards. Both are consulted by
  *  `confirmDiscardIfDirty`, which every exit from a screen goes through. */
 const TEMPLATE_DIRTY_MESSAGE = 'This template has unsaved changes. Discard them?';
 const AUTHORING_DRAFT_DIRTY_MESSAGE =
   'This drafted playbook has not been saved. It exists only in this tab, ' +
   'so leaving loses every clause you have reviewed. Leave anyway?';
+const REDLINES_DIRTY_MESSAGE =
+  'This learning session has not been turned into a published changeset. It exists only in this tab, ' +
+  'so leaving loses the documents you brought in and the positions found in them. Leave anyway?';
 
 /** Builds the persisted `Review` shape from an in-session `ReviewRun`, for
  *  a run scoped to a matter (`matterId` — see `activeMatterId`). Shared by
@@ -498,6 +539,46 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [importing, setImporting] = useState(false);
+
+  // --- Sub-project F: learning from redlines (Task 10A wiring) -----------
+  //
+  // Everything here is session-only until `redlinesChangeset` is actually
+  // built, per R-F6 (mirrors E's `AuthoringDraft`): a precedent document's
+  // `File` and its parsed edits live only in `redlinesFilesRef` below and
+  // die with the tab, never reaching `addDocument`/blob storage — spec §4 /
+  // §11's "read once, never stored" promise. `redlinesDocs` is the thin,
+  // serialisable-looking half of that state (`PrecedentDocument[]` — no
+  // `File`, no edit text) that actually drives `PrecedentIntake`'s render;
+  // `redlinesFilesRef` is the other half, keyed by the same `id`.
+  const [redlinesDocs, setRedlinesDocs] = useState<PrecedentDocument[]>([]);
+  const [redlinesUnreadable, setRedlinesUnreadable] = useState<UnreadableDocument[]>([]);
+  /** One entry per document brought in: its live `File` (read, never
+   *  persisted), the text `pdfRedlineDiff` needs for the diff fallback, the
+   *  edits actually read from it (tracked-change or diff-derived), and which
+   *  of the two `source` they are. A `useRef`, not `useState`: a `File` is
+   *  exactly the kind of per-session-only value `AuthoringDraft`'s own
+   *  ref/ref-writer pattern exists for (see `authoringDraftRef`) — nothing
+   *  here needs to trigger a re-render on its own, `redlinesDocs`/
+   *  `redlinesPositions` already do that whenever the derived, renderable
+   *  state actually changes. */
+  const redlinesFilesRef = useRef<Map<string, {
+    file: File; text: string; edits: ParsedEdit[]; source: 'tracked' | 'diff';
+  }>>(new Map());
+  const [redlinesBusy, setRedlinesBusy] = useState(false);
+  const [redlinesError, setRedlinesError] = useState<string | undefined>(undefined);
+  const [redlinesPositions, setRedlinesPositions] = useState<InferredPosition[]>([]);
+  const [redlinesQuestions, setRedlinesQuestions] = useState<OpenQuestion[]>([]);
+  const [redlinesWorkingsPosition, setRedlinesWorkingsPosition] = useState<InferredPosition | null>(null);
+  // The playbook this session mints (`handleBuildRedlinesChangeset`) so there
+  // is a LIVE version to build and publish a changeset against — spec §9's
+  // changeset mechanism, not E's draft-review surface, is what turns adopted
+  // positions into something publishable here (see that handler's doc
+  // comment for why).
+  const [redlinesVersion, setRedlinesVersion] = useState<PlaybookVersion | null>(null);
+  const [redlinesChangeset, setRedlinesChangeset] = useState<Changeset | null>(null);
+  const [redlinesPublishing, setRedlinesPublishing] = useState(false);
+  const [redlinesPublishError, setRedlinesPublishError] = useState<string | undefined>(undefined);
+  const [redlinesPublishedVersion, setRedlinesPublishedVersion] = useState<PlaybookVersion | undefined>(undefined);
 
   // Important 3: running a playbook from the Library now goes through this
   // picker instead of straight into the run panel, since every review is
@@ -1126,6 +1207,29 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setSavingAuthoringDraft(false);
   }, [view]);
 
+  // Sub-project F: the learning session dies with its screen, exactly like
+  // the authoring draft above and for the same reason (R-F6). This is the
+  // ONLY place `redlinesFilesRef` is cleared, and it is what actually keeps
+  // spec §4/§11's promise: once the last of the four `REDLINES_VIEWS` is
+  // left, every `File` this session ever read is dropped from memory, never
+  // having reached `addDocument`/blob storage on any path.
+  useEffect(() => {
+    if (isRedlinesView(view)) return;
+    redlinesFilesRef.current = new Map();
+    setRedlinesDocs([]);
+    setRedlinesUnreadable([]);
+    setRedlinesBusy(false);
+    setRedlinesError(undefined);
+    setRedlinesPositions([]);
+    setRedlinesQuestions([]);
+    setRedlinesWorkingsPosition(null);
+    setRedlinesVersion(null);
+    setRedlinesChangeset(null);
+    setRedlinesPublishing(false);
+    setRedlinesPublishError(undefined);
+    setRedlinesPublishedVersion(undefined);
+  }, [view]);
+
   // Best-effort: keeps `settings.model*` capability fields in step with the
   // OpenRouter model list for whichever model is currently selected, even
   // when the user never opens Settings this session (e.g. a model chosen
@@ -1336,15 +1440,30 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     AUTHORING_DRAFT_DIRTY_MESSAGE,
   );
 
+  /** Sub-project F's own unsaved-work flag, reusing E's guard rather than
+   *  writing a second one (spec §11's rule, restated for F in the task
+   *  brief). Real work exists in this session once at least one precedent
+   *  document has been brought in, OR a `Changeset` has been built — and
+   *  stops mattering the moment that changeset is actually published: past
+   *  that point every decision on it is already durable (`recordDecision`
+   *  persists immediately) and the published version itself cannot be lost
+   *  by closing a tab. */
+  const redlinesSessionDirty = isRedlinesView(view)
+    && !redlinesChangeset?.publishedVersionId
+    && (redlinesDocs.length > 0 || redlinesChangeset !== null);
+  const confirmLeaveRedlinesSession = useUnsavedDraftGuard(redlinesSessionDirty, REDLINES_DIRTY_MESSAGE);
+
   /** The single question every exit from the current screen asks — a nav
    *  click (`requestView`), a Back/Forward press (`useRoute`'s
    *  `canLeaveCurrentView`), and the editor's own close button. Each flag
    *  is already false outside its own screen (`isTemplateDirty` requires
    *  `view === 'editor'`; `authoringDraft` is cleared the moment an
-   *  authoring view is left), so calling both from anywhere is safe. `&&`
-   *  short-circuits, so the impossible case of both being dirty at once
-   *  still asks only one question and still refuses on the first "cancel". */
-  const confirmDiscardIfDirty = () => confirmLeaveTemplate() && confirmLeaveAuthoringDraft();
+   *  authoring view is left; `redlinesSessionDirty` requires a
+   *  `REDLINES_VIEWS` view), so calling all three from anywhere is safe.
+   *  `&&` short-circuits, so more than one being dirty at once still asks
+   *  only one question at a time and still refuses on the first "cancel". */
+  const confirmDiscardIfDirty = () =>
+    confirmLeaveTemplate() && confirmLeaveAuthoringDraft() && confirmLeaveRedlinesSession();
 
   const requestView = (next: View) => {
     if (next !== view && !confirmDiscardIfDirty()) return;
@@ -2585,6 +2704,320 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     }
   };
 
+  // --- Sub-project F: learning from redlines (Task 10A wiring) -----------
+  //
+  // `RouteChooser`'s "Learn from redlines" card is the ONLY entrance to any
+  // of the four screens below, exactly as it is the only entrance to E's
+  // two authoring screens — see `handleDraftWithAI`/`handleBuildByHand`
+  // above for the model this follows.
+  //
+  // Where this differs from E on purpose: E's adopted draft becomes durable
+  // through `saveDraftAsV1` (D's publish path applied directly to a fresh
+  // playbook). F instead runs every adopted/reworded position through the
+  // SAME changeset mechanism spec §9 built for testing a new deal against a
+  // live playbook (`buildChangeset` → `ChangesetReview` →
+  // `publishChangeset`) — `handleBuildRedlinesChangeset` below mints a
+  // brand-new, empty playbook (an empty v1, exactly like `handleBuildByHand`
+  // seeds a blank draft) purely so there is a live version for that existing
+  // mechanism to build a changeset against, then reuses it unmodified. This
+  // is the reading the task brief's own ordering makes unavoidable —
+  // "adopt/reword/decline → changeset → changeset review → publish" is one
+  // continuous path, not two — and it means F never needs a second,
+  // parallel "positions become a draft" pipeline alongside E's.
+
+  const handleLearnFromRedlines = () => {
+    setChooserOpen(false);
+    if (!ensureConfigured('Add your OpenRouter key to learn from redlines.')) return;
+    setRedlinesError(undefined);
+    setView('redlines-intake');
+  };
+
+  /**
+   * Reads a freshly-picked batch of files into memory ONLY — no
+   * `addDocument`, no blob write, nothing that reaches IndexedDB or
+   * `localStorage` (spec §4/§11's storage promise; mutation-tested in
+   * `App.redlines.test.tsx`). `parseFile` (`lib/documents.ts`) already never
+   * persists anything on its own, which is what makes it safe to reuse here
+   * for the pdf-diff fallback's text — it is called for every file, not
+   * only PDFs, so a `.docx` whose OOXML tracked changes cannot be read still
+   * has SOME text available if the user offers the diff fallback for it.
+   *
+   * A `.docx` is additionally read for tracked changes via
+   * `parseDocxRedlines`. That function distinguishes "no markup" from
+   * "could not read" by throwing on the latter (see its own doc comment) —
+   * exactly the distinction spec §8 requires: a throw here routes the
+   * document to `redlinesUnreadable`, offering the diff fallback explicitly
+   * (`onOfferDiff`) rather than silently reporting it as clean. A non-`.docx`
+   * file (a PDF chief among them) has no OOXML to read at all, so it goes
+   * straight to that same bucket — never silently treated as "no tracked
+   * changes found", which would be indistinguishable from a real, clean
+   * `.docx`.
+   *
+   * `proposeChains`/`proposeRole` run once per BATCH, over only the
+   * newly-added files — never re-run over documents already in
+   * `redlinesDocs`. Re-running over the whole list on every add would
+   * re-mint every document's `chainId` from scratch each time, silently
+   * undoing an earlier `onRejectChain` (spec §8: "a chain the user rejects
+   * is ungrouped, not re-proposed").
+   */
+  const handleAddRedlinesFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    setRedlinesBusy(true);
+    setRedlinesError(undefined);
+    try {
+      const parsed = await Promise.all(files.map(async (file) => {
+        const id = uid();
+        const parsedFile = await parseFile(file);
+        const text = parsedFile.text;
+        const isDocx = /\.docx$/i.test(file.name);
+        let edits: ParsedEdit[] = [];
+        let hasMarkup = false;
+        let markupError: string | undefined;
+        if (!isDocx) {
+          markupError = 'This file has no tracked changes to read — compare it against another version instead.';
+        } else {
+          try {
+            const result = await parseDocxRedlines(file);
+            edits = result.edits;
+            hasMarkup = result.hasMarkup;
+          } catch (e) {
+            markupError = e instanceof Error ? e.message : 'Its tracked changes could not be read.';
+          }
+        }
+        return { id, file, name: file.name, text, edits, hasMarkup, markupError };
+      }));
+
+      const readable = parsed.filter(p => !p.markupError);
+      const unreadable = parsed.filter(p => p.markupError);
+
+      const proposed = proposeChains(readable.map((p) => {
+        const { role, inferred } = proposeRole(p.name, p.hasMarkup);
+        return { id: p.id, name: p.name, role, roleInferred: inferred } satisfies PrecedentDocument;
+      }));
+
+      for (const p of parsed) {
+        redlinesFilesRef.current.set(p.id, { file: p.file, text: p.text, edits: p.edits, source: 'tracked' });
+      }
+
+      setRedlinesDocs(prev => [...prev, ...proposed]);
+      if (unreadable.length > 0) {
+        setRedlinesUnreadable(prev => [
+          ...prev,
+          ...unreadable.map(p => ({ id: p.id, name: p.name })),
+        ]);
+      }
+    } catch (e) {
+      setRedlinesError(e instanceof Error ? e.message : 'These documents could not be read.');
+    } finally {
+      setRedlinesBusy(false);
+    }
+  };
+
+  const handleSetRedlinesRole = (document: PrecedentDocument, role: PrecedentRole) => {
+    // The ONLY place `roleInferred` becomes `false` (R-F4) — every proposal
+    // from `proposeRole` arrives `inferred: true`, and only a human clicking
+    // Confirm or picking a role here turns that into a stated fact.
+    setRedlinesDocs(prev => prev.map(d => (d.id === document.id ? { ...d, role, roleInferred: false } : d)));
+  };
+
+  const handleRemoveRedlinesDocument = (document: PrecedentDocument) => {
+    redlinesFilesRef.current.delete(document.id);
+    setRedlinesDocs(prev => prev.filter(d => d.id !== document.id));
+  };
+
+  /** Spec §8: "a chain the user rejects is ungrouped, not re-proposed."
+   *  Giving every member of the chain its own fresh, unique `chainId` is
+   *  what makes it render as standalone cards from here on — and since
+   *  `handleAddRedlinesFiles` never re-chains documents already in
+   *  `redlinesDocs`, nothing later re-groups them. */
+  const handleRejectRedlinesChain = (chainId: string) => {
+    setRedlinesDocs(prev => prev.map(d => (d.chainId === chainId ? { ...d, chainId: uid() } : d)));
+  };
+
+  /**
+   * Spec §8: the diff fallback is OFFERED, never substituted silently — this
+   * only ever runs from `PrecedentIntake`'s explicit "Compare versions
+   * instead" click. Pairs the unreadable document against another document
+   * already brought into this session as the "earlier" side; when nothing
+   * else has been added yet, it says so rather than guessing a pairing.
+   */
+  const handleOfferRedlinesDiff = (document: UnreadableDocument) => {
+    if (!document.id) return;
+    const laterEntry = redlinesFilesRef.current.get(document.id);
+    if (!laterEntry) return;
+    const earlierDoc = redlinesDocs.find(d => d.id !== document.id);
+    if (!earlierDoc) {
+      notify('Add another document first — there is nothing yet to compare this one against.', 'error');
+      return;
+    }
+    const earlierEntry = redlinesFilesRef.current.get(earlierDoc.id);
+    if (!earlierEntry) return;
+    try {
+      const units = diffExtractedText(earlierEntry.text, laterEntry.text);
+      const edits: ParsedEdit[] = units.map(u => ({ kind: 'insertion', text: u.text, context: u.text }));
+      redlinesFilesRef.current.set(document.id, { ...laterEntry, edits, source: 'diff' });
+      const { role, inferred } = proposeRole(document.name, false);
+      setRedlinesDocs(prev => [...prev, { id: document.id!, name: document.name, role, roleInferred: inferred, chainId: uid() }]);
+      setRedlinesUnreadable(prev => prev.filter(u => u.id !== document.id));
+      notify(`Compared against ${earlierDoc.name} — ${edits.length} difference${edits.length === 1 ? '' : 's'} found.`);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'These documents could not be compared.', 'error');
+    }
+  };
+
+  /** All edits read so far, across every document currently in
+   *  `redlinesDocs`, tagged with the `documentId`/`source` `inferPositions`
+   *  and `buildChangeset` both need. Shared by the intake summary line and
+   *  `handleRedlinesContinueToLearning` below, so the count shown on screen
+   *  and the count actually sent to the model can never drift apart. */
+  const redlinesEditEntries = redlinesDocs.flatMap((doc) => {
+    const entry = redlinesFilesRef.current.get(doc.id);
+    if (!entry) return [];
+    return entry.edits.map(edit => ({ documentId: doc.id, edit, source: entry.source }));
+  });
+  const redlinesDocumentNames: Record<string, string> = Object.fromEntries(
+    redlinesDocs.map(d => [d.id, d.name]),
+  );
+
+  /**
+   * Precedent intake → "What we learned" (spec §6, §7). `unamendedClauses`
+   * is passed empty: this session has no pre-existing clause list to check a
+   * document against (it is building a playbook FROM these redlines, not
+   * reading them against one that already exists) — `inferPositions` reads
+   * that as "nothing to ask an open question about" and returns
+   * `questions: []`, which is the honest answer given there is no clause
+   * list this wiring can derive one from, not a guessed one.
+   */
+  const handleRedlinesContinueToLearning = async () => {
+    setRedlinesBusy(true);
+    setRedlinesError(undefined);
+    try {
+      const { positions, questions } = await inferPositions(redlinesEditEntries, [], settings);
+      setRedlinesPositions(positions);
+      setRedlinesQuestions(questions);
+      setView('redlines-learned');
+    } catch (e) {
+      if (isAuthError(e)) handleAuthError();
+      else setRedlinesError(e instanceof Error ? e.message : 'Positions could not be inferred from these documents.');
+    } finally {
+      setRedlinesBusy(false);
+    }
+  };
+
+  /** The one writer of a position's disposition — shared by `WhatWeLearned`
+   *  and `TheWorkings`, which both offer the same three actions over the
+   *  same position, so the two screens cannot drift on what "adopt" means.
+   *  Updates `redlinesWorkingsPosition` too, when it is the position being
+   *  acted on, so the workings screen reflects a reword made from itself
+   *  without requiring a round-trip back to "what we learned". */
+  const handleRedlinesDisposition = (
+    position: InferredPosition,
+    disposition: InferredPosition['disposition'],
+    rewordedText?: string,
+  ) => {
+    const apply = (p: InferredPosition): InferredPosition =>
+      (p.id === position.id ? { ...p, disposition, ...(rewordedText !== undefined ? { rewordedText } : {}) } : p);
+    setRedlinesPositions(prev => prev.map(apply));
+    setRedlinesWorkingsPosition(prev => (prev ? apply(prev) : prev));
+  };
+
+  const summariseRedlinesSources = (docs: PrecedentDocument[]): string => {
+    const chainCount = new Set(docs.filter(d => d.chainId).map(d => d.chainId)).size;
+    return `Learned from ${docs.length} document${docs.length === 1 ? '' : 's'} across ` +
+      `${chainCount} chain${chainCount === 1 ? '' : 's'}`;
+  };
+
+  /**
+   * "What we learned" → the changeset (spec §7, §9). Mints a brand-new,
+   * empty playbook and immediately publishes an empty v1 for it — exactly
+   * D's ordinary publish path, `publishAndPoint`, applied to a blank draft
+   * (see `handleBuildByHand`'s blank draft for the same shape one level
+   * up) — purely so there is a LIVE version for `buildChangeset` to read
+   * and `publishChangeset` to publish against; `buildChangeset` classifies
+   * every item `new_clause` against it, since an empty version matches
+   * nothing.
+   *
+   * Only the edits behind ADOPTED or REWORDED positions' SUPPORTING basis
+   * entries are sent to `buildChangeset` — a rejected position (or one still
+   * `undecided`) contributes nothing, so "not a house rule" actually keeps
+   * that evidence out of the changeset rather than merely hiding a button.
+   */
+  const handleBuildRedlinesChangeset = async () => {
+    const included = redlinesPositions.filter(p => p.disposition === 'adopted' || p.disposition === 'reworded');
+    if (included.length === 0 && !window.confirm(
+      'Nothing was adopted or reworded. Build an empty changeset to review anyway?',
+    )) {
+      return;
+    }
+    setRedlinesBusy(true);
+    setRedlinesError(undefined);
+    try {
+      const profile = await getProfile();
+      const draft = newPlaybookDraft('Learned from redlines');
+      const identity = newTemplate(draft.name);
+      const { version } = await publishAndPoint(identity, draft, profile.id);
+      setRedlinesVersion(version);
+
+      const editEntries = included.flatMap((position) => {
+        const source: 'tracked' | 'diff' = position.diffDerivedOnly ? 'diff' : 'tracked';
+        return position.basis
+          .filter(b => b.supports)
+          .flatMap(b => b.edits.map(edit => ({ documentId: b.documentId, edit, source })));
+      });
+
+      const changeset = await buildChangeset(version, editEntries, summariseRedlinesSources(redlinesDocs), settings);
+      const saved = await saveChangeset({ ...changeset, createdByUserId: profile.id });
+      setRedlinesChangeset(saved);
+      setView('redlines-changeset');
+      await refreshTemplates();
+    } catch (e) {
+      if (isAuthError(e)) handleAuthError();
+      else setRedlinesError(e instanceof Error ? e.message : 'The changeset could not be built.');
+    } finally {
+      setRedlinesBusy(false);
+    }
+  };
+
+  /** Await-then-apply, per CLAUDE.md: the screen must not show a decision as
+   *  recorded until `recordDecision` (which persists it) has actually
+   *  returned. */
+  const handleRedlinesDecide = async (
+    item: ChangesetItem, decision: 'accepted' | 'reworded' | 'declined', rewordedText?: string,
+  ) => {
+    if (!redlinesChangeset) return;
+    try {
+      const updated = await recordDecision(redlinesChangeset, item.id, decision, rewordedText);
+      setRedlinesChangeset(updated);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'This decision could not be saved.', 'error');
+    }
+  };
+
+  /** Spec §8: "a publish that fails leaves the changeset intact with its
+   *  decisions recorded" — `publishChangeset` itself guarantees this
+   *  (nothing is written to `changesets` before `publishAndPoint` returns),
+   *  so this handler only needs to report the failure, never roll anything
+   *  back. */
+  const handleRedlinesPublish = async () => {
+    if (!redlinesChangeset) return;
+    setRedlinesPublishing(true);
+    setRedlinesPublishError(undefined);
+    try {
+      const profile = await getProfile();
+      const version = await publishChangeset(redlinesChangeset, profile.id);
+      setRedlinesPublishedVersion(version);
+      const reloaded = await getChangeset(redlinesChangeset.id);
+      if (reloaded) setRedlinesChangeset(reloaded);
+      await refreshTemplates();
+      notify(`Published v${version.version}.`);
+    } catch (e) {
+      if (isAuthError(e)) handleAuthError();
+      else setRedlinesPublishError(e instanceof Error ? e.message : 'This changeset could not be published.');
+    } finally {
+      setRedlinesPublishing(false);
+    }
+  };
+
   const handleExportTemplate = (t: PlaybookDraft) => {
     const blob = exportTemplate(t);
     const url = URL.createObjectURL(blob);
@@ -2843,6 +3276,104 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             <div className="p-8 text-gray-500">No draft in progress.</div>
           )
         )}
+        {/* Sub-project F's four session-only screens (Task 10A). None has a
+            URL, for the same reason the two authoring screens above do
+            not — see `REDLINES_VIEWS`. */}
+        {view === 'redlines-intake' && (
+          <div className="pb-6">
+            <PrecedentUploadPanel onFilesSelected={handleAddRedlinesFiles} busy={redlinesBusy} />
+            {redlinesError && (
+              <p className="max-w-5xl mx-auto px-6 pt-3 text-sm text-red-400">{redlinesError}</p>
+            )}
+            <PrecedentIntake
+              documents={redlinesDocs}
+              unreadable={redlinesUnreadable}
+              totalEditsToRead={redlinesEditEntries.length}
+              onSetRole={handleSetRedlinesRole}
+              onRemoveDocument={handleRemoveRedlinesDocument}
+              onRejectChain={handleRejectRedlinesChain}
+              onOfferDiff={handleOfferRedlinesDiff}
+              onContinue={handleRedlinesContinueToLearning}
+            />
+          </div>
+        )}
+        {view === 'redlines-learned' && (
+          <div className="pb-6">
+            <WhatWeLearned
+              positions={redlinesPositions}
+              questions={redlinesQuestions}
+              documentNames={redlinesDocumentNames}
+              onAdopt={(p) => handleRedlinesDisposition(p, 'adopted')}
+              onReword={(p, text) => handleRedlinesDisposition(p, 'reworded', text)}
+              onReject={(p) => handleRedlinesDisposition(p, 'rejected')}
+              onSeeWorkings={(p) => { setRedlinesWorkingsPosition(p); setView('redlines-workings'); }}
+              onBulkAccept={(ps) => setRedlinesPositions(prev => prev.map(
+                p => (ps.some(x => x.id === p.id) ? { ...p, disposition: 'adopted' } : p),
+              ))}
+              onAnswerQuestion={(q, answer) => setRedlinesQuestions(prev => prev.map(
+                x => (x.id === q.id ? { ...x, answer } : x),
+              ))}
+              onSkipQuestion={(q) => setRedlinesQuestions(prev => prev.map(
+                x => (x.id === q.id ? { ...x, answer: 'Left open.' } : x),
+              ))}
+            />
+            {redlinesError && (
+              <p className="max-w-4xl mx-auto px-6 text-sm text-red-400">{redlinesError}</p>
+            )}
+            <div className="max-w-4xl mx-auto px-6 pt-2 flex items-center justify-between">
+              <button
+                onClick={() => setView('redlines-intake')}
+                className="text-xs text-gray-500 hover:text-gray-300"
+              >
+                &larr; Back to documents
+              </button>
+              <Button onClick={handleBuildRedlinesChangeset} loading={redlinesBusy}>
+                Build changeset
+              </Button>
+            </div>
+          </div>
+        )}
+        {view === 'redlines-workings' && (
+          redlinesWorkingsPosition ? (
+            <TheWorkings
+              position={redlinesWorkingsPosition}
+              documentNames={redlinesDocumentNames}
+              onAdopt={(p) => handleRedlinesDisposition(p, 'adopted')}
+              onReword={(p, text) => handleRedlinesDisposition(p, 'reworded', text)}
+              onReject={(p) => handleRedlinesDisposition(p, 'rejected')}
+              onClose={() => setView('redlines-learned')}
+            />
+          ) : (
+            <div className="p-8 text-gray-500">No position selected.</div>
+          )
+        )}
+        {view === 'redlines-changeset' && (
+          redlinesChangeset && redlinesVersion ? (
+            <>
+              <ChangesetReview
+                changeset={redlinesChangeset}
+                fromVersion={redlinesVersion}
+                publishedVersion={redlinesPublishedVersion}
+                onDecide={handleRedlinesDecide}
+                onPublish={handleRedlinesPublish}
+                publishing={redlinesPublishing}
+                publishError={redlinesPublishError}
+              />
+              {redlinesChangeset.publishedVersionId && (
+                <div className="max-w-4xl mx-auto px-6 pb-6">
+                  <Button
+                    variant="ghost"
+                    onClick={() => navigate({ name: 'playbook', playbookId: redlinesChangeset.playbookId })}
+                  >
+                    Open the playbook
+                  </Button>
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="p-8 text-gray-500">No changeset in progress.</div>
+          )
+        )}
         {view === 'matter' && (
           matterError ? (
             <LoadErrorPanel message={matterError} onRetry={() => matterRouteId && loadMatterHome(matterRouteId)} />
@@ -3024,15 +3555,16 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       </main>
 
       {/* The route chooser, and the only way into any authoring route
-          (spec §6). `learnFromRedlinesAvailable` stays false until
-          sub-project F lands: R-E6 keeps the card rendered and honestly
-          inert rather than hidden, because hiding it misrepresents what
-          the product is. */}
+          (spec §6), including F's. Task 10A: `learnFromRedlinesAvailable`
+          is now true — the card was built enabled from the start (R-E6)
+          specifically so switching it on was this one line plus a real
+          handler, never a re-design of the chooser itself. */}
       {chooserOpen && (
         <RouteChooser
           onDraftWithAI={handleDraftWithAI}
           onBuildByHand={handleBuildByHand}
-          learnFromRedlinesAvailable={false}
+          learnFromRedlinesAvailable
+          onLearnFromRedlines={handleLearnFromRedlines}
           onClose={() => setChooserOpen(false)}
         />
       )}
