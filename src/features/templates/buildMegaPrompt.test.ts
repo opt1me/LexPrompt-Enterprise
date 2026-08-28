@@ -46,7 +46,11 @@ describe('buildMegaPrompt', () => {
     expect(parsed.clauses).toHaveLength(2);
     expect(parsed.clauses[0].title).toBe('Term');
     expect(parsed.clauses[0].risk_criteria).toBe('Flag any term over 10 years.');
-    expect(parsed.clauses[1].risk_criteria).toBe('Use global tolerance');
+    // Integrity review (D/E), Major 2. This used to be the literal string
+    // 'Use global tolerance' — a pointer to a value the JSON prompt never
+    // contained. `riskCriteriaBlock` resolves the same fallback for the real
+    // extraction call, so the DIY prompt resolves it too.
+    expect(parsed.clauses[1].risk_criteria).toBe('Risk-averse on liability.');
   });
 
   it('json format omits risk_criteria entirely when risk is off', () => {
@@ -87,6 +91,73 @@ describe('buildMegaPrompt', () => {
     const parsed = JSON.parse(prompt.slice(prompt.indexOf('{')));
     expect(parsed.clauses[0].standard_position).toBe('A 6-month break notice.');
     expect('standard_position' in parsed.clauses[1]).toBe(false);
+  });
+
+  // Integrity review (D/E), Major 2 — the DIY prompt has to describe what
+  // the app actually does. Compared against what `extractClause` sends:
+  // system is the system prompt followed by "OUTPUT RULES: <formatPrompt>", a risk
+  // block resolved through `riskCriteriaBlock` (clause criteria else the
+  // playbook's tolerance), the position comparison whenever the clause has a
+  // standard position, and an explicit return shape.
+  describe('the JSON branch sends what the app sends (Major 2)', () => {
+    const parse = (t: PlaybookDraft, includeRisk = true) => {
+      const prompt = buildMegaPrompt(t, 'json', includeRisk);
+      return JSON.parse(prompt.slice(prompt.indexOf('{')));
+    };
+
+    it('carries the format prompt, which the app sends as its OUTPUT RULES', () => {
+      expect(parse(templateWithClauses()).output_rules).toBe('Return structured JSON.');
+    });
+
+    it('carries the global risk tolerance rather than pointing at one it never included', () => {
+      const parsed = parse(templateWithClauses());
+      expect(parsed.risk_tolerance).toBe('Risk-averse on liability.');
+      expect(JSON.stringify(parsed)).not.toContain('Use global tolerance');
+    });
+
+    it('asks for the MEETS / DEVIATES / UNCLEAR comparison, as the app does', () => {
+      const t = templateWithClauses();
+      t.clauses[0]!.standardPosition = {
+        text: 'A 6-month break notice.', origin: 'authored', reviewedByHuman: true,
+      };
+      const parsed = parse(t);
+      expect(JSON.stringify(parsed.clauses[0])).toMatch(/MEETS.*DEVIATES.*UNCLEAR/);
+      // Not asked of a clause with no house rule — there is nothing to have
+      // compared it against, exactly as `clauseSchema` decides.
+      expect(JSON.stringify(parsed.clauses[1])).not.toMatch(/MEETS/);
+      expect(parsed.return_for_each_clause.position_outcome).toBeTruthy();
+    });
+
+    it('asks for nothing about a position when no clause carries one', () => {
+      const parsed = parse(templateWithClauses());
+      expect('position_outcome' in parsed.return_for_each_clause).toBe(false);
+    });
+
+    it('states the return shape the app asks for, including every risk level', () => {
+      const parsed = parse(templateWithClauses());
+      expect(parsed.return_for_each_clause.summary).toBeTruthy();
+      expect(parsed.return_for_each_clause.citations).toMatch(/verbatim/i);
+      expect(parsed.return_for_each_clause.risk_level).toMatch(/High.*Medium.*Low.*Info/);
+      expect(parsed.return_for_each_clause.risk_analysis).toBeTruthy();
+    });
+
+    it('drops the whole risk half when risk is off, and asks for no risk level', () => {
+      const parsed = parse(templateWithClauses(), false);
+      expect('risk_tolerance' in parsed).toBe(false);
+      expect('risk_level' in parsed.return_for_each_clause).toBe(false);
+    });
+  });
+
+  // The same gaps, on the copilot side: it named three of the four risk
+  // levels the app accepts, and never listed the comparison it asks for.
+  it('copilot names every risk level the app accepts, and the position outcome it asks for', () => {
+    const t = templateWithClauses();
+    t.clauses[0]!.standardPosition = {
+      text: 'A 6-month break notice.', origin: 'authored', reviewedByHuman: true,
+    };
+    const prompt = buildMegaPrompt(t, 'copilot', true);
+    expect(prompt).toMatch(/High.*Medium.*Low.*Info/);
+    expect(prompt).toMatch(/OUTPUT FORMAT[\s\S]*MEETS/);
   });
 
   // The risk block is off unless the playbook says something about risk —
