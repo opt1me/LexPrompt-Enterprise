@@ -4,6 +4,7 @@ import {
   migrateDraft,
   migrateClause,
   migrateVersionRecord,
+  snapshotPlaybookId,
   IMPORTED_SUMMARY,
 } from './playbookMigration';
 import { migrateIfNeeded } from './migrate';
@@ -307,6 +308,26 @@ describe('migrateVersionRecord', () => {
     const v = migrateVersionRecord(null);
     expect(v.name).toBe('Untitled playbook');
     expect(v.clauses).toEqual([]);
+  });
+});
+
+// `reviews.ts`'s `buildVersionIndex` needs this identical fact for the
+// identical reason `migrateVersionRecord` does, and used to re-derive it with
+// a second copy of this same fallback chain. Tested directly here so the two
+// callers can never drift again without this failing first.
+describe('snapshotPlaybookId', () => {
+  it('prefers playbookId when the snapshot is already a real PlaybookVersion', () => {
+    expect(snapshotPlaybookId({ id: 'v1', playbookId: 'pb1' })).toBe('pb1');
+  });
+
+  it('falls back to id for a pre-D snapshot, whose id IS the playbook id', () => {
+    expect(snapshotPlaybookId(preD)).toBe('pb1');
+  });
+
+  it('returns empty when neither field is a usable string', () => {
+    expect(snapshotPlaybookId({})).toBe('');
+    expect(snapshotPlaybookId(null)).toBe('');
+    expect(snapshotPlaybookId({ playbookId: '', id: 7 })).toBe('');
   });
 });
 

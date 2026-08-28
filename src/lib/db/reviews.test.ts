@@ -189,6 +189,26 @@ describe('Review.playbookVersionId (Task 4)', () => {
     expect(version!.version).toBe(1);
   });
 
+  // Exercises `buildVersionIndex`'s own back-fill path directly (the other
+  // tests in this block set `playbookVersionId` explicitly, which short-
+  // circuits it before it ever recovers a playbook id from the snapshot).
+  // This is the actual pre-D scenario the back-fill exists for: a review
+  // saved with no `playbookVersionId` at all, whose frozen snapshot still
+  // names the playbook it ran against.
+  it('back-fills playbookVersionId on read for a review that never had one, from its own snapshot', async () => {
+    // A playbook id of its own, not the shared 'pb-1' the rest of this
+    // describe block uses: `playbookVersions` is never cleared between
+    // tests in this file, and `buildVersionIndex` specifically looks for
+    // the version numbered 1 — colliding with 'pb-1' would pick up an
+    // earlier test's v1 instead of this one's.
+    const playbook = { ...makePlaybook(), playbookId: 'pb-backfill-once' };
+    const v1 = await publishVersion('pb-backfill-once', draftFrom(playbook), 'u1');
+    const review = await saveReview(makeReview({ playbookSnapshot: playbook })); // no playbookVersionId
+
+    const reopened = await getReview(review.id);
+    expect(reopened!.playbookVersionId).toBe(v1.id);
+  });
+
   // R-D15: the id may DANGLE, not merely be absent. Task 3 made deleting a
   // playbook cascade to its versions, so a review that ran against a
   // deleted playbook's version still carries an id that resolves to

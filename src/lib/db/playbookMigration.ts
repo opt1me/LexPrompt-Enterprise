@@ -187,6 +187,29 @@ export function migrateDraft(input: unknown, fallbackName: string): PlaybookDraf
 }
 
 /**
+ * Recovers a playbook's id from a possibly-pre-D content record: a real
+ * `PlaybookVersion` carries it as `playbookId`; a pre-D `Template` (or a
+ * `Review.playbookSnapshot` frozen from one) has no separate identity record
+ * at all, so ITS `id` IS the playbook's id.
+ *
+ * `migrateVersionRecord` and `reviews.ts`'s `buildVersionIndex` both need
+ * this exact fact, for the same reason (recovering a playbook id from
+ * whichever shape a stored snapshot happens to be), and used to compute it
+ * with two separately-written copies of this same fallback chain —
+ * `buildVersionIndex`'s own comment even claimed it avoided the duplication
+ * it was actually committing. Extracted here so there is one answer to "what
+ * playbook does this snapshot belong to", not two that can drift.
+ */
+export function snapshotPlaybookId(input: unknown): string {
+  const t = (input ?? {}) as Record<string, unknown>;
+  return typeof t.playbookId === 'string' && t.playbookId !== ''
+    ? t.playbookId
+    : typeof t.id === 'string'
+      ? t.id
+      : '';
+}
+
+/**
  * Repairs a stored `PlaybookVersion` (or a pre-D `Review.playbookSnapshot`,
  * which is a `Template`) on read.
  *
@@ -204,11 +227,7 @@ export function migrateVersionRecord(input: unknown): PlaybookVersion {
   // its `id` IS the playbook's id, and it was never a published version, so
   // it gets no version id rather than one that would resolve to nothing.
   const isVersion = typeof t.playbookId === 'string' && t.playbookId !== '';
-  const playbookId = isVersion
-    ? (t.playbookId as string)
-    : typeof t.id === 'string'
-      ? t.id
-      : '';
+  const playbookId = snapshotPlaybookId(t);
 
   return {
     ...migrateDraft(t, name),

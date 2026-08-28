@@ -4,6 +4,7 @@ import { STORES } from './schema';
 import { nextSeq, seqOf } from './seq';
 import { migrateReviewRecord } from './reviewMigration';
 import { listVersions } from './playbookVersions';
+import { snapshotPlaybookId } from './playbookMigration';
 import type { Review } from '../../types';
 
 /** A review record as it actually sits in IndexedDB: the public `Review`
@@ -25,20 +26,19 @@ interface StoredReview extends Review {
  *
  * `record.playbookSnapshot` may still be a pre-D `Template`, whose own `id`
  * IS the playbook's id (there was no separate identity/version split yet);
- * a real `PlaybookVersion` carries that as `playbookId` instead. Reading
- * `playbookId` first and falling back to `id` covers both shapes without
- * duplicating `migrateVersionRecord`'s own such-or-such logic here.
+ * a real `PlaybookVersion` carries that as `playbookId` instead.
+ * `snapshotPlaybookId` (`playbookMigration.ts`) is the one place that
+ * recovers a playbook id from either shape — `migrateVersionRecord` needs
+ * the identical fact for the identical reason, and this function used to
+ * re-derive it inline with a second copy of the same fallback chain, while
+ * its own comment claimed the opposite (that reading `playbookId` first and
+ * falling back to `id` here avoided duplicating `migrateVersionRecord`'s
+ * logic). It did not; this is that fixed.
  */
 async function buildVersionIndex(record: StoredReview): Promise<Record<string, string>> {
   if (typeof record.playbookVersionId === 'string' && record.playbookVersionId) return {};
 
-  const snapshot = record.playbookSnapshot as { id?: unknown; playbookId?: unknown } | undefined;
-  const playbookId =
-    typeof snapshot?.playbookId === 'string' && snapshot.playbookId
-      ? snapshot.playbookId
-      : typeof snapshot?.id === 'string'
-        ? snapshot.id
-        : '';
+  const playbookId = snapshotPlaybookId(record.playbookSnapshot);
   if (!playbookId) return {};
 
   const versions = await listVersions(playbookId);
