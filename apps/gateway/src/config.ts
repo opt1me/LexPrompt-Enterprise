@@ -1,6 +1,7 @@
 import {
   isProviderId, type AllowedModel, type Bloc, type Jurisdiction, type ProviderId,
 } from '@lexprompt/core';
+import { PENDING } from './adapters/registry.ts';
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -235,6 +236,18 @@ export function loadConfig(
       throw new ConfigError(
         `Model "${id}" names provider ${JSON.stringify(m.provider)}, `
         + 'which is not a provider this gateway has an adapter for.',
+      );
+    }
+    // The registry (Task 8) is filled in over three tasks; PENDING is its
+    // honest record of what has no adapter yet. A model naming one of those
+    // ids is a real `ProviderId` (isProviderId above passes it) that would
+    // otherwise start clean and only fail on its first call — refusing here
+    // instead means the operator sees the problem at startup, in the same
+    // banner as every other misconfigured entry, not from a user's failed
+    // request.
+    if (PENDING.includes(m.provider)) {
+      throw new ConfigError(
+        `Model "${id}" names provider ${m.provider}, whose adapter is not implemented yet.`,
       );
     }
     const dataHandling = parseDataHandling(m.dataHandling, id);

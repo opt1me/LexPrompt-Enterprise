@@ -92,6 +92,14 @@ describe('loadConfig', () => {
       .toThrow(/bedrock/);
   });
 
+  // Task 8: PENDING names real provider ids (`anthropic`, `recorded`) that
+  // pass `isProviderId` but have no registered adapter yet. A model naming
+  // one must fail at startup, not on its first call.
+  it('refuses a model naming a provider whose adapter is not implemented yet', () => {
+    expect(() => loadConfig({ ...BASE }, read(file({ ...UK_MODEL, provider: 'anthropic' }))))
+      .toThrow(/uks-gpt4o[\s\S]*anthropic[\s\S]*not implemented yet/);
+  });
+
   it('refuses an entry with no jurisdiction rather than assuming one', () => {
     const { jurisdiction, ...noJurisdiction } = UK_MODEL;
     expect(() => loadConfig({ ...BASE }, read(file(noJurisdiction))))
