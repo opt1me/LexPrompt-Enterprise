@@ -282,7 +282,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
 
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
@@ -313,7 +313,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     extractClauseMock.mockResolvedValue({
       clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR, authError: true,
     });
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();

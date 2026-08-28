@@ -194,7 +194,7 @@ describe('App — a failed debounced mid-run save is surfaced, not just debug()-
   it('passes a real onError callback to createDebouncedReviewSaver, and it surfaces a toast', async () => {
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();

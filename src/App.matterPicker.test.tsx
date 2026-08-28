@@ -183,7 +183,7 @@ describe('App — running a playbook from the Library goes through a matter pick
   it('does not enter the run panel until a matter is chosen', async () => {
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
@@ -196,7 +196,7 @@ describe('App — running a playbook from the Library goes through a matter pick
   it('picking an existing matter enters the run panel scoped to it', async () => {
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
@@ -212,7 +212,7 @@ describe('App — running a playbook from the Library goes through a matter pick
     listMattersMock.mockResolvedValue([]); // no existing matters
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
@@ -235,7 +235,7 @@ describe('App — running a playbook from the Library goes through a matter pick
   it('Cancel closes the picker without starting a run', async () => {
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();

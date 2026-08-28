@@ -225,7 +225,7 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
     listPlaybooksMock.mockRejectedValue(new DbBlockedError());
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
 
     expect(container.textContent).toContain('another tab');
@@ -236,7 +236,7 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
     listPlaybooksMock.mockRejectedValue(new Error('boom'));
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
 
     expect(container.textContent).toContain('could not be loaded');
@@ -251,7 +251,7 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
     listPlaybooksMock.mockResolvedValueOnce([]);
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     expect(container.textContent).toContain('could not be loaded');
 
@@ -269,7 +269,7 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
     listPlaybooksMock.mockResolvedValue([]);
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
 
     expect(container.textContent).toContain('No templates yet');
@@ -322,7 +322,7 @@ describe('App — playbook editor route (Task 12)', () => {
     window.history.replaceState(null, '', '/');
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
 
     const card = Array.from(container.querySelectorAll('h3'))

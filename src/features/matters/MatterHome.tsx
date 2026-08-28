@@ -535,7 +535,7 @@ export function MatterHome({
           <LoadErrorPanel compact message={playbooksError} onRetry={onRetryPlaybooks} />
         ) : playbooks.length === 0 ? (
           <p className="text-sm text-gray-400">
-            No playbooks yet. Create one in the Library first, then run it against this matter's documents.
+            No playbooks yet. Create one in Playbooks first, then run it against this matter's documents.
           </p>
         ) : (
           <div className="space-y-2">

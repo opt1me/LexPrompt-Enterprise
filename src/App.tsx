@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { FileText, Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
+import { Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
 import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
 import { applyVerification, findingKey, makeNote, resetVerification, unchecked } from './lib/verification';
@@ -227,11 +227,11 @@ function MigrationBlockedScreen(
   { error, phase, onRetry }: { error: string; phase?: MigrationPhase; onRetry: () => void },
 ) {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-surface p-8">
+    <div className="min-h-screen flex items-center justify-center bg-paper p-8">
       <div className="max-w-md text-center space-y-4">
-        <h1 className="text-lg font-semibold text-white">Your playbook library couldn't be set up</h1>
-        <p className="text-gray-300">{reassuranceFor(phase)}</p>
-        <p className="text-red-400 text-sm break-words">{error}</p>
+        <h1 className="font-prose text-screen-title text-ink-1">Your playbook library couldn't be set up</h1>
+        <p className="font-ui text-ui text-ink-2">{reassuranceFor(phase)}</p>
+        <p className="text-risk-high text-sm break-words">{error}</p>
         <button
           onClick={onRetry}
           className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
@@ -2711,53 +2711,70 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-surface">
+    <div className="min-h-screen flex flex-col bg-paper">
       <Toast toast={toast} />
 
-      <header className="h-16 border-b border-white/10 bg-[#111] flex items-center justify-between px-6 shrink-0">
+      <header className="h-14 border-b border-rule bg-card flex items-center justify-between px-6 shrink-0">
         <button
-          className="flex items-center gap-2"
+          className="flex items-center"
           onClick={() => requestView('matters')}
         >
-          <div className="w-8 h-8 bg-gradient-to-br from-violet-600 to-indigo-600 rounded-lg flex items-center justify-center text-white">
-            <FileText className="w-5 h-5" />
-          </div>
-          <span className="font-bold text-lg text-white">LexPrompt</span>
+          <span className="font-prose text-section font-medium text-ink-1 tracking-[-0.01em]">LexPrompt</span>
         </button>
 
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-2">
           <button
             onClick={() => requestView('matters')}
-            className={`text-sm flex items-center gap-1.5 ${view === 'matters' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+            className={`font-ui text-ui-sm px-2.5 py-1.5 rounded-inset flex items-center gap-1.5 ${view === 'matters' || view === 'matter' ? 'font-semibold text-ink-1 bg-accent-tint' : 'font-medium text-ink-3 hover:text-ink-1'}`}
           >
             <Briefcase className="w-4 h-4" /> Matters
           </button>
           <button
             onClick={() => requestView('library')}
-            className={`text-sm ${view === 'library' || view === 'editor' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+            className={`font-ui text-ui-sm px-2.5 py-1.5 rounded-inset ${view === 'library' || view === 'editor' ? 'font-semibold text-ink-1 bg-accent-tint' : 'font-medium text-ink-3 hover:text-ink-1'}`}
           >
-            Library
+            Playbooks
           </button>
           {run && (
             // Important 6: nothing else sets `view` back to 'results' once
-            // the user navigates elsewhere (e.g. to Library), so a run was
+            // the user navigates elsewhere (e.g. to Playbooks), so a run was
             // otherwise stranded for the rest of the session with no way
             // back except starting a brand new one.
             <button
               onClick={() => requestView('results')}
-              className={`text-sm flex items-center gap-1.5 ${view === 'results' || view === 'tabular' ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+              className={`font-ui text-ui-sm px-2.5 py-1.5 rounded-inset flex items-center gap-1.5 ${view === 'results' || view === 'tabular' ? 'font-semibold text-ink-1 bg-accent-tint' : 'font-medium text-ink-3 hover:text-ink-1'}`}
               title="Back to the current run's results"
             >
               <ClipboardList className="w-4 h-4" /> Current run
             </button>
           )}
-          <div className="h-4 w-px bg-white/10" />
+          <div className="h-4 w-px bg-rule mx-2" />
           <button
             onClick={() => requestView('settings')}
-            className={`text-gray-400 hover:text-white ${view === 'settings' ? 'text-white' : ''}`}
+            className={`p-1.5 rounded-inset ${view === 'settings' ? 'text-ink-1' : 'text-ink-3 hover:text-ink-1'}`}
             title="Settings"
+            /* An icon-only control needs an accessible NAME, and `title` is
+               not one: `buttonNamed` (src/test/mount.tsx:54-57) matches
+               textContent or aria-label and never title, so without this the
+               gear is unreachable to assistive tech and to the test harness
+               alike. The gap is pre-existing; this task rewrites the element,
+               so it is this task's to close (F15). */
+            aria-label="Settings"
           >
-            <SettingsIcon className="w-4 h-4" />
+            <SettingsIcon className="w-4 h-4" aria-hidden="true" />
+          </button>
+          {/* §7: the avatar shows the LOCAL profile's own initials and goes
+              to Settings, where the name is editable. An avatar of yourself
+              is honest — and it is the only place the identity substrate
+              becomes visible. There is no counter, no badge, and no second
+              actor anywhere in this app (R-G1). */}
+          <button
+            onClick={() => requestView('settings')}
+            aria-label="Your profile"
+            title="Your profile"
+            className="w-7 h-7 rounded-meter bg-accent text-page font-ui text-meta font-semibold flex items-center justify-center"
+          >
+            {profile?.initials ?? 'ME'}
           </button>
         </div>
       </header>
@@ -2866,8 +2883,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           ) : null
         )}
         {view === 'not-found' && (
-          <div className="p-8 max-w-md mx-auto text-center space-y-4">
-            <p className="text-gray-400">This page could not be found.</p>
+          <div className="p-8 max-w-md mx-auto text-center space-y-4 bg-paper">
+            <p className="font-prose text-screen-title text-ink-1">This page could not be found.</p>
             <button
               onClick={() => requestView('matters')}
               className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
@@ -2889,7 +2906,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                 onClick={() => navigate({ name: 'playbooks' })}
                 className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
               >
-                Back to Library
+                Back to Playbooks
               </button>
             </div>
           ) : route.name === 'playbook' && playbookLoading && !editorContent ? (
@@ -2998,7 +3015,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               </div>
             </div>
           ) : (
-            <div className="p-8 text-gray-500">No run yet. Start one from a template.</div>
+            <div className="p-8 font-ui text-ui text-ink-3">No run yet. Start one from a template.</div>
           )
         )}
         {view === 'settings' && (
@@ -3122,7 +3139,7 @@ export default function App() {
     // Deliberately blank rather than a spinner: this resolves in a single
     // IndexedDB round trip (typically sub-frame), and the fast, common
     // `not-needed` case shouldn't flash a loading screen ahead of it.
-    return <div className="min-h-screen bg-surface" />;
+    return <div className="min-h-screen bg-paper" />;
   }
 
   if (migration.kind === 'failed') {

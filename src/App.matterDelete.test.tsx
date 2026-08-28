@@ -248,7 +248,7 @@ describe('App — deleting a matter with a run in flight for it (Important 2)', 
   async function startLiveRunForM1() {
     act(() => { root.render(<App />); });
     await flush();
-    clickNav(container, 'Library');
+    clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
