@@ -11,7 +11,7 @@ vi.mock('../../lib/openrouter', async () => {
   const actual = await vi.importActual<typeof import('../../lib/openrouter')>('../../lib/openrouter');
   return { ...actual, chatJson: vi.fn() };
 });
-const { chatJson } = await import('../../lib/openrouter');
+const { chatJson, OpenRouterError } = await import('../../lib/openrouter');
 const { TemplateEditor } = await import('./TemplateEditor');
 
 beforeEach(() => vi.clearAllMocks());
@@ -197,6 +197,36 @@ describe('TemplateEditor — per-field suggestions (Part A)', () => {
     expect(onDraftChange).not.toHaveBeenCalled();
   });
 
+  // Major (Task 8 review): a rejected key is not a per-clause problem a
+  // retry can fix — it must route to Settings via `onAuthError`, exactly as
+  // `ChatPanel`/`DraftForm` do, never render as inline text beside the
+  // field. Mutation-tested: removing the `isAuthError` check in
+  // `requestFieldSuggestion`'s catch makes this fail because `onAuthError`
+  // is never called and the rejection message appears inline instead.
+  it('a rejected API key routes to Settings instead of rendering inline', async () => {
+    vi.mocked(chatJson).mockRejectedValue(new OpenRouterError('Unauthorized', 401));
+    const onAuthError = vi.fn();
+    const onDraftChange = vi.fn();
+    const published = version({ clauses: structuredClone(oneClause) });
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={undefined}
+        onDraftChange={onDraftChange}
+        {...wiring}
+        onAuthError={onAuthError}
+      />,
+    );
+
+    click(buttonNamed(c, /draft the extraction instruction for term/i)!);
+    await flush();
+
+    expect(onAuthError).toHaveBeenCalledTimes(1);
+    expect(c.textContent).not.toMatch(/unauthorized/i);
+    expect(fieldFor(c, /extraction instruction/i)!.value).toBe('What is the term?');
+    expect(onDraftChange).not.toHaveBeenCalled();
+  });
+
   it("one field's suggestion does not disturb another's", async () => {
     vi.mocked(chatJson)
       .mockResolvedValueOnce({ text: 'Extract prompt suggestion.' })
@@ -270,5 +300,33 @@ describe('TemplateEditor — "Suggest what I\'m missing" (Part B, Task 8)', () =
     await flush();
 
     expect(c.textContent).toMatch(/could not check|rate limited/i);
+  });
+
+  // Major (Task 8 review): same auth-routing requirement as
+  // `requestFieldSuggestion` above, for "Suggest what I'm missing". Entering
+  // this editor is not gated by `ensureConfigured`, so this is the first AI
+  // trigger a user with no configured key may ever hit. Mutation-tested:
+  // removing the `isAuthError` check in `requestMissingClauses`'s catch
+  // makes this fail because `onAuthError` is never called and the rejection
+  // message appears inline instead.
+  it('a rejected API key routes to Settings instead of rendering inline', async () => {
+    vi.mocked(chatJson).mockRejectedValue(new OpenRouterError('Forbidden', 403));
+    const onAuthError = vi.fn();
+    const published = version({ clauses: structuredClone(oneClause) });
+    const c = mount(
+      <TemplateEditor
+        version={published}
+        draft={undefined}
+        onDraftChange={noop}
+        {...wiring}
+        onAuthError={onAuthError}
+      />,
+    );
+
+    click(buttonNamed(c, /suggest what i.m missing/i)!);
+    await flush();
+
+    expect(onAuthError).toHaveBeenCalledTimes(1);
+    expect(c.textContent).not.toMatch(/forbidden/i);
   });
 });

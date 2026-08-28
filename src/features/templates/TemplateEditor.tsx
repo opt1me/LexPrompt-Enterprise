@@ -12,6 +12,7 @@ import { positionHealthLabel, type PositionHealth } from '../../lib/positionHeal
 import { StandardPositionField } from './StandardPositionField';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { uid } from '../../lib/uid';
+import { isAuthError } from '../../lib/openrouter';
 import { suggestField, FIELD_LABEL, type SuggestableField } from './suggestField';
 import { FieldSuggestion } from './FieldSuggestion';
 import { suggestMissingClauses } from './suggestMissingClauses';
@@ -67,6 +68,14 @@ export interface TemplateEditorProps {
    *  dependency is how `suggestField`/`suggestMissingClauses` shipped tested
    *  and wired to nothing for an entire merge. */
   settings: Settings;
+  /** A rejected API key (401/403) on either AI trigger below must route to
+   *  Settings, exactly as it does for `ChatPanel`/`DraftForm` (spec §7,
+   *  `openrouter.ts`'s `isAuthError` contract) — never render as inline text
+   *  beside the field, which is not a per-clause problem a retry can fix.
+   *  Entering this editor is not gated by `ensureConfigured`, so a user with
+   *  no key configured yet meets these controls before anything has asked
+   *  them for one. */
+  onAuthError?: () => void;
 }
 
 /** One in-flight or completed "draft this for me" for one field of one
@@ -81,6 +90,17 @@ interface FieldSuggestionState {
 
 function suggestionKey(clauseId: string, field: SuggestableField): string {
   return `${clauseId}:${field}`;
+}
+
+/** The one place a brand-new clause's defaults are built — `addClause` and
+ *  `addMissingClause` both add a clause with nothing filled in but its
+ *  title, and CLAUDE.md's rule is to extract a second copy of a literal
+ *  rather than wait for a third. `uid()`, not `Date.now().toString()`: two
+ *  clauses added inside one millisecond would otherwise share an id, and
+ *  both `run.findings[key][clauseId]` and the position-health map are keyed
+ *  by it — one finding would answer for two clauses. */
+function newDefaultClause(title: string): PlaybookClause {
+  return { id: uid(), title, extractPrompt: 'Instruction...', riskCriteria: '' };
 }
 
 /**
@@ -123,7 +143,7 @@ export function TemplateEditor({
   version, draft, onDraftChange, onPersistDraft, onShowVersionHistory,
   unsavedChanges = false, savingDraft = false,
   onPublish, onExport, onShowMegaPrompt, onClose, health, healthError, onRetryHealth,
-  settings,
+  settings, onAuthError,
 }: TemplateEditorProps) {
   // Memoised: without it this re-CLONES the published version on every
   // render for as long as there is no draft, and the editor's copy drifts
@@ -146,9 +166,18 @@ export function TemplateEditor({
         setFieldSuggestions((prev) => ({ ...prev, [key]: { text, busy: false } }));
       })
       .catch((err: unknown) => {
-        // A failure leaves whatever was already displayed (nothing, on a
-        // first attempt; the prior suggestion, on a failed regenerate) and
-        // says so — it never touches the clause's actual field.
+        // A rejected key is not a per-clause problem a retry can fix, and
+        // showing it as inline text next to the field tells the user to fix
+        // the wrong thing — route it to Settings instead, exactly as
+        // ChatPanel/DraftForm do.
+        if (isAuthError(err)) {
+          setFieldSuggestions((prev) => ({ ...prev, [key]: { text: prev[key]?.text, busy: false } }));
+          onAuthError?.();
+          return;
+        }
+        // Any other failure leaves whatever was already displayed (nothing,
+        // on a first attempt; the prior suggestion, on a failed regenerate)
+        // and says so — it never touches the clause's actual field.
         setFieldSuggestions((prev) => ({
           ...prev,
           [key]: {
@@ -202,13 +231,19 @@ export function TemplateEditor({
       })
       .catch((err: unknown) => {
         setMissingBusy(false);
+        // Same auth routing as `requestFieldSuggestion` above — a rejected
+        // key routes to Settings rather than rendering here.
+        if (isAuthError(err)) {
+          onAuthError?.();
+          return;
+        }
         setMissingError(err instanceof Error ? err.message : 'Could not check for missing clauses. Try again.');
       });
   };
 
   const addMissingClause = (title: string) => {
     updateDraft({
-      clauses: [...working.clauses, { id: uid(), title, extractPrompt: 'Instruction...', riskCriteria: '' }],
+      clauses: [...working.clauses, newDefaultClause(title)],
     });
     setMissingSuggestions((prev) => prev.filter((t) => t !== title));
   };
@@ -246,14 +281,7 @@ export function TemplateEditor({
 
   const addClause = () => {
     updateDraft({
-      clauses: [
-        ...working.clauses,
-        // `uid()`, not `Date.now().toString()`: two clauses added inside one
-        // millisecond would otherwise share an id, and both
-        // `run.findings[key][clauseId]` and the position-health map are
-        // keyed by it — one finding would answer for two clauses.
-        { id: uid(), title: 'New Clause', extractPrompt: 'Instruction...', riskCriteria: '' },
-      ],
+      clauses: [...working.clauses, newDefaultClause('New Clause')],
     });
   };
 

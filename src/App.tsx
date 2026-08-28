@@ -2914,6 +2914,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               healthError={healthError ?? undefined}
               onRetryHealth={() => { if (playbookRouteId) loadPositionHealth(playbookRouteId); }}
               settings={settings}
+              onAuthError={handleAuthError}
             />
           ) : (
             <div className="p-8 text-gray-500">No template selected.</div>
