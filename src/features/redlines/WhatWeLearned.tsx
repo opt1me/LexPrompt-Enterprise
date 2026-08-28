@@ -25,6 +25,14 @@ import type { InferredPosition, OpenQuestion } from '../../lib/inferPositions';
  * - `strengthLabel` (not a home-grown string here) is the only place a
  *   strength badge is worded, so a `weak` position can never accidentally
  *   borrow a `consistent` one's phrasing.
+ *
+ * Sub-project G restyle: `STRENGTH_BADGE_CLASS`'s three entries are
+ * distinguished by more than hue (R-G16) — `consistent` is solid accent
+ * (teal, a pattern strong enough to call a house rule), `mixed` is solid
+ * risk-med (the redlines disagree), and `weak` is a DASHED neutral chip, so
+ * a weak position cannot be told apart from a consistent one by colour blur
+ * or a quick glance at just the border — the fill, the hue and the border
+ * style all have to agree before it reads as a real pattern.
  */
 
 export interface WhatWeLearnedProps {
@@ -67,9 +75,9 @@ const STRENGTH_ORDER: Record<PositionStrength, number> = {
 };
 
 const STRENGTH_BADGE_CLASS: Record<PositionStrength, string> = {
-  consistent: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300',
-  mixed: 'bg-amber-500/15 border-amber-500/30 text-amber-300',
-  weak: 'bg-white/10 border-white/20 text-gray-300',
+  consistent: 'bg-accent-tint border border-accent-edge text-accent',
+  mixed: 'bg-risk-med-tint border border-risk-med-edge text-risk-med',
+  weak: 'bg-chip-fill border border-dashed border-rule-strong text-ink-4',
 };
 
 /**
@@ -101,16 +109,16 @@ export function WhatWeLearned({
   const documentLabel = (id: string) => documentNames[id] ?? id;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6 bg-[#09090b]">
-      <div className="bg-violet-500/10 border border-violet-500/30 rounded-lg p-4">
-        <p className="text-sm text-violet-200">
+    <div className="p-6 max-w-4xl mx-auto space-y-6 bg-paper">
+      <div className="bg-draft-tint border border-draft rounded-panel p-4">
+        <p className="font-ui text-ui text-ink-1">
           These are observations about what you did, not advice. Nothing here becomes a house rule until you say so.
         </p>
       </div>
 
       <section className="space-y-4">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lg font-bold text-white">Positions we found in your redlines</h2>
+          <h2 className="font-prose text-section text-ink-1">Positions we found in your redlines</h2>
           {bulkable.length > 0 && (
             <Button variant="ghost" onClick={() => onBulkAccept(bulkable)}>
               Accept all consistent ({bulkable.length})
@@ -119,7 +127,7 @@ export function WhatWeLearned({
         </div>
 
         {positions.length === 0 ? (
-          <p className="text-sm text-gray-400 italic">
+          <p className="font-ui text-ui text-ink-3 italic">
             The redlines did not settle anything we could state as a position.
           </p>
         ) : (
@@ -140,15 +148,15 @@ export function WhatWeLearned({
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-bold text-white">Open questions</h2>
-        <p className="text-xs text-gray-500">
+        <h2 className="font-prose text-section text-ink-1">Open questions</h2>
+        <p className="font-ui text-meta text-ink-3">
           Things your redlines raised but never settled — never shown as a position (spec §11).
         </p>
         {questions.length === 0 ? (
           questionsUnavailableReason ? (
-            <p className="text-sm text-amber-300/90 italic">{questionsUnavailableReason}</p>
+            <p className="font-ui text-ui text-risk-med italic">{questionsUnavailableReason}</p>
           ) : (
-            <p className="text-sm text-gray-500 italic">Nothing the redlines raised without also settling it.</p>
+            <p className="font-ui text-ui text-ink-3 italic">Nothing the redlines raised without also settling it.</p>
           )
         ) : (
           <div className="space-y-3">
@@ -186,28 +194,28 @@ function PositionCard({ position, documentLabel, onAdopt, onReword, onReject, on
   };
 
   return (
-    <div className="border border-white/10 rounded-xl p-4 bg-white/5 space-y-3">
+    <div className="border border-rule rounded-card p-4 bg-card space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">{position.clauseTitle}</p>
-          <p className="text-sm text-gray-100 mt-1">{position.statement}</p>
+          <p className="font-mono text-label uppercase text-ink-4">{position.clauseTitle}</p>
+          <p className="font-prose text-finding text-ink-prose mt-1">{position.statement}</p>
         </div>
         <span
-          className={`shrink-0 text-[10px] font-bold uppercase px-2 py-1 rounded border whitespace-nowrap ${STRENGTH_BADGE_CLASS[position.strength]}`}
+          className={`shrink-0 font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip whitespace-nowrap ${STRENGTH_BADGE_CLASS[position.strength]}`}
         >
           {strengthLabel(position.strength, position.supporting, position.total)}
         </span>
       </div>
 
       {position.contradicted && (
-        <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded p-2">
+        <p className="font-ui text-ui text-risk-med bg-risk-med-tint border border-risk-med-edge rounded-inset p-2">
           The redlines disagree on this one &mdash; some documents support it, others go the other way. This is left
           for you to decide; the app does not pick a side.
         </p>
       )}
 
       {position.diffDerivedOnly && (
-        <p className="text-[10px] text-gray-500 italic">
+        <p className="font-ui text-meta text-risk-med italic">
           Based on comparing document text, not on tracked changes &mdash; weaker evidence.
         </p>
       )}
@@ -217,8 +225,8 @@ function PositionCard({ position, documentLabel, onAdopt, onReword, onReject, on
           {position.basis.map((b) => (
             <span
               key={b.documentId}
-              className={`text-[11px] px-2 py-1 rounded border ${
-                b.supports ? 'border-emerald-500/30 text-emerald-300' : 'border-red-500/30 text-red-300'
+              className={`font-ui text-meta px-2 py-1 rounded-chip border ${
+                b.supports ? 'border-outcome-meets text-outcome-meets' : 'border-outcome-deviates text-outcome-deviates'
               }`}
             >
               {documentLabel(b.documentId)} &middot; {b.supports ? 'supports' : 'opposes'}
@@ -233,7 +241,7 @@ function PositionCard({ position, documentLabel, onAdopt, onReword, onReject, on
             aria-label="Reworded position"
             value={rewordText}
             onChange={(e) => setRewordText(e.target.value)}
-            className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-xs text-gray-200 outline-none focus:border-violet-500 min-h-[60px]"
+            className="w-full bg-paper border border-rule rounded-control p-2 text-xs text-ink-1 outline-none focus:border-accent min-h-[60px]"
           />
           <div className="flex gap-2">
             <Button onClick={handleSaveReword}>Save reword</Button>
@@ -241,10 +249,10 @@ function PositionCard({ position, documentLabel, onAdopt, onReword, onReject, on
           </div>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-2 pt-1 border-t border-white/10">
+        <div className="flex flex-wrap gap-2 pt-1 border-t border-rule">
           <Button onClick={() => onAdopt(position)}>Adopt</Button>
           <Button variant="ghost" onClick={() => setRewording(true)}>Reword</Button>
-          <Button variant="ghost" onClick={() => onReject(position)}>Not a house rule</Button>
+          <Button variant="danger" onClick={() => onReject(position)}>Not a house rule</Button>
           <Button variant="ghost" onClick={() => onSeeWorkings(position)}>See the workings</Button>
         </div>
       )}
@@ -267,11 +275,11 @@ function QuestionCard({ question, onAnswer, onSkip }: QuestionCardProps) {
   const [answer, setAnswer] = useState(question.answer ?? '');
 
   return (
-    <div className="border border-white/10 rounded-xl p-4 bg-white/5 space-y-2">
-      <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">{question.clauseTitle}</p>
-      <p className="text-sm text-gray-100">{question.question}</p>
+    <div className="border border-rule rounded-card p-4 bg-card space-y-2">
+      <p className="font-mono text-label uppercase text-ink-4">{question.clauseTitle}</p>
+      <p className="font-prose text-finding text-ink-prose">{question.question}</p>
       {question.answer ? (
-        <p className="text-xs text-emerald-300">Answered: {question.answer}</p>
+        <p className="font-ui text-ui text-accent">Answered: {question.answer}</p>
       ) : (
         <div className="space-y-2">
           <textarea
@@ -279,7 +287,7 @@ function QuestionCard({ question, onAnswer, onSkip }: QuestionCardProps) {
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
             placeholder="Do you have a position, or is this genuinely open?"
-            className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-xs text-gray-200 outline-none focus:border-violet-500 min-h-[50px]"
+            className="w-full bg-paper border border-rule rounded-control p-2 text-xs text-ink-1 outline-none focus:border-accent min-h-[50px] placeholder-ink-5"
           />
           <div className="flex gap-2">
             <Button onClick={() => onAnswer(question, answer)} disabled={answer.trim() === ''}>

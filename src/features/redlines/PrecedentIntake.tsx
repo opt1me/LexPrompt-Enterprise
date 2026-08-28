@@ -17,6 +17,15 @@ import type { PrecedentDocument, PrecedentRole } from '../../lib/chains';
  * ("What is this?") rather than being folded into the same "confirm or
  * change" control every other, more-confident-but-still-unconfirmed role
  * gets.
+ *
+ * `RoleChip` (sub-project G restyle): a confirmed, non-inferred role is
+ * ACCENT — teal, "a person did something" (§6.3) — because confirming a
+ * proposed role, or reading one unambiguously, is exactly that: a human (or
+ * an unambiguous read) settled the question. A proposed-but-unconfirmed role
+ * gets the plain neutral chip fill, never accent, so it cannot be mistaken
+ * for the confirmed shape at a glance (R-F4) — this is the one place in
+ * these five files where getting a colour wrong would reproduce this
+ * sub-project's founding failure.
  */
 
 export interface UnreadableDocument {
@@ -114,10 +123,10 @@ export function PrecedentIntake({
   const hasAmbiguousRole = documents.some((d) => d.role === 'unknown');
 
   return (
-    <div className="p-6 max-w-5xl mx-auto space-y-6 bg-[#09090b]">
+    <div className="p-6 max-w-5xl mx-auto space-y-6 bg-paper">
       <header>
-        <h2 className="text-xl font-bold text-white">Bring in what you negotiated</h2>
-        <p className="text-xs text-gray-500 mt-1">
+        <h2 className="font-prose text-screen-title text-ink-1">Bring in what you negotiated</h2>
+        <p className="font-ui text-meta text-ink-3 mt-1">
           {documents.length} document{documents.length === 1 ? '' : 's'}
           {' · '}
           {chainCount} chain{chainCount === 1 ? '' : 's'}
@@ -128,7 +137,7 @@ export function PrecedentIntake({
             </>
           )}
         </p>
-        <p className="text-xs text-gray-600 mt-1">
+        <p className="font-ui text-meta text-ink-2 mt-1">
           {/* "Never stored", not "not stored with the playbook". The
               guarantee this flow makes and its tests enforce is that a
               precedent document is never persisted ANYWHERE — not in
@@ -141,7 +150,7 @@ export function PrecedentIntake({
 
       {onContractTypeChange && (
         <div className="max-w-md">
-          <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+          <label className="block font-mono text-label uppercase text-ink-4 mb-1">
             Playbook name
           </label>
           <input
@@ -149,9 +158,9 @@ export function PrecedentIntake({
             value={contractType}
             onChange={(e) => onContractTypeChange(e.target.value)}
             placeholder="e.g. Commercial Lease (Landlord)"
-            className="w-full bg-black/50 border border-white/10 rounded-lg p-2.5 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+            className="w-full bg-paper border border-rule rounded-control p-2.5 text-ink-1 text-sm outline-none focus:border-accent transition-colors placeholder-ink-5"
           />
-          <p className="text-[11px] text-gray-600 mt-1">
+          <p className="font-ui text-meta text-ink-4 mt-1">
             Names the playbook you are about to create from these documents — not the documents themselves.
           </p>
         </div>
@@ -162,9 +171,9 @@ export function PrecedentIntake({
           {unreadable.map((doc, i) => (
             <div
               key={doc.id ?? `${doc.name}-${i}`}
-              className="flex flex-wrap items-center justify-between gap-3 bg-amber-500/10 border border-amber-500/30 rounded-lg p-3"
+              className="flex flex-wrap items-center justify-between gap-3 bg-risk-med-tint border border-risk-med-edge rounded-card p-3"
             >
-              <p className="text-sm text-amber-200">
+              <p className="font-ui text-ui text-risk-med">
                 <strong>{doc.name}</strong> &mdash; its tracked changes could not be read.
               </p>
               <Button variant="ghost" onClick={() => onOfferDiff(doc)}>
@@ -186,14 +195,14 @@ export function PrecedentIntake({
           />
         ))}
         {documents.length === 0 && unreadable.length === 0 && (
-          <p className="text-sm text-gray-500 italic">No documents brought in yet.</p>
+          <p className="font-ui text-ui text-ink-3 italic">No documents brought in yet.</p>
         )}
       </div>
 
       {onContinue && (
-        <div className="flex flex-col items-end gap-2 pt-4 border-t border-white/10">
+        <div className="flex flex-col items-end gap-2 pt-4 border-t border-rule">
           {hasAmbiguousRole && (
-            <p className="text-xs text-amber-300">Say what each document is before continuing.</p>
+            <p className="font-ui text-ui text-risk-med">Say what each document is before continuing.</p>
           )}
           <Button onClick={onContinue} disabled={hasAmbiguousRole || documents.length === 0}>
             Continue
@@ -215,16 +224,16 @@ function ChainCard({ chain, onSetRole, onRemoveDocument, onRejectChain }: ChainC
   const isChain = Boolean(chain.chainId);
 
   return (
-    <div className={isChain ? 'border border-violet-500/30 rounded-xl p-3 bg-violet-500/5 space-y-3' : 'space-y-3'}>
+    <div className={isChain ? 'border border-draft rounded-panel p-3 bg-draft-tint space-y-3' : 'space-y-3'}>
       {isChain && (
         <div className="flex items-center justify-between gap-3">
-          <p className="text-xs font-bold text-violet-300 uppercase tracking-wide">
+          <p className="font-mono text-label uppercase text-draft">
             {chain.docs.length} turns: {chain.docs.map((d) => ROLE_LABEL[d.role]).join(' → ')}
           </p>
           {onRejectChain && chain.chainId && (
             <button
               onClick={() => onRejectChain(chain.chainId!)}
-              className="text-[11px] text-gray-500 hover:text-gray-300"
+              className="font-ui text-meta text-ink-3 hover:text-ink-1"
             >
               Not one chain
             </button>
@@ -255,16 +264,16 @@ function DocumentRow({ document, onSetRole, onRemoveDocument }: DocumentRowProps
   const isAmbiguous = document.role === 'unknown';
 
   return (
-    <div className="border border-white/10 rounded-lg p-3 bg-white/5 space-y-2">
+    <div className="border border-rule rounded-card p-3 bg-card space-y-2">
       <div className="flex items-center justify-between gap-3">
-        <span className="text-sm text-gray-200">{document.name}</span>
+        <span className="font-ui text-ui text-ink-1">{document.name}</span>
         <div className="flex items-center gap-2 shrink-0">
           <RoleChip role={document.role} inferred={document.roleInferred} />
           {onRemoveDocument && (
             <button
               onClick={() => onRemoveDocument(document)}
               aria-label={`Remove ${document.name}`}
-              className="text-gray-500 hover:text-gray-300 text-xs"
+              className="font-ui text-meta text-ink-3 hover:text-ink-1"
             >
               Remove
             </button>
@@ -274,7 +283,7 @@ function DocumentRow({ document, onSetRole, onRemoveDocument }: DocumentRowProps
 
       {isAmbiguous ? (
         <div className="space-y-1">
-          <p className="text-xs text-amber-300">
+          <p className="font-ui text-ui text-risk-med">
             What is this? We could not tell from the filename or its content.
           </p>
           <div className="flex flex-wrap gap-2">
@@ -282,7 +291,7 @@ function DocumentRow({ document, onSetRole, onRemoveDocument }: DocumentRowProps
               <button
                 key={role}
                 onClick={() => onSetRole(document, role)}
-                className="text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 text-gray-200"
+                className="font-ui text-ui-sm px-2 py-1 rounded-control bg-chip-fill hover:bg-rule text-ink-1"
               >
                 {ROLE_LABEL[role]}
               </button>
@@ -291,10 +300,10 @@ function DocumentRow({ document, onSetRole, onRemoveDocument }: DocumentRowProps
         </div>
       ) : document.roleInferred ? (
         <div className="flex flex-wrap items-center gap-3">
-          <p className="text-[11px] text-gray-500">Proposed from the filename &mdash; not yet confirmed.</p>
+          <p className="font-ui text-meta text-ink-3">Proposed from the filename &mdash; not yet confirmed.</p>
           <button
             onClick={() => onSetRole(document, document.role)}
-            className="text-xs font-semibold text-violet-300 hover:text-violet-200"
+            className="font-ui text-ui-sm font-semibold text-accent hover:text-accent-strong"
           >
             Confirm
           </button>
@@ -302,7 +311,7 @@ function DocumentRow({ document, onSetRole, onRemoveDocument }: DocumentRowProps
             <button
               key={role}
               onClick={() => onSetRole(document, role)}
-              className="text-xs text-gray-500 hover:text-gray-300"
+              className="font-ui text-meta text-ink-3 hover:text-ink-1"
             >
               It&apos;s actually {ROLE_LABEL[role]}
             </button>
@@ -314,13 +323,17 @@ function DocumentRow({ document, onSetRole, onRemoveDocument }: DocumentRowProps
 }
 
 function RoleChip({ role, inferred }: { role: PrecedentRole; inferred: boolean }) {
-  const base = 'text-[10px] font-bold uppercase px-2 py-1 rounded border whitespace-nowrap';
+  const base = 'font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border whitespace-nowrap';
   if (role === 'unknown') {
-    return <span className={`${base} bg-amber-500/15 border-amber-500/30 text-amber-300`}>Ambiguous</span>;
+    return <span className={`${base} bg-risk-med-tint border-risk-med-edge text-risk-med`}>Ambiguous</span>;
   }
+  // Confirmed (not inferred) is ACCENT — a person settled this, or it was
+  // read unambiguously. Proposed-but-unconfirmed is the plain neutral chip
+  // fill. The two must never converge (R-F4): a reader glancing at this chip
+  // is the only thing standing between "proposed" and "asserted as fact."
   const confirmedClass = inferred
-    ? 'bg-white/10 border-white/20 text-gray-300'
-    : 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300';
+    ? 'bg-chip-fill border-rule text-ink-3'
+    : 'bg-accent-tint border-accent-edge text-accent';
   return (
     <span className={`${base} ${confirmedClass}`}>
       {ROLE_LABEL[role]}

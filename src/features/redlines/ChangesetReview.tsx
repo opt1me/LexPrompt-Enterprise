@@ -26,6 +26,18 @@ import type { ChangeKind, Changeset, ChangesetItem, PlaybookVersion } from '../.
  * always available for such a record. See `src/lib/db/changesets.ts`'s
  * `newClauseTitle` for the same read, used for the same reason on the
  * publish side.
+ *
+ * Sub-project G restyle: `KIND_BADGE_CLASS` maps straight onto the token
+ * system's own examples — `confirm` (a position held again) is ACCENT, the
+ * same teal `health-held` uses for exactly this fact; `drift` is risk-med,
+ * the same amber a conceded position wears; `new_clause` is `draft` blue,
+ * which §6.3's role table names "new clause" under explicitly. `ITEM_ACCENT`
+ * gives each item card a left accent that tracks its decision — accepted
+ * and reworded (the two decisions that actually reach the published
+ * version) get the same accent bar; declined gets a neutral one — so a
+ * scan down the list shows what will and won't survive publish without
+ * reading every decision line (state checklist: "declined and open items
+ * stay visibly not-publishable").
  */
 
 export interface ChangesetReviewProps {
@@ -55,9 +67,20 @@ const KIND_BADGE_LABEL: Record<ChangeKind, string> = {
 };
 
 const KIND_BADGE_CLASS: Record<ChangeKind, string> = {
-  confirm: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300',
-  drift: 'bg-amber-500/15 border-amber-500/30 text-amber-300',
-  new_clause: 'bg-sky-500/15 border-sky-500/30 text-sky-300',
+  confirm: 'bg-accent-tint border-accent-edge text-accent',
+  drift: 'bg-risk-med-tint border-risk-med-edge text-risk-med',
+  new_clause: 'bg-draft-tint border-draft text-draft',
+};
+
+/** Which decisions actually reach a publish (`accepted`, `reworded`) versus
+ *  which do not (`open`, `declined`) — the left-accent bar on each item card
+ *  reads off this, not off the decision string directly, so the mapping
+ *  can't drift between "what colour is this" and "will this be in v{N+1}." */
+const ITEM_ACCENT: Record<ChangesetItem['decision'], string> = {
+  open: '',
+  accepted: 'border-l-2 border-l-accent',
+  reworded: 'border-l-2 border-l-accent',
+  declined: 'border-l-2 border-l-rule-strong',
 };
 
 interface DecisionCounts {
@@ -102,36 +125,36 @@ export function ChangesetReview({
   const canPublish = !published && !publishing && counts.open === 0 && changeset.items.length > 0;
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6 bg-[#09090b]">
+    <div className="p-6 max-w-4xl mx-auto space-y-6 bg-paper">
       <header className="space-y-2">
-        <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">
+        <p className="font-mono text-label uppercase text-ink-4">
           v{fromVersion.version} &rarr; v{fromVersion.version + 1} proposed
         </p>
-        <h2 className="text-lg font-bold text-white">{changeset.sourceSummary}</h2>
-        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-400">
+        <h2 className="font-prose text-section text-ink-1">{changeset.sourceSummary}</h2>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 font-ui text-meta text-ink-3">
           <span>{kinds.confirm} confirm</span>
           <span>{kinds.drift} drift</span>
           <span>{kinds.new_clause} new</span>
         </div>
       </header>
 
-      <div className="bg-violet-500/10 border border-violet-500/30 rounded-lg p-4">
-        <p className="text-sm text-violet-200">
+      <div className="bg-draft-tint border border-draft rounded-panel p-4">
+        <p className="font-ui text-ui text-ink-1">
           Nothing changes in the live version until you publish. Review every item below, then publish to create
           the next version from only what you accept.
         </p>
       </div>
 
       {published ? (
-        <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-lg p-4">
-          <p className="text-sm text-emerald-200">
+        <div className="bg-accent-tint border border-accent-edge rounded-panel p-4">
+          <p className="font-ui text-ui text-accent">
             {publishedVersion
               ? `Published as v${publishedVersion.version} — the live version now reflects the accepted and reworded items.`
               : 'Published — the live version now reflects the accepted and reworded items.'}
           </p>
         </div>
       ) : changeset.items.length === 0 ? (
-        <p className="text-sm text-gray-400 italic">This deal raised nothing to review against the playbook.</p>
+        <p className="font-ui text-ui text-ink-3 italic">This deal raised nothing to review against the playbook.</p>
       ) : (
         <div className="space-y-3">
           {changeset.items.map((item) => (
@@ -141,12 +164,12 @@ export function ChangesetReview({
       )}
 
       {!published && (
-        <div className="border-t border-white/10 pt-4 space-y-2">
-          <p className="text-xs text-gray-500">
+        <div className="border-t border-rule pt-4 space-y-2">
+          <p className="font-ui text-meta text-ink-3">
             {counts.accepted} accepted &middot; {counts.reworded} reworded &middot; {counts.declined} declined
             {counts.open > 0 ? ` · ${counts.open} still open` : ''}
           </p>
-          {publishError && <p className="text-xs text-red-400">{publishError}</p>}
+          {publishError && <p className="font-ui text-ui text-risk-high">{publishError}</p>}
           <Button onClick={onPublish} disabled={!canPublish} loading={publishing}>
             {counts.open > 0
               ? `Decide ${counts.open} more item${counts.open === 1 ? '' : 's'} before publishing`
@@ -174,14 +197,14 @@ function ChangesetItemCard({ item, onDecide }: ChangesetItemCardProps) {
   };
 
   return (
-    <div className="border border-white/10 rounded-xl p-4 bg-white/5 space-y-3">
+    <div className={`border border-rule rounded-card p-4 bg-card space-y-3 ${ITEM_ACCENT[item.decision]}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-[10px] uppercase tracking-wider text-gray-500 font-bold">{title}</p>
-          <p className="text-xs text-gray-400 mt-1">{item.rationale}</p>
+          <p className="font-mono text-label uppercase text-ink-4">{title}</p>
+          <p className="font-ui text-meta text-ink-3 mt-1">{item.rationale}</p>
         </div>
         <span
-          className={`shrink-0 text-[10px] font-bold uppercase px-2 py-1 rounded border whitespace-nowrap ${KIND_BADGE_CLASS[item.kind]}`}
+          className={`shrink-0 font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border whitespace-nowrap ${KIND_BADGE_CLASS[item.kind]}`}
         >
           {KIND_BADGE_LABEL[item.kind]}
         </span>
@@ -190,25 +213,30 @@ function ChangesetItemCard({ item, onDecide }: ChangesetItemCardProps) {
       {item.kind === 'drift' ? (
         <div className="grid gap-2 sm:grid-cols-2">
           <div>
-            <p className="text-[10px] uppercase text-gray-500 mb-1">Current</p>
-            <p className="text-sm text-gray-300 bg-black/20 rounded p-2">
+            <p className="font-mono text-label uppercase text-ink-4 mb-1">Current</p>
+            <p className="font-prose text-finding text-ink-2 bg-paper border border-rule rounded-inset p-2">
               {item.currentText ?? '(no standing position yet)'}
             </p>
           </div>
           <div>
-            <p className="text-[10px] uppercase text-gray-500 mb-1">Proposed</p>
-            <p className="text-sm text-gray-100 bg-black/20 rounded p-2">{item.proposedText}</p>
+            <p className="font-mono text-label uppercase text-ink-4 mb-1">Proposed</p>
+            <p className="font-prose text-finding text-ink-prose bg-paper border border-rule rounded-inset p-2">{item.proposedText}</p>
           </div>
         </div>
       ) : item.kind === 'confirm' ? (
-        <p className="text-sm text-gray-100 bg-black/20 rounded p-2">Held again: {item.proposedText}</p>
+        <p className="font-prose text-finding text-ink-prose bg-paper border border-rule rounded-inset p-2">Held again: {item.proposedText}</p>
       ) : (
-        <p className="text-sm text-gray-100 bg-black/20 rounded p-2">{item.proposedText}</p>
+        <p className="font-prose text-finding text-ink-prose bg-paper border border-rule rounded-inset p-2">{item.proposedText}</p>
       )}
 
       {item.decision !== 'open' && (
-        <p className="text-[11px] text-gray-500">
-          Decision: <span className="font-semibold text-gray-300">{item.decision}</span>
+        <p className="font-ui text-meta text-ink-3">
+          Decision:{' '}
+          <span
+            className={`font-semibold ${item.decision === 'declined' ? 'text-ink-3 line-through' : 'text-accent'}`}
+          >
+            {item.decision}
+          </span>
           {item.decision === 'reworded' && item.rewordedText ? ` — "${item.rewordedText}"` : ''}
         </p>
       )}
@@ -219,7 +247,7 @@ function ChangesetItemCard({ item, onDecide }: ChangesetItemCardProps) {
             aria-label={`Reworded text for ${title}`}
             value={rewordText}
             onChange={(e) => setRewordText(e.target.value)}
-            className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-xs text-gray-200 outline-none focus:border-violet-500 min-h-[60px]"
+            className="w-full bg-paper border border-rule rounded-control p-2 text-xs text-ink-1 outline-none focus:border-accent min-h-[60px]"
           />
           <div className="flex gap-2">
             <Button onClick={handleSaveReword}>Save reword</Button>
@@ -227,10 +255,10 @@ function ChangesetItemCard({ item, onDecide }: ChangesetItemCardProps) {
           </div>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-2 pt-1 border-t border-white/10">
+        <div className="flex flex-wrap gap-2 pt-1 border-t border-rule">
           <Button onClick={() => onDecide(item, 'accepted')}>Accept</Button>
           <Button variant="ghost" onClick={() => setRewording(true)}>Reword</Button>
-          <Button variant="ghost" onClick={() => onDecide(item, 'declined')}>Decline</Button>
+          <Button variant="danger" onClick={() => onDecide(item, 'declined')}>Decline</Button>
         </div>
       )}
     </div>

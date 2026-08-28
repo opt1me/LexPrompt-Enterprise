@@ -36,7 +36,7 @@ export function PrecedentUploadPanel({ onFilesSelected, busy = false }: Preceden
 
   return (
     <div className="max-w-5xl mx-auto px-6 pt-6">
-      <div className="border border-dashed border-white/20 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 bg-white/5">
+      <div className="border border-dashed border-rule rounded-card p-4 flex flex-wrap items-center justify-between gap-3 bg-card">
         <div>
           {/* No heading and no storage promise here. `PrecedentIntake`, which
               renders directly below this panel, already states both — and it
@@ -48,16 +48,16 @@ export function PrecedentUploadPanel({ onFilesSelected, busy = false }: Preceden
               somewhere else. The guarantee is that a precedent document is
               never persisted anywhere, so it is said once, in the strong
               form, by the screen that owns the header. */}
-          <p className="text-xs text-gray-500">
+          <p className="font-ui text-meta text-ink-3">
             Marked-up .docx files are read for tracked changes; anything else, including PDFs, can be
             compared against another version instead.
           </p>
         </div>
         <label
-          className={`shrink-0 px-3 py-2 rounded-md text-sm font-semibold ${
+          className={`shrink-0 px-3 py-2 rounded-control font-ui text-button font-semibold ${
             busy
-              ? 'bg-white/10 text-gray-500 cursor-not-allowed'
-              : 'bg-violet-600 text-white hover:bg-violet-500 cursor-pointer'
+              ? 'bg-chip-fill text-ink-4 cursor-not-allowed'
+              : 'bg-accent text-page hover:bg-accent-strong cursor-pointer'
           }`}
         >
           {busy ? 'Reading…' : 'Add documents'}
