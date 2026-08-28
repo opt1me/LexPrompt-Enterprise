@@ -56,6 +56,33 @@ function makeRun(findings: ReviewRun['findings'], documentIds: string[] = ['d1']
   };
 }
 
+describe('TabularReview — a busy cell does not impersonate a chip (R-GP2)', () => {
+  it('leaves [role="status"] to the verification chip while a cell is extracting', () => {
+    // The tests above find the verification chip with a positional
+    // `querySelector('[role="status"]')` — the FIRST match. A busy cell
+    // that also claimed that role would answer instead, and every one of
+    // those assertions would quietly read the wrong element rather than
+    // fail. The busy indicator announces via `aria-live` and is found by
+    // `data-busy`; only the chip claims the role.
+    const run = makeRun(
+      {
+        d1: { c1: doneFinding({ riskLevel: 'High', verification: { state: 'verified' } }) },
+        d2: { c1: { ...doneFinding(), status: 'running' } as Finding },
+      },
+      ['d1', 'd2'],
+    );
+    const container = mount(
+      <TabularReview run={run} documents={[makeDoc('d1'), makeDoc('d2')]} onRetryCell={() => {}} />,
+    );
+
+    expect(container.querySelector('[data-busy="true"]')).toBeTruthy();
+    for (const el of Array.from(container.querySelectorAll('[role="status"]'))) {
+      expect(el.getAttribute('data-busy')).toBe(null);
+      expect(el.textContent).not.toContain('Extracting');
+    }
+  });
+});
+
 describe('TabularReview — a cell shows verification and risk separately (Task 10)', () => {
   it('a verified High-risk finding shows both "Verified" and "High" as two separate chips', () => {
     const run = makeRun({

@@ -296,7 +296,14 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = fa
              `prefers-reduced-motion` — the spinner and the pulsing bar are
              both collapsed by index.css's reduced-motion block, so the text
              must never be the only thing motion carries. */}
-          <div className="flex items-center gap-2 text-ink-4" role="status" data-busy="true" aria-live="polite">
+          {/* `aria-live` WITHOUT `role="status"` (R-GP2). This file's own
+             tests find the verification chip with
+             `container.querySelector('[role="status"]')` — the FIRST match
+             — so a busy cell carrying that role would answer instead, and
+             the assertion would quietly read the wrong element rather than
+             fail. `aria-live="polite"` announces identically; the role is
+             the part that collides. */}
+          <div className="flex items-center gap-2 text-ink-4" data-busy="true" aria-live="polite">
             <Loader className="w-3 h-3 animate-spin text-accent" aria-hidden="true" />
             <span className="font-mono text-pin">Extracting…</span>
             <div className="h-2 bg-chip-fill rounded-inset w-16 lex-pulse" />
