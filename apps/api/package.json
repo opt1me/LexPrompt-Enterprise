@@ -1,0 +1,16 @@
+{
+  "name": "@lexprompt/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node --experimental-strip-types src/main.ts"
+  },
+  "dependencies": {
+    "@lexprompt/core": "*",
+    "fastify": "^5.2.0",
+    "undici": "^7.2.0",
+    "jose": "^6.0.0"
+  }
+}
