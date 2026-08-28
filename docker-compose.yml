@@ -18,8 +18,12 @@ networks:
   # Found by running `npm run test:compose` against a live stack, not by
   # reading the file: inspection of the topology said this was already
   # correct.
+  # Routable, because a published host port needs it: an `internal` network
+  # drops host<->container traffic in BOTH directions, not just outbound, so
+  # marking this one internal removed every port mapping (verified: the PORTS
+  # column went bare) and made the stack unreachable. Only `web` and
+  # `keycloak` sit here, and neither holds a credential or calls a provider.
   frontend:
-    internal: true    # no default route: published ports in, nothing out
   internal:
     internal: true    # no default route: this network cannot reach the internet
   # The ONE network with a route off this machine. Only `gateway` joins it.
@@ -58,21 +62,35 @@ services:
       context: .
       dockerfile: Dockerfile.web
       args:
-        VITE_API_BASE_URL: http://localhost:8080
+        # Same origin, proxied by this container's own nginx to api:8080 over
+        # `internal`. Not http://localhost:8080: `api` publishes no port,
+        # and a same-origin path also means no CORS policy exists to widen.
+        VITE_API_BASE_URL: /api
         # The issuer the BROWSER redirects to, so it is the published host
         # address rather than the compose service name.
         VITE_OIDC_ISSUER: ${OIDC_ISSUER_BROWSER}
         VITE_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
         VITE_OIDC_SCOPE: ${OIDC_SCOPE}
     ports: ["3005:80"]
-    networks: [frontend]
+    # `frontend` for the published port a browser connects to, `internal` to
+    # reach `api` — which has no port of its own by design.
+    depends_on: [api]
+    networks: [frontend, internal]
 
   api:
     build: { context: ., dockerfile: apps/api/Dockerfile }
-    ports: ["8080:8080"]
-    # frontend AND internal — deliberately NOT egress. This is the design's
-    # central claim as a network fact rather than a code review.
-    networks: [frontend, internal]
+    # NO published port and `internal` ONLY. This is §5's central claim as a
+    # network fact rather than a code review, and the shape is forced:
+    # outbound access in Docker comes from being attached to ANY non-internal
+    # network, not from being attached to `egress` specifically. An earlier
+    # version had `api` on `frontend` too and believed being off `egress` was
+    # enough; the container had `default via 172.21.0.1` and full internet
+    # access while the file still read as "api is not on egress". The egress
+    # test caught it; reading the topology did not.
+    #
+    # A browser reaches this service through `web`'s nginx proxy (/api/ ->
+    # api:8080 over `internal`), which is why it needs no port of its own.
+    networks: [internal]
     environment:
       API_PORT: "8080"
       # §5.1 row 1: the ONLY thing that differs from a firm deployment is
