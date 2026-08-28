@@ -35,6 +35,18 @@ export interface PrecedentIntakeProps {
    *  from the summary when not supplied rather than shown as zero, which
    *  would misreport documents nobody has parsed yet. */
   totalEditsToRead?: number;
+  /** The name this session's playbook will be saved under — a ruling on a
+   *  gap Task 10A-fix left open: it used to name every redlines playbook
+   *  with the same constant, unusable the moment the flow ran twice. Lives
+   *  here, beside the documents, because the person is already telling the
+   *  app what these documents are — mirroring E's `DraftForm`, which asks
+   *  the same question before it drafts anything. Never gates `onContinue`:
+   *  the app's own save gate (`handleRedlinesToDraftReview`, mirroring
+   *  `DraftForm`'s `canSubmit`) is where this is actually required, not
+   *  here — someone should be able to explore what the redlines say before
+   *  committing to a name. */
+  contractType?: string;
+  onContractTypeChange?: (value: string) => void;
   /** Sets (or confirms, when passed the document's own current role) a
    *  document's role. This is the ONLY route by which `roleInferred` can
    *  become `false` — that happens in the caller's state update, not here. */
@@ -83,6 +95,8 @@ export function PrecedentIntake({
   documents,
   unreadable = [],
   totalEditsToRead,
+  contractType = '',
+  onContractTypeChange,
   onSetRole,
   onRemoveDocument,
   onRejectChain,
@@ -118,6 +132,24 @@ export function PrecedentIntake({
           Read once to learn from. Not stored with the playbook.
         </p>
       </header>
+
+      {onContractTypeChange && (
+        <div className="max-w-md">
+          <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+            Playbook name
+          </label>
+          <input
+            aria-label="Playbook name"
+            value={contractType}
+            onChange={(e) => onContractTypeChange(e.target.value)}
+            placeholder="e.g. Commercial Lease (Landlord)"
+            className="w-full bg-black/50 border border-white/10 rounded-lg p-2.5 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+          />
+          <p className="text-[11px] text-gray-600 mt-1">
+            Names the playbook you are about to create from these documents — not the documents themselves.
+          </p>
+        </div>
+      )}
 
       {unreadable.length > 0 && (
         <div className="space-y-2">

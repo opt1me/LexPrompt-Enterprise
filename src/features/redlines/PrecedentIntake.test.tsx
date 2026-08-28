@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { mount, click, buttonNamed } from '../../test/mount';
+import { mount, click, buttonNamed, type } from '../../test/mount';
 import { PrecedentIntake } from './PrecedentIntake';
 import type { PrecedentDocument } from '../../lib/chains';
 
@@ -92,5 +92,30 @@ describe('PrecedentIntake', () => {
     const b = { ...confirmedDoc, id: 'b', chainId: 'chain-1' };
     const el = mount(<PrecedentIntake {...baseProps({ documents: [a, b] })} />);
     expect(el.textContent).toMatch(/2 turns/i);
+  });
+
+  // R-F-fix-1's gap: a ruling on Task 10 puts the playbook's name on THIS
+  // screen, beside the documents — the person is already telling the app
+  // what these are. Lives here rather than being defaulted to a constant
+  // (`App.tsx`'s `handleRedlinesToDraftReview` is where it is required).
+  describe('the playbook name field (a Task 10 ruling)', () => {
+    it('reports what was typed via onContractTypeChange', () => {
+      const onContractTypeChange = vi.fn();
+      const el = mount(<PrecedentIntake {...baseProps({ onContractTypeChange })} />);
+      const nameInput = el.querySelector('[aria-label="Playbook name"]') as HTMLInputElement;
+      expect(nameInput).toBeTruthy();
+      type(nameInput, 'Brookvale Lease (Landlord)');
+      expect(onContractTypeChange).toHaveBeenCalledWith('Brookvale Lease (Landlord)');
+    });
+
+    it('never blocks Continue, even while the name is blank', () => {
+      const onContinue = vi.fn();
+      const el = mount(
+        <PrecedentIntake
+          {...baseProps({ documents: [confirmedDoc], onContinue, onContractTypeChange: vi.fn(), contractType: '' })}
+        />,
+      );
+      expect(buttonNamed(el, /continue/i)!.disabled).toBe(false);
+    });
   });
 });

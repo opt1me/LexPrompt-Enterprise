@@ -4,7 +4,6 @@ import {
   includedPositions,
   positionText,
   learnedFromNames,
-  REDLINES_DRAFT_NAME,
 } from './positionsToDraft';
 import { canSaveDraft, toPlaybookDraft } from '../../lib/authoringDraft';
 import type { InferredPosition } from '../../lib/inferPositions';
@@ -82,9 +81,15 @@ describe('learnedFromNames', () => {
   });
 });
 
+// A stand-in for what the person typed into `PrecedentIntake`'s "Playbook
+// name" field — deliberately NOT the old `REDLINES_DRAFT_NAME` constant, so
+// a test asserting this value comes back cannot pass by accident if the
+// function silently reverted to hardcoding that string (R-F-fix-1's gap).
+const CONTRACT_TYPE = 'Brookvale Lease (Landlord)';
+
 describe('positionsToDraft', () => {
   it('makes every clause unreviewed, so E\'s save gate holds until a person reads it', () => {
-    const draft = positionsToDraft([position()], NAMES, 'test/model');
+    const draft = positionsToDraft([position()], NAMES, 'test/model', CONTRACT_TYPE);
     expect(draft.clauses).toHaveLength(1);
     expect(draft.clauses[0].disposition).toBe('unreviewed');
     // The whole point: a draft straight out of this function CANNOT be
@@ -93,7 +98,7 @@ describe('positionsToDraft', () => {
   });
 
   it('carries the position as a learned standard position, not an AI-drafted one', () => {
-    const draft = positionsToDraft([position()], NAMES, 'test/model');
+    const draft = positionsToDraft([position()], NAMES, 'test/model', CONTRACT_TYPE);
     const clause = draft.clauses[0];
     expect(clause.title).toBe('Confidentiality period');
     expect(clause.extractPrompt).toContain('Confidentiality period');
@@ -111,6 +116,7 @@ describe('positionsToDraft', () => {
       [position({ disposition: 'reworded', rewordedText: 'Five years, not indefinite.' })],
       NAMES,
       'test/model',
+      CONTRACT_TYPE,
     );
     expect(draft.clauses[0].positionEdited).toBe(true);
     expect(draft.clauses[0].edited).toBe(true);
@@ -118,7 +124,7 @@ describe('positionsToDraft', () => {
   });
 
   it('does not claim an adopted position was rewritten', () => {
-    const draft = positionsToDraft([position()], NAMES, 'test/model');
+    const draft = positionsToDraft([position()], NAMES, 'test/model', CONTRACT_TYPE);
     expect(draft.clauses[0].positionEdited).toBe(false);
     expect(draft.clauses[0].edited).toBe(false);
   });
@@ -128,19 +134,29 @@ describe('positionsToDraft', () => {
       [position({ id: 'a' }), position({ id: 'b', clauseTitle: 'Break clause', disposition: 'rejected' })],
       NAMES,
       'test/model',
+      CONTRACT_TYPE,
     );
     expect(draft.clauses.map(c => c.title)).toEqual(['Confidentiality period']);
   });
 
-  it('names the playbook after where it came from', () => {
-    expect(positionsToDraft([position()], NAMES, 'test/model').contractType).toBe(REDLINES_DRAFT_NAME);
+  // R-F-fix-1's gap: this used to be `REDLINES_DRAFT_NAME` no matter what —
+  // unusable the moment the flow ran twice, since nothing distinguished two
+  // playbooks named identically. The name is now whatever the caller
+  // supplies, taken verbatim and never substituted.
+  it('names the playbook exactly what the caller supplies, never a constant', () => {
+    expect(positionsToDraft([position()], NAMES, 'test/model', CONTRACT_TYPE).contractType).toBe(
+      CONTRACT_TYPE,
+    );
+    expect(positionsToDraft([position()], NAMES, 'test/model', 'Something Else').contractType).toBe(
+      'Something Else',
+    );
   });
 
   // The end of the seam: what E's publish path actually writes.
   it('produces a v1 draft whose provenance names the documents that taught it', () => {
-    const authoring = positionsToDraft([position()], NAMES, 'test/model');
+    const authoring = positionsToDraft([position()], NAMES, 'test/model', CONTRACT_TYPE);
     const kept = { ...authoring, clauses: authoring.clauses.map(c => ({ ...c, disposition: 'kept' as const })) };
-    const published = toPlaybookDraft(kept, REDLINES_DRAFT_NAME);
+    const published = toPlaybookDraft(kept, CONTRACT_TYPE);
 
     expect(published.clauses).toHaveLength(1);
     expect(published.clauses[0].standardPosition?.reviewedByHuman).toBe(true);

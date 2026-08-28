@@ -32,17 +32,6 @@ import type { InferredPosition } from '../../lib/inferPositions';
  * no playbook, and no version, exists.
  */
 
-/** The name and contract type a redlines-learned playbook starts with.
- *
- *  `handleSaveDraftAsV1` uses `AuthoringDraft.contractType` as the
- *  playbook's name (E's form asks for one thing and it serves as both), and
- *  this flow never asks the person for either: the redlines say what the
- *  firm does, not what kind of contract they were doing it in. Naming it
- *  after where it came from is the one thing that is certainly true. The
- *  name is editable in D's playbook editor immediately after the publish —
- *  which is where this flow lands. */
-export const REDLINES_DRAFT_NAME = 'Learned from redlines';
-
 /** The positions this flow carries forward. A `rejected` position ("not a
  *  house rule") and an `undecided` one both contribute nothing — "not a
  *  house rule" has to actually keep the position out of the playbook, not
@@ -122,11 +111,24 @@ export function learnedFromNames(
  * makes `positionProvenance` say "Learned from <documents>" rather than
  * naming a model as the author of a house rule the firm wrote in its own
  * redlines.
+ *
+ * `contractType` names the playbook this will become — a ruling on the gap
+ * Task 10A-fix left open (R-F-fix-1): that version named every redlines
+ * playbook with the same constant, which is unusable the moment the flow
+ * runs twice — two playbooks in the library named identically, neither
+ * saying what contract it is for. The caller reads it from a field on the
+ * precedent-intake screen (`PrecedentIntake`'s "Playbook name"), the natural
+ * place: the person is already telling the app what these documents are.
+ * It is REQUIRED here and never defaulted — `handleRedlinesToDraftReview`
+ * refuses to call this function at all until it is non-empty, mirroring how
+ * `DraftForm` gates its own submit on `contractType.trim() !== ''` rather
+ * than letting a blank one through to be silently named something generic.
  */
 export function positionsToDraft(
   positions: InferredPosition[],
   documentNames: Record<string, string>,
   modelId: string,
+  contractType: string,
 ): AuthoringDraft {
   const included = includedPositions(positions);
   const clauses: DraftClause[] = included.map((position) => {
@@ -153,7 +155,7 @@ export function positionsToDraft(
   });
 
   return {
-    contractType: REDLINES_DRAFT_NAME,
+    contractType,
     learnedFrom: learnedFromNames(included, documentNames),
     modelId,
     clauses,

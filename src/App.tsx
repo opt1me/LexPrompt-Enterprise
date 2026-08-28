@@ -592,6 +592,16 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [redlinesPositions, setRedlinesPositions] = useState<InferredPosition[]>([]);
   const [redlinesQuestions, setRedlinesQuestions] = useState<OpenQuestion[]>([]);
   const [redlinesWorkingsPosition, setRedlinesWorkingsPosition] = useState<InferredPosition | null>(null);
+  /** Ruling on a gap Task 10A-fix left open (R-F-fix-1): every redlines
+   *  playbook was named with the constant `REDLINES_DRAFT_NAME`, which is
+   *  unusable the second the flow runs twice — two identically-named
+   *  playbooks, neither saying what contract they are for. Collected on
+   *  `PrecedentIntake` (beside the documents, mirroring E's `DraftForm`,
+   *  which asks the same question before it drafts anything) and carried
+   *  through the session; `handleRedlinesToDraftReview` is where it is
+   *  actually required, not here — intake itself must not trap someone who
+   *  has not decided on a name yet. */
+  const [redlinesContractType, setRedlinesContractType] = useState('');
   // No playbook, no version and no changeset state here on purpose. This
   // session mints NOTHING: `handleRedlinesToDraftReview` converts the
   // adopted positions into E's `AuthoringDraft` and hands over, and the
@@ -1245,6 +1255,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setRedlinesPositions([]);
     setRedlinesQuestions([]);
     setRedlinesWorkingsPosition(null);
+    setRedlinesContractType('');
   }, [view]);
 
   // Best-effort: keeps `settings.model*` capability fields in step with the
@@ -2969,6 +2980,17 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * draft is one that could never be saved — sending someone to a review
    * screen they cannot leave by the front door is the "unfinishable state"
    * shape CLAUDE.md lists among this project's own defects.
+   *
+   * Also refuses without a playbook name (a ruling on a gap Task 10A-fix
+   * left open, R-F-fix-1): `redlinesContractType` is collected on
+   * `PrecedentIntake`, beside the documents, but intake itself does not
+   * require it — someone should be able to bring documents in and explore
+   * what the redlines say before committing to a name. This is the point
+   * mirroring `DraftForm`'s own `canSubmit` gate (`contractType.trim() !==
+   * ''`) that actually creates the `AuthoringDraft`: exactly where E blocks
+   * on the same field for the same reason, not a second, differently-shaped
+   * gate. Checked AFTER "nothing adopted" so a session with neither problem
+   * yet sees the more fundamental one first.
    */
   const handleRedlinesToDraftReview = () => {
     const included = includedPositions(redlinesPositions);
@@ -2976,6 +2998,14 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       setRedlinesError(
         'Nothing has been adopted yet. Adopt or reword at least one position — a playbook needs at ' +
         'least one clause a person stood behind.',
+      );
+      return;
+    }
+    const contractType = redlinesContractType.trim();
+    if (contractType === '') {
+      setRedlinesError(
+        'This playbook needs a name before it can be saved. Go back to the documents screen and name it — ' +
+        'that names the playbook you are about to create, not the documents themselves.',
       );
       return;
     }
@@ -2987,7 +3017,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     // hazard). Leaving the redlines views does clear this session's
     // documents and positions, which is correct — they have been read into
     // the draft, and the `File`s were never to be kept.
-    updateAuthoringDraft(positionsToDraft(included, redlinesDocumentNames, settings.modelId));
+    updateAuthoringDraft(positionsToDraft(included, redlinesDocumentNames, settings.modelId, contractType));
     setView('authoring-review');
   };
 
@@ -3263,6 +3293,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               documents={redlinesDocs}
               unreadable={redlinesUnreadable}
               totalEditsToRead={redlinesEditEntries.length}
+              contractType={redlinesContractType}
+              onContractTypeChange={setRedlinesContractType}
               onSetRole={handleSetRedlinesRole}
               onRemoveDocument={handleRemoveRedlinesDocument}
               onRejectChain={handleRejectRedlinesChain}
