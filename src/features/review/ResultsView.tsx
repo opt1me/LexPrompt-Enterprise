@@ -78,6 +78,8 @@ export interface ResultsViewProps {
   verifyBusyKey?: string | null;
   /** The local profile's initials, for a note's author placeholder. */
   authorInitials?: string;
+  /** The local profile's id, for deciding which notes read as "yours". */
+  localUserId?: string;
   /** Persists the human's acceptance of a collection clause's synthesised
    *  net position (Task 8). Same optionality reasoning as `onVerify`. */
   onConfirmNetPosition?: (docId: string, clauseId: string) => Promise<void>;
@@ -142,7 +144,7 @@ type Tab = 'findings' | 'chat';
  */
 export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
-  onVerify, onAddNote, verifyBusyKey, authorInitials,
+  onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
   playbookVersion, onShowVersionHistory,
 }: ResultsViewProps) {
@@ -417,7 +419,18 @@ export function ResultsView({
           onSelect={handleSelectClause}
         />
       </div>
-      <div className="w-full md:w-[470px] md:shrink-0 border-r border-rule flex flex-col bg-card min-h-0">
+      {/* Flexible, not `shrink-0`. Fixing 258px of rail + 470px of finding
+         column at every width above `md` left the document pane ~279px at
+         1024px and ~533px at 1278px — narrower than a page at any zoom the
+         control offers, which is how the clipped-left-margin defect above
+         went unnoticed. The column now takes what is left below `lg` (where
+         the document pane is a toggled overlay, so fixing 470px merely left
+         dead space beside it), a smaller fixed width once the document pane
+         claims a column of its own, and its full design width at `xl`. */}
+      <div
+        data-pane="findings"
+        className="w-full md:flex-1 md:min-w-0 lg:flex-none lg:w-[380px] xl:w-[470px] border-r border-rule flex flex-col bg-card min-h-0"
+      >
         <div className="p-4 border-b border-rule flex items-center justify-between gap-3">
           {run.documentIds.length > 1 ? (
             <select
@@ -521,7 +534,20 @@ export function ResultsView({
         </div>
 
         {tab === 'findings' ? (
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+          <div
+            // `relative` is load-bearing, not decoration. Every card's
+            // icon-only Retry button carries an `sr-only` label, and
+            // Tailwind's `sr-only` is `position: absolute` — with no
+            // positioned ancestor its containing block is the page itself,
+            // so a label sitting 14,000px down this scrolled list extended
+            // the DOCUMENT to 14,000px and gave the review screen a second,
+            // whole-window scrollbar over blank space. Positioning this
+            // scroller puts those labels inside the box that clips them.
+            // Verified in the browser: `document.scrollingElement.
+            // scrollHeight` drops from 14,570 to the viewport's own 1,352
+            // and the window scrollbar disappears.
+            className="relative flex-1 overflow-y-auto p-4 space-y-4 min-h-0"
+          >
             <div className="flex justify-between items-center">
               <h3 className="font-prose text-section text-ink-1">Analysis</h3>
               <div className="flex gap-2">
@@ -585,6 +611,7 @@ export function ResultsView({
                   noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
                   documentNames={documentNames}
                   authorInitials={authorInitials}
+                  localUserId={localUserId}
                   onConfirmNetPosition={onConfirmNetPosition ? () => onConfirmNetPosition(activeDocId, clause.id) : undefined}
                   onAmendNetPosition={onAmendNetPosition ? (text) => onAmendNetPosition(activeDocId, clause.id, text) : undefined}
                   netPositionBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
@@ -627,6 +654,7 @@ export function ResultsView({
          cached (`documentFileForReview`), and closing/reopening this pane
          must not pay that cost again. */}
       <div
+        data-pane="document"
         className={`${mobileDocOpen ? 'fixed inset-0 z-50 flex' : 'hidden'} lg:static lg:z-auto lg:flex lg:flex-1 lg:min-w-0 flex-col bg-paper`}
       >
         <button

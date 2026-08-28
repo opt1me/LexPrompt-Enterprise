@@ -394,7 +394,13 @@ export function TemplateEditor({
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto h-[calc(100vh-64px)] flex flex-col bg-paper">
+    <div
+      // `h-full`, not `calc(100vh - 64px)`: the app header's height is
+      // content-dependent since it gained `flex-wrap`, and `main` is
+      // already sized to whatever it left over. See App.tsx's results
+      // wrapper for the failure the hardcoded arithmetic invites.
+      className="p-6 max-w-7xl mx-auto h-full flex flex-col bg-paper"
+    >
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">

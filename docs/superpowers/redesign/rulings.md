@@ -913,3 +913,101 @@ tests, 0 skipped, all green; the palette scanner's `SCAN_EXEMPT` list is empty a
 passes at zero violations repo-wide; the contrast test's 47 declared role pairs all pass at
 their assigned tier; the font payload totals 354,180 bytes, inside the 350 KiB (358,400-byte)
 budget `src/test/fonts.test.ts` enforces.
+
+# Sub-project G, behaviour-fix round — rulings made without owner review (2026-08-28)
+
+Closing the final behaviour review's H1, L3 and L4, plus the collection-card gap left open
+under the honesty review's Major 3. Five decisions were mine.
+
+## R-GB1 — the finding column narrows at `lg`; the rail keeps its 258px
+
+H1's document pane was starved because 258px of rail and 470px of finding column were both
+`shrink-0` at every width from `md` up. The fix makes the finding column flexible instead:
+it takes the leftover below `lg` (where the document pane is a toggled overlay, so a fixed
+470px merely left dead space beside it), 380px at `lg`, and its full design width of 470px
+at `xl`. The clause-index rail is untouched at 258px.
+
+380px is chosen, not arbitrary: it is the widest the column can be while the document pane
+at 1024px still fits a whole page at the zoom control's own floor (50%, 306px). That
+property is asserted by a test rather than left as a comment, so a later widening of either
+pane fails loudly instead of quietly re-starving the document.
+
+*Cost if wrong: between 1024px and 1279px a finding card reads 90px narrower than the
+handoff's mockup — roughly six characters per line. If the owner would rather have the
+mockup's width there, the number to change is one, in `ResultsView`, and the test that
+guards the zoom-floor property will say so.*
+
+## R-GB2 — the app shell is `h-screen`, not `min-h-screen`
+
+L4 asked for the hardcoded `calc(100vh - 64px)` to stop naming a header height that
+`flex-wrap` had made content-dependent. Replacing it with `h-full` alone did NOT work, and
+the browser said so: under `min-h-screen` the shell's height is auto-with-a-floor, a
+percentage height on a child of the `flex-1` `main` resolves to auto, and the review screen
+grew to 19,473px with the WINDOW doing the scrolling. `h-screen` makes the shell's height
+definite, `main` exactly the header's leftover, and `h-full` resolve as written.
+
+This was not a free change: `PlaybookLibrary` and `TemplateEditor` were already written
+against `h-full` and were already degrading the same way, so the app has been scrolling at
+the window on those screens rather than inside `main`, as their own markup intended. It now
+scrolls inside `main` everywhere. Verified live at 1278px on the matters list, the playbook
+library, the template editor and a real PDF review, including a forced header wrap
+(56px to 79px: `main` shrank to match, no window scrollbar appeared).
+
+*Cost if wrong: every screen now scrolls inside `main` rather than at the window, so the
+scrollbar sits below the header instead of beside it and the browser's own
+scroll-restoration no longer applies to a screen's content. If that is unwanted, reverting
+to `min-h-screen` means every `h-full` screen wrapper needs a definite height again — the
+arithmetic L4 removed.*
+
+## R-GB3 — the findings scroller is `relative` (a defect found while verifying L4, not one the review reported)
+
+Verifying L4 in the browser turned up a second, unrelated cause of the very scrollbar L4
+warns about. Every finding card's icon-only Retry button carries an `sr-only` label, and
+Tailwind's `sr-only` is `position: absolute`; with no positioned ancestor its containing
+block is the page, so a label 14,000px down the scrolled finding column extended the
+DOCUMENT to 14,570px and gave the review screen a whole-window scrollbar over blank space.
+Positioning the scroller puts those labels inside the box that clips them
+(`document.scrollingElement.scrollHeight` drops to the viewport's own 1,352px, and the
+window scrollbar disappears).
+
+Fixed here rather than filed, because it is one class, it was measured before and after,
+and shipping an L4 fix while the app still grew a second scrollbar would have read as the
+fix not working.
+
+*Cost if wrong: none identified — `relative` on a scroll container with no absolutely
+positioned children of its own changes nothing else. It was not, however, swept for
+repo-wide: other screens may have the same `sr-only`-escapes-its-scroller pattern, and
+nothing guards against a new one.*
+
+## R-GB4 — L1 is left alone, because it could not be reproduced
+
+`PositionComparison`'s `return null` for a `done` finding with no `positionOutcome` is
+unreachable from any path in the running app. `FindingCard` renders the comparison only in
+its `done` branch, and both extractors call `normalisePositionOutcome(clause.standardPosition,
+…)` — the same field the render is gated on — which defaults to `unclear` whenever a
+standard position exists. `carryHumanState` spreads the whole finding, so no snapshot merge
+drops the field, and `reviewMigration` preserves whatever was stored. Reaching the branch
+needs a persisted review whose snapshot clause carries a `standardPosition` while its
+finding carries no outcome; both fields arrived in sub-project D, and no code path since has
+written one without the other. The brief's instruction was explicit — do not "fix" what
+cannot be demonstrated — so the code and its comment stand unchanged.
+
+*Cost if wrong: if such a record does exist somewhere (a build deployed mid-D, say), a
+clause with a house rule opens looking like a clause without one. The failure is silent, and
+nothing tests the branch.*
+
+## R-GB5 — the H1 test is a geometry model plus a repo-wide guard, not a rendered measurement
+
+jsdom has no layout engine, so no test in this suite can measure a box. The two new cases
+read the geometry the components DECLARE — the pane widths, the scroller's padding, whether
+it centres its cross axis — and compute the unreachable strip from those numbers, which is
+reading a class list as data rather than asserting a class as style. A third case
+generalises it: no container anywhere in `src/` may both declare horizontal scrolling and
+centre its cross axis. All three fail against the pre-fix code (252px unreachable at 1024px,
+306px minimum page against a 230px content box). The pixels themselves were confirmed in a
+real browser on a real review, recorded in the fix report.
+
+*Cost if wrong: the model encodes one CSS rule by hand. If a future layout puts the document
+pane somewhere the model does not describe — a grid, say, or a pane whose width is not a
+`w-[Npx]` utility — `paneWidth` throws rather than passing, which is the intended direction,
+but the test then needs updating with the layout rather than merely re-running.*

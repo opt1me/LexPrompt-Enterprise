@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Layers, AlertTriangle, Wrench, Play, Ungroup as UngroupIcon, Loader } from 'lucide-react';
 import type { Collection, DocumentRecord, ReviewTarget } from '../../types';
 import { orderedMembers } from '../../lib/collectionOrder';
+import { DocumentNotices } from './DocumentNotices';
 import { Button } from '../../components/Button';
 
 export interface CollectionCardProps {
@@ -130,9 +131,9 @@ export function CollectionCard({ collection, documents, onUngroup, onRepair, onR
 
       <ul className="flex flex-col gap-1.5">
         {members.map(m => (
-          <li key={m.documentId} className="flex items-center gap-3 bg-chip-fill rounded-control px-3 py-2">
+          <li key={m.documentId} className="flex items-start gap-3 bg-chip-fill rounded-control px-3 py-2">
             <span
-              className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border shrink-0 ${
+              className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border shrink-0 mt-0.5 ${
                 m.kind === 'original'
                   ? 'bg-accent-tint text-accent border-accent-edge'
                   : 'bg-chip-fill text-ink-3 border-rule'
@@ -141,7 +142,19 @@ export function CollectionCard({ collection, documents, onUngroup, onRepair, onR
               {m.kind === 'original' ? 'Base' : 'Varies'}
             </span>
             {m.document ? (
-              <span className="text-sm text-ink-1 truncate">{m.document.name}</span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm text-ink-1 truncate">{m.document.name}</p>
+                {/* The same notices the standalone document list shows, for
+                   the same reason: grouping a document into a collection
+                   must not be the act that hides "this looks like a scan"
+                   or "this parsed with every tracked change accepted".
+                   `extractCollectionClause` still declines a member it
+                   cannot read at run time, so the run stays safe either
+                   way — what a silent row costs is the chance to know
+                   BEFORE spending the tokens, which is the whole point of
+                   saying it here (R-G13). */}
+                <DocumentNotices doc={m.document} />
+              </div>
             ) : (
               <span className="text-sm text-risk-high flex items-center gap-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />

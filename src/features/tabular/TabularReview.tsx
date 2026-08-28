@@ -28,6 +28,8 @@ export interface TabularReviewProps {
   onAddNote?: (docId: string, clauseId: string, text: string) => Promise<void>;
   verifyBusyKey?: string | null;
   authorInitials?: string;
+  /** The local profile's id, for deciding which notes read as "yours". */
+  localUserId?: string;
   /** The grid's way out of triage: hands the clicked cell's `docId`/
    *  `clauseId` off to the ledger (Task 10). Optional, like `onVerify` and
    *  `onAddNote` — omitted, `CellDetail` renders with no such affordance
@@ -61,7 +63,7 @@ const RISK_CELL: Record<RiskLevel, string> = {
  */
 export function TabularReview({
   run, documents, onRetryCell, onOpenCards, interrupted = false,
-  onVerify, onAddNote, verifyBusyKey, authorInitials, onOpenInReview,
+  onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId, onOpenInReview,
 }: TabularReviewProps) {
   const [wrapText, setWrapText] = useState(false);
   const [selected, setSelected] = useState<SelectedCell | null>(null);
@@ -212,6 +214,7 @@ export function TabularReview({
             onAddNote={onAddNote ? (text) => onAddNote(selected.docId, selected.clauseId, text) : undefined}
             verifyBusy={verifyBusyKey === findingKey(selected.docId, selected.clauseId)}
             authorInitials={authorInitials}
+            localUserId={localUserId}
             onOpenInReview={onOpenInReview ? () => onOpenInReview(selected.docId, selected.clauseId) : undefined}
           />
         )}

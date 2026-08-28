@@ -61,6 +61,10 @@ export interface FindingCardProps {
    *  write. Defaults to 'ME' when omitted (ruling R1: attribution is real
    *  but local — there is one user). */
   authorInitials?: string;
+  /** The local profile's id, so a note can be attributed to "you" only when
+   *  the record says the local profile wrote it. Defaults to '' when
+   *  omitted, which attributes nothing — the safe direction (R-GP5). */
+  localUserId?: string;
   /** Reports the human's intent to accept a collection clause's synthesised
    *  net position as written. Optional, same reasoning as `onVerify`: a card
    *  with no way to persist (a preview) shows the position and its state
@@ -110,7 +114,7 @@ function riskAccent(level: RiskLevel | undefined): string {
  */
 export function FindingCard({
   clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames,
-  onVerify, verifyBusy, onAddNote, noteBusy, authorInitials,
+  onVerify, verifyBusy, onAddNote, noteBusy, authorInitials, localUserId,
   onConfirmNetPosition, onAmendNetPosition, netPositionBusy, documentInfo,
 }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
@@ -337,6 +341,7 @@ export function FindingCard({
           <NotesPanel
             notes={finding.notes}
             authorInitials={authorInitials ?? 'ME'}
+            localUserId={localUserId ?? ''}
             busy={noteBusy}
             onAddNote={onAddNote}
           />

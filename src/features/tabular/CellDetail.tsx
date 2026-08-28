@@ -45,6 +45,8 @@ export interface CellDetailProps {
   onAddNote?: (text: string) => Promise<void>;
   /** The local profile's initials, for a note's author placeholder. */
   authorInitials?: string;
+  /** The local profile's id, for deciding which notes read as "yours". */
+  localUserId?: string;
   /** The grid's way out of triage: hands this clicked cell off to the
    *  ledger (Task 10). Optional, same reasoning as `onVerify`/`onAddNote` —
    *  omitted, no such affordance renders rather than a button that goes
@@ -60,7 +62,7 @@ export interface CellDetailProps {
  * button feeds that single quote to the viewer as its highlight, scrolling
  * to it, exactly as `ResultsView` wires `FindingCard` to `DocumentViewer`.
  */
-export function CellDetail({ doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote, authorInitials, onOpenInReview }: CellDetailProps) {
+export function CellDetail({ doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote, authorInitials, localUserId, onOpenInReview }: CellDetailProps) {
   const [highlights, setHighlights] = useState<string[]>([]);
   /** Set when a clicked citation belongs to a document other than `doc`. */
   const [citedDocId, setCitedDocId] = useState<string | null>(null);
@@ -124,6 +126,7 @@ export function CellDetail({ doc, documents, clause, finding, onClose, onRetry, 
           noteBusy={verifyBusy}
           documentNames={documentNames}
           authorInitials={authorInitials}
+          localUserId={localUserId}
         />
       </div>
 

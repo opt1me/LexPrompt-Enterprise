@@ -75,7 +75,13 @@ function PdfPage({ pdfDoc, pageNum, scale, highlightRects }: PdfPageProps) {
   }, [highlightRects]);
 
   return (
-    <div className="relative shadow-page mb-4" style={{ width: viewport?.width, height: viewport?.height }}>
+    <div
+      // `mx-auto`, not the container's `align-items`: see the scroll
+      // container below on why centring a page this way is the only kind
+      // that leaves its left edge reachable once it outgrows the pane.
+      className="relative shadow-page mb-4 mx-auto"
+      style={{ width: viewport?.width, height: viewport?.height }}
+    >
       <canvas ref={canvasRef} className="bg-page rounded-inset" />
       {viewport && highlightRects.map((rect, i) => {
         // pdfjs-dist v6 dropped PageViewport.convertToViewportRectangle;
@@ -192,8 +198,24 @@ export function PdfCanvas({ file, highlights }: PdfCanvasProps) {
   const pageNumbers = Array.from({ length: pdfDoc.numPages }, (_, i) => i + 1);
 
   return (
-    <div className="h-full w-full relative bg-doc-gutter overflow-auto flex flex-col items-center p-8">
-      <div className="sticky top-4 z-50 flex items-center gap-2 bg-card border border-rule shadow-tab px-4 py-2 rounded-full mb-6">
+    // `items-center` is what this must never go back to. A scroll container
+    // only extends its scrollable region in the inline-END direction, so a
+    // flex child centred by `align-items: center` has its LEFT overhang
+    // clipped with no `scrollLeft` that can reach it: at a 1064px window the
+    // three-pane layout left this pane ~279px wide and cut ~100px off every
+    // page's left margin — "123 Sample Road" rendered as "23 Sample Road",
+    // with the horizontal scrollbar already at its leftmost stop. Auto
+    // margins are the fix: they centre the page while it FITS and collapse
+    // to zero the moment free space goes negative, so the page's left edge
+    // is always at the container's content origin and always reachable.
+    // Zooming out is not a fix (the control floors at 50%, still wider than
+    // the pane at `lg`), and defaulting to a smaller scale would only move
+    // the same bug to a narrower width while showing the reader less.
+    <div
+      className="h-full w-full relative bg-doc-gutter overflow-auto flex flex-col p-8"
+      data-overflow-origin="inline-start"
+    >
+      <div className="sticky top-4 z-50 w-fit mx-auto flex items-center gap-2 bg-card border border-rule shadow-tab px-4 py-2 rounded-full mb-6">
         <button
           onClick={() => setScale(s => Math.max(0.5, s - 0.2))}
           className="text-ink-4 hover:text-ink-1 hover:bg-chip-fill p-1 rounded-control"
@@ -216,14 +238,14 @@ export function PdfCanvas({ file, highlights }: PdfCanvasProps) {
           not be placed. Different ink so the two are never confused with
           each other (R-G19). */}
       {noTextLayer && (
-        <div className="sticky top-[4.5rem] z-40 flex items-center gap-2 bg-risk-med-tint border border-risk-med-edge text-risk-med font-ui text-ui-sm px-4 py-2 rounded-panel mb-6 max-w-md text-center shadow-tab">
+        <div className="sticky top-[4.5rem] z-40 w-fit mx-auto flex items-center gap-2 bg-risk-med-tint border border-risk-med-edge text-risk-med font-ui text-ui-sm px-4 py-2 rounded-panel mb-6 max-w-md text-center shadow-tab">
           <ScanSearch className="w-4 h-4 shrink-0" />
           <span>This document is a scan with no searchable text, so citations can&apos;t be located in it.</span>
         </div>
       )}
       {citationNotFound && (
         <div
-          className={`sticky z-40 flex items-center gap-2 bg-risk-high-tint border border-risk-high-edge text-risk-high font-ui text-ui-sm px-4 py-2 rounded-panel mb-6 max-w-md text-center shadow-tab ${noTextLayer ? 'top-[8rem]' : 'top-[4.5rem]'}`}
+          className={`sticky z-40 w-fit mx-auto flex items-center gap-2 bg-risk-high-tint border border-risk-high-edge text-risk-high font-ui text-ui-sm px-4 py-2 rounded-panel mb-6 max-w-md text-center shadow-tab ${noTextLayer ? 'top-[8rem]' : 'top-[4.5rem]'}`}
         >
           <SearchX className="w-4 h-4 shrink-0" />
           <span>

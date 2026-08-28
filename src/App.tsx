@@ -3221,7 +3221,16 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-paper">
+    // `h-screen`, not `min-h-screen`. `main` below is `flex-1`, and a flex
+    // item's height is only definite enough for a percentage child (`h-full`)
+    // to resolve against when the container's own height is definite. Under
+    // `min-h-screen` the height is auto-with-a-floor, so every screen that
+    // fills its pane with `h-full` silently fell back to content height: the
+    // review screen grew to 19,473px, the window took over the scrolling, and
+    // the document pane's own scroller stopped containing anything. Measured
+    // in the browser before and after; `TemplateEditor`/`PlaybookLibrary` were
+    // already written against `h-full` and were already degrading this way.
+    <div className="h-screen flex flex-col bg-paper">
       <Toast toast={toast} />
 
       <header className="min-h-14 h-auto border-b border-rule bg-card flex flex-wrap items-center justify-between gap-y-2 px-6 py-2 shrink-0">
@@ -3566,7 +3575,21 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           ) : route.name === 'review' && reviewLoading ? (
             <div className="p-8 font-ui text-ui text-ink-3">Loading review…</div>
           ) : run ? (
-            <div className="h-[calc(100vh-64px)] flex flex-col">
+            <div
+              // `h-full`, never `calc(100vh - <the header's height>)`. The
+              // header is `min-h-14 h-auto flex-wrap`, so its height is
+              // content-dependent: anything that pushes the nav onto a
+              // second row (browser zoom, a longer label, one more item)
+              // makes it ~103px, and a screen that had subtracted a
+              // hardcoded 64 would then reserve more than the space left,
+              // growing the page past the viewport and adding a second
+              // scrollbar outside this screen's own scroll panes. `main` is
+              // `flex-1` in the `h-screen` column, so its height is
+              // already exactly what the header left over: filling it needs
+              // no arithmetic, and no copy of a number that by now names
+              // nothing.
+              className="h-full flex flex-col"
+            >
               {isRunning && <RunProgressBar run={run} onCancel={handleCancelRun} />}
               {!isRunning && run.cancelledAt && !run.completedAt && <RunCancelledBanner run={run} />}
               {/* Important 1: `isInterrupted` (derived above, at render, not
@@ -3611,6 +3634,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     onAddNote={handleAddNote}
                     verifyBusyKey={verifyBusyKey}
                     authorInitials={profile?.initials ?? 'ME'}
+                    localUserId={profile?.id ?? ''}
                     onConfirmNetPosition={handleConfirmNetPosition}
                     onAmendNetPosition={handleAmendNetPosition}
                     documentDates={documentDates}
@@ -3629,6 +3653,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     onAddNote={handleAddNote}
                     verifyBusyKey={verifyBusyKey}
                     authorInitials={profile?.initials ?? 'ME'}
+                    localUserId={profile?.id ?? ''}
                   />
                 )}
               </div>

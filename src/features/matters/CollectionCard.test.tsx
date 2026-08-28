@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { act } from 'react';
 import { mount, buttons, buttonNamed, click } from '../../test/mount';
 import { CollectionCard } from './CollectionCard';
+import { SCAN_DISCLOSURE } from './DocumentNotices';
 import type { Collection, DocumentRecord } from '../../types';
 
 /** Clicks and flushes the microtask the click's async handler schedules
@@ -17,18 +18,23 @@ async function clickAndFlush(element: HTMLElement | null | undefined): Promise<v
   });
 }
 
-function doc(id: string, name: string): DocumentRecord {
+function doc(id: string, name: string, over: Partial<DocumentRecord> = {}): DocumentRecord {
   return {
     id,
     matterId: 'm1',
     name,
     kind: 'pdf',
-    text: '',
+    // Real extracted text by default: with `text: ''` every fixture
+    // document is a scan as far as `noUsableText` is concerned, and a
+    // notice that shows on every row proves nothing about the row it is
+    // meant to be about.
+    text: '[Page 1] The tenant shall keep the premises in repair.',
     byteSize: 1,
     addedAt: 1,
     addedByUserId: 'u1',
     role: id === 'lease' ? 'base' : 'varies',
     collectionId: 'c1',
+    ...over,
   };
 }
 
@@ -139,5 +145,34 @@ describe('CollectionCard', () => {
       <CollectionCard collection={collection} documents={fullDocuments} onUngroup={async () => {}} onRepair={async () => {}} onRunReview={() => {}} />,
     );
     expect(buttons(container)).toHaveLength(2);
+  });
+
+  it("carries a member document's ingestion notices, so grouping never hides a scan", () => {
+    // The scan disclosure lives in `DocumentNotices` precisely because a
+    // matter lists its documents in more than one place. Before this, a
+    // scanned PDF dropped into a collection lost the sentence entirely:
+    // `extractCollectionClause` would still decline it at run time, but
+    // only after the run had been started and paid for.
+    const documents = [
+      doc('lease', 'Lease.pdf'),
+      doc('dov', 'Scanned DoV.pdf', { text: '' }),
+      doc('licence', 'Licence.pdf', { markupNotice: 'Tracked changes were accepted to read this file.' }),
+    ];
+    const c = mount(
+      <CollectionCard
+        collection={collection}
+        documents={documents}
+        onUngroup={vi.fn()}
+        onRepair={vi.fn()}
+        onRunReview={vi.fn()}
+      />,
+    );
+    const rows = Array.from(c.querySelectorAll('li'));
+    const rowFor = (name: string) => rows.find(li => li.textContent?.includes(name))!;
+    expect(rowFor('Scanned DoV.pdf').textContent).toContain(SCAN_DISCLOSURE);
+    expect(rowFor('Licence.pdf').textContent).toContain('Tracked changes were accepted');
+    // …and a document that read fine says nothing, or the notice stops
+    // meaning anything.
+    expect(rowFor('Lease.pdf').textContent).not.toContain(SCAN_DISCLOSURE);
   });
 });
