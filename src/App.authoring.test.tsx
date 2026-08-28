@@ -430,3 +430,71 @@ describe('a generation failure keeps the form and everything typed into it (spec
     expect(container.textContent).not.toMatch(/unsaved draft/i);
   });
 });
+
+// Final honesty review (D/E), M1: a matters-load failure must read as "we
+// could not read your matters", never as "you have none" — CLAUDE.md's
+// empty-vs-broken rule, applied to a section of a screen rather than a whole
+// one, exactly as `TemplateEditor`'s `healthError` already does.
+describe('a matters load failure on the draft form reads as broken, not empty (M1)', () => {
+  it('shows the load error instead of silently hiding the "learn from a matter" section', async () => {
+    listMattersMock.mockReset().mockRejectedValue(new Error('boom'));
+    act(() => { root.render(<App />); });
+    await flush();
+    click(buttonNamed(/^library$/i));
+    await flush();
+    click(buttonNamed(/create template/i));
+    click(buttonNamed(/draft with ai/i));
+
+    expect(container.textContent).toMatch(/matters list could not be loaded/i);
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+  });
+
+  it('retries the matters load from the form and then shows the section', async () => {
+    listMattersMock.mockReset()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce([]);
+    act(() => { root.render(<App />); });
+    await flush();
+    click(buttonNamed(/^library$/i));
+    await flush();
+    click(buttonNamed(/create template/i));
+    click(buttonNamed(/draft with ai/i));
+    expect(container.textContent).toMatch(/matters list could not be loaded/i);
+
+    click(buttonNamed(/retry/i));
+    await flush();
+
+    expect(container.textContent).not.toMatch(/matters list could not be loaded/i);
+  });
+});
+
+// Final honesty review (D/E), m2: `learnedFrom` (and, upstream of it, the
+// sources actually handed to `generateDraft`) must name only sources that
+// contributed material — a matter with zero verified findings is the common
+// case, not the edge case, and crediting it overstates what shaped the draft.
+describe('a ticked matter that contributed nothing is not credited (m2)', () => {
+  it('does not pass an empty-contribution matter through to generateDraft', async () => {
+    listMattersMock.mockReset().mockResolvedValue([
+      { id: 'm1', name: 'Acme Lease', ownerId: 'u1', createdAt: 1, updatedAt: 1 },
+    ]);
+    listReviewsMock.mockReset().mockResolvedValue([]); // no reviews at all for m1
+    act(() => { root.render(<App />); });
+    await flush();
+    click(buttonNamed(/^library$/i));
+    await flush();
+    click(buttonNamed(/create template/i));
+    click(buttonNamed(/draft with ai/i));
+    typeInto(contractTypeField(), 'Commercial Lease');
+
+    const matterCheckbox = Array.from(container.querySelectorAll('input[type="checkbox"]'))
+      .find(el => /acme lease/i.test(el.closest('label')?.textContent ?? '')) as HTMLInputElement;
+    expect(matterCheckbox).toBeTruthy();
+    click(matterCheckbox);
+    click(buttonNamed(/draft the playbook/i));
+    await flush();
+
+    expect(generateDraftMock).toHaveBeenCalledTimes(1);
+    const [, , sourcesArg] = generateDraftMock.mock.calls[0];
+    expect(sourcesArg).toEqual([]);
+  });
+});

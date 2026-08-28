@@ -47,7 +47,7 @@ import { RouteChooser } from './features/authoring/RouteChooser';
 import { DraftForm } from './features/authoring/DraftForm';
 import { DraftReview } from './features/authoring/DraftReview';
 import { generateDraft, type DraftFormValues } from './features/authoring/generateDraft';
-import { buildFewShot, type FewShotSource } from './features/authoring/fewShot';
+import { buildFewShot, usedFewShotSources, type FewShotSource } from './features/authoring/fewShot';
 import { saveDraftAsV1 } from './features/authoring/saveDraftAsV1';
 import { useUnsavedDraftGuard } from './features/authoring/useUnsavedDraftGuard';
 import type { AuthoringDraft } from './lib/authoringDraft';
@@ -2320,8 +2320,14 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         sources.filter(s => s.kind === 'matter').map(s => listReviews(s.id)),
       )).flat();
       const fewShot = buildFewShot(templates, versions, reviews, sources);
+      // m2 (final honesty review): `learnedFrom` must name only sources
+      // that actually contributed material, not every source the user
+      // ticked — a matter with zero verified findings is the common case,
+      // and crediting it as having "taught" the draft overstates what
+      // happened.
+      const usedSources = usedFewShotSources(templates, versions, reviews, sources);
 
-      const draft = await generateDraft(form, fewShot, sources, settings);
+      const draft = await generateDraft(form, fewShot, usedSources, settings);
       setAuthoringDraft(draft);
       setView('authoring-review');
     } catch (e) {
@@ -2642,6 +2648,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             <DraftForm
               playbooks={templates.map(t => ({ id: t.id, name: t.name }))}
               matters={matters.map(m => ({ id: m.matter.id, name: m.matter.name }))}
+              mattersError={mattersLoadError ?? undefined}
+              onRetryMatters={() => loadMatters()}
               busy={authoringBusy}
               error={authoringError}
               authFailed={authoringAuthFailed}

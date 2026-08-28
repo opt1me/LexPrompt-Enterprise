@@ -63,7 +63,18 @@ describe('positionHealth', () => {
   it('is CONCEDED once a verified deviation lands after the version was published', () => {
     expect(
       positionHealthLabel(positionHealth(50, [verifiedFinding('meets', 100), verifiedFinding('deviates', 120)])),
-    ).toBe('CONCEDED 1 times');
+    ).toBe('CONCEDED 1 time');
+  });
+
+  // m5 (final honesty review): "CONCEDED 1 times" was ungrammatical, and a
+  // second concession must still pluralise correctly rather than the fix
+  // just special-casing 1.
+  it('pluralises correctly for more than one concession', () => {
+    expect(
+      positionHealthLabel(
+        positionHealth(0, [verifiedFinding('deviates', 100), verifiedFinding('deviates', 200)]),
+      ),
+    ).toBe('CONCEDED 2 times');
   });
 
   it('ignores a verified deviation from before this version was published', () => {
@@ -104,5 +115,33 @@ describe('positionHealth', () => {
 
   it('an empty history is UNTESTED, not an error', () => {
     expect(() => positionHealth(0, [])).not.toThrow();
+  });
+
+  // Minor 3 (final honesty review): every other consumer of
+  // `positionOutcome` gates on `isVerifiable` (status === 'done') —
+  // `findingOutcome.ts`'s `hasStandingPosition`, and
+  // `TabularReview.tsx`'s `positionOutcomeCounts` — but `positionHealth`'s
+  // `tested` filter checked only `verification.state`. `extractClause`'s
+  // `noContent` branch DOES attach a `positionOutcome` to a finding whose
+  // `status` is `'error'` (a model that gave an outcome and an empty
+  // summary still gave an outcome). Nothing in the app's own write paths
+  // can currently attach a `verified` verification to a non-`done`
+  // finding — `isVerifiable` gates both the mouse and keyboard verify
+  // controls — so this finding is built directly rather than produced
+  // through the UI; the point is that `positionHealth` itself must not
+  // trust `status` implicitly, matching every sibling that reads this
+  // field.
+  it('does not count an error finding as tested, even carrying a verified verification and an outcome', () => {
+    const errorFinding: Finding = {
+      clauseId: 'c1',
+      status: 'error',
+      error: 'The model returned no content for this clause.',
+      noContent: true,
+      citations: [],
+      verification: { state: 'verified', byUserId: 'u1', at: 1_000 },
+      notes: [],
+      positionOutcome: 'deviates',
+    };
+    expect(positionHealthLabel(positionHealth(0, [errorFinding]))).toBe('UNTESTED');
   });
 });

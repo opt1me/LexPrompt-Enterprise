@@ -1,4 +1,5 @@
 import type { Finding } from '../types';
+import { isVerifiable } from './findingOutcome';
 
 /**
  * How well-tested a firm's standard position is, derived at read time from
@@ -48,6 +49,17 @@ export interface PositionHealthOptions {
  * is reported as `conceded`, not as "held, minus the ones that deviated" —
  * a firm reading this wants to know the position has been given up on at
  * least once, not a net tally.
+ *
+ * Gated on `isVerifiable` (Minor 3, final honesty review), the same guard
+ * every other `positionOutcome` consumer applies — `findingOutcome.ts`'s
+ * `hasStandingPosition` and `TabularReview.tsx`'s `positionOutcomeCounts`.
+ * `extractClause`'s `noContent` branch attaches a `positionOutcome` to a
+ * finding whose `status` is `'error'`, deliberately (a model that gave an
+ * outcome and an empty summary still gave an outcome); nothing in this
+ * app's own write paths can currently attach a `verified` verification to
+ * that finding (`isVerifiable` also gates the verify controls), so this is
+ * defensive against the two ever drifting apart rather than a fix for a
+ * reachable defect — see `positionHealth.test.ts` for the reproduction.
  */
 export function positionHealth(
   publishedAt: number,
@@ -60,6 +72,7 @@ export function positionHealth(
 
   const tested = findings.filter(
     f =>
+      isVerifiable(f) &&
       f.verification.state === 'verified' &&
       f.verification.at !== undefined &&
       f.verification.at >= publishedAt &&
@@ -84,7 +97,10 @@ export function positionHealthLabel(health: PositionHealth): string {
     case 'held':
       return `HELD ${health.supporting} of ${health.total}`;
     case 'conceded':
-      return `CONCEDED ${health.count} times`;
+      // m5 (final honesty review): "CONCEDED 1 times" was a grammar defect,
+      // not a counting one — `saveGateLabel` (`authoringDraft.ts`) already
+      // pluralises correctly two files away.
+      return `CONCEDED ${health.count} time${health.count === 1 ? '' : 's'}`;
     case 'untested':
       return 'UNTESTED';
     case 'no-position':

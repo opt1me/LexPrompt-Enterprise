@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { mount, click } from '../../test/mount';
+import { mount, click, buttonNamed } from '../../test/mount';
 import { SourcePicker } from './SourcePicker';
 import type { FewShotSource } from './fewShot';
 
@@ -55,5 +55,45 @@ describe('SourcePicker', () => {
     const box = checkboxNamed(c, /nda v2/i)!;
     click(box);
     expect(onChange).toHaveBeenCalledWith([{ kind: 'matter', id: 'm1', name: 'Acme' }]);
+  });
+
+  // M1 (final honesty review, sub-projects D/E): a matters-load failure must
+  // read as "we could not read your matters", never as "you have none" —
+  // CLAUDE.md's empty-vs-broken rule, one screen over from where
+  // `TemplateEditor`'s `healthError` already closes it.
+  it('shows a load error instead of the matter checkboxes when matters failed to load', () => {
+    const c = mount(<SourcePicker playbooks={[]} matters={[]} selected={[]} onChange={() => {}}
+      mattersError="The matters list could not be loaded. Try again." />);
+    expect(c.textContent).toContain('The matters list could not be loaded. Try again.');
+    // Not silently mistaken for "no matters yet": no checkbox is rendered,
+    // but the error message stands in its place rather than nothing at all.
+    expect(c.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+  });
+
+  it('offers a working retry from the matters load error', () => {
+    const onRetryMatters = vi.fn();
+    const c = mount(<SourcePicker playbooks={[]} matters={[]} selected={[]} onChange={() => {}}
+      mattersError="boom" onRetryMatters={onRetryMatters} />);
+    click(buttonNamed(c, /retry/i)!);
+    expect(onRetryMatters).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the error INSTEAD OF the list even if matters somehow arrived non-empty alongside it', () => {
+    // Guards the "instead of" half of the fix: if matters somehow arrived
+    // non-empty alongside an error (should not happen upstream, but this
+    // component must not compound the mistake), the error still wins.
+    const c = mount(<SourcePicker playbooks={[]} matters={[{ id: 'm1', name: 'Acme' }]} selected={[]}
+      onChange={() => {}} mattersError="boom" />);
+    expect(c.textContent).not.toContain('Acme');
+    expect(c.textContent).toContain('boom');
+  });
+
+  // m6: the heading must not claim a filter ("completed") that is not
+  // applied — App.tsx hands this component every matter regardless of state.
+  it('does not claim the matters offered are "completed"', () => {
+    const c = mount(<SourcePicker playbooks={[]} matters={[{ id: 'm1', name: 'Acme' }]} selected={[]}
+      onChange={() => {}} />);
+    expect(c.textContent).not.toMatch(/completed matter/i);
+    expect(c.textContent).toMatch(/learn from a matter/i);
   });
 });

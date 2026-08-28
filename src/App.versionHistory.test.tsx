@@ -223,7 +223,7 @@ describe('App — the review header names the version this run ran against (Task
     await flush();
 
     expect(getVersionMock).not.toHaveBeenCalled();
-    expect(container.textContent).toMatch(/no longer recorded|not recorded/i);
+    expect(container.textContent).toMatch(/predates playbook versioning|does not record which version/i);
   });
 
   // The fix this batch adds: a `getVersion` that THROWS (a DB read failure,

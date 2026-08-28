@@ -1,5 +1,6 @@
 import React from 'react';
 import { ShieldAlert } from 'lucide-react';
+import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import type { FewShotSource } from './fewShot';
 
 export interface SourcePickerProps {
@@ -7,6 +8,14 @@ export interface SourcePickerProps {
   matters: { id: string; name: string }[];
   selected: FewShotSource[];
   onChange: (selected: FewShotSource[]) => void;
+  /** Set when the matters list this picker draws from failed to load.
+   *  Rendered INSTEAD OF the checkboxes, never alongside an empty `matters`
+   *  array — without this, a failed read and a firm with genuinely no
+   *  matters yet are the same picture: the section simply is not there. The
+   *  matters exist; the app could not see them (CLAUDE.md: distinguish
+   *  "empty" from "broken"). Mirrors `TemplateEditor`'s `healthError`. */
+  mattersError?: string;
+  onRetryMatters?: () => void;
 }
 
 function isSelected(selected: FewShotSource[], kind: FewShotSource['kind'], id: string): boolean {
@@ -24,7 +33,9 @@ function isSelected(selected: FewShotSource[], kind: FewShotSource['kind'], id: 
  * behind a dismiss button. Selecting a PLAYBOOK carries no client text (only
  * clause titles and standard positions), so it carries no such disclosure.
  */
-export function SourcePicker({ playbooks, matters, selected, onChange }: SourcePickerProps) {
+export function SourcePicker({
+  playbooks, matters, selected, onChange, mattersError, onRetryMatters,
+}: SourcePickerProps) {
   const toggle = (source: FewShotSource) => {
     if (isSelected(selected, source.kind, source.id)) {
       onChange(selected.filter((s) => !(s.kind === source.kind && s.id === source.id)));
@@ -58,31 +69,46 @@ export function SourcePicker({ playbooks, matters, selected, onChange }: SourceP
         )}
       </div>
 
-      {matters.length > 0 && (
+      {(matters.length > 0 || mattersError) && (
         <div>
+          {/* m6: the heading no longer claims "completed" — App.tsx hands
+             this component every matter regardless of state, and a heading
+             promising a filter that is not applied is its own small
+             confident-wrong-answer. Reworded rather than filtered: which
+             matters are close enough to "done" to be worth learning from is
+             a judgement call this picker has no way to make, so the
+             decision is left to the person selecting, same as it always
+             was — the heading just stops pretending the app already made
+             it for them. */}
           <label className="block text-xs text-gray-500 uppercase mb-2 font-semibold tracking-wider">
-            Learn from a completed matter
+            Learn from a matter
           </label>
-          <p className="flex items-start gap-2 text-xs text-yellow-300 bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3 mb-2">
-            <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
-            <span>
-              Selecting a matter sends its verified findings to the model you have chosen — the only
-              place in this app another matter&rsquo;s content leaves your browser.
-            </span>
-          </p>
-          <div className="space-y-1.5">
-            {matters.map((m) => (
-              <label key={m.id} className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isSelected(selected, 'matter', m.id)}
-                  onChange={() => toggle({ kind: 'matter', id: m.id, name: m.name })}
-                  className="accent-violet-500"
-                />
-                {m.name}
-              </label>
-            ))}
-          </div>
+          {mattersError ? (
+            <LoadErrorPanel message={mattersError} onRetry={onRetryMatters} compact />
+          ) : (
+            <>
+              <p className="flex items-start gap-2 text-xs text-yellow-300 bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3 mb-2">
+                <ShieldAlert className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>
+                  Selecting a matter sends its verified findings to the model you have chosen — the
+                  only place in this app another matter&rsquo;s content leaves your browser.
+                </span>
+              </p>
+              <div className="space-y-1.5">
+                {matters.map((m) => (
+                  <label key={m.id} className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={isSelected(selected, 'matter', m.id)}
+                      onChange={() => toggle({ kind: 'matter', id: m.id, name: m.name })}
+                      className="accent-violet-500"
+                    />
+                    {m.name}
+                  </label>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>

@@ -82,6 +82,22 @@ describe('dispositions and `edited`', () => {
     expect(out.clauses[1].disposition).toBe('unreviewed');
   });
 
+  // Minor 1 (final honesty review): an edit that explicitly clears a field
+  // to `undefined` — `DraftReview` does this for a blanked standard
+  // position — must DELETE the key, not leave it present with value
+  // `undefined`. `structuredClone` (how IndexedDB writes every record, once
+  // a draft is published) preserves an `undefined`-valued key, so leaving
+  // one here would resurface on reload exactly as if it had never been
+  // cleared.
+  it('deletes a key an edit explicitly sets to undefined, rather than assigning undefined', () => {
+    const withPosition = clause('a', {
+      standardPosition: { text: 'We ask for six months.', origin: 'authored', reviewedByHuman: true },
+    });
+    const out = keepClause(draft([withPosition]), 'a', { standardPosition: undefined });
+    expect('standardPosition' in out.clauses[0]).toBe(false);
+    expect(out.clauses[0].edited).toBe(true);
+  });
+
   it('never mutates the draft it was given', () => {
     const before = draft([clause('a')]);
     keepClause(before, 'a', { title: 'New' });

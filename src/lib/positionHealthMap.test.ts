@@ -224,7 +224,7 @@ describe('buildPositionHealthMap', () => {
       review('r1', 'm1', 'v1', { 'coll-1': { a: finding('a', 'deviates', 1500) } }),
     ];
     expect(positionHealthLabel(buildPositionHealthMap({ clauses, versions, reviews }).a!))
-      .toBe('CONCEDED 1 times');
+      .toBe('CONCEDED 1 time');
   });
 
   // "We have no house rule here" is not a health state — it is the absence

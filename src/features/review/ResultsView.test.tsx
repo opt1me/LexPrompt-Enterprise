@@ -535,7 +535,7 @@ describe('ResultsView — the header names the version this run ran against (R-D
     const container = mount(
       <ResultsView run={runWithVersionId(undefined)} documents={[]} settings={settings} onRetryCell={() => {}} />,
     );
-    expect(container.textContent).toMatch(/no longer recorded|not recorded/i);
+    expect(container.textContent).toMatch(/predates playbook versioning|does not record which version/i);
   });
 
   it('says which version once the caller has resolved it', () => {
@@ -578,7 +578,7 @@ describe('ResultsView — the header names the version this run ran against (R-D
     );
     expect(container.textContent).not.toMatch(/ran against v/i);
     expect(container.textContent).not.toMatch(/deleted|no longer exists/i);
-    expect(container.textContent).not.toMatch(/no longer recorded|not recorded/i);
+    expect(container.textContent).not.toMatch(/predates playbook versioning|does not record which version/i);
   });
 
   it('opens version history when the resolved line is clicked', () => {

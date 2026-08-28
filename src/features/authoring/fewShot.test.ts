@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildFewShot, type FewShotSource } from './fewShot';
+import { buildFewShot, usedFewShotSources, type FewShotSource } from './fewShot';
 import type { Finding, Playbook, PlaybookClause, PlaybookVersion, Review, Verification, VerificationState } from '../../types';
 
 // Fixtures. None of these exist anywhere else in the repo — every helper
@@ -130,5 +130,48 @@ describe('buildFewShot', () => {
     const draftOnly: Playbook = { id: 'pb2', name: 'Draft only', createdAt: 0, updatedAt: 0, schemaVersion: 6 };
     const out = buildFewShot([draftOnly], [], [], [{ kind: 'playbook', id: 'pb2', name: 'Draft only' }]);
     expect(out).toBe('');
+  });
+});
+
+// m2 (final honesty review, sub-projects D/E): `learnedFrom` must name only
+// sources that actually contributed material. `usedFewShotSources` is what
+// a caller populates it from — these tests pin it against the exact
+// scenarios `buildFewShot`'s own suite above already treats as "contributed
+// nothing", so the two functions can never quietly disagree.
+describe('usedFewShotSources', () => {
+  it('excludes a matter with zero verified findings — the common case, not the edge case', () => {
+    const source: FewShotSource = { kind: 'matter', id: 'm1', name: 'Acme' };
+    const used = usedFewShotSources([], [], [reviewWith(uncheckedFinding('a'))], [source]);
+    expect(used).toEqual([]);
+  });
+
+  it('includes a matter whose verified findings actually contributed', () => {
+    const source: FewShotSource = { kind: 'matter', id: 'm1', name: 'Acme' };
+    const used = usedFewShotSources([], [], [reviewWith(verifiedFinding('The cap is 125%.'))], [source]);
+    expect(used).toEqual([source]);
+  });
+
+  it('excludes a playbook that has never been published', () => {
+    const draftOnly: Playbook = { id: 'pb2', name: 'Draft only', createdAt: 0, updatedAt: 0, schemaVersion: 6 };
+    const source: FewShotSource = { kind: 'playbook', id: 'pb2', name: 'Draft only' };
+    const used = usedFewShotSources([draftOnly], [], [], [source]);
+    expect(used).toEqual([]);
+  });
+
+  it('includes a playbook whose current version actually contributed clauses', () => {
+    const source: FewShotSource = { kind: 'playbook', id: 'pb1', name: 'Lease' };
+    const used = usedFewShotSources(
+      [playbook('pb1')], [versionWith('pb1', 'Break', 'We ask for six months.')], [], [source],
+    );
+    expect(used).toEqual([source]);
+  });
+
+  it('reports only the sources that contributed, not every selected source', () => {
+    const contributed: FewShotSource = { kind: 'matter', id: 'm1', name: 'Acme' };
+    const empty: FewShotSource = { kind: 'matter', id: 'm2', name: 'Bolt' };
+    const used = usedFewShotSources(
+      [], [], [reviewWith(verifiedFinding('The cap is 125%.'), 'm1')], [contributed, empty],
+    );
+    expect(used).toEqual([contributed]);
   });
 });

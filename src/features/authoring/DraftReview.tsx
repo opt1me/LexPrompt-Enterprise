@@ -206,7 +206,19 @@ function ClauseEditor({ clause, onKeep, onCut, onAddSuggestion, onDismissSuggest
       riskCriteria: riskCriteria.trim() === '' ? undefined : riskCriteria,
     };
     if (clause.standardPosition) {
-      edits.standardPosition = { ...clause.standardPosition, text: positionText };
+      // Minor 1 (final honesty review): blanking the textarea REMOVES the
+      // position rather than saving `{ text: '' }` — mirrors
+      // `StandardPositionField`'s guard (`src/features/templates/
+      // StandardPositionField.tsx`) for the exact reason stated there: a
+      // position with no text reads as a house rule ("We ask for ") until
+      // something looks at it, and it would be published into an immutable
+      // version this way rather than dropped, unlike `migratePosition`'s
+      // read-time repair. Explicit `undefined` in the edits object, not an
+      // omitted key: `keepClause` spreads `edits` onto the clause, and only
+      // an explicit `undefined` here clears an existing `standardPosition`.
+      edits.standardPosition = positionText.trim() === ''
+        ? undefined
+        : { ...clause.standardPosition, text: positionText };
     }
     onKeep(edits);
   };

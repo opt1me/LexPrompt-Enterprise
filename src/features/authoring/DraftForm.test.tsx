@@ -81,6 +81,20 @@ describe('DraftForm', () => {
     expect(submit?.disabled).toBe(true);
   });
 
+  it('forwards a matters load error to the source picker instead of hiding the section (M1)', () => {
+    const c = mount(<DraftForm playbooks={[]} matters={[]} onSubmit={() => {}} onCancel={() => {}}
+      mattersError="The matters list could not be loaded. Try again." />);
+    expect(c.textContent).toContain('The matters list could not be loaded. Try again.');
+  });
+
+  it('wires the retry from the matters load error through to the caller', () => {
+    const onRetryMatters = vi.fn();
+    const c = mount(<DraftForm playbooks={[]} matters={[]} onSubmit={() => {}} onCancel={() => {}}
+      mattersError="boom" onRetryMatters={onRetryMatters} />);
+    click(buttonNamed(c, /retry/i)!);
+    expect(onRetryMatters).toHaveBeenCalledTimes(1);
+  });
+
   it('calls onCancel from the cancel control', () => {
     const onCancel = vi.fn();
     const c = mount(<DraftForm playbooks={[]} matters={[]} onSubmit={() => {}} onCancel={onCancel} />);

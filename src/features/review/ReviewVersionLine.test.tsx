@@ -29,9 +29,13 @@ describe('ReviewVersionLine (R-D15)', () => {
     expect(out).toMatch(/ran against v2/i);
   });
 
-  it('says the version is no longer recorded when the review never had one', () => {
+  // m4 (final honesty review): this branch means a version was NEVER
+  // recorded — "no longer recorded" falsely implies one existed and was
+  // since lost, which is a different, more alarming claim.
+  it('says a version was never recorded, without claiming one existed and was lost', () => {
     const out = mount(<ReviewVersionLine versionId={undefined} version={null} />).textContent!;
-    expect(out).toMatch(/no longer recorded|not recorded/i);
+    expect(out).toMatch(/predates playbook versioning|does not record which version/i);
+    expect(out).not.toMatch(/no longer recorded/i);
   });
 
   // Distinct from the case above, and the distinction is the point: "we

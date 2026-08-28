@@ -8,6 +8,11 @@ import type { FewShotSource } from './fewShot';
 export interface DraftFormProps {
   playbooks: { id: string; name: string }[];
   matters: { id: string; name: string }[];
+  /** Forwarded to `SourcePicker` — see its own doc comment. Set when the
+   *  matters list failed to load; renders an error in place of the matter
+   *  checkboxes rather than letting a load failure look like "no matters". */
+  mattersError?: string;
+  onRetryMatters?: () => void;
   busy?: boolean;
   error?: string;
   /** True when `error` is a 401/403 rather than an ordinary failure (spec
@@ -51,6 +56,8 @@ const ANSWER_LENGTH_LABEL: Record<AnswerLength, string> = {
 export function DraftForm({
   playbooks,
   matters,
+  mattersError,
+  onRetryMatters,
   busy = false,
   error,
   authFailed = false,
@@ -185,7 +192,14 @@ export function DraftForm({
       </div>
 
       <div>
-        <SourcePicker playbooks={playbooks} matters={matters} selected={sources} onChange={setSources} />
+        <SourcePicker
+          playbooks={playbooks}
+          matters={matters}
+          selected={sources}
+          onChange={setSources}
+          mattersError={mattersError}
+          onRetryMatters={onRetryMatters}
+        />
       </div>
 
       <p className="text-xs text-gray-500 italic border-t border-white/10 pt-4">

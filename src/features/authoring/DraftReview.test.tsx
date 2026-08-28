@@ -174,6 +174,29 @@ describe('DraftReview', () => {
     expect(onDiscard).not.toHaveBeenCalled();
   });
 
+  // Minor 1 (final honesty review, sub-projects D/E): blanking the position
+  // textarea must DROP the position, not save `{ text: '' }` into an
+  // immutable version — the same rule `StandardPositionField` (D's own
+  // editor) already enforces for exactly this reason.
+  it('drops the standard position entirely when its text is blanked before Keep', () => {
+    const onChange = vi.fn();
+    const el = mount(<DraftReview draft={withAiPosition} onChange={onChange} onSave={noop} onDiscard={noop} />);
+    type(fieldMatching(el, /standard position/i) ?? null, '');
+    click(buttonNamed(el, /^keep$/i));
+    const kept = onChange.mock.calls.at(-1)![0].clauses[0];
+    expect('standardPosition' in kept).toBe(false);
+  });
+
+  it('keeps the position, reviewed, when its text is left non-empty', () => {
+    const onChange = vi.fn();
+    const el = mount(<DraftReview draft={withAiPosition} onChange={onChange} onSave={noop} onDiscard={noop} />);
+    click(buttonNamed(el, /^keep$/i));
+    const kept = onChange.mock.calls.at(-1)![0].clauses[0];
+    expect(kept.standardPosition).toEqual({
+      text: 'We ask for 30 days notice.', origin: 'ai-drafted', reviewedByHuman: false,
+    });
+  });
+
   it('calls onSave from the save control once the gate is clear', () => {
     const onSave = vi.fn();
     const el = mount(<DraftReview draft={allKept} onChange={noop} onSave={onSave} onDiscard={noop} />);

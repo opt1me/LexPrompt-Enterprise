@@ -49,12 +49,19 @@ const RISK_CELL_CLASSES: Record<RiskLevel, string> = {
 };
 
 /**
- * Task 12: how many clauses across this run's findings deviate from a
- * standard position, and whether any clause carries one at all. Derived the
- * same flat walk `verificationCounts` uses — every document's every
- * clause's finding — because "absent is not zero": a run where nothing was
- * ever compared to a house position must show no count at all, not a
+ * Task 12: how many FINDINGS across this run deviate from a standard
+ * position, and whether any clause carries one at all. Derived the same
+ * flat walk `verificationCounts` uses — every document's every clause's
+ * finding — because "absent is not zero": a run where nothing was ever
+ * compared to a house position must show no count at all, not a
  * "0 deviating" chip implying a comparison that never happened.
+ *
+ * m7 (final honesty review): this counts finding-INSTANCES, not distinct
+ * clauses — a single clause deviating in all three documents of a 3-doc run
+ * contributes 3, not 1. The label this feeds says so explicitly ("deviating
+ * findings"), because it sits beside a "N docs · M clauses" summary and a
+ * bare "N deviating" reads as a tally of clauses, which it is not and can
+ * exceed.
  *
  * `unclear` is deliberately excluded from the tally. It means the model
  * could not tell, not that it found a conflict — counting it here would
@@ -62,11 +69,13 @@ const RISK_CELL_CLASSES: Record<RiskLevel, string> = {
  * `positionOutcomeLabel` (`findingOutcome.ts`) draws for the exports.
  *
  * Gated on `isVerifiable`, the same guard `findingOutcome.ts`'s
- * `positionOutcomeLabel` applies via `hasStandingPosition`: `failRetryCell`
- * can carry a previous attempt's `positionOutcome` onto an `error` finding,
- * and that comparison no longer describes settled output once the attempt it
- * was reasoning about has been superseded. Without this gate the exporters
- * and this index could disagree about whether a stale comparison still
+ * `positionOutcomeLabel` applies via `hasStandingPosition`. Stale as of the
+ * final honesty review: `failRetryCell` (`App.tsx`) does NOT carry a
+ * previous attempt's `positionOutcome` forward — it builds from `busy`,
+ * which already has none, and only carries `netPosition`. The gate stays
+ * right regardless: `extractClause`'s `noContent` branch attaches a
+ * `positionOutcome` to an `error` finding directly, and without this guard
+ * the exporters and this index could disagree about whether that still
  * counts — exactly the sibling-drift shape this project keeps paying for.
  */
 function positionOutcomeCounts(findings: Review['findings']): { deviating: number; hasPosition: boolean } {
@@ -137,7 +146,7 @@ export function TabularReview({
           </span>
           {positionCounts.hasPosition && (
             <span className="text-xs text-rose-300 bg-rose-500/10 px-2 py-1 rounded border border-rose-500/20 shrink-0">
-              {positionCounts.deviating} deviating
+              {positionCounts.deviating} deviating finding{positionCounts.deviating === 1 ? '' : 's'}
             </span>
           )}
         </div>

@@ -26,6 +26,22 @@ function playbookSection(
   return `From "${source.name}" (existing playbook):\n${lines.join('\n')}`;
 }
 
+/** `undefined` exactly when `source` produced no section — a playbook with
+ *  no `currentVersionId`/clauses, or a matter with no verified findings.
+ *  The single place that decision is made, so `buildFewShot` (the prompt
+ *  text) and `usedFewShotSources` (the provenance claim, m2) can never
+ *  disagree about which sources actually contributed. */
+function sectionFor(
+  source: FewShotSource,
+  playbooks: Playbook[],
+  versions: PlaybookVersion[],
+  reviews: Review[],
+): string | undefined {
+  return source.kind === 'playbook'
+    ? playbookSection(source, playbooks, versions)
+    : matterSection(source, reviews);
+}
+
 /** Every finding a completed matter produced that a human has actually
  *  verified. An unverified finding is the model's own output; feeding it
  *  back as house style would launder a guess into a rule. A flagged or
@@ -70,9 +86,27 @@ export function buildFewShot(
   selected: FewShotSource[],
 ): string {
   const sections = selected
-    .map((source) => (source.kind === 'playbook'
-      ? playbookSection(source, playbooks, versions)
-      : matterSection(source, reviews)))
+    .map((source) => sectionFor(source, playbooks, versions, reviews))
     .filter((s): s is string => !!s);
   return sections.join('\n\n');
+}
+
+/**
+ * Which of `selected` actually contributed material to `buildFewShot`'s
+ * output — m2 (final honesty review, sub-projects D/E). A source the user
+ * ticked but that produced no section (a matter with zero verified
+ * findings — the common case, since verification is a deliberate manual
+ * act, not the edge case; or a playbook with no published clauses)
+ * contributed nothing the model ever saw, so it must not appear in a
+ * draft's `learnedFrom`: that field is read as a provenance claim, and
+ * naming a source that taught the model nothing overstates what happened.
+ * Callers should populate `learnedFrom` from THIS, not from `selected`.
+ */
+export function usedFewShotSources(
+  playbooks: Playbook[],
+  versions: PlaybookVersion[],
+  reviews: Review[],
+  selected: FewShotSource[],
+): FewShotSource[] {
+  return selected.filter((source) => sectionFor(source, playbooks, versions, reviews) !== undefined);
 }

@@ -79,7 +79,17 @@ export function keepClause(
       for (const key of Object.keys(edits) as (keyof PlaybookClause)[]) {
         const newValue = edits[key];
         if (!valuesEqual(clause[key], newValue)) changed = true;
-        (next as unknown as Record<string, unknown>)[key] = newValue;
+        // Deleted, not assigned `undefined`: `structuredClone` (how
+        // IndexedDB writes every record, once this draft is published)
+        // PRESERVES an `undefined`-valued key, so an explicit `undefined`
+        // here — e.g. `DraftReview` clearing a blanked `standardPosition`,
+        // Minor 1 — must remove the key entirely, the same rule
+        // `TemplateEditor`'s own `setPosition` documents and applies.
+        if (newValue === undefined) {
+          delete (next as unknown as Record<string, unknown>)[key];
+        } else {
+          (next as unknown as Record<string, unknown>)[key] = newValue;
+        }
       }
     }
     next.disposition = 'kept';

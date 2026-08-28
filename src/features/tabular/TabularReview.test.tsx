@@ -127,6 +127,34 @@ describe('TabularReview — column header risk mini-bar (Task 10)', () => {
   });
 });
 
+// m7 (final honesty review): the clause-index chip counts finding-INSTANCES
+// across documents, which can exceed the clause count shown right beside
+// it. The fix names the unit explicitly rather than counting differently.
+describe('TabularReview — the deviating count names its own unit (m7)', () => {
+  it('says "deviating findings", plural, when the count exceeds the clause count', () => {
+    // One clause, deviating in all three documents: 3 deviating findings,
+    // but only 1 clause — a bare "3 deviating" beside "3 docs · 1 clauses"
+    // would misread as a clause tally.
+    const run = makeRun({
+      d1: { c1: doneFinding({ positionOutcome: 'deviates' }) },
+      d2: { c1: doneFinding({ positionOutcome: 'deviates' }) },
+      d3: { c1: doneFinding({ positionOutcome: 'deviates' }) },
+    }, ['d1', 'd2', 'd3']);
+    const container = mount(
+      <TabularReview run={run} documents={[makeDoc('d1'), makeDoc('d2'), makeDoc('d3')]} onRetryCell={() => {}} />,
+    );
+    expect(container.textContent).toContain('3 deviating findings');
+    expect(container.textContent).not.toMatch(/3 deviating(?! finding)/);
+  });
+
+  it('uses the singular for exactly one deviating finding', () => {
+    const run = makeRun({ d1: { c1: doneFinding({ positionOutcome: 'deviates' }) } });
+    const container = mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />);
+    expect(container.textContent).toContain('1 deviating finding');
+    expect(container.textContent).not.toContain('1 deviating findings');
+  });
+});
+
 describe('TabularReview — "Open in review" hands off the clicked cell (Task 10)', () => {
   it('calls onOpenInReview with the clicked cell\'s docId and clauseId', () => {
     const onOpenInReview = vi.fn();

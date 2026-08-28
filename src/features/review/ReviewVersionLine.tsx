@@ -74,9 +74,14 @@ export interface ReviewVersionLineProps {
  */
 export function ReviewVersionLine({ versionId, version, lookupFailed, onOpenHistory }: ReviewVersionLineProps) {
   if (versionId === undefined) {
+    // m4 (final honesty review): "no longer recorded" asserts a recording
+    // that was later lost, which is a different and more alarming claim
+    // than the truth — this branch means one was NEVER made (pre-versioning
+    // data, or a playbook that never existed), per this prop's own doc
+    // comment above.
     return (
       <span className="text-xs text-gray-500">
-        Ran against a playbook version that is no longer recorded.
+        This review predates playbook versioning, so it does not record which version it ran against.
       </span>
     );
   }
