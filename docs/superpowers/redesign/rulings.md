@@ -398,3 +398,145 @@ taken inside them, plus the ones the fixes required.
   are unit-tested only. Task 13's browser checklist gains steps for all of
   them.
 - **R-E8. The old `CreateTemplateDialog` + `generateTemplate` path is DELETED, not left beside E's route.** E Task 6's implementer removed all three files when the route chooser took over `Create Template`, and the reasoning is stronger than "nothing calls them any more". `generateTemplate` returned a `PlaybookDraft` **directly**: a user could generate a playbook with AI and save it with one click, never seeing a clause. That is precisely what E exists to make impossible — its spec says *an AI first pass is a draft, never a saved playbook, until the lawyer has been through every clause* — so leaving the old dialog in place would have left a documented gate with an undocumented way around it. Verified before accepting: zero references remain anywhere in `src/`, and the AI-generation capability survives in `generateDraft`, which routes through the review screen. *Cost if wrong: recoverable with `git checkout 21cbc36 -- <paths>`; the capability is not lost, only its ungated entrance.*
+
+
+---
+
+# Sub-project G — rulings made without owner review (2026-08-28)
+
+Full reasoning lives in `docs/superpowers/specs/2026-08-28-redesign-g-visual-reskin.md`;
+these are the decisions that bind. Three genuine scope forks were NOT ruled on and are
+put to the owner as decision points in that spec §17: phone parity in G or a
+sub-project H; the two-to-three-pane review relayout; and whether the `Standard
+positions` nav tab is built at all.
+
+Recorded in `docs/superpowers/redesign/rulings.md`'s format. Each carries its
+cost-if-wrong.
+
+- **R-G1. Every multi-user affordance in the prototypes is dropped or resolved to the
+  local profile, per §7's table.** Dropped: the "assigned to me" counter and badge, the
+  assignee chip and assign action, the firm tag, the mobile `Assigned` tab, and
+  "flagged *for* X" phrasing. Kept and resolved single-user: attribution ("Rejected by
+  you"), the avatar (local initials), and the activity feed as a derived, single-actor,
+  never-stored matter history that renders an explicit empty state rather than a
+  placeholder row. *Cost if wrong: the app photographs less like a firm-wide product.
+  The opposite error has a lawyer waiting on a review nobody was asked for — a silence
+  the app manufactured — which is why the asymmetry decides it.*
+- **R-G2. Colour tokens live in two layers, and the palette layer is deliberately
+  unreachable from components.** Raw values are plain `:root` custom properties
+  (`--lex-*`) that generate no Tailwind utilities; only the semantic layer sits in
+  `@theme` (`--color-risk-high`, `--color-accent`, `--color-ink-4`, …) and therefore
+  only semantic names exist as utilities. `bg-oxblood` is not a class anyone can type.
+  This mirrors `seq.ts`'s type-enforcement idiom: make the wrong thing fail rather than
+  documenting that it is wrong. Arbitrary-value escapes are closed by the palette guard
+  test. *Cost if wrong: one extra indirection in `index.css`, and a role must be named
+  before it can be used — which is the point.*
+- **R-G3. Fonts are self-hosted from `public/fonts/`, never hotlinked from Google.**
+  The app's own disclosure states that nothing leaves the browser except calls to
+  OpenRouter; a font `<link>` to a third-party CDN would make that sentence false for
+  every page view, in an app whose founding rule is not being quietly wrong. Latin
+  subset, woff2, `font-display: swap`, real fallback stacks, total budget ≤350 KB. No
+  npm dependency: the files are vendored. *Cost if wrong: ~350 KB of static assets in
+  the deploy and a manual step to update a font version.*
+- **R-G4. Semantic roles are named by meaning, not appearance, and `verified` uses the
+  accent teal (`#14574f`) while `low risk` uses the green (`#2c6448`).** The handoff is
+  explicit and the distinction is load-bearing: teal means a human confirmed something;
+  green means the model rated something low. *Cost if wrong: two nearby colours a user
+  may read as one — which is exactly why they also differ in chip shape (R-G16).*
+- **R-G5. Copy carrying a disclosure or a failure state is frozen (§8.4), and where a
+  prototype's wording differs, the shipped wording wins.** Uppercase presentation is a
+  CSS decision; the string is not, because several frozen strings are printed into a
+  DOCX or a CSV cell where the chip's styling does not exist. *Cost if wrong: some
+  screens read slightly less like the mockups.*
+- **R-G6. The permitted copy changes in G are enumerated, and each is a declared test
+  change.** They are: the nav's `Library` → `Playbooks`; the playbook editor's derived
+  coverage line ("*n* of *m* clauses have a standard position"); the export-gate
+  banner (§10.3); the intake wizard's step labels; and the `Standard positions` tab's own
+  strings. Everything else in §8.4 is frozen. *Cost if wrong: a handful of test
+  assertions updated in commits that declare themselves as copy changes rather than
+  restyles.*
+- **R-G7. One palette. No dark theme, no theme toggle.** The redesign is a paper
+  aesthetic and the whole point is legal prose that reads like a document. A toggle
+  would double every contrast check and every browser verification. *Cost if wrong:
+  users who preferred the dark app lose it; adding a theme later is a second set of
+  values under a `[data-theme]` selector, which the two-layer token structure makes
+  cheap — that is much of why the structure is worth having.*
+- **R-G8. The comparison grid (`1e`) was already rebuilt in sub-project C; G restyles
+  it and must not rebuild it.** The brief that commissioned this spec lists `1e` as a
+  deferred screen. It is not: `TabularReview.tsx` already has the per-column risk
+  mini-bar, the un-truncated sentence per cell, separated risk and verification, and
+  "Open in review". Recorded loudly because rebuilding it would silently discard C's
+  `findingsKeyFor` collection handling — the source of six defects in C. *Cost if wrong:
+  none; verified by reading the component.*
+- **R-G9. The activity feed is derived at read time and never stored.** Its inputs
+  (`verification.at`, `Note.at`, `netPosition.confirmedAt`, `Review.startedAt`) already
+  exist and already carry an author. Storing an event log would create a second account
+  of what happened that can drift from the findings themselves. *Cost if wrong: the
+  feed shows only what the current data model timestamps — no "you opened this" events —
+  which is the honest subset anyway.*
+- **R-G10. The matter stat row renders an empty form when no review has completed, and
+  is replaced by the load-error panel when reviews fail to load — never three zeroes.**
+  Zero verified of zero is not a fact about a matter's safety; it is the "empty
+  indistinguishable from broken" shape CLAUDE.md's load rule exists to prevent, at the
+  top of the screen that exists to say how checked the matter is. *Cost if wrong: one
+  extra branch per stat card.*
+- **R-G11. The `Report` segmented tab is dropped; export stays a button producing a
+  file.** A `Report` tab advertises a live report view the app does not have, and the
+  handoff never draws one. *Cost if wrong: a segmented control with two options rather
+  than three.*
+- **R-G12. The intake wizard ships without the AI playbook suggestion.** The mockup's
+  "These look like a commercial lease…" banner is a model call with a prompt contract,
+  a cost, and a failure mode (a confidently wrong playbook choice at the moment the
+  user is least able to judge it). None of that is a styling decision. Step 3 lists the
+  user's playbooks, most-recently-used first. *Cost if wrong: one fewer convenience on
+  the first-run path; adding it later is additive and belongs with E's generation code.*
+- **R-G13. No OCR progress UI.** The app does not OCR. Drawing a progress bar for work
+  it does not perform is precisely the failure §2 forbids. A scanned document says it is
+  scanned and says a vision-capable model is needed — the fact `modelContext.ts` already
+  enforces, stated once before the run rather than once per clause after it. *Cost if
+  wrong: the intake screen looks less capable than the mockup, and is more honest.*
+- **R-G14. `⌘K` global search is deferred, and G renders no search box.** It is a
+  cross-entity index over matters, clauses and findings — a subsystem, not a style. A
+  visible-but-dead search box is worse than none. *Cost if wrong: the top bar has a gap
+  where the mockup has a control.*
+- **R-G15. `Compare to v3` (playbook version diff) is dropped.** Named as an action in
+  `4c`, drawn nowhere. `VersionHistory` already carries each version's human-authored
+  change summary, which is the account that means something; a structured diff of two
+  prompt strings asserts less than it appears to. *Cost if wrong: a version history
+  without a diff view, which is what ships today.*
+- **R-G16. The three chips differ in shape, not only in hue.** `RiskChip` is a filled
+  dot plus a label with no border; `StateChip` is a lucide icon plus a label in a
+  hairline-bordered chip fill; `PositionChip` is a label inside a 1px coloured border on
+  a transparent fill. The handoff's palette gives rejected and high-risk the same
+  oxblood, and flagged and medium-risk the same amber, so colour alone cannot carry the
+  distinction between "a person disagreed", "the model rated it risky", and "it departs
+  from our house rule". *Cost if wrong: three chips that look slightly less uniform than
+  a single badge family would — which is the intent.*
+- **R-G17. G lands on one branch and merges whole; the seams in §12.2 are for review
+  and bisection, not for shipping intermediate states.** Route-by-route release would
+  require a transitional dual palette costing more than the reskin. Said plainly rather
+  than promising incrementality the shared primitives make impossible. *Cost if wrong: a
+  longer-lived branch, mitigated by every step passing tsc, tests and build on its own.*
+- **R-G18. The `Standard positions` tab is built, and it is the only undrawn screen
+  that G invents.** It passes §10's test — it answers "which of our house rules are
+  drifting", a question no per-playbook screen answers — and it needs no new data,
+  writes, or model calls, because D's `positionHealth` already derives everything it
+  shows. *Cost if wrong: a read-only index nobody opens; deleting it costs nothing
+  because nothing else links to it.*
+- **R-G19. Failure, disclosure and warning text may never use `ink-4` or below.** The
+  paper palette is deliberately soft and its lower ink steps are decorative-grade
+  contrast. A warning rendered in `ink-5` is a warning the reader's eye skips. *Cost if
+  wrong: some metadata rows are slightly darker than the mockup.*
+- **R-G20. Busy states must be legible without motion.** Under `prefers-reduced-motion`
+  the pulse becomes a static tinted bar and the word "extracting" remains. A busy state
+  whose only signal is an animation is invisible to a reader who turned animation off,
+  which is the "cell spinning forever, unfinishable" defect in a different disguise.
+  *Cost if wrong: a slightly less elegant reduced-motion rendering.*
+- **R-G21. Spacing stays on Tailwind's default 4px grid; the prototype's ladder is
+  snapped to it.** The handoff lists 5 / 6 / 7 / 9 / 11 / 14 / 18 / 22 / 26 / 34px, which
+  is an artefact of hand-authored inline HTML rather than a designed scale. Re-basing
+  `--spacing` to 2px to reproduce it exactly would silently change the meaning of every
+  spacing utility already written across ~788 `className` sites — a change with no
+  visual review surface and enormous blast radius. Radii and type sizes are *not*
+  snapped: those are named roles with explicit values, so they reproduce the prototype
+  exactly. *Cost if wrong: padding differs from the mock by up to 2px in places.*
