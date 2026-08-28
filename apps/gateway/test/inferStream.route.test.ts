@@ -1,6 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import { buildTestServer, fakeStream } from './helpers/streamHarness.ts';
 import { createSseEventReader, decodeFrame, type Frame } from '@lexprompt/core';
+import type { RateLimiter } from '../src/rateLimit.ts';
+
+/** A limiter that never refuses, but remembers every `record` call — so a
+ *  test can assert WHETHER usage was billed, not just what it would have
+ *  billed. Task 12 fixed a defect where `inferStream.ts` called
+ *  `limiter.record` unconditionally, including on a truncated or errored
+ *  stream; that bug was invisible under `unlimitedRateLimiter` because it
+ *  counts nothing. This pins the guard so it stays caught once a real
+ *  limiter is wired in (Task 14). */
+function spyLimiter(): RateLimiter & { calls: unknown[][] } {
+  const calls: unknown[][] = [];
+  return {
+    calls,
+    check() { /* never refuses */ },
+    record(...args) { calls.push(args); },
+  };
+}
 
 function framesOf(body: string): Frame[] {
   const r = createSseEventReader();
@@ -118,5 +135,48 @@ describe('POST /v1/infer/stream', () => {
     expect(app.auditSink.records.find(r => r.kind === 'call.finished'))
       .toMatchObject({ ok: false, errorCode: 'stream_truncated' });
     await app.close();
+  });
+
+  // Pins the fix Task 12 made and Task 14's brief warned against
+  // reintroducing: `limiter.record` must run only on a stream that actually
+  // completed — never on one that was truncated or errored — because
+  // `RateLimiter.record`'s contract is "after a successful call, with what
+  // it actually cost." Billing a truncated answer is exactly the silent
+  // wrong-answer class CLAUDE.md's "fail loudly" rule exists to prevent,
+  // once a limiter enforces anything real.
+  it('records usage on a completed stream but never on a truncated or errored one', async () => {
+    const okLimiter = spyLimiter();
+    const okApp = buildTestServer({ stream: fakeStream(200, OPENAI_OK), limiter: okLimiter });
+    await okApp.inject({ method: 'POST', url: '/v1/infer/stream',
+      payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
+    expect(okLimiter.calls).toEqual([
+      ['ws', 'sub', { promptTokens: 9, completionTokens: 2 }],
+    ]);
+    await okApp.close();
+
+    const truncatedLimiter = spyLimiter();
+    const truncatedApp = buildTestServer({
+      stream: fakeStream(200, 'data: {"choices":[{"delta":{"content":"x"}}]}\n\n'),
+      limiter: truncatedLimiter,
+    });
+    await truncatedApp.inject({ method: 'POST', url: '/v1/infer/stream',
+      payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
+    expect(truncatedLimiter.calls).toEqual([]);
+    await truncatedApp.close();
+
+    const erroredLimiter = spyLimiter();
+    const erroredApp = buildTestServer({
+      stream: fakeStream(200,
+        'data: {"choices":[{"delta":{"content":"x"}}]}\n\n'
+        + 'data: {"error":{"message":"boom"}}\n\n'),
+      limiter: erroredLimiter,
+    });
+    await erroredApp.inject({ method: 'POST', url: '/v1/infer/stream',
+      payload: { modelChoiceId: 'uks-gpt4o', purpose: 'assistant.chat', user: 'hi',
+                 workspaceId: 'ws', actorIssuer: 'iss', actorSubject: 'sub' } });
+    expect(erroredLimiter.calls).toEqual([]);
+    await erroredApp.close();
   });
 });

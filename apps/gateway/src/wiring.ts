@@ -7,7 +7,7 @@ import { AuditLogger, JsonlAuditSink } from './audit.ts';
 import { buildRegistry } from './adapters/registry.ts';
 import type { GatewayConfig } from './config.ts';
 import { DefaultCredentialResolver } from './credentials/resolve.ts';
-import { unlimitedRateLimiter } from './rateLimit.ts';
+import { WindowRateLimiter } from './rateLimit.ts';
 import type { ServerDeps } from './server.ts';
 import { undiciTransport } from './transport.ts';
 
@@ -56,10 +56,17 @@ export function buildDeps(config: GatewayConfig, out: Writable): ServerDeps {
     audit: new AuditLogger(new JsonlAuditSink(out)),
     credentials,
     transport: undiciTransport,
-    // Enforces nothing. Task 14 replaces it with the real budget, and the
-    // name is what says so at the wiring line rather than in a comment
-    // somebody has to find.
-    limiter: unlimitedRateLimiter,
+    // §10's real budgets. `unlimitedRateLimiter` (rateLimit.ts) enforces
+    // nothing and stays only as a fixture for tests unrelated to rate
+    // limiting — production wiring must never read that name, and
+    // `wiring.test.ts` asserts it does not.
+    limiter: new WindowRateLimiter({
+      requestsPerMinutePerActor: config.requestsPerMinutePerActor,
+      requestsPerMinutePerWorkspace: config.requestsPerMinutePerWorkspace,
+      tokensPerHourPerActor: config.tokensPerHourPerActor,
+      tokensPerHourPerWorkspace: config.tokensPerHourPerWorkspace,
+      now: () => Date.now(),
+    }),
     registry: buildRegistry({
       publicOrigin: config.publicOrigin,
       recordedDir: config.recordedDir,

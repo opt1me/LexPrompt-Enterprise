@@ -65,6 +65,13 @@ export interface GatewayConfig {
   maxPromptChars: number;
   requestTimeoutMs: number;
   defaultMaxTokens: number;
+  /** §10's budgets, consumed only by `WindowRateLimiter` (Task 14). Named to
+   *  match its constructor options exactly, so there is no second mapping
+   *  between a config field and a limiter option to drift out of step. */
+  requestsPerMinutePerActor: number;
+  requestsPerMinutePerWorkspace: number;
+  tokensPerHourPerActor: number;
+  tokensPerHourPerWorkspace: number;
   /** Sent as OpenRouter's `HTTP-Referer` attribution header. Read HERE and
    *  passed into the adapter factory, never read inside an adapter: S25
    *  says an adapter owns request shaping and nothing else, and reading
@@ -397,6 +404,10 @@ export function loadConfig(
     maxPromptChars: int(env, 'GATEWAY_MAX_PROMPT_CHARS', 400_000),
     requestTimeoutMs: int(env, 'GATEWAY_REQUEST_TIMEOUT_MS', 120_000),
     defaultMaxTokens: int(env, 'GATEWAY_DEFAULT_MAX_TOKENS', 4096),
+    requestsPerMinutePerActor: int(env, 'GATEWAY_RPM_PER_ACTOR', 60),
+    requestsPerMinutePerWorkspace: int(env, 'GATEWAY_RPM_PER_WORKSPACE', 600),
+    tokensPerHourPerActor: int(env, 'GATEWAY_TOKENS_PER_HOUR_PER_ACTOR', 2_000_000),
+    tokensPerHourPerWorkspace: int(env, 'GATEWAY_TOKENS_PER_HOUR_PER_WORKSPACE', 20_000_000),
     publicOrigin: env.GATEWAY_PUBLIC_ORIGIN ?? 'https://lexprompt.local',
     recordedDir: env.GATEWAY_RECORDED_DIR ?? 'apps/gateway/fixtures/recorded',
     // The one `process.env` reader in this process is `main.ts`, which hands

@@ -3,7 +3,7 @@ import { Allowlist } from '../../src/allowlist.ts';
 import { AuditLogger, type AuditRecord, type AuditSink } from '../../src/audit.ts';
 import { buildRegistry } from '../../src/adapters/registry.ts';
 import { buildServer } from '../../src/server.ts';
-import { unlimitedRateLimiter } from '../../src/rateLimit.ts';
+import { unlimitedRateLimiter, type RateLimiter } from '../../src/rateLimit.ts';
 import type { ModelEntry } from '../../src/config.ts';
 import type { Transport, TransportResponse } from '../../src/callModel.ts';
 
@@ -85,7 +85,7 @@ export interface TestApp extends FastifyInstance {
   auditSink: Sink;
 }
 
-export function buildTestServer(opts: { stream: Transport }): TestApp {
+export function buildTestServer(opts: { stream: Transport; limiter?: RateLimiter }): TestApp {
   const sink = new Sink();
   const app = buildServer({
     config: {
@@ -104,7 +104,7 @@ export function buildTestServer(opts: { stream: Transport }): TestApp {
     audit: new AuditLogger(sink, () => new Date(), () => 'call-1'),
     credentials: { resolve: async () => ({ kind: 'bearer' as const, token: 'test-bearer-token' }) },
     transport: opts.stream,
-    limiter: unlimitedRateLimiter,
+    limiter: opts.limiter ?? unlimitedRateLimiter,
     registry: buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' }),
   }) as TestApp;
   app.auditSink = sink;
