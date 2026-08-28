@@ -45,7 +45,7 @@ export function EmailModal({ isOpen, onClose, content }: EmailModalProps) {
         </>
       }
     >
-      <div className="prose prose-invert prose-sm max-w-none text-gray-300">
+      <div className="font-prose text-field text-ink-prose max-w-none">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{content ?? ''}</ReactMarkdown>
       </div>
     </Modal>

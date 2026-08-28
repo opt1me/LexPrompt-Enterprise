@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { MessageSquare } from 'lucide-react';
+import { Loader, MessageSquare } from 'lucide-react';
 import type { DocumentFile, Settings } from '../../types';
 import { listModels, isAuthError } from '../../lib/openrouter';
 import { sendChatMessage, type ChatMessage } from './chatContext';
@@ -117,29 +117,31 @@ export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) 
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0">
+    <div className="flex-1 flex flex-col min-h-0 bg-card">
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {history.length === 0 && (
-          <p className="text-xs text-gray-500 p-2">
+          <p className="font-ui text-ui-sm text-ink-4 p-2">
             Ask a question about the loaded document{documents.length > 1 ? 's' : ''}.
           </p>
         )}
         {history.map((m, i) => (
           <div
             key={i}
-            className={`p-3 rounded-lg text-xs max-w-[90%] ${
-              m.role === 'user' ? 'ml-auto bg-violet-600 text-white' : 'bg-white/10 text-gray-300'
+            className={`p-3 rounded-card max-w-[90%] ${
+              m.role === 'user'
+                ? 'ml-auto bg-accent-tint border border-accent-edge'
+                : 'bg-paper border border-rule'
             }`}
           >
-            <div className="prose prose-invert prose-sm max-w-none">
+            <div className="font-prose text-finding text-ink-prose max-w-none">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
-                  h1: ({ node, ...props }) => <h1 className="text-lg font-bold text-violet-300 mb-2 mt-4 border-b border-violet-500/30 pb-1" {...props} />,
-                  h2: ({ node, ...props }) => <h2 className="text-base font-bold text-violet-200 mb-2 mt-3" {...props} />,
-                  h3: ({ node, ...props }) => <h3 className="text-sm font-bold text-white mb-1 mt-2" {...props} />,
-                  ul: ({ node, ...props }) => <ul className="list-disc pl-4 space-y-1 mb-2 text-gray-300" {...props} />,
-                  li: ({ node, ...props }) => <li className="text-xs" {...props} />,
+                  h1: ({ node, ...props }) => <h1 className="font-prose text-clause text-ink-1 mb-2 mt-4 border-b border-rule pb-1" {...props} />,
+                  h2: ({ node, ...props }) => <h2 className="font-prose text-section text-ink-1 mb-2 mt-3" {...props} />,
+                  h3: ({ node, ...props }) => <h3 className="font-ui text-ui font-semibold text-ink-1 mb-1 mt-2" {...props} />,
+                  ul: ({ node, ...props }) => <ul className="list-disc pl-4 space-y-1 mb-2 text-ink-prose" {...props} />,
+                  li: ({ node, ...props }) => <li className="text-finding" {...props} />,
                   p: ({ node, ...props }) => <p className="mb-2 leading-relaxed" {...props} />,
                 }}
               >
@@ -148,24 +150,29 @@ export function ChatPanel({ documents, settings, onAuthError }: ChatPanelProps) 
             </div>
           </div>
         ))}
-        {loading && <div className="p-2 text-gray-500 text-xs animate-pulse">Assistant is thinking...</div>}
+        {loading && (
+          <div className="p-2 font-ui text-ui-sm text-ink-4 flex items-center gap-2" data-busy="true" aria-live="polite">
+            <Loader className="w-3 h-3 animate-spin text-accent" aria-hidden="true" />
+            Assistant is thinking…
+          </div>
+        )}
         <div ref={endRef} />
       </div>
-      <div className="p-3 border-t border-white/10">
+      <div className="p-3 border-t border-rule bg-card">
         <div className="flex gap-2">
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSend()}
             placeholder="Ask about the contract..."
-            className="flex-1 bg-black/50 border border-white/10 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-violet-500 transition-colors"
+            className="flex-1 bg-card border border-rule-strong rounded-control px-3 py-2 font-ui text-ui text-ink-1 focus:outline-none focus:ring-1 focus:ring-accent transition-colors"
           />
           <button
             onClick={handleSend}
             disabled={loading}
-            className="p-2 bg-violet-600 text-white rounded-lg hover:bg-violet-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-2 bg-accent text-page rounded-control hover:bg-accent-strong transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <MessageSquare className="w-4 h-4" />
+            <MessageSquare className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
       </div>

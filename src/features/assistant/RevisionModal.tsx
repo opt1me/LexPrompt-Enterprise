@@ -46,13 +46,13 @@ export function RevisionModal({ isOpen, onClose, data }: RevisionModalProps) {
       }
     >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="p-4 rounded-lg bg-red-900/10 border border-red-500/10">
-          <span className="text-xs font-bold text-red-400 uppercase mb-4 block tracking-wider">Original Text</span>
-          <p className="text-gray-300 whitespace-pre-wrap font-serif text-sm leading-relaxed">{data.original}</p>
+        <div className="p-4 rounded-card bg-paper border border-rule">
+          <span className="font-mono text-label uppercase text-ink-4 mb-4 block">Original Text</span>
+          <p className="font-prose text-field text-ink-prose whitespace-pre-wrap leading-relaxed">{data.original}</p>
         </div>
-        <div className="p-4 rounded-lg bg-green-900/10 border border-green-500/10">
-          <span className="text-xs font-bold text-green-400 uppercase mb-4 block tracking-wider">AI Suggestion</span>
-          <p className="text-gray-300 whitespace-pre-wrap font-serif text-sm leading-relaxed">{data.revised}</p>
+        <div className="p-4 rounded-card bg-draft-tint border border-dashed border-draft">
+          <span className="font-mono text-label uppercase text-draft mb-4 block">AI Suggestion</span>
+          <p className="font-prose text-field text-ink-prose whitespace-pre-wrap leading-relaxed">{data.revised}</p>
         </div>
       </div>
     </Modal>
