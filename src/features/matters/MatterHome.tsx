@@ -7,6 +7,7 @@ import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { DeleteMatterModal } from './MattersList';
 import { CollectionCard } from './CollectionCard';
 import { GroupDocumentsDialog } from './GroupDocumentsDialog';
+import { MatterStats } from './MatterStats';
 import { suggestCollections, type CollectionSuggestion } from '../../lib/collectionSuggest';
 import { progressLabel } from '../../lib/reviewProgress';
 
@@ -302,6 +303,16 @@ export function MatterHome({
         >
           <Trash2 className="w-4 h-4" />
         </button>
+      </div>
+
+      {/* Stat row (Task 15, spec §10.1): how much of this matter a human has
+          actually checked, before anything else on the screen. Its own
+          error/empty branches are R-G10, distinct from the reviews
+          section's own error branch below — one says "the statistics are
+          unknown", the other says "the review list is unknown", and
+          suppressing either would leave a screen that looks partly fine. */}
+      <div className="mb-8">
+        <MatterStats reviews={reviews} reviewsError={reviewsError} onRetryReviews={onRetryReviews} />
       </div>
 
       {/* Documents */}
