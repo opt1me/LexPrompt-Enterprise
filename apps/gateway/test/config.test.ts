@@ -216,4 +216,55 @@ describe('loadConfig', () => {
       )).toThrow(/no value that disables the caller check/i);
     }
   });
+
+describe('endpoint scheme — the transport branches on it, so config must guarantee it', () => {
+  // `transport.ts` reads anything that is not http(s) from the filesystem,
+  // which is how `recorded` replays a fixture with no second code path.
+  // That is safe only while no other adapter can build such a URL. Before
+  // this check, a scheme-less endpoint sent a REAL provider call into
+  // readFileSync — an ENOENT blaming a fixture, or a local file parsed as a
+  // model response. Both are the quiet wrong answer; a startup failure is
+  // the loud one.
+  it('refuses an endpoint with no scheme, which the transport would read as a file', () => {
+    expect(() => loadConfig(
+      { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU,US' },
+      read(file({ ...US_MODEL, endpoint: 'api.openai.com/v1' })),
+    )).toThrow(ConfigError);
+  });
+
+  it('refuses a file: endpoint outright', () => {
+    expect(() => loadConfig(
+      { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU,US' },
+      read(file({ ...US_MODEL, endpoint: 'file:///etc/passwd' })),
+    )).toThrow(/https:\/\/|not be sent over the network/i);
+  });
+
+  it('refuses plaintext http off loopback', () => {
+    expect(() => loadConfig(
+      { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU,US' },
+      read(file({ ...US_MODEL, endpoint: 'http://api.openai.com' })),
+    )).toThrow(ConfigError);
+  });
+
+  it('permits http on loopback, so a local provider stub still works', () => {
+    const cfg = loadConfig(
+      { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU,US' },
+      read(file({ ...US_MODEL, endpoint: 'http://localhost:11434' })),
+    );
+    expect(cfg.models[0].endpoint).toBe('http://localhost:11434');
+  });
+
+  it('exempts the recorded provider, whose buildCall never reads endpoint', () => {
+    const RECORDED = {
+      ...US_MODEL, id: 'rec', provider: 'recorded',
+      jurisdiction: { bloc: 'other', region: 'local', label: 'This machine' },
+      endpoint: 'unused', credential: { source: 'env', var: 'NONE' },
+    };
+    const cfg = loadConfig(
+      { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU,other' },
+      read(file(RECORDED)),
+    );
+    expect(cfg.models[0].provider).toBe('recorded');
+  });
+});
 });

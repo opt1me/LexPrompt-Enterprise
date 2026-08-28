@@ -330,6 +330,50 @@ export function loadConfig(
     }
   }
 
+  // Every provider that actually opens a socket must say so in its endpoint.
+  //
+  // `transport.ts` branches on the URL's SCHEME: anything that is not
+  // http(s) is read from the filesystem, which is how the `recorded`
+  // provider replays a fixture without a second code path. That branch is
+  // safe only while no other adapter can produce such a URL — and until
+  // this check existed that was true by CONVENTION, not by construction.
+  // An endpoint written `api.openai.com/v1` (no scheme), or one a typo
+  // turned into a bare path, would have sent a real provider call into
+  // `readFileSync` instead: either an ENOENT blaming a fixture for what is
+  // actually a malformed endpoint, or — if the path happened to exist —
+  // a local file parsed as a model response. Both are the quiet wrong
+  // answer this project refuses; the loud one is a startup failure naming
+  // the entry.
+  //
+  // `http://` is permitted only on loopback, mirroring the rule §7 already
+  // applies to the API's OIDC issuer: a developer may run a provider stub
+  // on localhost, and a deployment pointed at plaintext anywhere else is a
+  // misconfiguration rather than a choice. `recorded` is exempt because its
+  // `buildCall` never reads `endpoint` at all — it builds a fixture path
+  // from `recordedDir`.
+  for (const m of models) {
+    if (m.provider === 'recorded') continue;
+    let url: URL;
+    try {
+      url = new URL(m.endpoint);
+    } catch {
+      throw new ConfigError(
+        `Model "${m.id}" has endpoint ${JSON.stringify(m.endpoint)}, which is not a `
+        + 'URL. An endpoint must be an absolute https:// URL — a bare host or path '
+        + 'would be read as a local file rather than called over the network.',
+      );
+    }
+    const loopback = url.hostname === 'localhost'
+      || url.hostname === '127.0.0.1' || url.hostname === '[::1]' || url.hostname === '::1';
+    if (url.protocol === 'https:') continue;
+    if (url.protocol === 'http:' && loopback) continue;
+    throw new ConfigError(
+      `Model "${m.id}" has endpoint ${JSON.stringify(m.endpoint)}. An endpoint must be `
+      + 'https://, or http:// on loopback for local development. '
+      + `${url.protocol}// would not be sent over the network.`,
+    );
+  }
+
   // P4. An operator routing privileged text outside the permitted blocs
   // must have written that bloc down. There is no runtime warning to scroll
   // past and no documentation note to not read.
