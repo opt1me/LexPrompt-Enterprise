@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { loadConfig, describeConfig, ConfigError } from './config.ts';
 import { buildServer } from './server.ts';
+import { buildDeps } from './wiring.ts';
 
 async function main(): Promise<void> {
   let config;
@@ -15,7 +16,7 @@ async function main(): Promise<void> {
     throw err;
   }
   process.stdout.write(`${describeConfig(config)}\n`);
-  const app = buildServer({ config });
+  const app = buildServer(buildDeps(config, process.stdout));
   await app.listen({ port: config.port, host: '0.0.0.0' });
 }
 
