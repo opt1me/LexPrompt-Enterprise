@@ -3,6 +3,7 @@ import { ModelError } from '@lexprompt/core';
 import type { Principal } from './oidc.ts';
 import type { GatewayClient } from './gatewayClient.ts';
 import { registerInfer } from './routes/infer.ts';
+import { registerInferStream } from './routes/inferStream.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -58,8 +59,9 @@ export interface ServerDeps {
 
 /**
  * Stage 1 boundary (§13): this derives a `Principal`, answers `/healthz`,
- * and forwards `/v1/infer` and `/v1/models` to the gateway with the actor
- * overwritten from the token (Task 17) — never a role gate, never an
+ * and forwards `/v1/infer`, `/v1/infer/stream` and `/v1/models` to the
+ * gateway with the actor overwritten from the token (Task 17, reused by
+ * Task 18 for the streaming route) — never a role gate, never an
  * `app_user` row, both of which stay Stage 2.
  */
 export function buildServer(deps: ServerDeps): FastifyInstance {
@@ -73,6 +75,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   app.get('/healthz', async () => ({ ok: true }));
   registerInfer(app, deps.gateway, deps.workspaceId);
+  registerInferStream(app, deps.gateway, deps.workspaceId);
 
   return app;
 }

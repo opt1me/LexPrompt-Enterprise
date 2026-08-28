@@ -32,10 +32,23 @@ export interface TestApiOptions {
   /** Makes the fake gateway's `infer` reject, as an unreachable gateway
    *  would (ECONNREFUSED, DNS failure, …). */
   inferThrows?: Error;
+  /** Raw bytes the fake gateway's `stream` yields, one chunk per array
+   *  entry, exactly as given — no re-joining, no re-splitting. Tests use
+   *  this to delivers a single SSE body whole, in uneven pieces, one byte
+   *  at a time, or with a CRLF/truncated/no-trailing-blank-line shape, so
+   *  `registerInferStream` has to prove it is a byte-transparent pipe
+   *  rather than merely correct on a well-behaved delivery. */
+  streamChunks?: string[];
+  /** The fake gateway stream response's HTTP status. Defaults to 200. A
+   *  non-200 carries no body chunks through the SSE path at all — the route
+   *  reads `streamChunks` (joined) as the failure response's JSON body via
+   *  `text()` instead. */
+  streamStatus?: number;
 }
 
 export interface CallLog {
   infer: Array<Record<string, unknown>>;
+  stream: Array<Record<string, unknown>>;
 }
 
 /**
@@ -47,7 +60,7 @@ export interface CallLog {
  * routing rather than about a test double standing in for it.
  */
 export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof buildServer>; calls: CallLog } {
-  const calls: CallLog = { infer: [] };
+  const calls: CallLog = { infer: [], stream: [] };
 
   const verify = async (_token: string): Promise<Principal> => {
     if (opts.principalError) {
@@ -73,8 +86,21 @@ export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof bui
     async models() {
       return opts.modelsResponse ?? { status: 200, json: { models: [] } };
     },
-    async stream() {
-      throw new Error('buildTestApi does not fake the stream route');
+    async stream(body: unknown) {
+      calls.stream.push(body as Record<string, unknown>);
+      const chunks = opts.streamChunks ?? [];
+      // A real async generator, not a pre-built array, so the route's
+      // `for await` actually consumes it chunk by chunk — exactly the shape
+      // undici hands back from `res.body`.
+      async function* bytes(): AsyncGenerator<Buffer> {
+        for (const chunk of chunks) yield Buffer.from(chunk, 'utf8');
+      }
+      return {
+        status: opts.streamStatus ?? 200,
+        headers: { 'content-type': 'text/event-stream' } as Record<string, string>,
+        body: bytes(),
+        text: async () => chunks.join(''),
+      };
     },
   } as GatewayClient;
 

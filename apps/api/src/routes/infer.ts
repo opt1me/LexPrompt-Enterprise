@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { GatewayClient } from '../gatewayClient.ts';
 import type { Principal } from '../oidc.ts';
+import { withActor } from '../actorBody.ts';
 
 export function registerInfer(
   app: FastifyInstance, gateway: GatewayClient, workspaceId: string,
@@ -9,21 +10,10 @@ export function registerInfer(
     const principal = request.principal as Principal;
     const client = (request.body ?? {}) as Record<string, unknown>;
 
-    // Spread FIRST, then overwrite. A client that could set the actor could
-    // put a colleague's name on every call in the firm's audit log — which
-    // corrupts the record that answers §12's questions, silently, and is
-    // worse than any of the loud failures this stage defends against.
-    // Never `{ workspaceId, actorIssuer, actorSubject, ...client }`.
-    //
-    // (issuer, subject), never an Entra-shaped id: `principal.subject` is
-    // whatever the configured subjectClaim named, and the two halves stay
-    // separate so Stage 2 can key app_user on the pair.
-    const body = {
-      ...client,
-      workspaceId,
-      actorIssuer: principal.issuer,
-      actorSubject: principal.subject,
-    };
+    // Actor overwrite shared with the streaming route (Task 18) via
+    // `actorBody.ts` — see its docstring for why the overwrite happens
+    // AFTER the spread.
+    const body = withActor(client, workspaceId, principal);
 
     try {
       const { status, json } = await gateway.infer(body);
