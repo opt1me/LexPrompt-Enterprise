@@ -3192,7 +3192,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     <div className="min-h-screen flex flex-col bg-paper">
       <Toast toast={toast} />
 
-      <header className="h-14 border-b border-rule bg-card flex items-center justify-between px-6 shrink-0">
+      <header className="min-h-14 h-auto border-b border-rule bg-card flex flex-wrap items-center justify-between gap-y-2 px-6 py-2 shrink-0">
         <button
           className="flex items-center"
           onClick={() => requestView('matters')}

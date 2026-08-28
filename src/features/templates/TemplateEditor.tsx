@@ -471,10 +471,20 @@ export function TemplateEditor({
         </div>
       </div>
 
-      {/* Grid Layout */}
-      <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-3 gap-6 pb-2">
+      {/* Grid Layout. Below `lg` this collapses to one column — the left
+         rail (global settings) stacks above the clause list, in normal
+         document order, with nothing hidden. At `lg`+ the two panes sit
+         side by side, each scrolling independently within the fixed
+         viewport height. Below `lg` there are two stacked rows instead of
+         one, so `h-full`/forced internal scrolling on either child would
+         divide that same fixed height between them and squeeze the clause
+         list into a cramped scroll box — the collapse this task exists to
+         prevent. So the height/overflow constraints are `lg:`-only below,
+         and the OUTER grid scrolls the whole stacked page vertically
+         instead. */}
+      <div className="flex-1 overflow-y-auto lg:overflow-hidden grid grid-cols-1 lg:grid-cols-3 gap-6 pb-2">
         {/* Left Column: Global Settings */}
-        <div className="space-y-6 overflow-y-auto pr-2 custom-scrollbar">
+        <div className="space-y-6 lg:overflow-y-auto pr-2 custom-scrollbar">
           <div className="bg-card border border-rule rounded-card p-5">
             <label className="block font-ui text-ui text-ink-3 mb-2 flex items-center gap-2"><Cpu className="h-4 w-4" /> System Persona</label>
             <AutoResizeTextarea
@@ -512,13 +522,13 @@ export function TemplateEditor({
         </div>
 
         {/* Right Column: Clauses (Spans 2 cols on large screens) */}
-        <div className="lg:col-span-2 flex flex-col h-full bg-card border border-rule rounded-card overflow-hidden">
+        <div className="lg:col-span-2 flex flex-col lg:h-full bg-card border border-rule rounded-card overflow-hidden">
           <div className="p-4 border-b border-rule bg-paper flex justify-between items-center shrink-0">
             <h3 className="font-prose text-section text-ink-1 flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-accent" /> Extraction Clauses ({working.clauses.length})</h3>
             <Button onClick={addClause} className="px-3 py-1.5"><Plus className="h-3 w-3" /> Add Clause</Button>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+          <div className="flex-1 lg:overflow-y-auto p-4 space-y-4 custom-scrollbar">
             {/* Instead of the chips, never beside them. A failed scan that
                fell back to an empty map would render every position as
                having no evidence, which reads as a finding about the

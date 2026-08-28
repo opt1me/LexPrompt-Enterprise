@@ -136,7 +136,17 @@ export function TabularReview({
       </div>
 
       <div className="flex-1 flex overflow-hidden min-h-0">
-        <div className="flex-1 min-w-0 overflow-auto">
+        {/* The grid's own horizontal scroll container (§11's collapse order,
+           item 3): wide content scrolls INSIDE this div, never by pushing
+           the page. `overflow-x-auto` alone still scrolls vertically too —
+           CSS resolves a lone non-`visible` axis by converting the other
+           axis's `visible` to `auto` — which is what keeps the `sticky
+           top-0` header and `sticky left-0` first column both pinned
+           against THIS single scrolling ancestor rather than splitting
+           across two. `data-scroll-x` is the semantic hook the structural
+           test asserts on, since jsdom lays nothing out and cannot see the
+           CSS actually doing the scrolling. */}
+        <div data-scroll-x className="flex-1 min-w-0 overflow-x-auto">
           <table className="w-full border-collapse">
             <thead className="bg-card sticky top-0 z-10">
               <tr>
