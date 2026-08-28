@@ -205,6 +205,39 @@ describe('buildMegaPrompt', () => {
     });
   });
 
+  // Re-review N1. A previous fix made the per-clause fallback RESOLVE
+  // rather than point at a value the prompt never carried — but resolved it
+  // against a fabricated default where `riskCriteriaBlock` (the real
+  // extraction path) resolves to nothing at all. `MegaPromptModal` lets the
+  // user force the Risk toggle on regardless of `defaultIncludeRisk`, so
+  // this state is reachable: a playbook with no global tolerance and no
+  // per-clause criteria, Risk forced on.
+  describe('emits no risk block at all when neither the playbook nor any clause has one (N1)', () => {
+    function bareTemplate(): PlaybookDraft {
+      const t = newPlaybookDraft('Bare');
+      t.systemPrompt = 'You are a reviewer.';
+      t.formatPrompt = 'Return structured JSON.';
+      t.clauses = [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }];
+      return t;
+    }
+
+    it('json format: no risk_tolerance key, no risk_criteria key, no fabricated sentence', () => {
+      const prompt = buildMegaPrompt(bareTemplate(), 'json', true);
+      const parsed = JSON.parse(prompt.slice(prompt.indexOf('{')));
+      expect('risk_tolerance' in parsed).toBe(false);
+      expect('risk_criteria' in parsed.clauses[0]).toBe(false);
+      expect(prompt).not.toContain('Use standard commercial risk judgment.');
+    });
+
+    it('copilot format: no "Assess risk based on" line, no fabricated sentence', () => {
+      const prompt = buildMegaPrompt(bareTemplate(), 'copilot', true);
+      expect(prompt).not.toMatch(/Assess risk based on/);
+      expect(prompt).not.toContain('Use standard commercial risk judgment.');
+      // Risk is still ON (the toggle was forced) — just with nothing to say.
+      expect(prompt).toMatch(/Flag each clause as High, Medium, Low or Info risk\./);
+    });
+  });
+
   // The risk block is off unless the playbook says something about risk —
   // R-D1's rule that presence, not a flag, decides.
   it('turns the risk block on only when the playbook says something about risk', () => {

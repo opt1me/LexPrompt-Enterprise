@@ -35,7 +35,28 @@ import type { PlaybookClause, PlaybookVersion } from '../types';
  */
 export const DEFAULT_RISK_TOLERANCE = 'General commercial reasonableness.';
 
+/**
+ * The clause's own risk criteria, else the playbook's global tolerance,
+ * else `''` when neither exists. The one place this fallback chain is
+ * decided — `riskCriteriaBlock` below wraps it for the real extraction
+ * prompt, and `buildMegaPrompt`'s DIY prompt calls it directly so the two
+ * can never resolve a risk instruction differently for the same playbook.
+ *
+ * Re-review N1: `buildMegaPrompt` used to run this same fallback chain
+ * itself but land on a fabricated sentence (`'Use standard commercial risk
+ * judgment.'`) when both were absent, where this function — and therefore
+ * the real review — lands on `''` and sends no risk instruction at all.
+ * Sharing this function is what keeps that from reopening: there is now
+ * only one place that decides "nothing was written", and both prompts read
+ * it the same way.
+ */
+export function resolveRiskCriteria(
+  clause: PlaybookClause, version: Pick<PlaybookVersion, 'riskTolerance'>,
+): string {
+  return clause.riskCriteria?.trim() || version.riskTolerance?.trim() || '';
+}
+
 export function riskCriteriaBlock(clause: PlaybookClause, version: PlaybookVersion): string {
-  const criteria = clause.riskCriteria?.trim() || version.riskTolerance?.trim() || '';
+  const criteria = resolveRiskCriteria(clause, version);
   return criteria ? `\nRISK CRITERIA: ${criteria}` : '';
 }

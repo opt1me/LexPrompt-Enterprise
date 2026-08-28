@@ -1,4 +1,5 @@
 import type { PlaybookDraft } from '../../types';
+import { resolveRiskCriteria } from '../../lib/riskBlock';
 
 export type MegaPromptFormat = 'copilot' | 'json';
 
@@ -69,10 +70,20 @@ function positionLabel(reviewedByHuman: boolean): string {
  * tolerance, tell the model the criteria were "Use global tolerance" (a
  * pointer to a value the prompt did not contain), ship the position without
  * ever asking for the comparison, and never state a return shape at all.
+ *
+ * Re-review N1: a later fix made the per-clause fallback resolve rather
+ * than point, but resolved it against a FABRICATED default
+ * ('Use standard commercial risk judgment.') where `riskCriteriaBlock`
+ * resolves to nothing at all. Both branches now call `resolveRiskCriteria`
+ * — the exact function the real extraction call uses — for every risk
+ * value they emit, so a playbook with no tolerance and no clause criteria
+ * gets no risk block here either, never an invented one.
  */
 export function buildMegaPrompt(template: PlaybookDraft, format: MegaPromptFormat, includeRisk: boolean): string {
   const clauses = template.clauses || [];
-  const riskTolerance = template.riskTolerance || 'Use standard commercial risk judgment.';
+  // The firm's own global tolerance, verbatim, or '' when it wrote none —
+  // never a substitute for a value it did not write.
+  const globalTolerance = template.riskTolerance?.trim() || '';
   const anyPosition = clauses.some(c => c.standardPosition);
 
   const clauseListStr = clauses.map((c, i) => {
@@ -85,8 +96,13 @@ export function buildMegaPrompt(template: PlaybookDraft, format: MegaPromptForma
       str += `\n   - ${positionLabel(c.standardPosition.reviewedByHuman)}: ${c.standardPosition.text}`;
       str += `\n   - ${POSITION_COMPARISON_INSTRUCTION}`;
     }
-    if (includeRisk && c.riskCriteria) {
-      str += `\n   - Risk Criteria: ${c.riskCriteria}`;
+    // Resolved through the same function `riskCriteriaBlock` uses for the
+    // real extraction call — the clause's own criteria else the playbook's
+    // tolerance, else nothing. Never the fabricated default N1 was filed
+    // over.
+    const riskCriteria = includeRisk ? resolveRiskCriteria(c, template) : '';
+    if (riskCriteria) {
+      str += `\n   - Risk Criteria: ${riskCriteria}`;
     }
     return str;
   }).join('\n\n');
@@ -102,7 +118,9 @@ I will upload one or more contract documents. You must review them against the r
 # EXTRACTION RULES
 ${template.formatPrompt}
 
-${includeRisk ? `# RISK ASSESSMENT RULES\n- Assess risk based on: "${riskTolerance}"\n- Flag each clause as ${RISK_LEVEL_LIST} risk.` : '# RISK ASSESSMENT\n- Risk reporting is DISABLED.'}
+${includeRisk
+  ? `# RISK ASSESSMENT RULES\n${globalTolerance ? `- Assess risk based on: "${globalTolerance}"\n` : ''}- Flag each clause as ${RISK_LEVEL_LIST} risk.`
+  : '# RISK ASSESSMENT\n- Risk reporting is DISABLED.'}
 
 # CLAUSES TO REVIEW
 ${clauseListStr}
@@ -128,29 +146,38 @@ Acknowledge this prompt and tell me when you are ready.
     role: template.systemPrompt,
     output_rules: template.formatPrompt,
     task: 'Review the uploaded contract document(s) against the clauses below, answering strictly from the document text.',
-    ...(includeRisk ? { risk_tolerance: riskTolerance } : {}),
-    clauses: clauses.map(c => ({
-      title: c.title,
-      instruction: c.extractPrompt,
-      ...(c.standardPosition
-        ? {
-            standard_position: c.standardPosition.text,
-            // Minor 7 — present only when it's true, the same convention
-            // `provenance` uses: a reviewed position needs no caveat, and an
-            // absent key must not be misread as "reviewed" by a consumer
-            // that only checks for the field's presence.
-            ...(c.standardPosition.reviewedByHuman
-              ? {}
-              : { standard_position_status: 'DRAFTED BY AI — NOT YET REVIEWED by a person at the firm' }),
-            position_instruction: POSITION_COMPARISON_INSTRUCTION,
-          }
-        : {}),
-      // Resolved, not pointed at: `riskCriteriaBlock` gives the real
-      // extraction call the clause's own criteria else the playbook's
-      // tolerance, so the DIY prompt resolves the same fallback rather than
-      // naming a value it does not carry.
-      ...(includeRisk ? { risk_criteria: c.riskCriteria || riskTolerance } : {}),
-    })),
+    // Only when the firm actually wrote one — never the fabricated default
+    // N1 was filed over. `riskCriteriaBlock` sends no global tolerance of
+    // its own (it resolves per clause, below), so there is nothing to
+    // substitute here either.
+    ...(includeRisk && globalTolerance ? { risk_tolerance: globalTolerance } : {}),
+    clauses: clauses.map(c => {
+      // Resolved through the exact function `riskCriteriaBlock` uses for
+      // the real extraction call — the clause's own criteria else the
+      // playbook's tolerance, else '' when neither exists. Omitted, not
+      // defaulted, when it resolves empty: `riskCriteriaBlock` sends no
+      // risk instruction at all in that case, and inventing one here is
+      // the fabricated-tolerance defect N1 was filed over.
+      const riskCriteria = includeRisk ? resolveRiskCriteria(c, template) : '';
+      return {
+        title: c.title,
+        instruction: c.extractPrompt,
+        ...(c.standardPosition
+          ? {
+              standard_position: c.standardPosition.text,
+              // Minor 7 — present only when it's true, the same convention
+              // `provenance` uses: a reviewed position needs no caveat, and an
+              // absent key must not be misread as "reviewed" by a consumer
+              // that only checks for the field's presence.
+              ...(c.standardPosition.reviewedByHuman
+                ? {}
+                : { standard_position_status: 'DRAFTED BY AI — NOT YET REVIEWED by a person at the firm' }),
+              position_instruction: POSITION_COMPARISON_INSTRUCTION,
+            }
+          : {}),
+        ...(riskCriteria ? { risk_criteria: riskCriteria } : {}),
+      };
+    }),
     return_for_each_clause: {
       summary: 'What the document says on this point, or that it is silent.',
       citations: 'Exact verbatim substrings copied from the document text supporting the summary. Never clause numbers — the literal text.',
