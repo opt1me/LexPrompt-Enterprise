@@ -23,7 +23,8 @@ import {
 import { getProfile } from './lib/db/profile';
 import { migrateIfNeeded, type MigrationPhase } from './lib/db/migrate';
 import { describeLoadError } from './lib/loadError';
-import { listVersions, getVersion } from './lib/db/playbookVersions';
+import { getVersion } from './lib/db/playbookVersions';
+import { scanPlaybookAcrossMatters } from './lib/playbookScan';
 import { buildPositionHealthMap } from './lib/positionHealthMap';
 import {
   listCollections, getCollection, saveCollection, deleteCollection, newCollection,
@@ -867,18 +868,33 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // rather than borrowing one that renders a different message.
   const [historyMatterNames, setHistoryMatterNames] = useState<Record<string, string[]>>({});
 
+  // Minor 4: a fire-and-forget request-id guard, "latest request wins".
+  // `playbookRouteId` can change again before this scan resolves (a fast
+  // Back-then-click-another-card, or a re-import that lands on a fresh route
+  // before the old one's IndexedDB awaits settle) — without this, whichever
+  // of the two resolves LAST wins, even if it was requested first, and the
+  // screen ends up showing one playbook's version history stitched onto
+  // another's clauses. Each loader below owns its own counter so a stale
+  // history scan can never be judged against a position-health request or
+  // vice versa.
+  const versionHistoryRequestRef = useRef(0);
   const loadVersionHistory = (playbookId: string) => {
+    const requestId = ++versionHistoryRequestRef.current;
     setHistoryError(null);
     setHistoryLoading(true);
-    return Promise.all([listVersions(playbookId), listMatters()])
-      .then(async ([versions, allMatters]) => {
-        const perMatter = await Promise.all(allMatters.map(m => listReviews(m.id)));
+    // D3 (drift review): the cross-matter `listVersions`/`listMatters`/
+    // `listReviews` sweep is shared with `loadPositionHealth` via
+    // `scanPlaybookAcrossMatters` — see its docstring for why the two loaders
+    // still keep their own error handling rather than sharing that too.
+    return scanPlaybookAcrossMatters(playbookId)
+      .then(({ versions, matters, reviewsByMatter }) => {
+        if (versionHistoryRequestRef.current !== requestId) return; // superseded — discard
         const versionIds = new Set(versions.map(v => v.id));
         const names: Record<string, string[]> = {};
-        for (const review of perMatter.flat()) {
+        for (const review of reviewsByMatter.flat()) {
           const versionId = review.playbookVersionId;
           if (versionId === undefined || !versionIds.has(versionId)) continue;
-          const matterName = allMatters.find(m => m.id === review.matterId)?.name;
+          const matterName = matters.find(m => m.id === review.matterId)?.name;
           if (!matterName) continue;
           const forVersion = (names[versionId] ??= []);
           if (!forVersion.includes(matterName)) forVersion.push(matterName);
@@ -887,9 +903,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         setHistoryMatterNames(names);
       })
       .catch((e) => {
+        if (versionHistoryRequestRef.current !== requestId) return; // superseded — discard
         setHistoryError(describeLoadError(e, "This playbook's versions could not be read. Try again."));
       })
-      .finally(() => setHistoryLoading(false));
+      .finally(() => {
+        if (versionHistoryRequestRef.current !== requestId) return; // superseded — its own request owns the spinner now
+        setHistoryLoading(false);
+      });
   };
 
   // Task 10: the review header's "ran against vN" link into this same
@@ -906,17 +926,22 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     loadVersionHistory(playbookId);
   };
 
+  // Minor 4 — see `versionHistoryRequestRef` above for why each loader needs
+  // its own "latest request wins" counter.
+  const positionHealthRequestRef = useRef(0);
   const loadPositionHealth = (playbookId: string) => {
+    const requestId = ++positionHealthRequestRef.current;
     setHealthError(null);
     setHealthLoaded(false);
-    return Promise.all([listVersions(playbookId), listMatters()])
-      .then(async ([versions, allMatters]) => {
-        const perMatter = await Promise.all(allMatters.map(m => listReviews(m.id)));
+    return scanPlaybookAcrossMatters(playbookId)
+      .then(({ versions, reviewsByMatter }) => {
+        if (positionHealthRequestRef.current !== requestId) return; // superseded — discard
         setHealthVersions(versions);
-        setHealthReviews(perMatter.flat());
+        setHealthReviews(reviewsByMatter.flat());
         setHealthLoaded(true);
       })
       .catch((e) => {
+        if (positionHealthRequestRef.current !== requestId) return; // superseded — discard
         setHealthError(describeLoadError(
           e,
           'Your reviews could not be read, so position health is unknown. Try again.',
@@ -924,12 +949,20 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       });
   };
 
+  // Minor 4 — see `versionHistoryRequestRef` above. This is the loader whose
+  // staleness the review named worst: an unguarded resolve here does not
+  // just show the wrong text, it can make `positionHealthMap` (built from
+  // THIS playbook's clauses against the PREVIOUS playbook's versions and
+  // reviews) report a false "HELD n of n" on a position that was never run.
+  const playbookForEditRequestRef = useRef(0);
   const loadPlaybookForEdit = (id: string) => {
+    const requestId = ++playbookForEditRequestRef.current;
     setPlaybookLoadError(null);
     setPlaybookNotFound(false);
     setPlaybookLoading(true);
     return getTemplate(id)
       .then(async (t) => {
+        if (playbookForEditRequestRef.current !== requestId) return; // superseded — discard
         if (!t) {
           setPlaybookNotFound(true);
           return;
@@ -940,6 +973,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         // there is nothing published for it to show, and everything in it
         // is by definition unpublished.
         const version = await getPlaybookContent(id);
+        if (playbookForEditRequestRef.current !== requestId) return; // superseded — discard
         const draft = t.draft ?? (version ? null : newPlaybookDraft(t.name));
         setActivePlaybook(t);
         setActiveVersion(version);
@@ -949,12 +983,37 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
         // that closing would lose. Any edit from here replaces
         // `activeDraft` and makes this comparison fail, which is what marks
         // the editor dirty.
-        setSavedTemplateSnapshot(JSON.stringify(draft));
+        //
+        // Minor 6 (integrity review): snapshotting `draft` itself, rather
+        // than what the editor actually DISPLAYS, broke this for a published
+        // playbook with no stored draft — `draft` is `null` there, so this
+        // used to record `JSON.stringify(null)`, the literal string "null",
+        // as the baseline. The first keystroke replaces `activeDraft` with a
+        // REAL draft object (`TemplateEditor`'s `updateDraft` always
+        // produces one, never `null`), and `JSON.stringify` of a real object
+        // can never again equal the string "null" — not even after the edit
+        // is typed and undone back to the exact published content.
+        // `isTemplateDirty` then latches true for the rest of the session,
+        // "Save draft" stays enabled, and clicking it persists a
+        // `Playbook.draft` that is content-identical to the published
+        // version. The library's badge (`t.draft ? 'Unpublished changes' :
+        // ...`) is keyed on the draft's mere PRESENCE, not its content, so it
+        // shows from then on with no control left to clear it: the Discard
+        // path is reachable only while `isTemplateDirty`, which THIS save
+        // just made false. Snapshotting the same WORKING CONTENT the editor
+        // renders (`workingContent` — the one function that coalesces
+        // draft/version, shared with `TemplateEditor` and `editorContent`)
+        // gives a baseline a genuine edit-and-undo can actually match again.
+        setSavedTemplateSnapshot(JSON.stringify(workingContent(version ?? undefined, draft ?? undefined)));
       })
       .catch((e) => {
+        if (playbookForEditRequestRef.current !== requestId) return; // superseded — discard
         setPlaybookLoadError(describeLoadError(e, 'This playbook could not be loaded. Try again.'));
       })
-      .finally(() => setPlaybookLoading(false));
+      .finally(() => {
+        if (playbookForEditRequestRef.current !== requestId) return; // superseded — its own request owns the spinner now
+        setPlaybookLoading(false);
+      });
   };
 
   /** Per-clause position health for the editor, or `undefined` when the
@@ -2480,7 +2539,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       setActivePlaybook(saved);
       setActiveVersion(version);
       setActiveDraft(null);
-      setSavedTemplateSnapshot(JSON.stringify(null));
+      // Minor 6: the same fix as `loadPlaybookForEdit`'s, for the same
+      // reason. The baseline has to be the WORKING CONTENT a next edit will
+      // be compared against (a fresh copy of the version just published),
+      // not the literal string "null" — which a real draft object's
+      // `JSON.stringify` can never equal again, latching `isTemplateDirty`
+      // true for the rest of the session on the very next keystroke.
+      setSavedTemplateSnapshot(JSON.stringify(workingContent(version)));
       setPublishOpen(false);
       await refreshTemplates();
       notify(`Published v${version.version}.`);

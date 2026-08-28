@@ -415,6 +415,61 @@ describe('App — playbook editor route (Task 12)', () => {
 
     expect(window.location.pathname).toBe('/playbooks');
   });
+
+  // Minor 4 (integrity review), PLAUSIBLE in the review, settled here.
+  // `loadPlaybookForEdit` had no staleness guard: navigating from playbook A
+  // to playbook B before A's `getTemplate` resolves let A's LATE answer land
+  // after B's, overwriting the editor with A's name and clauses while the
+  // URL and Version History/Position Health already agree on B.
+  it('a slow load for one playbook does not overwrite the editor after navigating to another (Minor 4)', async () => {
+    const playbookA = {
+      id: 'pb-a', name: 'Alpha', contractType: 'NDA', systemPrompt: 's', formatPrompt: 'f',
+      clauses: [], playbookId: 'pb-a', version: 1, changeSummary: '', publishedAt: 1,
+      publishedByUserId: '', schemaVersion: 6,
+    };
+    const playbookB = {
+      id: 'pb-b', name: 'Beta', contractType: 'NDA', systemPrompt: 's', formatPrompt: 'f',
+      clauses: [], playbookId: 'pb-b', version: 1, changeSummary: '', publishedAt: 1,
+      publishedByUserId: '', schemaVersion: 6,
+    };
+
+    let resolveA!: (value: unknown) => void;
+    const pendingA = new Promise((resolve) => { resolveA = resolve; });
+    getPlaybookMock.mockReset().mockImplementation(async (id: string) => {
+      if (id === 'pb-a') return pendingA; // never resolves until we say so
+      if (id === 'pb-b') return playbookB;
+      return null;
+    });
+    // Called once per successful `getTemplate` resolution, in that order:
+    // B's load completes in full (including this call) before A's
+    // `getTemplate` is ever allowed to resolve, so the first call here is
+    // for B and the (late) second is for A.
+    getPlaybookContentMock
+      .mockImplementationOnce(async () => playbookB)
+      .mockImplementationOnce(async () => playbookA);
+
+    window.history.replaceState(null, '', '/playbooks/pb-a');
+    act(() => { root.render(<App />); });
+    await flush();
+
+    // Switch to B — a browser Back to a fresh URL, exactly as the failure
+    // scenario describes — before A's load has resolved.
+    window.history.pushState(null, '', '/playbooks/pb-b');
+    act(() => { window.dispatchEvent(new PopStateEvent('popstate')); });
+    await flush();
+
+    let nameInput = container.querySelector('input') as HTMLInputElement | null;
+    expect(nameInput?.value).toBe('Beta');
+
+    // Now let A's stale load resolve.
+    await act(async () => { resolveA(playbookA); });
+    await flush();
+
+    // A's late arrival must not clobber the editor now showing B.
+    nameInput = container.querySelector('input') as HTMLInputElement | null;
+    expect(nameInput?.value).toBe('Beta');
+    expect(window.location.pathname).toBe('/playbooks/pb-b');
+  });
 });
 
 describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', () => {
@@ -692,6 +747,40 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     await flush();
 
     expect(confirmSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/playbooks');
+  });
+
+  // Minor 6 (integrity review). `isTemplateDirty` used to latch true
+  // forever after the FIRST keystroke on a published playbook with no
+  // stored draft: `loadPlaybookForEdit` snapshotted `draft` itself (`null`
+  // there) rather than what the editor actually DISPLAYS, so once typing
+  // replaced `activeDraft` with a real object, `JSON.stringify(activeDraft)`
+  // could never again equal that snapshot — not even after the edit was
+  // undone back to the exact published text. Left uncaught, this test's
+  // Back would trigger the keep/discard prompt over an edit that no longer
+  // exists, "Save draft" below would stay enabled, and clicking it would
+  // persist a content-identical draft the library's badge (keyed on the
+  // draft's mere presence) could never stop calling "Unpublished changes".
+  it('typing an edit and reverting it back to the published text leaves nothing unsaved (Minor 6)', async () => {
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+
+    const nameInput = container.querySelector('input') as HTMLInputElement;
+    const original = nameInput.value;
+    act(() => { setInputValue(nameInput, `${original}X`); });
+    act(() => { setInputValue(container.querySelector('input') as HTMLInputElement, original); });
+
+    const saveDraftButton = Array.from(container.querySelectorAll('button'))
+      .find(b => /save draft/i.test(b.textContent || '')) as HTMLButtonElement;
+    expect(saveDraftButton).toBeTruthy();
+    expect(saveDraftButton.disabled).toBe(true);
+
+    simulateBrowserBack('/playbooks');
+    await flush();
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(saveDraftMock).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe('/playbooks');
   });
 });
