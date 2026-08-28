@@ -1,9 +1,28 @@
 name: lexprompt
 
 networks:
+  # `frontend` carries the three services a BROWSER talks to, over published
+  # ports. It is `internal: true` for the same reason `internal` is, and the
+  # reason is not obvious: a container's ability to reach the internet comes
+  # from being attached to ANY non-internal network, not from being attached
+  # to `egress` specifically. Leaving this one routable gave `api` a default
+  # route (`default via 172.21.0.1 dev eth0`) and therefore full outbound
+  # access, while the topology still read as "api is not on egress" — the
+  # claim §5 rests on, quietly false.
+  #
+  # Publishing a port still works on an internal network: host->container
+  # DNAT is unaffected: what `internal: true` removes is the default route
+  # and the masquerade rule, i.e. OUTBOUND access. That is exactly the half
+  # we want gone and exactly the half we do not.
+  #
+  # Found by running `npm run test:compose` against a live stack, not by
+  # reading the file: inspection of the topology said this was already
+  # correct.
   frontend:
+    internal: true    # no default route: published ports in, nothing out
   internal:
     internal: true    # no default route: this network cannot reach the internet
+  # The ONE network with a route off this machine. Only `gateway` joins it.
   egress:
 
 services:

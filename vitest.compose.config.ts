@@ -10,5 +10,19 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     include: ['apps/api/test/**/*.compose.test.ts'],
+    // These tests prove a network path is ABSENT, and absence takes as long
+    // as the prober is willing to wait: the in-container fetch uses
+    // `AbortSignal.timeout(8000)`, and `inApi`'s `execFileSync` allows
+    // 30s. Vitest's default 5s test timeout is shorter than either, which
+    // made the egress tests unpassable in BOTH directions — with egress
+    // open they failed the assertion, and with egress correctly blocked
+    // they died at 5s before the 8s abort could report `BLOCKED`. A test
+    // that cannot go green whatever the system does is worse than no test:
+    // it reads as coverage of the claim §5 rests on.
+    //
+    // Matched to `inApi`'s own 30s ceiling so the failure a reader sees is
+    // the prober's, which names what it could not reach, rather than
+    // Vitest's, which names only the clock.
+    testTimeout: 30_000,
   },
 });
