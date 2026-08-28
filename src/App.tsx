@@ -454,6 +454,29 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // to, presented as one they did.
   const [chooserOpen, setChooserOpen] = useState(false);
   const [authoringDraft, setAuthoringDraft] = useState<AuthoringDraft | null>(null);
+  /**
+   * The authoring draft as it stands RIGHT NOW, updated synchronously by
+   * `updateAuthoringDraft` below.
+   *
+   * Integrity review (D/E), Major 4. `handleSaveDraftAsV1` read
+   * `authoringDraft` from its own render closure, awaited `getProfile()`,
+   * and published that captured value. Anything the reviewer decided in the
+   * meantime — and, once `DraftReview` began committing typed edits on its
+   * way into the save, the edit that triggered the save itself — updated
+   * React state and never reached the version; `setAuthoringDraft(null)` on
+   * success then destroyed it, and the draft exists only in memory (R-E1),
+   * so it was unrecoverable. This is the same shape as `latestRunRef`, and
+   * it is here for the same reason: a value read across an await has to come
+   * from somewhere that a render has not frozen.
+   */
+  const authoringDraftRef = useRef<AuthoringDraft | null>(null);
+  /** The ONLY writer of the authoring draft. Ref first, so a handler
+   *  already mid-await sees the change on its next read rather than on the
+   *  next render. */
+  const updateAuthoringDraft = (next: AuthoringDraft | null) => {
+    authoringDraftRef.current = next;
+    setAuthoringDraft(next);
+  };
   const [authoringBusy, setAuthoringBusy] = useState(false);
   const [authoringError, setAuthoringError] = useState<string | undefined>(undefined);
   const [authoringAuthFailed, setAuthoringAuthFailed] = useState(false);
@@ -1020,7 +1043,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // effect-ordering hazard).
   useEffect(() => {
     if (isAuthoringView(view)) return;
-    setAuthoringDraft(null);
+    updateAuthoringDraft(null);
     setAuthoringError(undefined);
     setAuthoringAuthFailed(false);
     setAuthoringBusy(false);
@@ -2328,7 +2351,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       const usedSources = usedFewShotSources(templates, versions, reviews, sources);
 
       const draft = await generateDraft(form, fewShot, usedSources, settings);
-      setAuthoringDraft(draft);
+      updateAuthoringDraft(draft);
       setView('authoring-review');
     } catch (e) {
       if (isAuthError(e)) {
@@ -2349,7 +2372,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    *  the next render, so routing the discard through the guard would ask a
    *  second time about a draft the user has just agreed to throw away. */
   const handleDiscardDraft = () => {
-    setAuthoringDraft(null);
+    updateAuthoringDraft(null);
     navigate({ name: 'playbooks' });
   };
 
@@ -2364,16 +2387,23 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * reviewer can retry without losing the reviewing they have done.
    */
   const handleSaveDraftAsV1 = async () => {
-    if (!authoringDraft) return;
+    if (!authoringDraftRef.current) return;
     setSavingAuthoringDraft(true);
     try {
       const profile = await getProfile();
+      // Read AFTER the await, not before: `DraftReview` commits whatever is
+      // typed into the clause editor on its way into this call, and that
+      // commit lands in the ref one tick before this function's own render
+      // closure would ever see it (Major 4). Everything that could change it
+      // from here on is disabled for the duration of the publish.
+      const draft = authoringDraftRef.current;
+      if (!draft) return;
       const { playbook, version } = await saveDraftAsV1(
-        authoringDraft,
-        authoringDraft.contractType,
+        draft,
+        draft.contractType,
         profile.id,
       );
-      setAuthoringDraft(null);
+      updateAuthoringDraft(null);
       await refreshTemplates();
       navigate({ name: 'playbook', playbookId: playbook.id });
       // The number comes from what was actually published, not from the
@@ -2663,7 +2693,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           authoringDraft ? (
             <DraftReview
               draft={authoringDraft}
-              onChange={setAuthoringDraft}
+              onChange={updateAuthoringDraft}
               onSave={handleSaveDraftAsV1}
               onDiscard={handleDiscardDraft}
               saving={savingAuthoringDraft}

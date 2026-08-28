@@ -6,6 +6,10 @@ export interface ClauseRailProps {
   clauses: DraftClause[];
   activeId: string;
   onSelect: (clauseId: string) => void;
+  /** Inert while a publish is in flight. Moving clause commits whatever is
+   *  typed into the editor, and a commit landing mid-publish would change
+   *  the draft under the write (Major 4). */
+  disabled?: boolean;
 }
 
 /** Shared with `DraftReview`'s main-pane badge so the word used for a given
@@ -35,7 +39,7 @@ const DISPOSITION_CLASS: Record<ClauseDisposition, string> = {
  * opening every clause, then every clause with its own disposition and a
  * click to jump straight to it.
  */
-export function ClauseRail({ clauses, activeId, onSelect }: ClauseRailProps) {
+export function ClauseRail({ clauses, activeId, onSelect, disabled = false }: ClauseRailProps) {
   const kept = clauses.filter((c) => c.disposition === 'kept').length;
   const cut = clauses.filter((c) => c.disposition === 'cut').length;
   const unreviewed = clauses.filter((c) => c.disposition === 'unreviewed').length;
@@ -55,6 +59,7 @@ export function ClauseRail({ clauses, activeId, onSelect }: ClauseRailProps) {
             <li key={c.id}>
               <button
                 onClick={() => onSelect(c.id)}
+                disabled={disabled}
                 aria-current={isActive}
                 className={`w-full text-left px-3 py-2.5 flex items-center gap-2 border-b border-white/5 transition-colors ${
                   isActive ? 'bg-violet-500/10' : 'hover:bg-white/5'

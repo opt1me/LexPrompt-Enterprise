@@ -198,6 +198,68 @@ describe('DraftReview', () => {
     });
   });
 
+  // Integrity review (D/E), Major 6. The clause editor's fields are local
+  // state remounted on every clause switch (deliberately — see the docstring
+  // on ClauseEditor), which made them a write-only buffer that only `Keep`
+  // ever drained. Moving via the rail threw away what had been typed, and a
+  // clause already marked `Kept` went on saying so over the FIRST wording.
+  // A silent loss under a status that is affirmatively wrong is the worst
+  // shape in this codebase, so these assert the DATA, not the control.
+  describe('typed edits survive leaving the clause (Major 6)', () => {
+    const twoKept = draftOf([
+      clause('a', 'Clause a', 'kept', { extractPrompt: 'The first wording.' }),
+      clause('b', 'Clause b', 'kept'),
+    ]);
+
+    it('carries a typed edit into the draft when the rail moves to another clause', () => {
+      const onChange = vi.fn();
+      const el = mount(<DraftReview draft={twoKept} onChange={onChange} onSave={noop} onDiscard={noop} />);
+      type(fieldMatching(el, /extraction/i) ?? null, 'The corrected wording.');
+      click(buttonNamed(el, /Clause b/));
+
+      const next = onChange.mock.calls.at(-1)![0];
+      expect(next.clauses[0].extractPrompt).toBe('The corrected wording.');
+      // Still kept — switching clause is not a re-decision — but now the
+      // badge and the content agree.
+      expect(next.clauses[0].disposition).toBe('kept');
+      expect(next.clauses[0].edited).toBe(true);
+    });
+
+    it('carries a typed edit into the draft when J moves to the next clause', () => {
+      const withUnreviewed = draftOf([
+        clause('a', 'Clause a', 'kept', { extractPrompt: 'The first wording.' }),
+        clause('b', 'Clause b', 'unreviewed'),
+      ]);
+      const onChange = vi.fn();
+      const el = mount(
+        <DraftReview draft={withUnreviewed} onChange={onChange} onSave={noop} onDiscard={noop} />,
+      );
+      type(fieldMatching(el, /extraction/i) ?? null, 'The corrected wording.');
+      keyDown({ key: 'j' });
+      expect(onChange.mock.calls.at(-1)![0].clauses[0].extractPrompt).toBe('The corrected wording.');
+    });
+
+    it('carries a typed edit into what Save as v1 is given', () => {
+      const onChange = vi.fn();
+      const onSave = vi.fn();
+      const el = mount(<DraftReview draft={twoKept} onChange={onChange} onSave={onSave} onDiscard={noop} />);
+      type(fieldMatching(el, /extraction/i) ?? null, 'The corrected wording.');
+      click(buttonNamed(el, /save as v1/i));
+
+      expect(onSave).toHaveBeenCalledTimes(1);
+      expect(onChange.mock.calls.at(-1)![0].clauses[0].extractPrompt).toBe('The corrected wording.');
+    });
+
+    // R-E5 still holds through the new path: leaving a clause alone and
+    // moving on must not record engagement that did not happen.
+    it('records nothing when the clause was only looked at', () => {
+      const onChange = vi.fn();
+      const el = mount(<DraftReview draft={twoKept} onChange={onChange} onSave={noop} onDiscard={noop} />);
+      click(buttonNamed(el, /Clause b/));
+      expect(onChange).not.toHaveBeenCalled();
+    });
+  });
+
   it('calls onSave from the save control once the gate is clear', () => {
     const onSave = vi.fn();
     const el = mount(<DraftReview draft={allKept} onChange={noop} onSave={onSave} onDiscard={noop} />);

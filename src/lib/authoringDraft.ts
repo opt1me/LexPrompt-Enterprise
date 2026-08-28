@@ -71,46 +71,87 @@ function updateClause(
   };
 }
 
-/** Marks a clause kept, optionally applying edited field values first.
- *  `edited` is computed by comparing each supplied value against the
- *  clause's current one (R-E5) — an edit typed and undone, or a field
- *  re-submitted unchanged, must not read as engagement — and is OR'd with
- *  any existing `edited` so a clause edited, reopened and kept again stays
- *  marked edited. */
+/** Applies field values to a clause and recomputes its engagement flags.
+ *
+ *  The one place a `DraftClause`'s fields are written, shared by
+ *  `keepClause` (which then decides the clause) and `editClause` (which
+ *  does not). Two copies of this loop would be two chances for the flags to
+ *  drift from what a person actually did.
+ *
+ *  `edited` and `positionEdited` are computed by comparing each supplied
+ *  value against the clause's current one (R-E5) — an edit typed and
+ *  undone, or a field re-submitted unchanged, must not read as engagement —
+ *  and are OR'd with the existing flags so a clause edited, reopened and
+ *  decided again stays marked. */
+function applyEdits(clause: DraftClause, edits?: Partial<PlaybookClause>): DraftClause {
+  const next: DraftClause = { ...clause };
+  if (!edits) return next;
+  let changed = false;
+  let positionChanged = false;
+  for (const key of Object.keys(edits) as (keyof PlaybookClause)[]) {
+    const newValue = edits[key];
+    if (!valuesEqual(clause[key], newValue)) {
+      changed = true;
+      if (key === 'standardPosition') positionChanged = true;
+    }
+    // Deleted, not assigned `undefined`: `structuredClone` (how
+    // IndexedDB writes every record, once this draft is published)
+    // PRESERVES an `undefined`-valued key, so an explicit `undefined`
+    // here — e.g. `DraftReview` clearing a blanked `standardPosition`,
+    // Minor 1 — must remove the key entirely, the same rule
+    // `TemplateEditor`'s own `setPosition` documents and applies.
+    if (newValue === undefined) {
+      delete (next as unknown as Record<string, unknown>)[key];
+    } else {
+      (next as unknown as Record<string, unknown>)[key] = newValue;
+    }
+  }
+  next.edited = clause.edited || changed;
+  next.positionEdited = clause.positionEdited || positionChanged;
+  return next;
+}
+
+/** True when applying `edits` would change any of the clause's values. */
+function editsChangeAnything(clause: DraftClause, edits: Partial<PlaybookClause>): boolean {
+  return (Object.keys(edits) as (keyof PlaybookClause)[])
+    .some((key) => !valuesEqual(clause[key], edits[key]));
+}
+
+/** Marks a clause kept, optionally applying edited field values first. */
 export function keepClause(
   draft: AuthoringDraft,
   clauseId: string,
   edits?: Partial<PlaybookClause>,
 ): AuthoringDraft {
-  return updateClause(draft, clauseId, (clause) => {
-    let changed = false;
-    let positionChanged = false;
-    const next: DraftClause = { ...clause };
-    if (edits) {
-      for (const key of Object.keys(edits) as (keyof PlaybookClause)[]) {
-        const newValue = edits[key];
-        if (!valuesEqual(clause[key], newValue)) {
-          changed = true;
-          if (key === 'standardPosition') positionChanged = true;
-        }
-        // Deleted, not assigned `undefined`: `structuredClone` (how
-        // IndexedDB writes every record, once this draft is published)
-        // PRESERVES an `undefined`-valued key, so an explicit `undefined`
-        // here — e.g. `DraftReview` clearing a blanked `standardPosition`,
-        // Minor 1 — must remove the key entirely, the same rule
-        // `TemplateEditor`'s own `setPosition` documents and applies.
-        if (newValue === undefined) {
-          delete (next as unknown as Record<string, unknown>)[key];
-        } else {
-          (next as unknown as Record<string, unknown>)[key] = newValue;
-        }
-      }
-    }
-    next.disposition = 'kept';
-    next.edited = clause.edited || changed;
-    next.positionEdited = clause.positionEdited || positionChanged;
-    return next;
-  });
+  return updateClause(draft, clauseId, (clause) => ({
+    ...applyEdits(clause, edits),
+    disposition: 'kept',
+  }));
+}
+
+/**
+ * Folds field values into a clause WITHOUT deciding it — the same write
+ * `keepClause` performs, minus the disposition.
+ *
+ * Integrity review (D/E), Major 6. `ClauseEditor`'s fields are local state
+ * remounted on every clause switch, so before this existed only `Keep`
+ * drained them: moving to another clause silently discarded whatever had
+ * been typed, and a clause already marked `Kept` went on saying so over the
+ * superseded wording. The buffer's lifetime, not a warning, is the fix —
+ * `DraftReview` commits through here on every route out of a clause.
+ *
+ * Returns the SAME draft object when nothing would change, so a caller can
+ * tell "there was nothing to commit" by identity and avoid an `onChange`
+ * that would record engagement nobody performed (R-E5).
+ */
+export function editClause(
+  draft: AuthoringDraft,
+  clauseId: string,
+  edits: Partial<PlaybookClause>,
+): AuthoringDraft {
+  const clause = draft.clauses.find((c) => c.id === clauseId);
+  if (!clause || !editsChangeAnything(clause, edits)) return draft;
+  return updateClause(draft, clauseId, (c) => applyEdits(c, edits));
 }
 
 /** Marks a clause cut. Cutting is not engagement with the clause's content —

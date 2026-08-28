@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ShieldAlert, Scale, Sparkles, Plus, X } from 'lucide-react';
 import { Button } from '../../components/Button';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
@@ -8,6 +8,7 @@ import {
   saveGateLabel,
   keepClause,
   cutClause,
+  editClause,
   type AuthoringDraft,
   type DraftClause,
 } from '../../lib/authoringDraft';
@@ -42,6 +43,49 @@ function isTyping(target: EventTarget | null): boolean {
 export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false }: DraftReviewProps) {
   const [activeId, setActiveId] = useState<string>(() => draft.clauses[0]?.id ?? '');
 
+  /**
+   * What is currently typed into the clause editor, and which clause it
+   * belongs to.
+   *
+   * Integrity review (D/E), Major 6. `ClauseEditor`'s fields are local state
+   * remounted on every clause switch (see its docstring - the remount is
+   * deliberate), which made them a buffer only `Keep` ever drained: moving
+   * via the rail threw away what had been typed, and a clause already marked
+   * `Kept` went on reading `Kept` over the superseded wording. Widening the
+   * buffer's LIFETIME is the fix - it is reported up here on every change
+   * and folded into the draft on every route out of the clause.
+   *
+   * A ref, not state, because nothing renders from it: writing it on every
+   * keystroke through `useState` would re-render the screen for no visible
+   * change. The clause id travels with it so a commit can never land the
+   * wrong clause's text.
+   */
+  const pendingRef = useRef<{ clauseId: string; edits: Partial<PlaybookClause> } | null>(null);
+
+  /** The draft with whatever is typed folded in. `editClause` returns the
+   *  SAME object when nothing differs, so an untouched clause commits
+   *  nothing and records no engagement (R-E5). */
+  const withPendingEdits = (current: AuthoringDraft): AuthoringDraft => {
+    const pending = pendingRef.current;
+    if (!pending) return current;
+    return editClause(current, pending.clauseId, pending.edits);
+  };
+
+  /** Folds the buffer into the draft and reports it. */
+  const commitPendingEdits = (): AuthoringDraft => {
+    const next = withPendingEdits(draft);
+    if (next !== draft) onChange(next);
+    return next;
+  };
+
+  /** Every route out of a clause goes through here, so a route added later
+   *  cannot forget to drain the buffer. */
+  const goToClause = (clauseId: string) => {
+    if (clauseId === activeId) return;
+    commitPendingEdits();
+    setActiveId(clauseId);
+  };
+
   // Falls back to the first clause if the active one disappears (e.g. a
   // suggestion turned into a new clause list elsewhere). Guarded on
   // membership rather than on draft identity, so it never fights the
@@ -63,12 +107,17 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
       const nextIndex = draft.clauses.findIndex((c, i) => i > index && c.disposition === 'unreviewed');
       if (nextIndex !== -1) {
         event.preventDefault();
-        setActiveId(draft.clauses[nextIndex].id);
+        goToClause(draft.clauses[nextIndex].id);
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [draft.clauses, activeId]);
+    // Re-bound every render rather than on [draft.clauses, activeId]:
+    // `goToClause` closes over `onChange` and the current `draft`, and a
+    // listener held over from an earlier render would commit the buffer
+    // onto a stale draft. Rebinding a single window listener per render is
+    // cheap; a stale closure that silently drops an edit is not.
+  });
 
   const activeClause = draft.clauses.find((c) => c.id === activeId);
   const canSave = canSaveDraft(draft);
@@ -77,12 +126,28 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
 
   const handleKeep = (edits: Partial<PlaybookClause>) => {
     if (!activeClause) return;
+    // The buffer holds exactly these edits for exactly this clause, so
+    // there is nothing separate to commit: `keepClause` applies them and
+    // computes the flags by the same comparison.
+    pendingRef.current = null;
     onChange(keepClause(draft, activeClause.id, edits));
   };
 
+  /** Cutting is not a reason to lose what was typed: a cut clause can be
+   *  kept again from this same pane, and it would come back carrying the
+   *  superseded wording. */
   const handleCut = () => {
     if (!activeClause) return;
-    onChange(cutClause(draft, activeClause.id));
+    onChange(cutClause(withPendingEdits(draft), activeClause.id));
+    pendingRef.current = null;
+  };
+
+  /** Major 4: the publish must see what the screen holds NOW, buffer
+   *  included. `App`'s handler reads back the draft this reports rather
+   *  than the one its own render closed over. */
+  const handleSave = () => {
+    commitPendingEdits();
+    onSave();
   };
 
   const handleAddSuggestion = (text: string) => {
@@ -96,9 +161,10 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
       positionEdited: false,
       suggestions: [],
     };
+    const current = withPendingEdits(draft);
     onChange({
-      ...draft,
-      clauses: draft.clauses.flatMap((c) =>
+      ...current,
+      clauses: current.clauses.flatMap((c) =>
         c.id === activeClause.id
           ? [{ ...c, suggestions: c.suggestions.filter((s) => s !== text) }, newClause]
           : [c],
@@ -123,9 +189,10 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
 
   const handleDismissSuggestion = (text: string) => {
     if (!activeClause) return;
+    const current = withPendingEdits(draft);
     onChange({
-      ...draft,
-      clauses: draft.clauses.map((c) =>
+      ...current,
+      clauses: current.clauses.map((c) =>
         c.id === activeClause.id ? { ...c, suggestions: c.suggestions.filter((s) => s !== text) } : c,
       ),
     });
@@ -146,14 +213,16 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
         </div>
         <div className="flex gap-3 shrink-0">
           <Button variant="ghost" onClick={handleDiscard} disabled={saving}>Discard</Button>
-          <Button onClick={onSave} disabled={!canSave || saving} loading={saving}>
+          <Button onClick={handleSave} disabled={!canSave || saving} loading={saving}>
             {saveLabel}
           </Button>
         </div>
       </header>
 
       <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-[280px_1fr] gap-6">
-        <ClauseRail clauses={draft.clauses} activeId={activeId} onSelect={setActiveId} />
+        <ClauseRail
+          clauses={draft.clauses} activeId={activeId} onSelect={goToClause} disabled={saving}
+        />
 
         <div className="overflow-y-auto custom-scrollbar bg-[#111] border border-white/10 rounded-xl p-5">
           {activeClause ? (
@@ -162,8 +231,12 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
               clause={activeClause}
               onKeep={handleKeep}
               onCut={handleCut}
+              onPendingChange={(edits) => {
+                pendingRef.current = { clauseId: activeClause.id, edits };
+              }}
               onAddSuggestion={handleAddSuggestion}
               onDismissSuggestion={handleDismissSuggestion}
+              saving={saving}
             />
           ) : (
             <p className="text-sm text-gray-500 italic">No clauses to review.</p>
@@ -178,8 +251,16 @@ interface ClauseEditorProps {
   clause: DraftClause;
   onKeep: (edits: Partial<PlaybookClause>) => void;
   onCut: () => void;
+  /** Reports the current field values on every change, so the parent can
+   *  fold them into the draft when this component is about to be replaced.
+   *  The parent writes them to a ref, so this re-renders nothing. */
+  onPendingChange: (edits: Partial<PlaybookClause>) => void;
   onAddSuggestion: (text: string) => void;
   onDismissSuggestion: (text: string) => void;
+  /** Keep and Cut are dead while a publish is in flight: a control that
+   *  responds normally but cannot reach the version being written is worse
+   *  than a disabled one (Major 4). */
+  saving?: boolean;
 }
 
 /**
@@ -190,12 +271,18 @@ interface ClauseEditorProps {
  * effect in the same commit (CLAUDE.md: effects run in declaration order),
  * and a remount sidesteps that class of bug entirely.
  */
-function ClauseEditor({ clause, onKeep, onCut, onAddSuggestion, onDismissSuggestion }: ClauseEditorProps) {
+function ClauseEditor({
+  clause, onKeep, onCut, onPendingChange, onAddSuggestion, onDismissSuggestion, saving = false,
+}: ClauseEditorProps) {
   const [extractPrompt, setExtractPrompt] = useState(clause.extractPrompt);
   const [riskCriteria, setRiskCriteria] = useState(clause.riskCriteria ?? '');
   const [positionText, setPositionText] = useState(clause.standardPosition?.text ?? '');
 
-  const handleKeep = () => {
+  /** ONE reading of the fields, shared by Keep and by the report to the
+   *  parent. Two would be two normalisations to keep in step, and the
+   *  normalisation is what stops an untouched blank field reading as an
+   *  edit. */
+  const currentEdits = (): Partial<PlaybookClause> => {
     const edits: Partial<PlaybookClause> = {
       extractPrompt,
       // Normalised back to the original's undefined-vs-string shape: an
@@ -221,8 +308,19 @@ function ClauseEditor({ clause, onKeep, onCut, onAddSuggestion, onDismissSuggest
         ? undefined
         : { ...clause.standardPosition, text: positionText };
     }
-    onKeep(edits);
+    return edits;
   };
+
+  // Reported from an effect rather than from each field's `onChange`, so a
+  // field added later cannot be wired up without it. It also fires on
+  // mount, which is correct and free: those values equal the clause's, and
+  // `editClause` returns the draft unchanged for that.
+  useEffect(() => {
+    onPendingChange(currentEdits());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [extractPrompt, riskCriteria, positionText]);
+
+  const handleKeep = () => onKeep(currentEdits());
 
   const dispositionClass =
     clause.disposition === 'kept'
@@ -246,6 +344,7 @@ function ClauseEditor({ clause, onKeep, onCut, onAddSuggestion, onDismissSuggest
         </label>
         <AutoResizeTextarea
           aria-label="Extraction instructions"
+          disabled={saving}
           value={extractPrompt}
           onChange={(e) => setExtractPrompt(e.target.value)}
           className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-sm text-gray-200 outline-none focus:border-violet-500 min-h-[70px]"
@@ -258,6 +357,7 @@ function ClauseEditor({ clause, onKeep, onCut, onAddSuggestion, onDismissSuggest
         </label>
         <AutoResizeTextarea
           aria-label="Risk criteria"
+          disabled={saving}
           value={riskCriteria}
           onChange={(e) => setRiskCriteria(e.target.value)}
           placeholder="Leave blank to use the playbook's global risk tolerance."
@@ -277,6 +377,7 @@ function ClauseEditor({ clause, onKeep, onCut, onAddSuggestion, onDismissSuggest
           )}
           <AutoResizeTextarea
             aria-label="Standard position"
+          disabled={saving}
             value={positionText}
             onChange={(e) => setPositionText(e.target.value)}
             className="w-full bg-black/50 border border-white/10 rounded-lg p-2 text-xs text-gray-200 outline-none focus:border-violet-500 min-h-[50px]"
@@ -314,8 +415,8 @@ function ClauseEditor({ clause, onKeep, onCut, onAddSuggestion, onDismissSuggest
       )}
 
       <div className="flex justify-end gap-3 pt-2 border-t border-white/10">
-        <Button variant="danger" onClick={onCut}>Cut</Button>
-        <Button onClick={handleKeep}>Keep</Button>
+        <Button variant="danger" onClick={onCut} disabled={saving}>Cut</Button>
+        <Button onClick={handleKeep} disabled={saving}>Keep</Button>
       </div>
     </div>
   );

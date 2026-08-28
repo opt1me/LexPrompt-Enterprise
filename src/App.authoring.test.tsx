@@ -175,6 +175,12 @@ function typeInto(el: HTMLInputElement | HTMLTextAreaElement | null, value: stri
   });
 }
 
+function extractionField(): HTMLTextAreaElement {
+  const field = container.querySelector('textarea[aria-label="Extraction instructions"]');
+  if (!field) throw new Error('The clause editor is not on screen.');
+  return field as HTMLTextAreaElement;
+}
+
 function contractTypeField(): HTMLInputElement {
   const input = Array.from(container.querySelectorAll('input'))
     .find(i => /SaaS Agreement/i.test(i.getAttribute('placeholder') ?? ''));
@@ -498,5 +504,57 @@ describe('a ticked matter that contributed nothing is not credited (m2)', () => 
     expect(generateDraftMock).toHaveBeenCalledTimes(1);
     const [, , sourcesArg] = generateDraftMock.mock.calls[0];
     expect(sourcesArg).toEqual([]);
+  });
+});
+
+// Integrity review (D/E), Major 4. `handleSaveDraftAsV1` captured
+// `authoringDraft` from its render closure, awaited `getProfile()`, and
+// published the captured value — while `DraftReview` left Keep and Cut live
+// for the whole publish. Anything decided in that window went into React
+// state and not into the version, and `setAuthoringDraft(null)` on success
+// then destroyed it: the draft exists only in memory (R-E1), so a decision
+// the user watched happen was unrecoverable.
+describe('Save as v1 publishes what the screen holds, not a stale copy (Major 4)', () => {
+  it('publishes an edit typed into the clause editor and never Kept', async () => {
+    await reachTheDraftReviewScreen();
+    keepEveryClause();
+    // `keepEveryClause` leaves the second clause active. Type into it and go
+    // straight to Save — the commit happens in the same tick as the click,
+    // so a handler reading its own render's `authoringDraft` sees the value
+    // from BEFORE the commit.
+    typeInto(extractionField(), 'Extract the rent review mechanism AND its cap.');
+    click(buttonNamed(/save as v1/i));
+    await flush();
+
+    expect(publishAndPointMock).toHaveBeenCalledTimes(1);
+    const [, draft] = publishAndPointMock.mock.calls[0];
+    expect(draft.clauses[1].extractPrompt).toBe('Extract the rent review mechanism AND its cap.');
+  });
+
+  it('leaves nothing on the draft review screen live while the publish is in flight', async () => {
+    let release: (value: unknown) => void = () => {};
+    publishAndPointMock.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+
+    await reachTheDraftReviewScreen();
+    keepEveryClause();
+    click(buttonNamed(/save as v1/i));
+    await flush();
+
+    // Every control that could change the draft under the write. A button
+    // that responds normally and then turns out not to have counted is the
+    // failure this guards: the user watched clause 12 be cut and v1 shipped
+    // with it.
+    expect(buttonNamed(/^keep$/i)!.disabled).toBe(true);
+    expect(buttonNamed(/^cut$/i)!.disabled).toBe(true);
+    expect(buttonNamed(/break clause/i)!.disabled).toBe(true);
+    expect(extractionField().disabled).toBe(true);
+    expect(buttonNamed(/discard/i)!.disabled).toBe(true);
+
+    await act(async () => {
+      release({ playbook: publishedPlaybook, version: publishedVersion });
+      await Promise.resolve();
+    });
+    await flush();
+    expect(window.location.pathname).toBe('/playbooks/pb-new');
   });
 });
