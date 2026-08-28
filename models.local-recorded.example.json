@@ -1,0 +1,21 @@
+{
+  "models": [
+    {
+      "id": "offline",
+      "provider": "recorded",
+      "model": "recorded",
+      "label": "Recorded responses (offline)",
+      "jurisdiction": {
+        "bloc": "other",
+        "region": "local",
+        "label": "this machine — recorded responses, not a model"
+      },
+      "contextLength": 128000,
+      "supportsImages": true,
+      "supportsStructuredOutput": true,
+      "isDefault": true,
+      "endpoint": "file:///recorded",
+      "credential": { "source": "env", "var": "UNUSED" }
+    }
+  ]
+}

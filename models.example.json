@@ -1,0 +1,20 @@
+{
+  "models": [
+    {
+      "id": "uks-gpt4o",
+      "provider": "azure-foundry",
+      "model": "gpt-4o",
+      "label": "GPT-4o (Foundry, UK South)",
+      "jurisdiction": { "bloc": "UK", "region": "uksouth", "label": "UK South" },
+      "contextLength": 128000,
+      "supportsImages": true,
+      "supportsStructuredOutput": true,
+      "isDefault": true,
+      "endpoint": "https://lexprompt-uks.services.ai.azure.com",
+      "credential": {
+        "source": "managed-identity",
+        "scope": "https://cognitiveservices.azure.com/.default"
+      }
+    }
+  ]
+}

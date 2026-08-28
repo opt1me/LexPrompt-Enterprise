@@ -188,6 +188,58 @@ npm run dev
 
 This starts a Vite dev server (default `http://127.0.0.1:3005`). Open Settings in the running app and enter your own OpenRouter key to use it — nothing works without one, since every review, template generation, chat message, and suggestion goes through OpenRouter.
 
+## Running the server stack locally (Stage 1)
+
+The section above is the original browser-only app. LexPrompt is being rebuilt around a real server: a `gateway` that is the only process allowed to call a model provider, an `api` that authenticates every request against a real identity provider and proxies validated calls to the gateway, and a `web` static build in front of both. There is no local bypass for any of this — Stage 1 requires a signed-in user with no mode that skips it — so a local Keycloak realm ships alongside the services so the whole path can be exercised on a laptop.
+
+**Run the certificate script first.** The gateway and `api` talk to each other over mTLS; `api` presents a client certificate the gateway's identity check requires. Nothing else in this section works until this has been run:
+
+```bash
+bash scripts/dev-certs.sh
+```
+
+This writes a development CA and two leaf certificates into `certs/` (gitignored — see `scripts/dev-certs.sh`'s own comment on why a committed private key here would be a mistake nobody could undo later).
+
+Then:
+
+```bash
+cp .env.example .env
+cp models.local-openai.example.json models.json   # or one of the alternatives below
+npm run compose:up
+```
+
+**Expect the first run to refuse to start.** `GATEWAY_ALLOWED_JURISDICTIONS` ships in `.env.example` only as a commented-out example, on purpose — the gateway will not guess which jurisdictions your own provider contracts cover, so it fails at startup until you set it yourself. Read the gateway's log line, uncomment and set `GATEWAY_ALLOWED_JURISDICTIONS` in `.env` to match `models.json` (`UK`, `EU`, `US`, `other` — processing blocs, not country codes; there is no `DE`, and it is `UK`, never `GB`), set whichever provider API key `models.json` needs, and run `npm run compose:up` again.
+
+Three example model files are provided, because more than one is a first-class way to run this stack, not a fallback:
+
+| File | Provider(s) | Needs | `GATEWAY_ALLOWED_JURISDICTIONS` |
+|---|---|---|---|
+| `models.example.json` | Azure Foundry, UK South | `az login` (managed identity — no key in `.env`) | `UK` |
+| `models.local-openai.example.json` | OpenAI + Anthropic | `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` | `US` |
+| `models.local-recorded.example.json` | `recorded` (offline fixtures, Task 13) | nothing — no network call is ever made | `other` |
+
+Copy whichever fits onto `models.json` (also gitignored — it is the operator's own allowlist, not something to commit).
+
+`npm run compose:up` prints four seeded Keycloak accounts once the stack is up:
+
+```
+trainee  / trainee    reviewers
+partner  / partner    partners
+admin    / admin      admins
+nogroups / nogroups   (no group - expect to be refused, on purpose)
+```
+
+Stage 1 enforces no roles, so all four sign in and see the same app — `partner`, `admin` and `nogroups` exist for Stage 2 onward, not because anything in this stage treats them differently yet. Open `http://localhost:3005` and sign in as `trainee` / `trainee` to run a review end to end.
+
+```bash
+npm run test:compose   # proves the network claim below against the running stack
+npm run compose:down   # stop and remove the stack (including the Keycloak volume)
+```
+
+**The one architectural claim this whole arrangement exists to make checkable:** `api` sits on the `frontend` and `internal` Docker networks; `gateway` sits on `internal` and `egress`. `api` is deliberately **not** on `egress`, and `internal` is marked `internal: true`, so Docker adds no default route to anywhere outside the stack. "The API cannot reach a model provider directly" is therefore a fact about the network, checkable by anyone with `docker network inspect`, not only a property of `apps/api/src/gatewayClient.ts` being the only file in that service that ever calls `fetch`. `npm run test:compose` (`apps/api/test/egress.compose.test.ts`) asserts it against the live stack: `api` cannot reach a model provider, `api` cannot reach the internet at all, `api` *can* reach the gateway, and the gateway *can* reach the internet — the last two rule out a false pass from a stack that is simply unplugged.
+
+**What running this locally does not prove.** Keycloak implements the same OIDC protocol Entra implements — it is not an Entra emulator, in the way Azurite genuinely emulates Blob Storage. Untested by this stack: Entra's group-claim shape and its overage behaviour, consent, conditional access, MFA, and tenant token lifetimes. A green run here is evidence about the authentication *path*, not about Entra specifically.
+
 ## Testing
 
 ```bash

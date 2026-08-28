@@ -1,0 +1,30 @@
+{
+  "models": [
+    {
+      "id": "oai-gpt4o",
+      "provider": "openai",
+      "model": "gpt-4o",
+      "label": "GPT-4o (OpenAI)",
+      "jurisdiction": { "bloc": "US", "region": "us", "label": "United States" },
+      "contextLength": 128000,
+      "supportsImages": true,
+      "supportsStructuredOutput": true,
+      "isDefault": true,
+      "endpoint": "https://api.openai.com",
+      "credential": { "source": "env", "var": "OPENAI_API_KEY" }
+    },
+    {
+      "id": "claude-sonnet",
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "label": "Claude Sonnet 4.5 (Anthropic)",
+      "jurisdiction": { "bloc": "US", "region": "us", "label": "United States" },
+      "contextLength": 200000,
+      "supportsImages": true,
+      "supportsStructuredOutput": true,
+      "isDefault": false,
+      "endpoint": "https://api.anthropic.com",
+      "credential": { "source": "env", "var": "ANTHROPIC_API_KEY" }
+    }
+  ]
+}

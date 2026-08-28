@@ -28,6 +28,13 @@ dist-ssr
 .env.local
 test_docs/
 
+# The gateway's allowlist, copied from one of the tracked
+# models.*.example.json files (docker-compose.yml mounts it read-only into
+# the gateway container). Never committed: a real deployment's model list is
+# environment-specific, and copying an example over it is how a developer
+# ends up with one that differs from what's in git.
+models.json
+
 # Firebase deploy cache
 .firebase/
 

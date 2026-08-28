@@ -17,7 +17,10 @@
     "hosting:on": "npm run build && npx firebase-tools@13 deploy",
     "gateway:dev": "npm run dev -w @lexprompt/gateway",
     "api:dev": "npm run dev -w @lexprompt/api",
-    "typecheck": "node scripts/typecheck.mjs"
+    "typecheck": "node scripts/typecheck.mjs",
+    "compose:up": "docker compose up -d --build && bash scripts/print-local-accounts.sh",
+    "compose:down": "docker compose down -v",
+    "test:compose": "vitest run --config vitest.compose.config.ts"
   },
   "dependencies": {
     "@lexprompt/core": "*",

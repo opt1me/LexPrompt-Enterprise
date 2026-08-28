@@ -1,0 +1,35 @@
+# The web app is a plain Vite SPA: "build" means producing a static bundle
+# with `tsc && vite build`, and every VITE_* value `src/lib/config.ts` reads
+# (VITE_API_BASE_URL, VITE_OIDC_ISSUER, VITE_OIDC_CLIENT_ID, VITE_OIDC_SCOPE)
+# is INLINED into that bundle at BUILD time by Vite — there is no runtime env
+# injection for an already-built set of static files. They arrive here as
+# build ARGs (docker-compose.yml's `web.build.args`), not as this container's
+# runtime environment: setting them under a running container's `environment:`
+# would have no effect at all on files that were baked before the container
+# ever started.
+#
+# Copies are scoped explicitly (not `COPY . .`) so nothing outside what the
+# build actually needs — most importantly `.env`, `certs/`, and `node_modules`
+# — can ever end up inside an image layer. There is no root `.dockerignore`
+# in this repo, so a wildcard copy here would be the only way a real
+# credential from a developer's local `.env` could leak into a built image.
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY packages/core/package.json packages/core/
+COPY apps/api/package.json apps/api/
+COPY apps/gateway/package.json apps/gateway/
+RUN npm ci --include-workspace-root
+COPY tsconfig.json vite.config.ts index.html ./
+COPY public public
+COPY src src
+COPY packages/core packages/core
+ARG VITE_API_BASE_URL
+ARG VITE_OIDC_ISSUER
+ARG VITE_OIDC_CLIENT_ID
+ARG VITE_OIDC_SCOPE
+RUN npm run build
+
+FROM nginx:1.27-alpine
+COPY --from=build /app/dist /usr/share/nginx/html
+EXPOSE 80

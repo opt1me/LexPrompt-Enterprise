@@ -1,0 +1,130 @@
+name: lexprompt
+
+networks:
+  frontend:
+  internal:
+    internal: true    # no default route: this network cannot reach the internet
+  egress:
+
+services:
+  # The local OIDC issuer (S31). NOT an Entra emulator — it implements the
+  # same protocol Entra implements, which is a different and weaker claim,
+  # and §5.1's "what local does not prove" list is where the difference bites.
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    command: ["start-dev", "--import-realm"]
+    ports: ["8088:8080"]          # published so a BROWSER can redirect to it
+    networks: [frontend, internal]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      - "./infra/keycloak:/opt/keycloak/data/import:ro"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && cat <&3 | grep -q '\"status\": \"UP\"'"]
+      interval: 5s
+      retries: 30
+
+  web:
+    # The web app is a Vite SPA: every VITE_* value src/lib/config.ts reads
+    # is INLINED into the static bundle at BUILD time (see vite.config.ts —
+    # there is no runtime env injection for a prebuilt bundle). They must
+    # arrive as build `args`, not as this service's runtime `environment` —
+    # a `docker build` run with none of these set would bake a bundle that
+    # throws "VITE_API_BASE_URL is not configured" in every browser tab,
+    # and setting them under `environment:` afterwards would have no effect
+    # on the already-built files at all.
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        VITE_API_BASE_URL: http://localhost:8080
+        # The issuer the BROWSER redirects to, so it is the published host
+        # address rather than the compose service name.
+        VITE_OIDC_ISSUER: ${OIDC_ISSUER_BROWSER}
+        VITE_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+        VITE_OIDC_SCOPE: ${OIDC_SCOPE}
+    ports: ["3005:80"]
+    networks: [frontend]
+
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    ports: ["8080:8080"]
+    # frontend AND internal — deliberately NOT egress. This is the design's
+    # central claim as a network fact rather than a code review.
+    networks: [frontend, internal]
+    environment:
+      API_PORT: "8080"
+      # §5.1 row 1: the ONLY thing that differs from a firm deployment is
+      # these five values. There is no local auth mode and no bypass (S29).
+      # NOTE: apps/api/src/config.ts reads API_ISSUER / API_AUDIENCE /
+      # API_SUBJECT_CLAIM / API_GROUPS_CLAIM / API_REQUIRED_CLAIMS — there is
+      # no "_OIDC_" infix in the real variable names, only in the .env.example
+      # names chosen to group them for a reader.
+      API_ISSUER: ${OIDC_ISSUER_API}
+      API_AUDIENCE: ${OIDC_AUDIENCE}
+      API_SUBJECT_CLAIM: ${OIDC_SUBJECT_CLAIM}
+      API_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM}
+      API_REQUIRED_CLAIMS: ${OIDC_REQUIRED_CLAIMS}
+      API_WORKSPACE_ID: 00000000-0000-0000-0000-000000000001
+      API_GATEWAY_URL: https://gateway:8081
+      API_MTLS_CA_FILE: /certs/ca.pem
+      API_MTLS_CERT_FILE: /certs/api.pem
+      API_MTLS_KEY_FILE: /certs/api.key
+    volumes: ["./certs:/certs:ro"]
+    depends_on:
+      gateway: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+
+  gateway:
+    build: { context: ., dockerfile: apps/gateway/Dockerfile }
+    # NO ports: — unreachable from the host, by construction.
+    networks: [internal, egress]
+    environment:
+      GATEWAY_PORT: "8081"
+      GATEWAY_MODELS_FILE: /config/models.json
+      # NO DEFAULT (P4, owner decision 5). Unset means the gateway refuses to
+      # start, which is what we want: which jurisdictions are permitted
+      # follows from the operator's own contracts with their provider, and a
+      # compose file has no standing to guess. There is also no
+      # GATEWAY_UPSTREAM — offline working is the `recorded` provider on the
+      # allowlist (Task 13), not a mode, because a mode would be an
+      # environment branch (S30).
+      GATEWAY_ALLOWED_JURISDICTIONS: ${GATEWAY_ALLOWED_JURISDICTIONS}
+      GATEWAY_CALLER_AUTH: mtls
+      GATEWAY_MTLS_CA_FILE: /certs/ca.pem
+      GATEWAY_MTLS_CERT_FILE: /certs/gateway.pem
+      GATEWAY_MTLS_KEY_FILE: /certs/gateway.key
+      GATEWAY_MTLS_ALLOWED_SUBJECT: lexprompt-api
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - "./certs:/certs:ro"
+      - "./models.json:/config/models.json:ro"
+    # CARRIED OBLIGATION (ruling H1): main.ts applies requestCert/
+    # rejectUnauthorized ONLY when caller.mode is 'mtls' (the mode this
+    # compose file uses), so a certless caller fails the TLS HANDSHAKE
+    # before Fastify routes anything — server.ts's own `/healthz` auth
+    # exclusion never runs for it. A healthcheck that curls plain http://,
+    # or even https:// with no --cert, would report this container
+    # permanently unhealthy while it is in fact fine, and Docker would
+    # restart a healthy gateway on a schedule. The cert presented is
+    # api.pem/api.key (apps/api's client identity, not the gateway's own
+    # server certificate) — server.ts's own comment on this exclusion names
+    # that exact invocation. Any cert signed by the same CA satisfies the
+    # TLS handshake for /healthz, since the allowed-subject check happens
+    # only inside the (bypassed) application-level auth hook; api's is used
+    # here because it is the one this compose file already mounts for a
+    # reason unrelated to health, and reusing it needs no third cert.
+    healthcheck:
+      test: [
+        "CMD", "curl", "-sf",
+        "--cacert", "/certs/ca.pem",
+        "--cert", "/certs/api.pem",
+        "--key", "/certs/api.key",
+        "https://localhost:8081/healthz",
+      ]
+      interval: 5s
+      retries: 30

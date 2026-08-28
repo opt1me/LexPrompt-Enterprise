@@ -1,0 +1,143 @@
+{
+  "realm": "lexprompt",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+
+  "clientScopes": [
+    {
+      "name": "groups",
+      "description": "Group membership, as a claim. Without this scope's mapper, Keycloak issues no `groups` claim at all, and every account looks like one in no group.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "claim.name": "groups",
+            "full.path": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "userinfo.token.claim": "true"
+          }
+        }
+      ]
+    },
+    {
+      "name": "lexprompt-api",
+      "description": "Adds the lexprompt-api audience to lexprompt-web's tokens. Without this, apps/api rejects every token for the wrong audience, and the failure reads like a code bug rather than a missing scope.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "audience-lexprompt-api",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "lexprompt-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+
+  "clients": [
+    {
+      "clientId": "lexprompt-web",
+      "name": "LexPrompt (browser)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["http://localhost:3005/*"],
+      "webOrigins": ["http://localhost:3005"],
+      "attributes": {
+        "pkce.code.challenge.method": "S256"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "profile",
+        "email",
+        "roles",
+        "groups",
+        "lexprompt-api"
+      ],
+      "optionalClientScopes": ["offline_access"]
+    },
+    {
+      "clientId": "lexprompt-api",
+      "name": "LexPrompt API (bearer-only)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false
+    }
+  ],
+
+  "groups": [
+    { "name": "reviewers" },
+    { "name": "partners" },
+    { "name": "admins" }
+  ],
+
+  "users": [
+    {
+      "username": "trainee",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "trainee@lexprompt.local",
+      "firstName": "Trainee",
+      "lastName": "Reviewer",
+      "credentials": [{ "type": "password", "value": "trainee", "temporary": false }],
+      "groups": ["/reviewers"]
+    },
+    {
+      "username": "partner",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "partner@lexprompt.local",
+      "firstName": "Partner",
+      "lastName": "Reviewer",
+      "credentials": [{ "type": "password", "value": "partner", "temporary": false }],
+      "groups": ["/partners"]
+    },
+    {
+      "username": "admin",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "admin@lexprompt.local",
+      "firstName": "Admin",
+      "lastName": "User",
+      "credentials": [{ "type": "password", "value": "admin", "temporary": false }],
+      "groups": ["/admins"]
+    },
+    {
+      "username": "nogroups",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "nogroups@lexprompt.local",
+      "firstName": "No",
+      "lastName": "Access",
+      "credentials": [{ "type": "password", "value": "nogroups", "temporary": false }],
+      "groups": []
+    }
+  ]
+}
