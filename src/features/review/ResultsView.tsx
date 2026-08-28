@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { Table, Mail, FileDown, Loader } from 'lucide-react';
+import { Table, Mail, FileDown, Loader, FileText, X } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun, Settings } from '../../types';
 import { isAuthError } from '../../lib/openrouter';
 import { findingKey } from '../../lib/verification';
@@ -8,6 +8,7 @@ import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { isVerifiable } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 import { FindingCard } from './FindingCard';
+import { ClauseIndex } from './ClauseIndex';
 import { ViewSwitch } from './ViewSwitch';
 import { ReviewVersionLine } from './ReviewVersionLine';
 import type { TrailDocumentInfo } from './VariationTrailModal';
@@ -111,15 +112,33 @@ export interface ResultsViewProps {
 type Tab = 'findings' | 'chat';
 
 /**
- * Two panes: findings list (one FindingCard per clause, in template order)
- * on the left, DocumentViewer on the right. A document switcher above the
- * list swaps both panes together when the run covers more than one
- * document. `highlights` is local state set by a citation click and handed
- * straight to the viewer — that's the whole feature this task exists for.
+ * Three panes (Task 23, `1b`'s ledger): a clause index rail, a finding
+ * column (the cards, in template order, plus the Findings/Assistant tab
+ * pair moved into its header per R-GP7), and DocumentViewer. A document
+ * switcher in the finding column's header swaps the findings and the
+ * viewer together when the run covers more than one document. `highlights`
+ * is local state set by a citation click and handed straight to the
+ * viewer — that's the whole feature this screen exists for.
  *
- * The left pane also carries a Findings/Assistant tab switch (Task 18):
- * Findings holds the cards plus Draft Email / Export DOCX actions, and
- * Assistant is the chat panel scoped to the active document.
+ * `ClauseIndex` is purely a second way to MOVE the same keyboard cursor
+ * (`focusIndex`) that `useVerifyKeys` already drives — it reads the same
+ * `findings` map the cards read and computes no count or status of its own
+ * (CLAUDE.md's sibling-drift rule). Every clause's card still renders in
+ * the finding column exactly as it did in the two-pane layout; the index
+ * does not hide any of them. Collapsing the finding column down to a
+ * single active card was considered and rejected: two existing regression
+ * tests (`App.rerunResets.test.tsx`'s "leaves the verification of other
+ * findings alone", and this file's own "renders exactly as before") prove,
+ * with no keyboard movement at all, that a second clause's chip/summary is
+ * on screen alongside the first — a single-card column would make both
+ * false. See this task's report for the full account.
+ *
+ * Responsive collapse (also this task, F17b — Task 22 deliberately skipped
+ * this screen so the pass is written once against the layout that ships):
+ * below `lg` the document pane is reachable through an "Open in document"
+ * toggle instead of sitting in its own column; below `md` the clause index
+ * becomes a `<select>`, the same control shape already used for switching
+ * documents above.
  */
 export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
@@ -141,6 +160,11 @@ export function ResultsView({
   const [revisionLoadingClauseId, setRevisionLoadingClauseId] = useState<string | null>(null);
   const [revisionData, setRevisionData] = useState<RevisionData | null>(null);
   const [revisionOpen, setRevisionOpen] = useState(false);
+
+  // Below `lg` the document pane lives behind an "Open in document" toggle
+  // rather than its own column (§11's collapse order, applied here for the
+  // first time — Task 22 skipped this screen deliberately).
+  const [mobileDocOpen, setMobileDocOpen] = useState(false);
 
   // The comparison grid's "Open in review" handoff: land on the document
   // and clause the reader actually clicked. Keyed on the value itself so
@@ -225,6 +249,11 @@ export function ResultsView({
       setActiveDocId(documentId);
     }
     setHighlights(quotes);
+    // Below `lg` the document pane is behind the "Open in document" toggle
+    // (see `mobileDocOpen`) — a citation click is exactly the moment a
+    // reader wants to see the highlight land, so it opens the overlay
+    // rather than leaving them to notice the toggle themselves.
+    setMobileDocOpen(true);
   };
 
   // Task 8A: a collection review's findings are keyed by the COLLECTION id
@@ -316,6 +345,22 @@ export function ResultsView({
   const clauses = run.templateSnapshot.clauses;
   const cardRefs = useRef<(HTMLDivElement | null)[]>([]);
 
+  // `ClauseIndex`'s notion of "the active clause" is the SAME cursor
+  // `focusIndex` already is — not a second piece of state to keep in sync.
+  // Selecting a row just moves `focusIndex` to match, exactly as `j`/`k`
+  // do, so the index's highlight, the keyboard cursor and the scrolled-to
+  // card can never disagree with one another.
+  const activeClauseId = clauses[focusIndex]?.id ?? null;
+  const handleSelectClause = (clauseId: string) => {
+    const i = clauses.findIndex(c => c.id === clauseId);
+    if (i < 0) return;
+    setFocusIndex(i);
+    // Selecting a clause is a request to read it, which only ever makes
+    // sense on the Findings tab — switching there mirrors what the
+    // Assistant tab already is not: a place `focusIndex` has any meaning.
+    setTab('findings');
+  };
+
   // Keyboard nav for the verify loop (Task 13): j/k move, v/f act immediately,
   // r opens the reason dialog rather than rejecting directly — a keyboard
   // shortcut must never be able to reject something silently.
@@ -362,8 +407,17 @@ export function ResultsView({
   }, [focusIndex]);
 
   return (
-    <div className="h-full flex flex-col lg:flex-row bg-paper">
-      <div className="w-full lg:w-1/3 border-r border-rule flex flex-col bg-card min-h-0">
+    <div className="h-full flex flex-col md:flex-row bg-paper min-h-0">
+      {/* The clause index rail, `md` and up. */}
+      <div className="hidden md:flex md:shrink-0">
+        <ClauseIndex
+          clauses={clauses}
+          findings={findings}
+          activeClauseId={activeClauseId}
+          onSelect={handleSelectClause}
+        />
+      </div>
+      <div className="w-full md:w-[470px] md:shrink-0 border-r border-rule flex flex-col bg-card min-h-0">
         <div className="p-4 border-b border-rule flex items-center justify-between gap-3">
           {run.documentIds.length > 1 ? (
             <select
@@ -385,6 +439,19 @@ export function ResultsView({
           <span className="shrink-0 font-mono text-pin text-ink-4" title="Findings a human has verified">
             {progressLabel(run.findings)}
           </span>
+
+          {/* Below `lg` the document pane lives behind this toggle instead
+             of its own column (§11's collapse order — the document pane
+             collapses first). */}
+          <button
+            type="button"
+            onClick={() => setMobileDocOpen(true)}
+            title="Open in document"
+            className="lg:hidden shrink-0 p-2 bg-chip-fill rounded-control hover:bg-paper transition-colors text-ink-2"
+          >
+            <FileText className="w-4 h-4" aria-hidden="true" />
+            <span className="sr-only">Open in document</span>
+          </button>
 
           {onOpenTabular && (
             <ViewSwitch
@@ -533,8 +600,45 @@ export function ResultsView({
         )}
       </div>
 
-      <div className="flex-1 min-w-0">
-        <DocumentViewer doc={activeDoc} highlights={highlights} />
+      {/* Below `md` the clause index collapses into a `<select>` — the
+         same control shape the document switcher above already uses.
+         `order-first` puts it visually above the finding column on a
+         stacked mobile layout despite sitting after it in the DOM; DOM
+         order itself is deliberate — `ResultsView — a citation opens its
+         own document`'s `activeDoc` helper reads `container.querySelector
+         ('select')` expecting the DOCUMENT switcher, and jsdom applies no
+         media query, so both selects exist in the tree regardless of
+         viewport and whichever comes first in the DOM wins that query. */}
+      <div className="order-first md:hidden shrink-0 border-b border-rule bg-card p-3">
+        <select
+          value={activeClauseId ?? ''}
+          onChange={(e) => handleSelectClause(e.target.value)}
+          className="w-full bg-card border border-rule-strong rounded-control px-2 py-1.5 font-ui text-ui text-ink-1 outline-none focus:ring-1 focus:ring-accent"
+        >
+          {clauses.map(clause => (
+            <option key={clause.id} value={clause.id}>{clause.title}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* The document pane: its own column from `lg` up; below that, a
+         toggled full-screen overlay. Never conditionally unmounted by the
+         toggle — a scan's page images are regenerated per session and
+         cached (`documentFileForReview`), and closing/reopening this pane
+         must not pay that cost again. */}
+      <div
+        className={`${mobileDocOpen ? 'fixed inset-0 z-50 flex' : 'hidden'} lg:static lg:z-auto lg:flex lg:flex-1 lg:min-w-0 flex-col bg-paper`}
+      >
+        <button
+          type="button"
+          onClick={() => setMobileDocOpen(false)}
+          className="lg:hidden shrink-0 flex items-center gap-1.5 px-4 py-2 border-b border-rule bg-card font-ui text-ui text-ink-2"
+        >
+          <X className="w-4 h-4" aria-hidden="true" /> Close
+        </button>
+        <div className="flex-1 min-h-0">
+          <DocumentViewer doc={activeDoc} highlights={highlights} />
+        </div>
       </div>
 
       {emailContent !== null && (

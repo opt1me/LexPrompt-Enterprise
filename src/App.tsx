@@ -56,6 +56,7 @@ import type { AuthoringDraft } from './lib/authoringDraft';
 import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, RunInterruptedBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
 import { ExportGateBanner } from './features/review/ExportGateBanner';
+import { firstUncheckedClauseId } from './features/review/ClauseIndex';
 import { emptyRun, runReview, retryCell, type CollectionRunInput } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
 import { parseFiles, parseFile, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
@@ -1834,6 +1835,33 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [openReviewAt, setOpenReviewAt] = useState<{ docId: string; clauseId: string } | undefined>(undefined);
 
   /**
+   * `ExportGateBanner`'s "Review unchecked →": the first finding nobody has
+   * disposed of, wherever it is in this run. Task 17 deliberately left the
+   * banner's `onReviewUnchecked` unwired because there was nowhere to send
+   * the reader — `ResultsView`'s clause index (Task 23) is that somewhere.
+   *
+   * A collection review keys every clause's finding by the collection id
+   * (one position per clause, however many documents fed it), so there is
+   * exactly one findings map to scan and `docId` is only along for the ride
+   * (it just picks which document the viewer shows). A standalone review
+   * keys by document, so this walks `run.documentIds` in order and returns
+   * the first document whose OWN findings have an unchecked clause — the
+   * same "read top to bottom" order a reviewer would use by hand.
+   */
+  const firstUncheckedTarget = (r: ReviewRun): { docId: string; clauseId: string } | null => {
+    const clauses = r.templateSnapshot.clauses;
+    if (isCollectionTarget(r.target)) {
+      const clauseId = firstUncheckedClauseId(clauses, r.findings[findingsKeyFor(r.target)] ?? {});
+      return clauseId ? { docId: r.documentIds[0] ?? '', clauseId } : null;
+    }
+    for (const docId of r.documentIds) {
+      const clauseId = firstUncheckedClauseId(clauses, r.findings[findingsKeyFor(r.target, docId)] ?? {});
+      if (clauseId) return { docId, clauseId };
+    }
+    return null;
+  };
+
+  /**
    * Await the write, then apply (ruling R-B2, spec section 9). The UI must
    * never show a verification the store did not take: a reviewer who marks
    * twenty findings verified, whose writes all fail, and whose export then
@@ -3554,7 +3582,15 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               {/* Stated where the export decision is made. Renders nothing
                   when everything has been checked, and gates nothing ever:
                   export is never blocked (B §7, §10.3). */}
-              <ExportGateBanner findings={run.findings} />
+              <ExportGateBanner
+                findings={run.findings}
+                onReviewUnchecked={() => {
+                  const target = firstUncheckedTarget(run);
+                  if (!target) return;
+                  setOpenReviewAt(target);
+                  setView('results');
+                }}
+              />
               <div className="flex-1 min-h-0">
                 {view === 'results' ? (
                   <ResultsView
