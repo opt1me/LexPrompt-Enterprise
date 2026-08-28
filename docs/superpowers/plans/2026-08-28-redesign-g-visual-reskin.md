@@ -6,7 +6,9 @@
 
 **Architecture:** All colour lives as CSS custom properties in `src/index.css` in two layers: a palette layer of plain `:root` variables that Tailwind generates no utilities for, and a semantic layer inside `@theme` that generates every class application code is allowed to type. Components name meanings (`bg-risk-high-tint`), never colours. Two test guards make the wrong thing fail rather than documenting that it is wrong: a palette scanner that rejects a raw colour anywhere under `src/`, and a contrast test that is pure arithmetic over the token table. The restyle carries no behaviour change, which is what makes each of its commits reviewable by one question; the five inherited screens are labelled structural and sequenced after it.
 
-**Tech Stack:** React 19, TypeScript 5.8 (strict), Vite 6, Tailwind 4 (`@tailwindcss/vite`, `@theme`), `lucide-react`, Vitest 3 + jsdom, `src/test/mount.tsx`. **No dependency is added by this sub-project.**
+**Tech Stack:** React 19, TypeScript 5.8, Vite 6, Tailwind 4 (`@tailwindcss/vite`, `@theme`), `lucide-react`, Vitest 3 + jsdom, `src/test/mount.tsx`. **No dependency is added by this sub-project.**
+
+**`tsc` is a weaker gate here than it looks (F23b).** `tsconfig.json` sets **neither `strict` nor `noUnusedLocals`** — earlier drafts of this plan said "TypeScript 5.8 (strict)" and that was wrong. Treat `npx tsc --noEmit` as catching shape and name errors only: it will **not** catch an unread optional field, an unused destructured prop, or an implicit `any` on a callback parameter. The per-task tests, not the compiler, are what prove the new pure modules read the fields they claim to.
 
 **Spec:** `docs/superpowers/specs/2026-08-28-redesign-g-visual-reskin.md` (binding authority). Rulings R-G1–R-G21 are in its §18 and mirrored in `docs/superpowers/redesign/rulings.md`.
 
@@ -43,7 +45,7 @@ Copied verbatim from the spec and CLAUDE.md. Every task's requirements implicitl
 - **Verification state is set only by a human action; nothing derives it.** G renders it. G never writes it.
 - **Copy frozen by spec §8.4 is not reworded.** Everything `src/lib/findingOutcome.ts` exports; `positionHealthLabel`'s four strings; `ReviewVersionLine`'s four sentences; `SettingsPanel`'s two disclosure blocks; `TemplateEditor`/`TemplateLibrary`'s unpublished-changes badges and the disabled-publish tooltip; `RunPanel`'s four banner sentences; the model-capability refusal; `SourcePicker`'s privacy sentence; `TEMPLATE_DIRTY_MESSAGE` and `AUTHORING_DRAFT_DIRTY_MESSAGE`; `MatterHome`'s "Preparing documents for review…". Where a prototype's wording differs, **the shipped wording wins** (R-G5).
 - **Uppercase is a CSS decision, not a string decision.** Use `text-transform: uppercase`; never uppercase the string — several frozen strings are printed into a DOCX or a CSV cell where the chip's styling does not exist.
-- **The permitted copy changes are enumerated** (R-G6, extended once by R-GP3 below), and **each is a declared test change**: the nav's `Library` → `Playbooks`; the playbook editor's derived coverage line; the export-gate banner; the intake wizard's step labels; the `Standard positions` tab's own strings.
+- **The permitted copy changes are enumerated** (R-G6, extended by R-GP3 and R-GP8 below), and **each is a declared change**: the nav's `Library` → `Playbooks`, **and with it the two other user-facing strings that name that tab** — `App.tsx`'s `Back to Library` button and `MatterHome`'s "Create one in the Library first" (R-GP8, Task 5); the playbook editor's derived coverage line; the export-gate banner; the intake wizard's step labels; the `Standard positions` tab's own strings.
 - **Failure, disclosure and warning text may never use `ink-4` or below** (R-G19).
 - **Busy states must be legible without motion** (R-G20). Under `prefers-reduced-motion: reduce` every transition collapses to 0, the extracting pulse becomes a static tinted bar, and the word stays.
 - **Fonts are self-hosted from `public/fonts/`, never hotlinked** (R-G3). Latin subset, `woff2`, `font-display: swap`, real fallback stacks, total budget **≤350 KB**. No screen may depend on a font metric: no icon fonts, no character-width layout.
@@ -72,8 +74,20 @@ Recorded here and copied into `docs/superpowers/redesign/rulings.md` by Task 24.
 **R-GP1 — `PdfCanvas.tsx`'s highlight overlay divs are restyled; its canvas draw calls are not touched.**
 Spec §3 calls `PdfCanvas` a partial exception ("it renders into a canvas and takes no restyling") and §13.4 exempts the whole file from the palette guard. But the citation highlight is **not** a canvas draw call: `PdfCanvas.tsx:100-101` renders absolutely-positioned `<div>`s with `backgroundColor: 'rgba(255, 235, 59, 0.35)'` and `borderBottom: '2px solid rgba(255, 193, 7, 0.8)'` — DOM, in the old yellow, not the design's `rgba(255,222,89,.34)` / `rgba(198,150,20,.75)`. Leaving them would ship the one graphic §13.5 item 3 exists to verify in the wrong colour, hidden behind a guard exemption. So: those two inline style values become `var(--color-highlight-fill)` / `var(--color-highlight-edge)`, the file-level guard exemption stays exactly as the spec wrote it, and nothing else in the file changes. *Cost if wrong: two lines of a file the spec called untouched are touched, in the direction the spec's own token table asks for.*
 
-**R-GP2 — Busy elements carry `data-busy="true"` and `aria-live="polite"`, NOT `role="status"`.**
-Spec §8.6 and §13.2 say busy elements should gain `role="status"` + `data-busy="true"`. That is unsafe here and the spec could not have known why: `[role="status"]` is already this suite's selector for `StateChip`, and **thirteen assertions read it positionally** — `chips()[0].textContent` in `App.verification.test.tsx` (8 sites) and `App.rerunResets.test.tsx` (5 sites), including `App.rerunResets.test.tsx:459`, which reads `chipsDuring()[0]` **while a card is busy**. Adding `role="status"` to a busy card inserts a new element into that index-ordered list and changes what every one of those assertions selects. `role="status"` is defined as exactly `aria-live="polite"` plus `aria-atomic="true"` on a status region, so `aria-live="polite"` delivers the identical announcement behaviour without colliding with the selector. The machine-checkable contract the spec actually wanted is `data-busy="true"`, and that is what the converted test asserts on. *Cost if wrong: a busy region is announced by `aria-live` rather than by an implicit role — the same announcement — and `[role="status"]` keeps meaning "a chip".*
+**R-GP2 — `[role="status"]` means "a chip", and nothing else in this app may claim it. Busy elements and the toast carry `aria-live` + a `data-*` hook instead.**
+Spec §8.6 and §13.2 say busy elements should gain `role="status"` + `data-busy="true"`, and §9.1/§13.3 say `role="status"` is on "every chip **and toast**". Both are unsafe here, and the spec could not have known why.
+
+`[role="status"]` is already this suite's selector for `StateChip`, and **roughly 21 assertions read it positionally, across three files** (F6 corrected the earlier undercount of "13 across two"):
+- `App.verification.test.tsx` — 15 positional reads (`481, 491, 496, 508, 613, 617, 638, 687, 754, 781, 831, 882, 995, 1011, 1018`), of which `508` is the non-arrow form;
+- `App.rerunResets.test.tsx` — 5 (`333, 338, 369, 374, 460`) plus two more at `470-471`, and **`460` reads `chipsDuring()[0]` while a card is busy**;
+- `TabularReview.test.tsx` — `:65` takes the **first** match with `querySelector`, and `:80` maps over all of them.
+
+Any element that joins that index-ordered list changes what every one of those assertions selects. Two consequences, and the second is the one that would have shipped a broken Task 4:
+
+1. **A busy element takes `data-busy="true"` + `aria-live="polite"`, never `role="status"`.** The machine-checkable contract the spec actually wanted is `data-busy`, and that is what Task 3's converted test asserts on.
+2. **The toast takes `aria-live` + `data-toast`, never `role="status"` (F1).** `src/components/Toast.tsx` carries **no** `role` today — §9.1's "keeps `role="status"`" is factually wrong about the current source — and `<Toast>` is the **first child** of the app frame, so a rendered toast would take index 0 of every query above. `App.verification.test.tsx:498-510` rejects `saveReview` with `Storage quota exceeded`, which fires `notify(…, 'error')`, and then asserts `chips[0].textContent === 'Unverified'`: with a toast carrying the role, that assertion reads the toast. Task 4 is a no-test-edited task, so the implementer would have had no sanctioned move. The toast uses `aria-live="assertive"` for the error variant (an error the user must not miss) and `aria-live="polite"` for success.
+
+`role="status"` is defined as exactly `aria-live="polite"` plus `aria-atomic="true"` on a status region, so `aria-live` delivers the identical announcement behaviour in both cases without colliding with the selector. *Cost if wrong: a busy region and a toast are announced by `aria-live` rather than by an implicit role — the same announcement — and `[role="status"]` keeps meaning "a chip", which is what 21 assertions already assume.*
 
 **R-GP3 — R-G6's enumerated copy changes gain exactly one string: the busy card's visible `Extracting…` label.**
 R-G20 requires a busy state to stay legible with motion off. `FindingCard`'s `running` branch today shows a clause title, a spinning `Loader`, and three pulsing skeleton bars — **no word at all**. With `prefers-reduced-motion` on, that is a dimmed card with grey bars, which is indistinguishable from an empty one. So the running branch gains a visible `Extracting…` label. It is new copy, it is declared, and it lands in Task 3 — the one task before the restyle sequence that is allowed to change tests — so that no restyle commit carries a string change. *Cost if wrong: one more string than R-G6 enumerated, in the service of the ruling R-G20 that R-G6 does not override.*
@@ -87,14 +101,47 @@ Spec §13.4 item 5 asks for 4.5:1 body / 3:1 chips and large text. `ink-5` on `p
 **R-GP6 — The `Review / Compare` control is absent when `run.documentIds.length < 2`, as well as for a collection review.**
 §10.5 requires absence "when there is nothing to compare across — a single-document review, or a collection review". `TabularReview` already refuses a collection target outright (`isCollectionTarget` → `CollectionNotComparable`). The single-document half has no such guard today: the grid renders a one-column table. The control is therefore gated on **both** conditions, and `ResultsView`'s existing `onOpenTabular` prop stays the mechanism — it is already optional and already renders nothing when omitted. *Cost if wrong: a one-document review loses a grid view that showed one column.*
 
+**R-GP8 — R-G6's rename covers every user-facing string that names the tab, not only the tab itself.**
+R-G6 enumerates "the nav's `Library` → `Playbooks`". Two other strings name that control and would, after Task 5, direct the user to a tab that no longer exists: `src/App.tsx:2738` renders a button labelled **`Back to Library`**, and `src/features/matters/MatterHome.tsx:538` reads **"No playbooks yet. Create one in the Library first, then run it against this matter's documents."** Neither is asserted by any test, so nothing would ever have forced their discovery — which is exactly why they are named here with their files and their current text. Both land in **Task 5**, in the same declared commit as the nav rename. Tasks 7 and 11 could not absorb them: those are cosmetic tasks explicitly forbidden from changing copy. *Cost if wrong: two screens confidently name a control that does not exist — small in consequence, identical in kind to the failure CLAUDE.md's first rule is about, and the thirteenth instance of this project's most repeated defect (a requirement owned by no task).*
+
+**R-GP9 (F22) — `accent-strong` is a real darkened teal, not an alias.**
+Task 1's first draft set `--color-accent-strong: var(--lex-teal)` — identical to `--color-accent` — while Tasks 4, 5 and 9 used `hover:bg-accent-strong` and `hover:text-accent-strong`. Every primary button and every link in the app would have had a hover state that changes nothing: invisible to the whole suite, findable only in a browser. It becomes `--lex-teal-strong: #0e3f39` (the same hue, roughly 25% darker), and Task 6 moves it out of `SURFACE_ONLY` and asserts it as a foreground pair so it cannot silently drift back to the base teal. *Cost if wrong: one more palette-layer value than the handoff's token table lists, in a hue the handoff already fixes.*
+
+**R-GP10 — a test that cannot fail is deleted or replaced, never kept for coverage.**
+Three cases in this plan's first draft asserted nothing (F17): a banner mounted without the prop that would create the control it claimed to check; a "no write affordance" case on a component whose only controls are buttons; and an "excludes `.css`" case against a walker that only ever collects `.tsx?`. Each is replaced below by an assertion of the behaviour it names. This is not tidiness — CLAUDE.md records that this project has shipped several tests that passed against unfixed code, and a green test that reports safety it does not provide is worse than no test at all. **Every new test in this plan must have a stated mutation that makes it fail, and the step that introduces it must name that mutation.** *Cost if wrong: three fewer assertions, each of which was worth nothing.*
+
 **R-GP7 — the chat panel moves into the finding column's header, not out of the app.**
 The three-pane ledger (Task 23) leaves no room for a rail-level Findings/Chat tab pair, and dropping the chat panel would be a behaviour change smuggled into a layout change — the exact thing §9.4 flags the relayout for. It becomes a two-way segmented control at the top of the 470px finding column: `Finding` / `Assistant`. Every prop `ChatPanel` receives today is unchanged, and ruling R4's "the assistant module is otherwise untouched" still holds. *Cost if wrong: the assistant is one click further from the document pane than it was.*
 
 ---
 
+## Every line reference in this plan is a hint; re-derive it by content match
+
+**This applies to every task, not only the ones where it has already been caught.**
+
+A pre-flight scan found this plan's `TabularReview.tsx` references 9–10 lines stale and its `App.tsx` references 5–23 lines stale, against a branch that is still moving. Line numbers rot; the code they point at does not.
+
+**When a brief is generated for a task, every `file.tsx:NNN` in it is re-derived by content match — `grep -n` for the actual string, attribute or identifier named — and the brief carries the re-derived number.** Never edit at a line number this plan supplies without first confirming the content there is what the plan says it is. The failure this guards against is specific and quiet: an implementer edits the neighbouring element, and the step's own mutation test still passes for the wrong reason, because both lines sit inside the same cell.
+
+The scan's corrected numbers are already applied below. They will rot again.
+
+---
+
+## Structural tasks carry the same "no test edited" gate
+
+Tasks 15–23 change behaviour, so they are allowed to add tests and to make the copy changes R-G6 and R-GP8 enumerate. **They are not allowed to edit an existing assertion silently.** Every one of them ends with:
+
+```bash
+git status --porcelain -- '*.test.ts' '*.test.tsx'
+```
+
+and the expected output is **only the test files that task creates, plus any declared change the task names in advance**. A hit on any other test file is a finding: stop, report it, and either revert the change or move it into a commit that declares itself and explains what moved. The governing rule — a test edit **is** the finding — holds for the whole sub-project, not only for its restyle half.
+
+---
+
 ## The restyle task template
 
-Tasks 5–13 are restyles. Each one repeats this shape, and **each names its own components' non-happy states explicitly** — the checklist is in the task, not left to memory. Every restyle task's steps are:
+Tasks 4, 5 and 7–13 are restyles. Each one repeats this shape, and **each names its own components' non-happy states explicitly** — the checklist is in the task, not left to memory. Every restyle task's steps are:
 
 1. **Record the baseline.** Run `npm test` and note the passing count. A restyle that changes it has changed behaviour.
 2. **Apply the token mapping**, component by component, using the exact class strings the task gives.
@@ -145,15 +192,15 @@ Tasks 5–13 are restyles. Each one repeats this shape, and **each names its own
 
 **Modify:**
 
-- `src/index.css` — the whole token system; the dark `@theme` block and `body` rule are deleted in Task 6.
+- `src/index.css` — the whole token system; the dark `@theme` block and `body` rule are deleted in Task 5.
 - `index.html` — nothing added (no font `<link>`; R-G3). Asserted by Task 1's test.
-- All eight shared primitives in `src/components/` (Task 5).
-- `src/App.tsx` — chrome (Task 6), banners' host (Task 9), stat row/activity/wizard wiring (Tasks 15/16/18/19), export-gate banner (Task 17), the `positions` route and view (Task 20), the view switch (Task 21).
+- All eight shared primitives in `src/components/` (Task 4).
+- `src/App.tsx` — chrome (Task 5), banners' host (Task 9), stat row/activity/wizard wiring (Tasks 15/16/18/19), export-gate banner (Task 17), the `positions` route and view (Task 20), the view switch (Task 21).
 - `src/lib/router.ts` — one new route, `{ name: 'positions' }` (Task 20).
 - Every `.tsx` under `src/features/` (Tasks 7–13, 22, 23).
 - `src/features/review/PdfCanvas.tsx` — two overlay style values only (R-GP1, Task 9).
 - `src/App.rerunResets.test.tsx`, `src/features/tabular/TabularReview.test.tsx`, `src/features/templates/TemplateEditor.test.tsx` — the three declared conversions (Task 3).
-- `src/App.test.tsx`, `src/App.authRedirect.test.tsx`, `src/App.matterDelete.test.tsx`, `src/App.matterPicker.test.tsx`, `src/App.reviewSaveError.test.tsx` — the declared `Library` → `Playbooks` rename, 13 occurrences (Task 6).
+- `src/App.test.tsx`, `src/App.authRedirect.test.tsx`, `src/App.matterDelete.test.tsx`, `src/App.matterPicker.test.tsx`, `src/App.reviewSaveError.test.tsx` — the declared `Library` → `Playbooks` rename, 13 occurrences (Task 5).
 - `docs/superpowers/redesign/rulings.md`, `README.md` (Task 24).
 
 **Do not create:** any theme-toggle module, any search component, any `Report` view, any version-diff component, any OCR progress component, any assignee or "assigned to me" component.
@@ -165,7 +212,7 @@ Tasks 5–13 are restyles. Each one repeats this shape, and **each names its own
 **Kind:** cosmetic (purely additive — nothing changes visually in this commit).
 
 **Files:**
-- Modify: `src/index.css` (adds two layers above the existing dark `@theme`, which stays until Task 6)
+- Modify: `src/index.css` (adds two layers above the existing dark `@theme`, which stays until Task 5)
 - Create: `public/fonts/newsreader-latin-var.woff2`, `public/fonts/newsreader-latin-var-italic.woff2`, `public/fonts/instrument-sans-latin-var.woff2`, `public/fonts/ibm-plex-mono-latin-400.woff2`, `public/fonts/ibm-plex-mono-latin-500.woff2`, `public/fonts/ibm-plex-mono-latin-600.woff2`
 - Create: `src/test/fonts.test.ts`
 
@@ -220,7 +267,7 @@ The total must be **≤ 358400 bytes** (350 KB). All three families are open-lic
 
 - [ ] **Step 2: Add the two token layers to `src/index.css`**
 
-Insert **above** the existing dark `@theme` block. That block and the `body` rule below it stay for now and are deleted in Task 6 — this commit changes nothing visually.
+Insert **above** the existing dark `@theme` block. That block and the `body` rule below it stay for now and are deleted in Task 5 — this commit changes nothing visually.
 
 ```css
 @import "tailwindcss";
@@ -241,6 +288,11 @@ Insert **above** the existing dark `@theme` block. That block and the `body` rul
 
   --lex-teal: #14574f;   --lex-oxblood: #8c2f24;  --lex-amber: #8a6414;
   --lex-green: #2c6448;  --lex-blue: #3d5a80;
+  /* The hover/pressed step for teal. A real value, not an alias of
+     --lex-teal: `hover:bg-accent-strong` on every primary button and every
+     link would otherwise be a visual no-op, invisible to the whole test
+     suite and findable only in a browser (R-GP9). */
+  --lex-teal-strong: #0e3f39;
 
   /* Channel triplets, so a tint or an edge is one rgb(… / a) away from the
      hue it belongs to and cannot drift from it by hand-mixing. */
@@ -286,7 +338,7 @@ Insert **above** the existing dark `@theme` block. That block and the `body` rul
   --color-accent:        var(--lex-teal);
   --color-accent-tint:   rgb(var(--lex-teal-rgb) / 0.09);
   --color-accent-edge:   rgb(var(--lex-teal-rgb) / 0.24);
-  --color-accent-strong: var(--lex-teal);
+  --color-accent-strong: var(--lex-teal-strong);
 
   /* Risk — a model judgement */
   --color-risk-high:      var(--lex-oxblood);
@@ -502,12 +554,24 @@ Rename one file (`mv public/fonts/ibm-plex-mono-latin-600.woff2 /tmp/x.woff2`), 
 - [ ] **Step 6: Confirm nothing changed visually**
 
 Run: `npm test && npx tsc --noEmit && npm run build`
-Expected: the full suite passes with no test edited (the old dark `@theme` is still in place and still wins for `--color-card`, which is redeclared in the new block — Tailwind takes the last declaration, so `card` is now `#fffefb`; nothing in the app consumes `bg-card` yet, so no screen changes). Build clean, no externalization warning.
+Expected: the full suite passes with no test edited. Build clean, no externalization warning.
+
+**On the `--color-card` collision, precisely (F13).** Both blocks declare `--color-card`. The new layers are inserted **above** the old dark `@theme`, so the **old** declaration (`#1a1a1d`) is the later one and still wins at this commit. That is fine, and it is not the reason nothing changes: nothing changes because **`bg-card` / `text-card` / `border-card` have zero call sites in the app today** (verified). The value it resolves to is therefore unobservable until Task 5 deletes the dark block.
+
+**Do not "fix" this by moving the new layers below the old block.** That would flip which declaration wins for `--color-card` *and* for anything else the two blocks share, inside a commit whose entire claim is that nothing changes visually. Insertion order is above, deliberately, and Task 5 removes the collision rather than reordering around it.
 
 - [ ] **Step 7: Commit**
 
+Stage the six font files **by name** — never the `public/fonts` directory, which would sweep in anything else that happens to be sitting there (F23a):
+
 ```bash
-git add src/index.css src/test/fonts.test.ts public/fonts
+git add src/index.css src/test/fonts.test.ts \
+  public/fonts/newsreader-latin-var.woff2 \
+  public/fonts/newsreader-latin-var-italic.woff2 \
+  public/fonts/instrument-sans-latin-var.woff2 \
+  public/fonts/ibm-plex-mono-latin-400.woff2 \
+  public/fonts/ibm-plex-mono-latin-500.woff2 \
+  public/fonts/ibm-plex-mono-latin-600.woff2
 git commit -F .git/COMMIT_G1
 ```
 
@@ -549,7 +613,9 @@ Written now, failing against today's ~100 raw palette utilities, so the target i
   - `export interface ColourViolation { file: string; line: number; rule: string; text: string }`
   - `export function scanSource(file: string, source: string): ColourViolation[]`
   - `export function collectScannableFiles(root: string): string[]`
-  - `export const SCAN_EXEMPT: readonly string[]` — the exemption list, so a later reader can see it is three entries and why.
+  - `export const SCAN_EXEMPT: readonly string[]` — the exemption list, **one entry** (`features/review/PdfCanvas.tsx`), so a later reader can see what it is and why. It does **not** list `index.css`: the walker collects `.ts`/`.tsx` only, so a `.css` entry would never match and would merely look like a guarantee it was not providing (F14).
+
+**How big the job is, measured (Task 2 Step 5 records it; Task 14 checks it reached zero):** **943 violations across 104 scannable files** — 895 `tailwind-palette`, 48 `arbitrary-colour`, 0 `hex-literal`, 0 `palette-layer-leak`. **48 of the 943 sit in files no restyle task owns**: `src/App.tsx` (45) and `src/main.tsx` (3). Task 5 takes both, so Task 14's sweep is a genuine tail rather than a second restyle.
 
 - [ ] **Step 1: Write the scanner's failing tests**
 
@@ -559,7 +625,7 @@ Create `src/test/palette.test.ts`. This first half runs green as soon as Step 2 
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { scanSource, collectScannableFiles } from './paletteScan';
+import { scanSource, collectScannableFiles, SCAN_EXEMPT } from './paletteScan';
 
 const SRC = resolve(__dirname, '..');
 
@@ -626,11 +692,24 @@ describe('collectScannableFiles', () => {
   it('includes application source and excludes tests, the harness and the exemptions', () => {
     const files = collectScannableFiles(SRC);
     expect(files).toContain('features/review/FindingCard.tsx');
+    expect(files).toContain('App.tsx');
+    // The crash screen is application chrome and is scanned like anything
+    // else — it is the one screen that renders when everything else has
+    // failed, so it is the last place a raw colour should go unreviewed.
+    expect(files).toContain('main.tsx');
     expect(files.some(f => f.endsWith('.test.tsx'))).toBe(false);
     expect(files.some(f => f.endsWith('.test.ts'))).toBe(false);
     expect(files.some(f => f.startsWith('test/'))).toBe(false);
     expect(files).not.toContain('features/review/PdfCanvas.tsx');
-    expect(files.some(f => f.endsWith('.css'))).toBe(false);
+  });
+
+  it('exempts exactly the two files it means to, and says which', () => {
+    // Replaces an earlier case that asserted no `.css` file was collected —
+    // true by construction, since the walker only ever collects .ts/.tsx,
+    // so it reported an exemption that was really an absence
+    // (F14 + F17c, R-GP10).
+    expect([...SCAN_EXEMPT]).toEqual(['features/review/PdfCanvas.tsx']);
+    expect(collectScannableFiles(SRC)).not.toContain('features/review/PdfCanvas.tsx');
   });
 });
 
@@ -675,17 +754,26 @@ export interface ColourViolation {
 }
 
 /**
- * Files the scan does not read, and why each one is exempt.
+ * Files the scan collects and then skips. Exactly one, and it is a real
+ * exemption rather than a decorative one.
  *
- * `index.css` is where the tokens are DEFINED — the palette layer lives
- * there by design. `PdfCanvas.tsx` is exempt by spec §13.4 because canvas
- * draw calls are not styling; its highlight overlay divs are nevertheless
- * moved onto the highlight tokens by Task 9 (R-GP1), so the exemption
- * covers only what it is meant to. `test/` holds this scanner and the token
- * reader, both of which contain colour patterns as DATA.
+ * `PdfCanvas.tsx` is exempt by spec §13.4 because canvas draw calls are not
+ * styling; its highlight overlay DIVS are nevertheless moved onto the
+ * highlight tokens by Task 9 (R-GP1), so the exemption covers only what it
+ * is meant to.
+ *
+ * `index.css` is deliberately NOT listed. It is where the tokens are
+ * defined and the palette layer legitimately lives, but the walker below
+ * collects `.ts`/`.tsx` only, so a `.css` entry here would never match and
+ * would read as a guarantee it was not providing. If the scan is ever
+ * widened to `.css` — a genuine improvement, since index.css is the one
+ * place a raw colour is legal — add it here in the same change.
+ *
+ * `test/` is excluded by the walker, not by this list: it holds this
+ * scanner and the token reader, both of which contain colour patterns as
+ * DATA.
  */
 export const SCAN_EXEMPT: readonly string[] = [
-  'index.css',
   'features/review/PdfCanvas.tsx',
 ];
 
@@ -754,7 +842,9 @@ Expected: PASS for every unskipped case; the repo-wide guard reported as skipped
 
 - [ ] **Step 5: Prove the skipped guard would actually fire**
 
-Temporarily change `describe.skip` to `describe` and run again. Expected: FAIL, with a multi-line list naming real files (`features/review/FindingCard.tsx:128 [tailwind-palette] text-violet-400`, and so on) — this is the work Tasks 5–13 remove. Restore the `.skip`. **Record the violation count in the commit message**; Task 14 checks it has reached zero.
+Temporarily change `describe.skip` to `describe` and run again. Expected: FAIL, with a multi-line list naming real files (`features/review/FindingCard.tsx:128 [tailwind-palette] text-violet-400`, and so on) — this is the work Tasks 4, 5 and 7–13 remove. Restore the `.skip`.
+
+**Expected total: 943 across 104 files** (895 `tailwind-palette`, 48 `arbitrary-colour`, 0 `hex-literal`, 0 `palette-layer-leak`). **Record the count you actually measure in the commit message**, and if it differs materially from 943, say so — the branch has moved since this plan was written and Task 14 compares against what you record here, not against this number.
 
 - [ ] **Step 6: Mutation-test the scanner**
 
@@ -798,9 +888,11 @@ Three assertions couple to a presentational class. Each is converted to a semant
 | `src/features/tabular/TabularReview.test.tsx:97` | `.truncate` | `[data-testid="cell-summary"]` holding the whole summary |
 | `src/features/templates/TemplateEditor.test.tsx:124` | `.closest('.group')` | `.closest('[data-clause-row]')` |
 
+**One correction to the spec's framing of the middle row.** §13.2 lists all three as tests that "will break". The `.truncate` one will not: it asserts `expect(summaryEl).toBeFalsy()`, i.e. the *absence* of a class, so a restyle that removes the class keeps it green. The conversion is still worth doing, and for a better reason than the spec gives — the replacement asserts that the whole sentence is present in one element, which is a real claim about the grid not hiding a finding, where the original only said a class was missing.
+
 **Files:**
-- Modify: `src/features/review/FindingCard.tsx:105-147` (the `pending` and `running` branches)
-- Modify: `src/features/tabular/TabularReview.tsx:379-381` (the cell summary div)
+- Modify: `src/features/review/FindingCard.tsx:105-147` (the `pending` and `running` branches — re-derive by grepping for `status === 'running'`)
+- Modify: `src/features/tabular/TabularReview.tsx:388-390` (the cell summary div — re-derive by grepping for `line-clamp-3`)
 - Modify: `src/features/templates/TemplateEditor.tsx:312-322` (the clause row wrapper)
 - Modify: `src/App.rerunResets.test.tsx` (the assertion at line 998)
 - Modify: `src/features/tabular/TabularReview.test.tsx` (the assertion at line 97)
@@ -815,7 +907,7 @@ Three assertions couple to a presentational class. Each is converted to a semant
 
 - [ ] **Step 1: Add the busy contract to `FindingCard`'s running branch**
 
-`src/features/review/FindingCard.tsx:123-134` becomes (the `interrupted` block below it at 135-144 is unchanged):
+`FindingCard`'s `running` branch becomes the following (find it by grepping for `status === 'running'`; the `interrupted` block immediately below it, at roughly `:134-144`, is unchanged):
 
 ```tsx
   if (status === 'running') {
@@ -859,7 +951,17 @@ with:
 ```ts
     // The busy contract, not a styling class: `data-busy` survives the
     // reskin, and the word survives `prefers-reduced-motion` (R-G20/R-GP2).
-    expect(container.querySelectorAll('[data-busy="true"]').length).toBeGreaterThan(0);
+    //
+    // The WORD is the load-bearing half. From Task 4 onward a loading
+    // `Button` also carries `data-busy="true"`, so a bare
+    // `querySelectorAll('[data-busy]').length > 0` could be satisfied by an
+    // unrelated element and would stop proving anything about this card —
+    // the "green suite is not evidence" failure, arriving four commits after
+    // the mutation test that certified it (F11). So the attribute is
+    // asserted INSIDE the card region, not across the container.
+    const busyCard = Array.from(container.querySelectorAll('[data-busy="true"]'))
+      .find(el => /Extracting…/.test(el.textContent || ''));
+    expect(busyCard, 'the retried clause card must expose the busy contract').toBeTruthy();
     expect(container.textContent).toContain('Extracting…');
 ```
 
@@ -871,7 +973,7 @@ Now delete `data-busy="true"` from `FindingCard.tsx` and re-run: expected FAIL o
 
 - [ ] **Step 4: Add `data-testid="cell-summary"` to the grid cell**
 
-`src/features/tabular/TabularReview.tsx:379-381` becomes:
+`src/features/tabular/TabularReview.tsx:388-390` becomes (find it by content: the `div` whose className switches between `whitespace-normal` and `line-clamp-3`):
 
 ```tsx
             <div
@@ -942,7 +1044,7 @@ Now remove `data-clause-row` from the component and re-run: expected FAIL — `h
 - [ ] **Step 10: Confirm no other test was disturbed**
 
 Run: `npm test && npx tsc --noEmit && npm run build`
-Expected: full suite green. In particular confirm the eight positional `chips()[0]` assertions in `src/App.verification.test.tsx` and the five in `src/App.rerunResets.test.tsx` still pass — they would not have, had the busy element been given `role="status"`, which is precisely why R-GP2 rules it out.
+Expected: full suite green. In particular confirm the **~21 positional `[role="status"]` reads across three files** still pass — 15 in `src/App.verification.test.tsx`, 7 in `src/App.rerunResets.test.tsx` (including `:460`, which reads `chipsDuring()[0]` while a card is busy), and `src/features/tabular/TabularReview.test.tsx:65` and `:80`. None of them would have, had the busy element been given `role="status"`, which is precisely why R-GP2 rules it out. (An earlier draft of this plan said "eight and five across two files"; that counted `const chips = …` declarations rather than assertions, and missed the third file entirely — F6.)
 
 - [ ] **Step 11: Commit**
 
@@ -976,269 +1078,7 @@ at all (R-G20, declared under R-GP3).
 
 ---
 
-## Task 4: The contrast test over the token table
-
-**Kind:** test infrastructure. No application file changes.
-
-The single most likely regression in a palette this deliberately soft is a role slipping below legibility. This is pure arithmetic over `src/index.css`, needs no browser, and asserts **every** pair the design system defines — at the tier that pair's role assigns (R-GP4).
-
-**Files:**
-- Create: `src/test/tokens.ts`
-- Create: `src/test/contrast.test.ts`
-
-**Interfaces:**
-- Consumes: Task 1's `src/index.css` token layers.
-- Produces:
-  - `export interface TokenTable { palette: Record<string, string>; roles: Record<string, string> }`
-  - `export function readTokens(cssPath: string): TokenTable`
-  - `export function resolveColour(name: string, tokens: TokenTable): { r: number; g: number; b: number; a: number }`
-  - `export function composite(fg: {r,g,b,a}, bg: {r,g,b,a}): {r,g,b,a}`
-  - `export function contrastRatio(fg: string, bg: string, tokens: TokenTable): number`
-
-- [ ] **Step 1: Write the failing contrast tests**
-
-Create `src/test/contrast.test.ts`:
-
-```ts
-import { describe, it, expect } from 'vitest';
-import { resolve } from 'node:path';
-import { readTokens, contrastRatio } from './tokens';
-
-const tokens = readTokens(resolve(__dirname, '../index.css'));
-
-/** Tier thresholds. `body` is WCAG AA for normal text; `chip` is AA for
- *  large/bold text and is what the 9.5px uppercase mono chips are held to
- *  because they are bold, letter-spaced and short. `decorative` is a
- *  documented FLOOR, not a WCAG grade: ink-5 on paper is ~2.3:1 by design
- *  and is right for a timestamp and wrong for anything a reader must not
- *  miss (R-G19, R-GP4). Asserting it rather than exempting it is what stops
- *  a future palette edit pushing a timestamp to invisible. */
-const MIN = { body: 4.5, chip: 3.0, decorative: 2.2 } as const;
-
-type Pair = [fg: string, bg: string, tier: keyof typeof MIN];
-
-const PAIRS: Pair[] = [
-  // Primary and prose ink on every surface it is used on.
-  ['ink-1', 'paper', 'body'], ['ink-1', 'card', 'body'], ['ink-1', 'page', 'body'],
-  ['ink-prose', 'paper', 'body'], ['ink-prose', 'card', 'body'], ['ink-prose', 'page', 'body'],
-  ['ink-quote', 'card', 'body'], ['ink-quote', 'paper', 'body'],
-  ['ink-2', 'paper', 'body'], ['ink-2', 'card', 'body'],
-  ['ink-3', 'paper', 'body'], ['ink-3', 'card', 'body'],
-  // Decorative-grade ink. Never used for a warning, a disclosure or a
-  // failure — that rule is R-G19 and lives in review, not in arithmetic.
-  ['ink-4', 'paper', 'chip'], ['ink-4', 'card', 'chip'],
-  ['ink-5', 'paper', 'decorative'], ['ink-5', 'card', 'decorative'],
-  ['ink-6', 'card', 'decorative'],
-  // Action and human confirmation.
-  ['accent', 'paper', 'body'], ['accent', 'card', 'body'], ['accent', 'accent-tint', 'chip'],
-  // Risk, on the surfaces and washes each is used on.
-  ['risk-high', 'paper', 'body'], ['risk-high', 'card', 'body'], ['risk-high', 'risk-high-tint', 'chip'],
-  ['risk-med', 'paper', 'body'], ['risk-med', 'card', 'body'], ['risk-med', 'risk-med-tint', 'chip'],
-  ['risk-low', 'paper', 'body'], ['risk-low', 'card', 'body'], ['risk-low', 'risk-low-tint', 'chip'],
-  // Verification chips, each on the fill it sits in.
-  ['state-verified', 'accent-tint', 'chip'],
-  ['state-flagged', 'risk-med-tint', 'chip'],
-  ['state-rejected', 'risk-high-tint', 'chip'],
-  ['state-unchecked', 'chip-fill', 'chip'],
-  // Position outcome chips sit on a transparent fill over card.
-  ['outcome-meets', 'card', 'chip'],
-  ['outcome-deviates', 'card', 'chip'],
-  ['outcome-unclear', 'card', 'chip'],
-  // Position health.
-  ['health-held', 'card', 'chip'], ['health-conceded', 'card', 'chip'],
-  ['health-untested', 'card', 'chip'], ['health-none', 'card', 'decorative'],
-  // Net position.
-  ['net-unconfirmed', 'card', 'body'], ['net-confirmed', 'card', 'body'],
-  // Draft / suggested.
-  ['draft', 'card', 'body'], ['draft', 'draft-tint', 'chip'],
-  // Primary button: white text on the accent fill.
-  ['page', 'accent', 'body'],
-];
-
-describe('token contrast', () => {
-  for (const [fg, bg, tier] of PAIRS) {
-    it(`${fg} on ${bg} clears the ${tier} floor (${MIN[tier]}:1)`, () => {
-      const ratio = contrastRatio(fg, bg, tokens);
-      expect(
-        Number(ratio.toFixed(2)),
-        `${fg} on ${bg} is ${ratio.toFixed(2)}:1`,
-      ).toBeGreaterThanOrEqual(MIN[tier]);
-    });
-  }
-
-  it('every semantic role in index.css is either exercised above or explicitly surface-only', () => {
-    // A role nobody checks is a role that can drift. Surfaces, rules,
-    // edges and the two highlight colours are not text pairs; everything
-    // else must appear as a foreground somewhere in PAIRS.
-    const SURFACE_ONLY = new Set([
-      'canvas', 'paper', 'card', 'doc-gutter',
-      'rule-soft', 'rule', 'rule-strong', 'chip-fill',
-      'accent-tint', 'accent-edge', 'accent-strong',
-      'risk-high-tint', 'risk-high-edge', 'risk-med-tint', 'risk-med-edge', 'risk-low-tint',
-      'draft-tint', 'highlight-fill', 'highlight-edge',
-      'redline-ins', 'redline-del', 'net-amended',
-    ]);
-    const exercised = new Set(PAIRS.map(([fg]) => fg));
-    const missing = Object.keys(tokens.roles)
-      .filter(name => !SURFACE_ONLY.has(name) && !exercised.has(name));
-    expect(missing).toEqual([]);
-  });
-});
-```
-
-- [ ] **Step 2: Run it to watch it fail**
-
-Run: `npx vitest run src/test/contrast.test.ts`
-Expected: FAIL — `Failed to resolve import "./tokens"`.
-
-- [ ] **Step 3: Write the token reader and the contrast arithmetic**
-
-Create `src/test/tokens.ts`:
-
-```ts
-import { readFileSync } from 'node:fs';
-
-export interface TokenTable {
-  /** `--lex-*` names, without the prefix: `teal`, `ink-1`, `teal-rgb`. */
-  palette: Record<string, string>;
-  /** `--color-*` names, without the prefix: `accent`, `risk-high-tint`. */
-  roles: Record<string, string>;
-}
-
-export interface Rgba { r: number; g: number; b: number; a: number }
-
-/** Reads both layers out of index.css. Deliberately a parse of the real
- *  file rather than a duplicated table: a second copy of the palette is
- *  exactly the sibling drift this project keeps paying for. */
-export function readTokens(cssPath: string): TokenTable {
-  const css = readFileSync(cssPath, 'utf8');
-  const palette: Record<string, string> = {};
-  const roles: Record<string, string> = {};
-  for (const [, name, value] of css.matchAll(/--lex-([a-z0-9-]+)\s*:\s*([^;]+);/g)) {
-    palette[name] = value.trim();
-  }
-  for (const [, name, value] of css.matchAll(/--color-([a-z0-9-]+)\s*:\s*([^;]+);/g)) {
-    roles[name] = value.trim();
-  }
-  return { palette, roles };
-}
-
-function parseHex(hex: string): Rgba {
-  const h = hex.replace('#', '');
-  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
-  return {
-    r: parseInt(full.slice(0, 2), 16),
-    g: parseInt(full.slice(2, 4), 16),
-    b: parseInt(full.slice(4, 6), 16),
-    a: 1,
-  };
-}
-
-/** Resolves a role name to concrete channels, following `var()` through the
- *  palette layer and expanding `rgb(<triplet> / <alpha>)`. */
-export function resolveColour(name: string, tokens: TokenTable): Rgba {
-  let value = tokens.roles[name];
-  if (value === undefined) throw new Error(`No --color-${name} in index.css`);
-
-  const rgbFn = value.match(/^rgb\(\s*var\(--lex-([a-z0-9-]+)\)\s*\/\s*([0-9.]+)\s*\)$/);
-  if (rgbFn) {
-    const triplet = tokens.palette[rgbFn[1]];
-    if (triplet === undefined) throw new Error(`No --lex-${rgbFn[1]} in index.css`);
-    const [r, g, b] = triplet.split(/\s+/).map(Number);
-    return { r, g, b, a: Number(rgbFn[2]) };
-  }
-
-  const varRef = value.match(/^var\(--lex-([a-z0-9-]+)\)$/);
-  if (varRef) {
-    const resolved = tokens.palette[varRef[1]];
-    if (resolved === undefined) throw new Error(`No --lex-${varRef[1]} in index.css`);
-    value = resolved;
-  }
-  if (!value.startsWith('#')) throw new Error(`--color-${name} is not a resolvable colour: ${value}`);
-  return parseHex(value);
-}
-
-/** Source-over compositing, so a tint's real appearance is measured rather
- *  than its nominal channels — a 9% teal wash IS what the eye sees, and
- *  measuring the unblended colour would report a contrast nobody has. */
-export function composite(fg: Rgba, bg: Rgba): Rgba {
-  return {
-    r: Math.round(fg.r * fg.a + bg.r * (1 - fg.a)),
-    g: Math.round(fg.g * fg.a + bg.g * (1 - fg.a)),
-    b: Math.round(fg.b * fg.a + bg.b * (1 - fg.a)),
-    a: 1,
-  };
-}
-
-function channelLuminance(v: number): number {
-  const s = v / 255;
-  return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-}
-
-function relativeLuminance({ r, g, b }: Rgba): number {
-  return 0.2126 * channelLuminance(r) + 0.7152 * channelLuminance(g) + 0.0722 * channelLuminance(b);
-}
-
-/**
- * WCAG 2.1 contrast ratio between two role tokens.
- *
- * A translucent background is composited over `card` first, because every
- * tint in this system is painted on a card or on paper and `card` is the
- * lighter of the two (so this reports the WORSE of the two ratios for dark
- * ink, which is the honest direction to round in).
- */
-export function contrastRatio(fgName: string, bgName: string, tokens: TokenTable): number {
-  const card = resolveColour('card', tokens);
-  let bg = resolveColour(bgName, tokens);
-  if (bg.a < 1) bg = composite(bg, card);
-  let fg = resolveColour(fgName, tokens);
-  if (fg.a < 1) fg = composite(fg, bg);
-
-  const l1 = relativeLuminance(fg);
-  const l2 = relativeLuminance(bg);
-  const [light, dark] = l1 > l2 ? [l1, l2] : [l2, l1];
-  return (light + 0.05) / (dark + 0.05);
-}
-```
-
-- [ ] **Step 4: Run it to watch it pass**
-
-Run: `npx vitest run src/test/contrast.test.ts`
-Expected: PASS for every pair. If a pair fails, **do not lower the threshold** — either the role assignment in Task 1 is wrong (a body-tier role pointing at a decorative ink), or the pair belongs at a different tier and the reason must be written into the test as a comment. `state-unchecked` on `chip-fill` is the tightest pair in the table at roughly 3.1:1; that is intentional and is why the chip tier exists.
-
-- [ ] **Step 5: Mutation-test the contrast guard**
-
-In `src/index.css`, temporarily change `--color-ink-2` to `var(--lex-ink-5)`. Re-run: expected FAIL on `ink-2 on paper clears the body floor`, with the measured ratio in the message. Restore. Then add a new `--color-experimental: var(--lex-blue);` to the `@theme` block and re-run: expected FAIL on "every semantic role … is either exercised above or explicitly surface-only", naming `experimental`. Remove it.
-
-- [ ] **Step 6: Full gates and commit**
-
-Run: `npm test && npx tsc --noEmit && npm run build`
-
-```bash
-git add src/test/tokens.ts src/test/contrast.test.ts
-git commit -F .git/COMMIT_G4
-```
-
-Message:
-
-```
-test(g): assert contrast for every token pair the design system defines
-
-Pure arithmetic over index.css, parsed rather than copied so a second table
-cannot drift from the first. Tints are composited over card before the
-ratio is taken, because a 9% wash is what the eye actually sees.
-
-Three tiers rather than an exemption list: body 4.5:1, chip and large text
-3:1, and a documented decorative floor of 2.2:1 for the timestamp inks that
-are ~2.3:1 by design. Exempting them is how a palette drifts to invisible;
-asserting the floor means a future edit that crosses it fails here (R-GP4).
-
-A last case fails if index.css grows a role no pair exercises.
-```
-
----
-
-## Task 5: Shared primitives
+## Task 4: Shared primitives
 
 **Kind:** cosmetic. Restyled first, because every screen depends on them.
 
@@ -1261,7 +1101,7 @@ Follow the **restyle task template** above. Eight components, all with existing 
 - The three chips are three shapes (R-G16) — verify by rendering all three side by side, not by reading the classes.
 - `Button` keeps `loading` and `disabled` semantics exactly, keeps the disabled cursor and opacity, and keeps rendering its spinner while loading — but that spinner now sits inside a `data-busy="true"` `aria-live="polite"` wrapper, per Task 3's contract.
 - `Modal` keeps `role="dialog"`, `aria-modal="true"`, and the `aria-label="Close"` on its X.
-- `Toast` keeps `role="status"` and keeps its two variants distinct.
+- **`Toast` does NOT gain `role="status"`** (F1, R-GP2). It has none today — spec §9.1's "keeps `role="status"`" is factually wrong about the current source — and `<Toast>` is the **first child** of the app frame, so a rendered toast would take index 0 of every `querySelectorAll('[role="status"]')` in the suite. `App.verification.test.tsx:498-510` rejects `saveReview` with `Storage quota exceeded`, which fires `notify(…, 'error')`, then asserts `chips[0].textContent === 'Unverified'` — with the role on the toast, that assertion reads the toast and fails, inside a task that forbids editing tests. It takes `aria-live` and `data-toast` instead, and keeps its two variants distinct.
 
 - [ ] **Step 1: Record the baseline**
 
@@ -1326,12 +1166,19 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
 
 ```tsx
     <div
-      role="status"
+      data-toast
+      // `aria-live`, never role="status": that selector is how ~21 positional
+      // assertions find a StateChip, and this element renders FIRST in the app
+      // frame (R-GP2/F1). `assertive` for an error the user must not miss,
+      // `polite` for a success they can read when they get to it.
+      aria-live={isError ? 'assertive' : 'polite'}
       className={`fixed bottom-8 right-8 px-6 py-3 rounded-card z-[100] flex items-center gap-3 border-l-2 border border-rule bg-card font-ui text-ui transition-colors duration-150 ${
         isError ? 'border-l-risk-high text-risk-high' : 'border-l-accent text-ink-1'
       }`}
     >
 ```
+
+`Toast.test.tsx` selects by text, not by role (verified), so this changes nothing it asserts. If it did, that would be the finding — not a licence to edit it.
 
 - [ ] **Step 5: Restyle `LoadErrorPanel`**
 
@@ -1477,7 +1324,7 @@ Run: `npx tsc --noEmit && npm run build`
 
 ```bash
 git add src/components/Button.tsx src/components/Modal.tsx src/components/Toast.tsx src/components/LoadErrorPanel.tsx src/components/StateChip.tsx src/components/RiskChip.tsx src/components/PositionChip.tsx src/components/AutoResizeTextarea.tsx
-git commit -F .git/COMMIT_G5
+git commit -F .git/COMMIT_G4
 ```
 
 Message:
@@ -1504,24 +1351,30 @@ No test edited.
 ```
 ---
 
-## Task 6: App chrome, the dark-theme deletion, and the declared nav rename
+## Task 5: App chrome, the dark-theme deletion, and the declared nav rename
 
 **Kind:** **structural (small)** — the top bar gains an avatar and the nav's `Library` is renamed to `Playbooks`. Everything else is cosmetic. **This is the commit after which the branch is visibly light and visibly inconsistent**, which is expected and is why G is a branch (R-G17).
 
 **Files:**
 - Modify: `src/index.css` (delete the dark `@theme` block and the `body` rule; retint `.custom-scrollbar`; add the new `body` rule)
-- Modify: `src/App.tsx:2554-2604` (the app frame and header), `src/App.tsx:225-243` (`MigrationBlockedScreen`), `src/App.tsx:2946` (the pending `bg-surface` div), and the `not-found` branch
+- Modify: `src/App.tsx` — the app frame and header (`≈:2559-2608`, find it by grepping for `<header`), `MigrationBlockedScreen` (`≈:225-243`), the pending `bg-surface` div (`≈:2969`, grep `min-h-screen bg-surface`), the "No run yet" line (`≈:2843`), the `not-found` branch, the `Back to Library` button (`≈:2738`)
+- Modify: `src/main.tsx` — the last-resort `ErrorBoundary` (F12)
+- Modify: `src/features/matters/MatterHome.tsx` — the "Create one in the Library first" sentence (`≈:538`) **only**; the rest of that file is Task 7's
 - Modify: `src/App.test.tsx`, `src/App.authRedirect.test.tsx`, `src/App.matterDelete.test.tsx`, `src/App.matterPicker.test.tsx`, `src/App.reviewSaveError.test.tsx` — **13 occurrences** of the string `'Library'` passed to each file's local `clickNav` helper
 
+**Every line number above is approximate and rots.** Re-derive each by content match before editing — the scan that produced these found the previous set 5–23 lines stale (F24).
+
 **Interfaces:**
-- Consumes: Task 1's tokens; Task 5's primitives.
+- Consumes: Task 1's tokens; Task 4's primitives.
 - Produces: the light app frame every other screen sits inside, and the nav row Tasks 20 and 21 extend.
 
 **Declared changes, and nothing else may be declared later:**
 
-1. **`Library` → `Playbooks`** (R-G6). The route is already `/playbooks` and the `Route` is already `{ name: 'playbooks' }`; only the visible label was out of step. Thirteen assertions call `clickNav(container, 'Library')` and each becomes `clickNav(container, 'Playbooks')`. This is the one copy change in this task and it is why the commit is labelled structural.
-2. **The profile-initials avatar** (§7). It shows the **local** profile's own initials and links to Settings. An avatar of yourself is honest and it is the only place the identity substrate becomes visible. **No** "assigned to me" counter, **no** badge, **no** firm tag beside the wordmark, **no** search box (R-G14).
-3. **The gradient logo tile is dropped** for a live-text wordmark in Newsreader — the handoff's "no logo file".
+1. **`Library` → `Playbooks`** (R-G6). The route is already `/playbooks` and the `Route` is already `{ name: 'playbooks' }`; only the visible label was out of step. Thirteen assertions call `clickNav(container, 'Library')` and each becomes `clickNav(container, 'Playbooks')`.
+2. **The two other strings that name that tab, renamed in the same commit** (R-GP8, F5). `src/App.tsx:2738` renders a button labelled **`Back to Library`**; `src/features/matters/MatterHome.tsx:538` reads **"No playbooks yet. Create one in the Library first, then run it against this matter's documents."** After the nav rename, both direct the user to a tab that no longer exists. **Neither is asserted by any test**, so nothing else in this plan would ever have forced their discovery — which is precisely why they are named here rather than left to be noticed. Tasks 7 and 11 cannot absorb them: those are cosmetic and forbidden from changing copy.
+3. **`src/main.tsx`'s `ErrorBoundary` is restyled here** (F12). It is app-frame chrome, it holds 3 of the 943 palette violations, and it is named nowhere in spec §9's inventory — so without this line it would have been restyled by whoever ran Task 14's sweep, with no state checklist and no R-G19 pass. It is the one screen that renders when everything else has failed, so its heading and its stringified error sit at **`risk-high` on `risk-high-tint`**, never at `ink-4` or below.
+4. **The profile-initials avatar** (§7). It shows the **local** profile's own initials and links to Settings. An avatar of yourself is honest and it is the only place the identity substrate becomes visible. **No** "assigned to me" counter, **no** badge, **no** firm tag beside the wordmark, **no** search box (R-G14).
+5. **The gradient logo tile is dropped** for a live-text wordmark in Newsreader — the handoff's "no logo file".
 
 - [ ] **Step 1: Record the baseline**
 
@@ -1545,7 +1398,7 @@ body {
 .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgb(26 24 21 / 0.24); }
 ```
 
-`bg-surface` and `bg-panel` no longer exist as utilities; `tsc` will not catch that (they are strings), so Step 6's grep does.
+`bg-surface` and `bg-panel` no longer exist as utilities; `tsc` will not catch that (they are strings), so Step 8's grep does.
 
 - [ ] **Step 3: Restyle the app frame and header**
 
@@ -1590,8 +1443,15 @@ body {
             onClick={() => requestView('settings')}
             className={`p-1.5 rounded-inset ${view === 'settings' ? 'text-ink-1' : 'text-ink-3 hover:text-ink-1'}`}
             title="Settings"
+            /* An icon-only control needs an accessible NAME, and `title` is
+               not one: `buttonNamed` (src/test/mount.tsx:54-57) matches
+               textContent or aria-label and never title, so without this the
+               gear is unreachable to assistive tech and to the test harness
+               alike. The gap is pre-existing; this task rewrites the element,
+               so it is this task's to close (F15). */
+            aria-label="Settings"
           >
-            <SettingsIcon className="w-4 h-4" />
+            <SettingsIcon className="w-4 h-4" aria-hidden="true" />
           </button>
           {/* §7: the avatar shows the LOCAL profile's own initials and goes
               to Settings, where the name is editable. An avatar of yourself
@@ -1619,19 +1479,45 @@ body {
 - The `not-found` view: `bg-paper`, centred, heading in `font-prose text-screen-title text-ink-1`, body in `text-ink-2`.
 - `src/App.tsx:2838`: `<div className="p-8 text-gray-500">No run yet. Start one from a template.</div>` → `<div className="p-8 font-ui text-ui text-ink-3">No run yet. Start one from a template.</div>`.
 
-- [ ] **Step 5: Update the 13 declared test occurrences**
+- [ ] **Step 5: Rename the two other strings that name the Playbooks tab (R-GP8)**
+
+Both are declared copy changes and neither is asserted by any test, so nothing but this step will find them.
+
+- `src/App.tsx` (≈`:2738`, grep for `Back to Library`): the button label becomes **`Back to Playbooks`**.
+- `src/features/matters/MatterHome.tsx` (≈`:538`, grep for `Create one in the Library first`): the sentence becomes **"No playbooks yet. Create one in Playbooks first, then run it against this matter's documents."**
+
+Confirm with `grep -rn "Library" src --include=*.tsx | grep -v "TemplateLibrary\|\.test\."` that no user-facing "Library" string survives. `TemplateLibrary` is a component name, not copy, and stays.
+
+- [ ] **Step 6: Restyle `src/main.tsx`'s crash screen (F12)**
+
+The last-resort `ErrorBoundary` — the screen that renders when everything else has failed:
+
+```tsx
+      return (
+        <div className="p-10 min-h-screen bg-paper text-ink-1">
+          <h1 className="font-prose text-screen-title text-risk-high mb-4">Something went wrong.</h1>
+          <pre className="bg-risk-high-tint border border-risk-high-edge text-risk-high p-4 rounded-card overflow-auto font-mono text-ui-sm">
+            {String(this.state.error)}
+          </pre>
+        </div>
+      );
+```
+
+`risk-high`, not `ink-4` or below: this is the app's loudest failure and R-G19 applies to it more than to anything else in the sub-project.
+
+- [ ] **Step 7: Update the 13 declared test occurrences**
 
 In each of `src/App.test.tsx` (5), `src/App.matterPicker.test.tsx` (4), `src/App.authRedirect.test.tsx` (2), `src/App.matterDelete.test.tsx` (1) and `src/App.reviewSaveError.test.tsx` (1), replace `clickNav(container, 'Library')` with `clickNav(container, 'Playbooks')`. Each file's `clickNav` matches on the button's exact trimmed text, so nothing else needs touching. Leave every comment mentioning "the Library flow" alone: they describe a flow, not a label.
 
-- [ ] **Step 6: Prove no dead utility survived**
+- [ ] **Step 8: Prove no dead utility survived**
 
 ```bash
 grep -rn "bg-surface\|bg-panel" src --include=*.tsx --include=*.ts
 ```
 
-Expected: no output. Both were generated only by the deleted `@theme` block; a leftover would render transparent — invisible text on an invisible background, exactly the §14 failure mode.
+Expected: no output — there are **three** `bg-surface` sites (`App.tsx` ≈`:229`, ≈`:2560`, ≈`:2969`) and all three are this task's. Both utilities were generated only by the deleted `@theme` block; a leftover would render transparent — invisible text on an invisible background, exactly the §14 failure mode.
 
-- [ ] **Step 7: Run the suite**
+- [ ] **Step 9: Run the suite**
 
 Run: `npm test`
 Expected: the Step 1 count, with **only** the five declared test files modified. Confirm with:
@@ -1642,13 +1528,13 @@ git status --porcelain -- '*.test.ts' '*.test.tsx'
 
 Expected: exactly those five files, no others.
 
-- [ ] **Step 8: Gates and commit**
+- [ ] **Step 10: Gates and commit**
 
 Run: `npx tsc --noEmit && npm run build`
 
 ```bash
-git add src/index.css src/App.tsx src/App.test.tsx src/App.authRedirect.test.tsx src/App.matterDelete.test.tsx src/App.matterPicker.test.tsx src/App.reviewSaveError.test.tsx
-git commit -F .git/COMMIT_G6
+git add src/index.css src/App.tsx src/main.tsx src/features/matters/MatterHome.tsx src/App.test.tsx src/App.authRedirect.test.tsx src/App.matterDelete.test.tsx src/App.matterPicker.test.tsx src/App.reviewSaveError.test.tsx
+git commit -F .git/COMMIT_G5
 ```
 
 Message:
@@ -1662,13 +1548,299 @@ inconsistent until task 14 — expected, and the reason G is a branch that
 merges whole rather than a series of releases (R-G17).
 
 Three declared changes, none of them styling:
-- Library -> Playbooks in the nav (R-G6). The route was already
-  /playbooks; only the label was out of step. 13 assertions across 5 test
-  files updated, named in this commit rather than absorbed into a restyle.
+- Library -> Playbooks in the nav (R-G6), AND the two other strings that
+  name that tab: App.tsx's "Back to Library" button and MatterHome's
+  "Create one in the Library first". Neither is asserted by any test, so
+  nothing would have forced their discovery; after the nav rename both
+  would have directed the user to a tab that no longer exists (R-GP8). The
+  route was already /playbooks; only the labels were out of step. 13
+  assertions across 5 test files updated, named here rather than absorbed
+  into a restyle.
+- main.tsx's crash screen restyled here rather than swept up by task 14: it
+  is the screen that renders when everything else has failed, and its text
+  stays at risk-high rather than a metadata grey (R-G19).
 - A profile avatar showing the LOCAL profile's initials, linking to
   Settings. No counter, no badge, no firm tag, no search box: nothing that
   implies a colleague this app does not have (R-G1, R-G14).
 - The gradient logo tile becomes a live-text Newsreader wordmark.
+```
+
+---
+
+## Task 6: The contrast test over the token table
+
+**Kind:** test infrastructure. No application file changes.
+
+The single most likely regression in a palette this deliberately soft is a role slipping below legibility. This is pure arithmetic over `src/index.css`, needs no browser, and asserts **every** pair the design system defines — at the tier that pair's role assigns (R-GP4).
+
+**Why this sits after the chrome task and not beside the palette guard (F2).** An earlier draft placed it immediately after Task 2, on the "define the target before the work" argument. It could not have passed there. `readTokens` collects **every** `--color-*` in `src/index.css`, and until Task 5 deletes the dark `@theme` that file also holds `--color-surface: #09090b`, `--color-panel: #111113` and a **second** `--color-card: #1a1a1d`. Task 1 inserts the new layers *above* the old block, so the dark `card` is the later declaration and the last-wins loop in `readTokens` resolves `roles.card` to `#1a1a1d` — every `… on card` pair then measures near 1:1, and the "every role is exercised" case additionally fails naming `surface` and `panel`. Scoping the parser to one `@theme` block would hide the collision rather than remove it. Task 5 removes it, so this comes after Task 5. Nothing in Tasks 3, 4 or 7–13 consumes this test, and "define the target before the work" is already carried by Task 2's guard.
+
+**Files:**
+- Create: `src/test/tokens.ts`
+- Create: `src/test/contrast.test.ts`
+
+**Interfaces:**
+- Consumes: Task 1's `src/index.css` token layers.
+- Produces:
+  - `export interface TokenTable { palette: Record<string, string>; roles: Record<string, string> }`
+  - `export function readTokens(cssPath: string): TokenTable`
+  - `export function resolveColour(name: string, tokens: TokenTable): { r: number; g: number; b: number; a: number }`
+  - `export function composite(fg: {r,g,b,a}, bg: {r,g,b,a}): {r,g,b,a}`
+  - `export function contrastRatio(fg: string, bg: string, tokens: TokenTable): number`
+
+- [ ] **Step 1: Write the failing contrast tests**
+
+Create `src/test/contrast.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { resolve } from 'node:path';
+import { readTokens, contrastRatio } from './tokens';
+
+const tokens = readTokens(resolve(__dirname, '../index.css'));
+
+/** Tier thresholds. `body` is WCAG AA for normal text; `chip` is AA for
+ *  large/bold text and is what the 9.5px uppercase mono chips are held to
+ *  because they are bold, letter-spaced and short. `decorative` is a
+ *  documented FLOOR, not a WCAG grade: ink-5 on paper is 2.28:1 by design
+ *  and is right for a timestamp and wrong for anything a reader must not
+ *  miss (R-G19, R-GP4). Asserting it rather than exempting it is what stops
+ *  a future palette edit pushing a timestamp to invisible.
+ *
+ *  `disabled` is a fourth tier with exactly one member (F3): ink-6 on card is
+ *  1.74:1, and ink-6 is the disabled-glyph and page-number step — it may
+ *  never carry text a reader needs, which is R-G19 one step further down.
+ *  It is asserted rather than exempted for R-GP4's own reason. The two
+ *  alternatives are worse: dropping ink-6 from PAIRS removes the guard
+ *  altogether, and lowering `decorative` to 1.7 would stop it guarding
+ *  ink-5, which has 0.08 of headroom. */
+const MIN = { body: 4.5, chip: 3.0, decorative: 2.2, disabled: 1.7 } as const;
+
+type Pair = [fg: string, bg: string, tier: keyof typeof MIN];
+
+const PAIRS: Pair[] = [
+  // Primary and prose ink on every surface it is used on.
+  ['ink-1', 'paper', 'body'], ['ink-1', 'card', 'body'], ['ink-1', 'page', 'body'],
+  ['ink-prose', 'paper', 'body'], ['ink-prose', 'card', 'body'], ['ink-prose', 'page', 'body'],
+  ['ink-quote', 'card', 'body'], ['ink-quote', 'paper', 'body'],
+  ['ink-2', 'paper', 'body'], ['ink-2', 'card', 'body'],
+  ['ink-3', 'paper', 'body'], ['ink-3', 'card', 'body'],
+  // Decorative-grade ink. Never used for a warning, a disclosure or a
+  // failure — that rule is R-G19 and lives in review, not in arithmetic.
+  ['ink-4', 'paper', 'chip'], ['ink-4', 'card', 'chip'],
+  ['ink-5', 'paper', 'decorative'], ['ink-5', 'card', 'decorative'],
+  ['ink-6', 'card', 'disabled'],
+  // Action and human confirmation.
+  ['accent', 'paper', 'body'], ['accent', 'card', 'body'], ['accent', 'accent-tint', 'chip'],
+  // Asserted as a foreground, not parked in SURFACE_ONLY: that is what
+  // stops accent-strong drifting back to an alias of accent and making
+  // every primary-button hover a visual no-op (R-GP9).
+  ['accent-strong', 'paper', 'body'], ['page', 'accent-strong', 'body'],
+  // Risk, on the surfaces and washes each is used on.
+  ['risk-high', 'paper', 'body'], ['risk-high', 'card', 'body'], ['risk-high', 'risk-high-tint', 'chip'],
+  ['risk-med', 'paper', 'body'], ['risk-med', 'card', 'body'], ['risk-med', 'risk-med-tint', 'chip'],
+  ['risk-low', 'paper', 'body'], ['risk-low', 'card', 'body'], ['risk-low', 'risk-low-tint', 'chip'],
+  // Verification chips, each on the fill it sits in.
+  ['state-verified', 'accent-tint', 'chip'],
+  ['state-flagged', 'risk-med-tint', 'chip'],
+  ['state-rejected', 'risk-high-tint', 'chip'],
+  ['state-unchecked', 'chip-fill', 'chip'],
+  // Position outcome chips sit on a transparent fill over card.
+  ['outcome-meets', 'card', 'chip'],
+  ['outcome-deviates', 'card', 'chip'],
+  ['outcome-unclear', 'card', 'chip'],
+  // Position health.
+  ['health-held', 'card', 'chip'], ['health-conceded', 'card', 'chip'],
+  ['health-untested', 'card', 'chip'], ['health-none', 'card', 'decorative'],
+  // Net position.
+  ['net-unconfirmed', 'card', 'body'], ['net-confirmed', 'card', 'body'],
+  // Draft / suggested.
+  ['draft', 'card', 'body'], ['draft', 'draft-tint', 'chip'],
+  // Primary button: white text on the accent fill.
+  ['page', 'accent', 'body'],
+];
+
+describe('token contrast', () => {
+  for (const [fg, bg, tier] of PAIRS) {
+    it(`${fg} on ${bg} clears the ${tier} floor (${MIN[tier]}:1)`, () => {
+      const ratio = contrastRatio(fg, bg, tokens);
+      expect(
+        Number(ratio.toFixed(2)),
+        `${fg} on ${bg} is ${ratio.toFixed(2)}:1`,
+      ).toBeGreaterThanOrEqual(MIN[tier]);
+    });
+  }
+
+  it('every semantic role in index.css is either exercised above or explicitly surface-only', () => {
+    // A role nobody checks is a role that can drift. Surfaces, rules,
+    // edges and the two highlight colours are not text pairs; everything
+    // else must appear as a foreground somewhere in PAIRS.
+    const SURFACE_ONLY = new Set([
+      'canvas', 'paper', 'card', 'doc-gutter',
+      'rule-soft', 'rule', 'rule-strong', 'chip-fill',
+      'accent-tint', 'accent-edge',
+      'risk-high-tint', 'risk-high-edge', 'risk-med-tint', 'risk-med-edge', 'risk-low-tint',
+      'draft-tint', 'highlight-fill', 'highlight-edge',
+      'redline-ins', 'redline-del', 'net-amended',
+    ]);
+    const exercised = new Set(PAIRS.map(([fg]) => fg));
+    const missing = Object.keys(tokens.roles)
+      .filter(name => !SURFACE_ONLY.has(name) && !exercised.has(name));
+    expect(missing).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to watch it fail**
+
+Run: `npx vitest run src/test/contrast.test.ts`
+Expected: FAIL — `Failed to resolve import "./tokens"`.
+
+- [ ] **Step 3: Write the token reader and the contrast arithmetic**
+
+Create `src/test/tokens.ts`:
+
+```ts
+import { readFileSync } from 'node:fs';
+
+export interface TokenTable {
+  /** `--lex-*` names, without the prefix: `teal`, `ink-1`, `teal-rgb`. */
+  palette: Record<string, string>;
+  /** `--color-*` names, without the prefix: `accent`, `risk-high-tint`. */
+  roles: Record<string, string>;
+}
+
+export interface Rgba { r: number; g: number; b: number; a: number }
+
+/** Reads both layers out of index.css. Deliberately a parse of the real
+ *  file rather than a duplicated table: a second copy of the palette is
+ *  exactly the sibling drift this project keeps paying for. */
+export function readTokens(cssPath: string): TokenTable {
+  const css = readFileSync(cssPath, 'utf8');
+  const palette: Record<string, string> = {};
+  const roles: Record<string, string> = {};
+  for (const [, name, value] of css.matchAll(/--lex-([a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+    palette[name] = value.trim();
+  }
+  for (const [, name, value] of css.matchAll(/--color-([a-z0-9-]+)\s*:\s*([^;]+);/g)) {
+    roles[name] = value.trim();
+  }
+  return { palette, roles };
+}
+
+function parseHex(hex: string): Rgba {
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  return {
+    r: parseInt(full.slice(0, 2), 16),
+    g: parseInt(full.slice(2, 4), 16),
+    b: parseInt(full.slice(4, 6), 16),
+    a: 1,
+  };
+}
+
+/** Resolves a role name to concrete channels, following `var()` through the
+ *  palette layer and expanding `rgb(<triplet> / <alpha>)`. */
+export function resolveColour(name: string, tokens: TokenTable): Rgba {
+  let value = tokens.roles[name];
+  if (value === undefined) throw new Error(`No --color-${name} in index.css`);
+
+  const rgbFn = value.match(/^rgb\(\s*var\(--lex-([a-z0-9-]+)\)\s*\/\s*([0-9.]+)\s*\)$/);
+  if (rgbFn) {
+    const triplet = tokens.palette[rgbFn[1]];
+    if (triplet === undefined) throw new Error(`No --lex-${rgbFn[1]} in index.css`);
+    const [r, g, b] = triplet.split(/\s+/).map(Number);
+    return { r, g, b, a: Number(rgbFn[2]) };
+  }
+
+  const varRef = value.match(/^var\(--lex-([a-z0-9-]+)\)$/);
+  if (varRef) {
+    const resolved = tokens.palette[varRef[1]];
+    if (resolved === undefined) throw new Error(`No --lex-${varRef[1]} in index.css`);
+    value = resolved;
+  }
+  if (!value.startsWith('#')) throw new Error(`--color-${name} is not a resolvable colour: ${value}`);
+  return parseHex(value);
+}
+
+/** Source-over compositing, so a tint's real appearance is measured rather
+ *  than its nominal channels — a 9% teal wash IS what the eye sees, and
+ *  measuring the unblended colour would report a contrast nobody has. */
+export function composite(fg: Rgba, bg: Rgba): Rgba {
+  return {
+    r: Math.round(fg.r * fg.a + bg.r * (1 - fg.a)),
+    g: Math.round(fg.g * fg.a + bg.g * (1 - fg.a)),
+    b: Math.round(fg.b * fg.a + bg.b * (1 - fg.a)),
+    a: 1,
+  };
+}
+
+function channelLuminance(v: number): number {
+  const s = v / 255;
+  return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+}
+
+function relativeLuminance({ r, g, b }: Rgba): number {
+  return 0.2126 * channelLuminance(r) + 0.7152 * channelLuminance(g) + 0.0722 * channelLuminance(b);
+}
+
+/**
+ * WCAG 2.1 contrast ratio between two role tokens.
+ *
+ * A translucent background is composited over `card` first, because every
+ * tint in this system is painted on a card or on paper and `card` is the
+ * lighter of the two (so this reports the WORSE of the two ratios for dark
+ * ink, which is the honest direction to round in).
+ */
+export function contrastRatio(fgName: string, bgName: string, tokens: TokenTable): number {
+  const card = resolveColour('card', tokens);
+  let bg = resolveColour(bgName, tokens);
+  if (bg.a < 1) bg = composite(bg, card);
+  let fg = resolveColour(fgName, tokens);
+  if (fg.a < 1) fg = composite(fg, bg);
+
+  const l1 = relativeLuminance(fg);
+  const l2 = relativeLuminance(bg);
+  const [light, dark] = l1 > l2 ? [l1, l2] : [l2, l1];
+  return (light + 0.05) / (dark + 0.05);
+}
+```
+
+- [ ] **Step 4: Run it to watch it pass**
+
+Run: `npx vitest run src/test/contrast.test.ts`
+Expected: PASS for every pair. If a pair fails, **do not lower the threshold** — either the role assignment in Task 1 is wrong (a body-tier role pointing at a decorative ink), or the pair belongs at a different tier and the reason must be written into the test as a comment.
+
+**The measured margins (F3), so a failure is recognisable as a real change rather than a rounding surprise.** All 45 pairs were computed against Task 1's declared values with this file's own compositing and formula. The tightest pair **by margin** is `ink-5` on `paper` at **2.28:1** against the 2.2 decorative floor — 0.08 of headroom, and the reason the decorative tier may not be lowered. `state-unchecked` on `chip-fill` measures **3.25:1**, comfortably over the chip tier (an earlier draft called it "roughly 3.1:1" and "the tightest pair"; it is neither). The only pair that fails a 2.2 floor is `ink-6` on `card` at **1.74:1**, which is why the `disabled` tier exists.
+
+- [ ] **Step 5: Mutation-test the contrast guard**
+
+In `src/index.css`, temporarily change `--color-ink-2` to `var(--lex-ink-5)`. Re-run: expected FAIL on `ink-2 on paper clears the body floor`, with the measured ratio in the message. Restore. Then add a new `--color-experimental: var(--lex-blue);` to the `@theme` block and re-run: expected FAIL on "every semantic role … is either exercised above or explicitly surface-only", naming `experimental`. Remove it.
+
+- [ ] **Step 6: Full gates and commit**
+
+Run: `npm test && npx tsc --noEmit && npm run build`
+
+```bash
+git add src/test/tokens.ts src/test/contrast.test.ts
+git commit -F .git/COMMIT_G6
+```
+
+Message:
+
+```
+test(g): assert contrast for every token pair the design system defines
+
+Pure arithmetic over index.css, parsed rather than copied so a second table
+cannot drift from the first. Tints are composited over card before the
+ratio is taken, because a 9% wash is what the eye actually sees.
+
+Three tiers rather than an exemption list: body 4.5:1, chip and large text
+3:1, and a documented decorative floor of 2.2:1 for the timestamp inks that
+are ~2.3:1 by design. Exempting them is how a palette drifts to invisible;
+asserting the floor means a future edit that crosses it fails here (R-GP4).
+
+A last case fails if index.css grows a role no pair exercises.
 ```
 
 ---
@@ -1681,7 +1853,7 @@ Three declared changes, none of them styling:
 - Modify: `src/features/matters/MattersList.tsx`, `MatterHome.tsx`, `CollectionCard.tsx`, `GroupDocumentsDialog.tsx`, `MatterPickerModal.tsx`
 
 **Interfaces:**
-- Consumes: Task 1's tokens, Task 5's primitives.
+- Consumes: Task 1's tokens, Task 4's primitives.
 - Produces: the restyled matters screens that Tasks 15, 16, 18 and 19 add sections to. **No prop changes.**
 
 **State checklist for this task:**
@@ -1735,7 +1907,7 @@ The emerald row is the one that needs thought every time: **teal for a human, gr
 - Metadata sentences (client · reference · counts): `font-ui text-meta text-ink-4`.
 - Counts, dates, page counts, byte sizes: `font-mono text-pin text-ink-4`.
 - Role chips (`BASE`, `VARIES`, `COLLECTION · READ TOGETHER`): `font-mono text-chip uppercase`.
-- Buttons: through `Button`, which Task 5 already handles.
+- Buttons: through `Button`, which Task 4 already handles.
 
 - [ ] **Step 4: Walk the state checklist** above, item by item, in the code.
 
@@ -1745,7 +1917,7 @@ Run: `npm test`, then `git status --porcelain -- '*.test.ts' '*.test.tsx'` (expe
 
 - [ ] **Step 6: Scan and gate**
 
-Run the Task 5 Step 10 scan command with this task's five paths substituted. Then `npx tsc --noEmit && npm run build`.
+Run the Task 4 Step 10 scan command ("Scan the touched files") with this task's five paths substituted. Then `npx tsc --noEmit && npm run build`.
 
 - [ ] **Step 7: Commit**
 
@@ -1781,7 +1953,7 @@ No test edited.
 - Modify: `src/features/review/ResultsView.tsx` (the existing **two-pane** layout only — the three-pane relayout is Task 23), `FindingCard.tsx`, `EvidenceList.tsx`, `VerificationControls.tsx`, `NotesPanel.tsx`
 
 **Interfaces:**
-- Consumes: Task 1's tokens, Task 3's busy contract, Task 5's primitives.
+- Consumes: Task 1's tokens, Task 3's busy contract, Task 4's primitives.
 - Produces: the restyled review rail. **No prop changes**; `ResultsViewProps` is untouched.
 
 **State checklist for this task:**
@@ -1842,7 +2014,7 @@ Each citation block: `border-l-2 border-l-rule pl-3.5 bg-chip-fill/40`. The quot
 
 - [ ] **Step 7: Run the suite with no test edited** — `npm test`, then `git status --porcelain -- '*.test.ts' '*.test.tsx'` (expected: empty).
 
-- [ ] **Step 8: Scan and gate** — the Task 5 Step 10 command with this task's five paths; then `npx tsc --noEmit && npm run build`.
+- [ ] **Step 8: Scan and gate** — the Task 4 Step 10 command with this task's five paths; then `npx tsc --noEmit && npm run build`.
 
 - [ ] **Step 9: Commit**
 
@@ -1884,7 +2056,7 @@ No test edited.
 - Modify: `src/features/review/PdfCanvas.tsx:100-101` — **the two overlay style values only** (R-GP1)
 
 **Interfaces:**
-- Consumes: Task 1's tokens (`highlight-fill`, `highlight-edge`, `net-*`, `outcome-*`), Task 5's primitives.
+- Consumes: Task 1's tokens (`highlight-fill`, `highlight-edge`, `net-*`, `outcome-*`), Task 4's primitives.
 - Produces: the restyled document pane and run banners. **No prop changes.**
 
 **State checklist for this task:**
@@ -2042,7 +2214,7 @@ No test edited.
 - Modify: `src/features/tabular/TabularReview.tsx`, `src/features/tabular/CellDetail.tsx`
 
 **Interfaces:**
-- Consumes: Task 1's tokens, Task 3's `data-testid="cell-summary"`, Task 5's chips.
+- Consumes: Task 1's tokens, Task 3's `data-testid="cell-summary"`, Task 4's chips.
 - Produces: the restyled grid Task 21's `Review / Compare` control switches to.
 
 **State checklist for this task:**
@@ -2056,7 +2228,7 @@ No test edited.
 - `data-testid="cell-summary"` holds the whole sentence; the wrap toggle still switches between `whitespace-normal` and `line-clamp-3`.
 - The done cell's retry control keeps its `title="Re-run this clause"` and its `sr-only` "Retry".
 - **The per-cell retry buttons at `TabularReview.tsx:285`, `:307`, `:328` and `:352` keep `title="Retry"` verbatim.** Three assertions read `button[title="Retry"]` — `TabularReview.test.tsx:239` and `TabularReview.interrupted.test.tsx:55` and `:71` — and this is the `title="Retry"` §13.3 names.
-- The CSV export button keeps its label (and this task fixes the literal typo `bg-white\5` at `TabularReview.tsx:157` by replacing the whole class string).
+- The CSV export button keeps its label. (An earlier draft of this plan told you to fix a `bg-white` typo here. **There is no such typo** — every `bg-white/5` in the file is well-formed, and hunting it wastes time or, worse, produces a "fix" to an unrelated class string inside a commit that claims to be a restyle. F9.)
 
 - [ ] **Step 1: Record the baseline** — `npm test`, note the count.
 
@@ -2064,7 +2236,7 @@ No test edited.
 
 Header bar: `h-14 border-b border-rule bg-card`. Title: `font-prose text-section text-ink-1`. The doc/clause count chip: `font-mono text-chip uppercase bg-chip-fill text-ink-4 rounded-chip px-2 py-1`. The deviating chip: `font-mono text-chip uppercase text-outcome-deviates border border-outcome-deviates rounded-chip px-2 py-1` (the third chip shape, R-G16). The Wrap toggle: `bg-accent-tint text-accent border-accent-edge` when on, `bg-chip-fill text-ink-2 border-rule` when off.
 
-Sticky clause header (`TabularReview.tsx:177`) and sticky row header (`:197`):
+Sticky clause header (≈`TabularReview.tsx:186`, grep for `sticky left-0` on the `<th>`) and sticky row header (≈`:206`) — an earlier draft said `:177`/`:197`, 9–10 lines out (F10):
 
 ```tsx
 className="text-left p-4 border-b border-r border-rule font-mono text-label uppercase text-ink-4 w-64 sticky left-0 bg-card z-20"
@@ -2089,7 +2261,7 @@ const RISK_CELL: Record<RiskLevel, string> = {
 };
 ```
 
-and the selection ring (`TabularReview.tsx:262`) becomes `ring-1 ring-inset ring-accent` rather than an arbitrary `shadow-[inset…rgba…]`.
+and the selection ring (≈`TabularReview.tsx:271`, grep for `selectedRing`) becomes `ring-1 ring-inset ring-accent` rather than an arbitrary `shadow-[inset…rgba…]`.
 
 The mini-bar's segment classes (`RISK_BAR_CLASSES`) become `bg-risk-high` / `bg-risk-med` / `bg-risk-low` / `bg-draft`, and its track `bg-chip-fill`.
 
@@ -2136,7 +2308,7 @@ No test edited.
 - Modify: `src/features/templates/TemplateEditor.test.tsx` — **one new test** for the coverage line (declared)
 
 **Interfaces:**
-- Consumes: Task 1's tokens, Task 3's `data-clause-row`, Task 5's primitives, D's `positionHealthLabel`.
+- Consumes: Task 1's tokens, Task 3's `data-clause-row`, Task 4's primitives, D's `positionHealthLabel`.
 - Produces: the restyled playbook editor Task 20's rows link into.
 
 **State checklist for this task:**
@@ -2255,7 +2427,7 @@ This is the project's "extract it on the second copy" rule applied before the th
 - Modify: `src/features/settings/SettingsPanel.tsx` (to consume the module; its restyle is Task 13)
 
 **Interfaces:**
-- Consumes: Task 1's tokens, Task 5's primitives.
+- Consumes: Task 1's tokens, Task 4's primitives.
 - Produces:
   - `export const API_KEY_PRIVACY: string`
   - `export const STORAGE_PRIVACY: readonly [string, string, string]` — the three paragraphs of the "Where your documents go" block, in order
@@ -2264,7 +2436,7 @@ This is the project's "extract it on the second copy" rule applied before the th
 
 **State checklist for this task:**
 
-- `SourcePicker`'s privacy line still renders **only** when a source is selected — `SourcePicker.test.tsx:27` asserts its absence otherwise, and that absence is the point.
+- `SourcePicker`'s privacy line renders **whenever there are matters to pick from** (`matters.length > 0 || mattersError`), and is absent only when there are none — `SourcePicker.test.tsx:22-28` is titled "does not disclose anything when there are **no matters to pick from**". **It is not gated on a selection**, and an earlier draft of this checklist said it was (F8). Do not "restore" the described behaviour: gating a disclosure on selection would deliver the warning *after* the decision it exists to inform — a behaviour change inside a task labelled cosmetic.
 - `DraftReview`'s `UNSAVED DRAFT` badge and its discouraged-but-not-blocked save survive exactly.
 - `ClauseRail`'s kept/cut/unreviewed chips stay three states.
 - `RouteChooser`'s "learn from redlines" card stays rendered and honestly inert (R-E6) — **it is not hidden**.
@@ -2274,7 +2446,7 @@ This is the project's "extract it on the second copy" rule applied before the th
 
 - [ ] **Step 2: Create the shared module**
 
-Create `src/lib/privacyCopy.ts`, copying the strings **character for character** from `SettingsPanel.tsx:90-121` and `SourcePicker.tsx:66-72`:
+Create `src/lib/privacyCopy.ts`, copying the strings **character for character** from `SettingsPanel.tsx` (≈`:90-121`, grep for `local storage`) and `SourcePicker.tsx` (≈`:90-96` — the sentence, not the render guard at ≈`:72`):
 
 ```ts
 /**
@@ -2302,12 +2474,19 @@ export const STORAGE_PRIVACY = [
   'Deleting a matter deletes its documents and their stored bytes, not just its entry '
   + "in a list. Data is per-browser: clearing this browser's site data removes your "
   + 'matters permanently, and there is no sync or backup.',
-  'Page images generated for scanned PDFs are never stored — they’re regenerated from '
-  + 'the original file bytes whenever they’re needed again.',
+  // STRAIGHT apostrophes, both of them. SettingsPanel.tsx:116-117 ships
+  // `they're` (U+0027) and the file contains no U+2019 anywhere; an
+  // extraction whose entire purpose is to stop the wording drifting must
+  // not itself change two characters of a frozen disclosure (F7).
+  'Page images generated for scanned PDFs are never stored — they're regenerated from '
+  + 'the original file bytes whenever they're needed again.',
 ] as const;
 
 export const SOURCE_PRIVACY =
   'Selecting a matter sends its verified findings to the model you have chosen — the only '
+  // CURLY here, deliberately and in contrast to the block above:
+  // SourcePicker.tsx:94 renders `matter&rsquo;s`, so U+2019 is what the
+  // DOM actually contains and what SourcePicker.test.tsx matches against.
   + "place in this app another matter’s content leaves your browser.";
 ```
 
@@ -2368,7 +2547,7 @@ No test edited.
 - Modify: `src/features/settings/SettingsPanel.tsx`, `src/features/assistant/ChatPanel.tsx`, `EmailModal.tsx`, `RevisionModal.tsx`
 
 **Interfaces:**
-- Consumes: Task 1's tokens, Task 5's primitives, Task 12's `privacyCopy` module.
+- Consumes: Task 1's tokens, Task 4's primitives, Task 12's `privacyCopy` module.
 - Produces: nothing new.
 
 **State checklist for this task:**
@@ -2436,10 +2615,10 @@ No test edited.
 
 **Files:**
 - Modify: `src/test/palette.test.ts` (remove the `.skip`)
-- Modify: whatever files the guard still names — expected to be a short tail (`MigrationBlockedScreen`'s inline styles, any remaining `App.tsx` string, the `not-found` view)
+- Modify: whatever files the guard still names — expected to be a genuinely short tail. `App.tsx` and `main.tsx` held 48 of the 943 violations and **both are Task 5's**, so what remains here should be strays only. Note that `MigrationBlockedScreen` has **no inline styles** (F25): its violations are ordinary palette classes (`bg-surface`, `text-white`, `text-gray-300`, `text-red-400`, `bg-violet-600`), so do not go looking for a `style={{}}` that is not there.
 
 **Interfaces:**
-- Consumes: Task 2's scanner, Tasks 5–13's restyles.
+- Consumes: Task 2's scanner, Tasks 4, 5 and 7–13's restyles.
 - Produces: the standing guarantee that every later task (15–23) inherits: no new raw colour can land.
 
 - [ ] **Step 1: See what is left**
@@ -2448,7 +2627,7 @@ No test edited.
 npx vitest run src/test/palette.test.ts
 ```
 
-with `describe.skip` temporarily changed to `describe`. Read the full violation list. Expected: a short tail in `src/App.tsx` and one or two feature files that no restyle task owned.
+with `describe.skip` temporarily changed to `describe`. Read the full violation list. Expected: **zero, or a handful of strays.** Task 2 measured 943 across 104 files, of which 48 were in `App.tsx` (45) and `main.tsx` (3); Tasks 4–13 own every one of those files, so a large remaining count means a restyle task skipped something rather than that this task has real work.
 
 - [ ] **Step 2: Fix every remaining violation**
 
@@ -3319,11 +3498,24 @@ describe('ExportGateBanner', () => {
     expect(onReviewUnchecked).toHaveBeenCalled();
   });
 
-  it('renders as a banner with no control that could block an export', () => {
+  it('gates nothing, even when it is offering its own control', () => {
     // It must not block, disable, or gate the export button (§10.3).
-    const c = mount(<ExportGateBanner findings={{ d1: { c1: finding('unchecked') } }} />);
-    expect(c.querySelectorAll('button')).toHaveLength(0);
-    expect(c.querySelectorAll('[disabled]')).toHaveLength(0);
+    //
+    // An earlier draft mounted this WITHOUT `onReviewUnchecked` and then
+    // asserted the button count was 0 — true by construction, and it would
+    // have stayed true however the component gated the export (F17a,
+    // R-GP10). Mount it WITH the control, so the assertion is about what
+    // the banner does rather than about what was not passed to it.
+    const onReviewUnchecked = vi.fn();
+    const c = mount(<ExportGateBanner findings={{ d1: { c1: finding('unchecked') } }} onReviewUnchecked={onReviewUnchecked} />);
+    // Its own control is enabled, and it is the only one it renders.
+    const controls = Array.from(c.querySelectorAll('button'));
+    expect(controls).toHaveLength(1);
+    expect(controls[0].hasAttribute('disabled')).toBe(false);
+    expect(c.querySelectorAll('[disabled], [aria-disabled="true"]')).toHaveLength(0);
+    // And it exposes no way to reach or suppress an export: the export
+    // buttons live in the review header and this component never wraps them.
+    expect(c.textContent).not.toMatch(/export docx|export csv|download/i);
   });
 
   it('uses the singular for one unchecked finding', () => {
@@ -3409,9 +3601,21 @@ Immediately below the four run banners at `src/App.tsx:2782-2797`:
 
 `onReviewUnchecked` is left unwired for now — `ResultsView`'s `openAt` prop is scoped to a document+clause pair and Task 23 is where the clause index makes "the first unchecked finding" a place the reader can be sent. Passing a handler that scrolls nowhere would be worse than a plain statement.
 
-- [ ] **Step 6: Full gates and commit**
+- [ ] **Step 6: Confirm no existing assertion moved (F16)**
 
-Run: `npm test && npx tsc --noEmit && npm run build`
+This task injects a new sentence above the results pane of **every** review that has an unchecked finding — which is most App-level review fixtures. That makes it the structural task most likely to disturb a `textContent` assertion, and it had no gate at all in an earlier draft.
+
+Run: `npm test`, then:
+
+```bash
+git status --porcelain -- '*.test.ts' '*.test.tsx'
+```
+
+Expected: **only** `src/features/review/ExportGateBanner.test.tsx`, which this task creates. A hit on any other test file is a finding — report it and declare it; do not absorb it.
+
+- [ ] **Step 7: Full gates and commit**
+
+Run: `npx tsc --noEmit && npm run build`
 
 ```bash
 git add src/features/review/ExportGateBanner.tsx src/features/review/ExportGateBanner.test.tsx src/App.tsx
@@ -3738,7 +3942,7 @@ export function IntakeWizard({
 }
 ```
 
-Declare `IntakeWizardProps` above the component exactly as the **Interfaces** block gives it, with `playbooks`, `playbooksError`, `onRetryPlaybooks`, `onRunReview` and `onCreatePlaybook` marked in a comment as Task 19's, so `tsc` accepts the unused destructured names only because they are consumed in the next task — if `noUnusedLocals` complains, prefix them in this commit by rendering the placeholder section as `data-step="playbook"` and reading `playbooks.length` into an `aria-hidden` count, then delete that in Task 19.
+Declare `IntakeWizardProps` above the component exactly as the **Interfaces** block gives it, with `playbooks`, `playbooksError`, `onRetryPlaybooks`, `onRunReview` and `onCreatePlaybook` marked in a comment as Task 19's. They are destructured but unused in this commit, and that compiles: `tsconfig.json` enables neither `strict` nor `noUnusedLocals` (F23b). An earlier draft carried a contingency here for a `noUnusedLocals` error that cannot fire; it is removed rather than left as a branch nobody will ever take.
 
 - [ ] **Step 4: Run to watch it pass** — expected PASS on all nine cases.
 
@@ -3881,7 +4085,7 @@ Now change the sort to `a.updatedAt - b.updatedAt` and re-run: expected FAIL on 
 
 - [ ] **Step 5: Swap the wizard in as the matter's empty state**
 
-`MatterHome.tsx`'s `documents.length === 0 ? (<p>No documents yet. Add one to get started.</p>) : …` branch becomes a render of `<IntakeWizard … />` with every prop `MatterHome` already holds, plus the two new ones. Add `modelId: string` and `onOpenSettings: () => void` to `MatterHomeProps` with doc comments naming the wizard as their only consumer, and pass them from `App.tsx` as `settings.model` (read the exact field name from `Settings` in `src/types.ts:257`) and `() => requestView('settings')`.
+`MatterHome.tsx`'s `documents.length === 0 ? (<p>No documents yet. Add one to get started.</p>) : …` branch becomes a render of `<IntakeWizard … />` with every prop `MatterHome` already holds, plus the two new ones. Add `modelId: string` and `onOpenSettings: () => void` to `MatterHomeProps` with doc comments naming the wizard as their only consumer, and pass them from `App.tsx` as **`settings.modelId`** (the field is `modelId`, `src/types.ts:259` — an earlier draft wrote `settings.model`, which does not exist; F21) and `() => requestView('settings')`.
 
 **The matter with documents is unchanged**: it still renders the status board. The wizard replaces one branch, not the screen.
 
@@ -4193,10 +4397,23 @@ describe('StandardPositionsView', () => {
     expect(onOpenPlaybook).toHaveBeenCalledWith('p1', 'c1');
   });
 
-  it('offers no way to change anything from here', () => {
+  it('is read-only: every control it renders only navigates or filters', () => {
     // Read-only by design: no new writes and no model call (R-G18).
-    const c = mount(<StandardPositionsView rows={[row()]} error={null} onRetry={() => {}} onOpenPlaybook={() => {}} />);
-    expect(c.querySelectorAll('input, textarea, select')).toHaveLength(0);
+    //
+    // An earlier draft asserted there was no input/textarea/select on a
+    // component whose only controls are <button>s — true however the
+    // component behaved (F17b, the vacuous read-only test; R-GP10). The
+    // real claim is about what this view can DO: it renders exactly two
+    // kinds of control, a health filter and a navigation link, and nothing
+    // that could write.
+    const c = mount(<StandardPositionsView rows={[row(), row({ clauseId: 'c2', clauseTitle: 'Rent' })]} error={null} onRetry={() => {}} onOpenPlaybook={() => {}} />);
+    const labels = Array.from(c.querySelectorAll('button')).map(b => (b.textContent || '').trim());
+    // Four filters, plus exactly one "Open in playbook" per row. Nothing
+    // else: no edit, no save, no re-derive, no "recalculate health".
+    expect(labels).toEqual([
+      'All', 'Conceded', 'Untested', 'Held',
+      'Open in playbook →', 'Open in playbook →',
+    ]);
   });
 });
 ```
@@ -4316,7 +4533,7 @@ Now move the `error` check below the `rows.length === 0` check and re-run: expec
 - Add `'positions'` to the `View` union, `case 'positions': return 'positions';` to `viewForRoute`, and `positions: { name: 'positions' }` to `ROUTE_FOR_VIEW`.
 - Add state `positionRows: PositionRow[]`, `positionsError: string | null`, and a `loadPositions()` that runs `listPlaybooks()`, then `listVersions(id)` per playbook, then `listMatters()` → `listReviews(matterId)` per matter, and calls `buildPositionRows`. On any rejection it sets `positionsError` via `describeLoadError(e, 'Your standard positions could not be loaded. Try again.')` and **leaves `positionRows` untouched** — never `[]`, which would render the empty state over a failure.
 - Fire `loadPositions()` from the same effect that reacts to `view === 'positions'`, so opening the tab reads current data rather than a stale snapshot.
-- Render the third nav button between `Playbooks` and `Current run`, with the same class idiom Task 6 established:
+- Render the third nav button between `Playbooks` and `Current run`, with the same class idiom Task 5 established:
 
 ```tsx
           <button
@@ -4511,12 +4728,17 @@ In `ResultsView`, replace the "Tabular view" button with:
           )}
 ```
 
-In `TabularReview`, replace its return-to-cards affordance with the same control at `value="compare"`, calling `onOpenCards()` when `next === 'review'`. `onOpenTabular` and `onOpenCards` stay optional; when either is omitted the control simply is not rendered, which is the existing contract.
+In `TabularReview` there are **two** return-to-cards affordances, and only one of them is this task's (F4):
+
+- **Replace** the header control at ≈`:170-176` (grep for `Card view`) with the same `ViewSwitch` at `value="compare"`, calling `onOpenCards()` when `next === 'review'`.
+- **Do not touch** `CollectionNotComparable`'s "Open in review" button at ≈`:430-436`. `TabularReview` short-circuits to that component for a collection target (≈`:115`), and `ViewSwitch` renders **nothing** for a collection target by design (R-GP6) — so swapping the switch in there would leave the reader with **no way out of the grid at all**, and would fail `TabularReview.test.tsx:206-228` ("still offers a way back to the review when `onOpenCards` is supplied"), which mounts a **collection** run and looks for a button matching `/review/i`. The grid therefore carries two idioms for one action; the alternative is a screen with no exit, which is not a trade.
+
+`onOpenTabular` and `onOpenCards` stay optional; when either is omitted the control simply is not rendered, which is the existing contract.
 
 - [ ] **Step 6: Confirm the existing review tests still pass unedited**
 
 Run: `npm test`, then `git status --porcelain -- '*.test.ts' '*.test.tsx'`
-Expected: only `src/features/review/ViewSwitch.test.tsx` (new). If `ResultsView.test.tsx` or a `TabularReview` test asserted on the string "Tabular view" or "Cards", **that is a declared copy change belonging to this task** — update it and say so in the commit message, naming the test.
+Expected: only `src/features/review/ViewSwitch.test.tsx` (new). No test asserts the string "Tabular view" (verified), and `TabularReview.test.tsx:206-228` passes untouched **because** `CollectionNotComparable` was left alone. If a `TabularReview` test does fail, check that first before assuming a copy change: it is far more likely you replaced the wrong control.
 
 - [ ] **Step 7: Full gates and commit**
 
@@ -4542,6 +4764,10 @@ single-document review, or a collection review, which produces one position
 per clause however many documents fed it. A disabled tab advertises a view
 that will never exist for this review.
 
+Only the grid's HEADER control is replaced. CollectionNotComparable's "Open
+in review" stays exactly as it is: the switch renders nothing on a
+collection, so putting it there would leave that screen with no exit.
+
 No Report tab: export is a button that produces a file (R-G11).
 ```
 ---
@@ -4553,17 +4779,20 @@ No Report tab: export is a button that produces a file (R-G11).
 **Scope, stated so a later reader does not assume mobile was forgotten:** this task makes **the screens that exist** usable at 768px and 1024px. It builds **no phone-specific screen**. Full `1h` phone parity — a bottom tab bar, a single-column phone review flow, a phone treatment of the grid, a touch replacement for the `J`/`V`/`F`/`R` verify loop — is **sub-project H**, per decision D1. Nothing in this task pretends otherwise.
 
 **Files:**
-- Modify: `src/App.tsx` (the header wraps rather than overflowing), `src/features/review/ResultsView.tsx`, `src/features/tabular/TabularReview.tsx`, `src/features/matters/MatterHome.tsx`, `src/features/matters/MatterStats.tsx`, `src/features/templates/TemplateEditor.tsx`, `src/components/Modal.tsx`
+- Modify: `src/App.tsx` (the header wraps rather than overflowing), `src/features/tabular/TabularReview.tsx`, `src/features/matters/MatterHome.tsx`, `src/features/matters/MatterStats.tsx`, `src/features/templates/TemplateEditor.tsx`, `src/components/Modal.tsx`
+- **Not** `src/features/review/ResultsView.tsx` — see below (F17b)
 - Create: `src/test/responsive.test.tsx`
 
 **Interfaces:**
 - Consumes: every restyled screen.
 - Produces: `data-scroll-x` on the one element that owns each dense table's horizontal scroll — the semantic hook the structural test asserts on, because jsdom evaluates no media query and lays nothing out.
 
+**`ResultsView` is deliberately excluded, and Task 23 owns it (F17b — the double responsive pass).** This task's own stated reason for being late is that "a responsive pass over a layout still due to change is a pass that has to be repeated" — and Task 23 replaces `ResultsView`'s two panes with three in the very next commit. Doing it here would be doing it twice, and the second pass would land inside the one commit that has to stay cleanly revertible. So the review screen's collapse is written once, by Task 23, whose snippet already carries `flex-col md:flex-row` and `hidden lg:block`. The collapse order below still governs it; Task 23 applies it.
+
 **The collapse order, applied consistently (§11):**
 
-1. **The document pane collapses first**, below `lg`. Its content moves behind an "Open in document" affordance rather than being stacked beneath the finding, so the finding column keeps a usable width.
-2. **The clause index collapses second**, below `md`, into a `<select>` that changes the active clause — the same control shape `ResultsView` already uses for switching documents.
+1. **The document pane collapses first**, below `lg`. Its content moves behind an "Open in document" affordance rather than being stacked beneath the finding, so the finding column keeps a usable width. *(Applied by Task 23.)*
+2. **The clause index collapses second**, below `md`, into a `<select>` that changes the active clause — the same control shape `ResultsView` already uses for switching documents. *(Applied by Task 23; the clause index does not exist until then.)*
 3. **Dense tables scroll inside their own container**, never by pushing the page. The container carries `data-scroll-x` and `overflow-x-auto`; the page body never scrolls horizontally.
 4. **Modals become full-height sheets below 640px**: `max-h-full h-full rounded-none` at the base, `sm:h-auto sm:max-h-[85vh] sm:rounded-control` above it.
 5. **The stat row and the matter's lower grid stack** below `md` (`grid-cols-1 md:grid-cols-[…]`) — Task 15 already wrote them that way; confirm rather than re-do.
@@ -4608,16 +4837,15 @@ describe('responsive structure (≥768px pass)', () => {
     expect(scroller!.tagName).not.toBe('BODY');
   });
 
-  it('a modal panel declares a sheet form at the smallest width and a panel form above it', () => {
+  it('a modal panel declares itself a sheet below the sm breakpoint', () => {
     const c = mount(<Modal isOpen title="T" onClose={() => {}}><p>x</p></Modal>);
     const dialog = c.querySelector('[role="dialog"]');
-    const cls = dialog!.getAttribute('class') ?? '';
-    // The class strings are the responsive contract here — asserted as
-    // BEHAVIOUR (a sheet below 640, a panel above) rather than as
-    // appearance, because jsdom evaluates no media query and there is no
-    // other way to state it in this environment.
-    expect(cls).toContain('sm:rounded-control');
-    expect(cls).toContain('sm:h-auto');
+    // A semantic hook, not a class-string assertion. §13.1 records that this
+    // suite has ZERO class-as-style assertions and G is not the sub-project
+    // that introduces the first one; the scroll container in the case above
+    // already demonstrates the better idiom (F18).
+    expect(dialog!.getAttribute('data-sheet-below')).toBe('sm');
+    expect(dialog!.getAttribute('role')).toBe('dialog');
   });
 });
 ```
@@ -4627,17 +4855,16 @@ describe('responsive structure (≥768px pass)', () => {
 - [ ] **Step 3: Apply the collapse rules**
 
 - `TabularReview`: wrap the `<table>` in `<div data-scroll-x className="overflow-x-auto min-w-0">`. The sticky first column keeps `sticky left-0`, which works inside the scroller.
-- `Modal`: the panel becomes `w-full h-full max-h-full rounded-none sm:h-auto sm:max-h-[85vh] sm:rounded-control ${SIZE_CLASSES[size]}`, and the body's `max-h-[60vh]` becomes `flex-1 sm:max-h-[60vh]`.
-- `ResultsView`: `flex-col lg:flex-row` already; the document pane becomes `hidden lg:block`, with an "Open in document" button in the finding column below `lg` that toggles it to a full-width overlay (`fixed inset-0 z-50 lg:static lg:z-auto`).
+- `Modal`: the panel gains `data-sheet-below="sm"` and becomes `w-full h-full max-h-full rounded-none sm:h-auto sm:max-h-[85vh] sm:rounded-control ${SIZE_CLASSES[size]}`, and the body's `max-h-[60vh]` becomes `flex-1 sm:max-h-[60vh]`. The attribute is what the test reads; the classes are what the browser reads.
 - `App.tsx`'s header: `flex-wrap gap-y-2 h-auto min-h-14 py-2` so the nav wraps instead of overflowing at 768px.
 - `TemplateEditor`'s clause rows: already `flex-col md:flex-row`; confirm the left rail becomes `hidden md:block` with its content reachable above the list below `md`.
 - `MatterHome`'s lower grid and `MatterStats`: `grid-cols-1 md:grid-cols-[…]`.
 
 - [ ] **Step 4: Run to watch it pass** — `npx vitest run src/test/responsive.test.tsx`, expected PASS.
 
-- [ ] **Step 5: Mutation-test the scroll container**
+- [ ] **Step 5: Mutation-test both hooks**
 
-Remove `data-scroll-x` from the grid wrapper and re-run: expected FAIL with "the grid table must sit inside a data-scroll-x container". Restore.
+Remove `data-scroll-x` from the grid wrapper and re-run: expected FAIL with "the grid table must sit inside a data-scroll-x container". Restore. Then remove `data-sheet-below` from `Modal`'s panel and re-run: expected FAIL on the modal case. Restore. (R-GP10: every new test in this plan names the mutation that makes it fail.)
 
 - [ ] **Step 6: Verify in a browser at 768px and 1024px — and write down what you saw**
 
@@ -4655,7 +4882,7 @@ jsdom evaluates no media query and lays nothing out, so this is the only real ch
 Run: `npm test && npx tsc --noEmit && npm run build`
 
 ```bash
-git add src/test/responsive.test.tsx src/App.tsx src/components/Modal.tsx src/features/review/ResultsView.tsx src/features/tabular/TabularReview.tsx src/features/matters/MatterHome.tsx src/features/matters/MatterStats.tsx src/features/templates/TemplateEditor.tsx
+git add src/test/responsive.test.tsx src/App.tsx src/components/Modal.tsx src/features/tabular/TabularReview.tsx src/features/matters/MatterHome.tsx src/features/matters/MatterStats.tsx src/features/templates/TemplateEditor.tsx
 git commit -F .git/COMMIT_G22
 ```
 
@@ -4686,6 +4913,8 @@ form — and the rest is browser-verified and written down.
 **Kind:** **structural, and separately revertible.** Decision D2. §9.4 and §12.2 step 15.
 
 This is the one place in G where calling the work cosmetic would be a lie. It is sequenced last and written so that **`git revert` of this single commit leaves every other task intact** — nothing landed before it depends on anything it introduces.
+
+**What reverting actually costs, stated plainly.** Task 22 deliberately skipped `ResultsView` (F17b — the double responsive pass), so this commit owns the review screen's responsive collapse as well as its three panes. Reverting it therefore returns the review screen to Task 8's **two-pane, non-responsive** layout, and that layout would need its own ≥768px pass before shipping. Everything else in G — tokens, guards, primitives, chrome, every other screen's collapse, and all five inherited screens — is untouched by the revert. That is the trade D2 was ruled on, and it is written here so nobody discovers it at revert time.
 
 **Today:** two panes — a 1/3 rail carrying a Findings/Chat tab pair and the finding cards, plus a 2/3 document pane.
 **`1b`:** three panes — a 258px clause index, a 470px finding column, a fluid document pane.
@@ -4908,6 +5137,8 @@ The outer container becomes:
     </div>
 ```
 
+**This layout is also the review screen's responsive pass** (F17b — the double responsive pass): Task 22 skipped `ResultsView` so the work is done once, here. Apply Task 22's collapse order to it — the document pane goes first (`hidden lg:block`, reachable below `lg` through an "Open in document" control that opens it as `fixed inset-0 z-50 lg:static lg:z-auto`), and the clause index goes second (below `md` it collapses into a `<select>` that sets `activeClauseId`, the same control shape `ResultsView` already uses for switching documents).
+
 `activeClauseId` is new local state, seeded from `openAt?.clauseId` and otherwise from the first clause. **Guard the "the run changed" effect on the run id actually changing** rather than relying on effect order — React runs effects in declaration order, and a reset-on-mount effect will silently undo an earlier one that set the cursor.
 
 The finding column renders **only the active clause's card**. Keep the existing `clauses.map` list behind nothing: delete it, because the clause index replaces it. `useVerifyKeys` keeps operating over the same `clauses` array and now drives `activeClauseId` as well as the verification, so `J` moves the selection.
@@ -4921,9 +5152,13 @@ In `App.tsx`, pass `onReviewUnchecked` to `ExportGateBanner`: it sets `openRevie
 Run: `npx vitest run src/features/review/useVerifyKeys.test.tsx src/features/review/ResultsView.test.tsx src/App.verification.test.tsx src/App.rerunResets.test.tsx`
 Expected: PASS, unedited. If `ResultsView.test.tsx` asserted on the presence of every clause's card at once, that assertion is now false by design — it becomes an assertion that every clause is listed in the index and the active one's card is rendered. **That is a declared change and this task's commit message names it.**
 
-- [ ] **Step 8: Verify in a browser at 1280px**
+- [ ] **Step 8: Verify in a browser at 1280px, 1024px and 768px**
 
-Three panes; `J` walks the index and the finding column follows; a citation still highlights in the document pane; the run banners and the gate banner span all three. Write down what you saw.
+At **1280px**: three panes; `J` walks the index and the finding column follows; a citation still highlights in the document pane; the run banners and the gate banner span all three.
+At **1024px**: the document pane is behind "Open in document" and opens as an overlay; the finding stays readable.
+At **768px**: the clause index is a `<select>`; no horizontal page scroll (`document.documentElement.scrollWidth === clientWidth`).
+
+Write down what you saw. This screen's responsive behaviour exists only in this commit, so it is verified only here.
 
 - [ ] **Step 9: Full gates and commit — on its own, and revertible**
 
@@ -4953,6 +5188,12 @@ header rather than out of the app (R-GP7).
 The keyboard verify loop drives the selection now as well as the
 verification, over the same clause order, stopping at the same ends.
 
+This commit also owns the review screen's responsive collapse: task 22
+skipped ResultsView deliberately so the pass is written once, against the
+layout that ships. Reverting this commit therefore returns the review
+screen to task 8's two-pane, non-responsive layout, which would need its
+own pass — everything else in G is untouched by the revert.
+
 The export-gate banner's "Review unchecked" now has somewhere to send the
 reader, which is why task 17 left it unwired.
 ```
@@ -4973,7 +5214,17 @@ reader, which is why task 17 left it unwired.
 Append to `docs/superpowers/redesign/rulings.md`, in its existing format:
 
 - **The three decisions of §17, as ruled:** D1 — phone parity is **not** in G; it is **sub-project H**, to be specced separately; G ships ≥768px responsive behaviour of existing screens and no phone-specific screen. D2 — the three-pane ledger **is** in G, sequenced last, in one revertible commit. D3 — the `Standard positions` tab **is** built.
-- **R-GP1** through **R-GP7** exactly as this plan's "Rulings made while writing this plan" section states them, each with its cost if wrong.
+- **R-GP1** through **R-GP10** exactly as this plan's "Rulings made while writing this plan" section states them, each with its cost if wrong.
+
+- [ ] **Step 1b: Record the three places the spec is factually wrong about the code**
+
+These are not rulings and not disagreements — they are the spec describing source that does not exist. Record each so nobody "fixes" working code to match it:
+
+1. **`NetPosition` has no `confirmedAt`/`confirmedBy` (F19).** Spec §7 derives the activity feed partly from "a net position's `confirmedAt`/`confirmedBy`". The real fields are **`at`** and **`byUserId`** (`src/types.ts:368-381`). `matterActivity.ts` (Task 16) uses the real names and is correct. *If this is not recorded, someone renames working code to match a spec typo, or writes a migration for fields that never existed.*
+2. **`Toast` has no `role="status"` (F1).** Spec §9.1 and §13.3 say `role="status"` is on "every chip **and toast**". `src/components/Toast.tsx` carries no `role` at all, and adding one would collide with ~21 positional `[role="status"]` reads. R-GP2 governs; the toast ships with `aria-live` and `data-toast`.
+3. **`title="Retry"` is the grid's, not `LoadErrorPanel`'s (F20).** §13.3 lists it as a structural contract without saying where it lives: it is on `TabularReview`'s four per-cell retry controls, read by three assertions. Task 4 additionally **adds** `title="Retry"` to both `LoadErrorPanel` variants as a hardening — defensible, and recorded here so the contract's scope is written down rather than inferred: after G, an App-level `querySelector('button[title="Retry"]')` could match a load-error panel, though none of the three existing assertions mounts one.
+
+Also record the **`tsconfig.json` correction (F23b)**: this plan's first draft described the stack as "TypeScript 5.8 (strict)". `tsconfig.json` sets neither `strict` nor `noUnusedLocals`, so `tsc --noEmit` is a materially weaker gate than the per-task steps imply — it catches shape and name errors, not unread optional fields or unused props.
 
 - [ ] **Step 2: Update the README**
 
@@ -4998,7 +5249,7 @@ Walk §15's twelve items and confirm each against the repo:
 1. `npx tsc --noEmit` clean; `npm test` passes; `npm run build` clean with no externalization warning.
 2. `src/index.css` carries the two-layer token set; the dark `@theme` block is gone.
 3. The palette guard and semantic-role guard pass, un-skipped, each mutation-tested (Tasks 2 and 14).
-4. The contrast test passes for every token pair (Task 4).
+4. The contrast test passes for every token pair (Task 6).
 5. No application component references a raw colour, a raw hex, or a palette-layer variable (Task 14's guard).
 6. Fonts served from the app's origin; no request leaves the page except to OpenRouter — verified in the network panel on a cold load (record it in Step 3's file).
 7. Every component in §9 restyled, existing tests passing **unedited** except the three conversions (Task 3) and the R-G6 copy changes (Tasks 6, 11, 19, 20, 21).
@@ -5025,10 +5276,17 @@ phone parity is sub-project H and is scheduled rather than forgotten; the
 three-pane ledger shipped as one revertible commit; the Standard positions
 tab was built.
 
-R-GP1 to R-GP7 are the rulings this plan made on its own authority, each
+R-GP1 to R-GP10 are the rulings this plan made on its own authority, each
 with its cost if wrong — including the one that departs from the spec's
-literal wording, because role="status" on a busy element collides with the
-selector thirteen positional chip assertions already use.
+literal wording, because role="status" on a busy element or on the toast
+collides with the selector ~21 positional chip assertions already use.
+
+Three places where the spec describes source that does not exist are
+recorded too, so nobody "fixes" working code to match them: NetPosition's
+confirmedAt/confirmedBy (the fields are at/byUserId), role="status" on the
+Toast (it has none), and title="Retry" (it is the grid's per-cell control,
+not LoadErrorPanel's). Plus the tsconfig correction: there is no strict
+flag, so tsc is a weaker gate than an earlier draft claimed.
 
 The browser verification is a file, not a claim, and anything that could
 not be verified says so.
@@ -5046,17 +5304,17 @@ Run against the spec with fresh eyes, per the skill.
 | --- | --- |
 | §3.1 two-layer token set in Tailwind 4, semantic roles | 1 |
 | §3.2 self-hosted fonts with fallback stacks | 1 |
-| §3.3 restyle of every screen in §9 | 5–13 |
+| §3.3 restyle of every screen in §9 | 4, 5, 7–13 |
 | §3.4 responsive to 768px | 22 |
 | §3.5 the inherited screens | 15, 16, 17, 19, 20, 21 |
 | §3.6 the multi-user ruling applied everywhere | 6 (avatar, no counter/firm tag/search), 8 (no assignee chip), 15 (no "unassigned" count), 16 (single-actor feed) |
-| §3.7 palette guard test | 2, 14 |
+| §3.7 palette guard test | 2, 14 (and the contrast guard, 6) |
 | §6.1 two layers, `@theme` vs `:root`, dark block deleted, `.custom-scrollbar` retinted | 1, 6 |
 | §6.2 surfaces, ink, rules table; ink-4-and-below rule | 1; R-G19 restated in every restyle task's checklist |
 | §6.3 semantic colour roles, teal-vs-green | 1 |
 | §6.4 how a component consumes a role; the three-shapes rule | 5 |
 | §6.5 typography, type scale as named roles, font delivery | 1 |
-| §6.6 radii, spacing on the 4px grid, borders, two shadows, motion, icons, CSS graphics | 1 (tokens, `.lex-pulse`, reduced-motion), 5–13 (application) |
+| §6.6 radii, spacing on the 4px grid, borders, two shadows, motion, icons, CSS graphics | 1 (tokens, `.lex-pulse`, reduced-motion), 4, 5, 7–13 (application) |
 | §6.7 no dependency added | Global Constraints; nothing in any task adds one |
 | §7 multi-user affordance table, row by row | 6, 8, 15, 16 |
 | §8.1 nine load-error sites, both `LoadErrorPanel` variants, the retry control | 5, 7, 11, 13, 15, 19, 20 (the `title="Retry"` selector §13.3 names is `TabularReview`'s per-cell retry, preserved by 10) |
@@ -5081,16 +5339,16 @@ Run against the spec with fresh eyes, per the skill.
 | §10.5 `Compare` resolved onto the existing toggle; absent not disabled | 21 |
 | §10.6 screens recommended not built (`Compare to v3`, `⌘K`, OCR) | Global Constraints; asserted in Tasks 11, 18 |
 | §11 responsive ≥768px; phone parity deferred | 22 (and D1, recorded by 24) |
-| §12.2 the order, steps 1–15 | Tasks 1→23 follow it exactly; step 7's "any order" group is Tasks 10–13 |
+| §12.2 the order, steps 1–15 | Tasks 1→23 follow it, with **one deliberate departure**: §12.2 puts the contrast test at step 2, but it cannot pass until the dark `@theme` is gone, so it is **Task 6**, immediately after the chrome task (F2). Step 7's "any order" group is Tasks 10–13 |
 | §12.3 what may not be split | Tasks 1+2 adjacent; every restyle task carries its component's state branches; `verificationLabel`'s consumers are untouched throughout |
 | §13.2 the three conversions | 3 |
 | §13.3 structural contracts | Global Constraints + every restyle task's checklist |
-| §13.4 palette guard, semantic-role guard, state-preservation tests, reduced-motion, contrast | 2, 14, 4; state-preservation tests in 15, 16, 17, 19, 20, 21; reduced-motion in 3 |
+| §13.4 palette guard, semantic-role guard, state-preservation tests, reduced-motion, contrast | 2 and 14 (guards), 6 (contrast); state-preservation tests in 15, 16, 17, 19, 20, 21; reduced-motion in 3 |
 | §13.5 the ten browser checks | 22 (item 9), 23 (item 4-adjacent), 24 (the record of all ten) |
 | §14 error handling: font failure, missing token | 1 (fallback stacks + the font test), 14 ("a new role is added in the same commit") |
 | §15 definition of done, twelve items | 24 Step 4 |
 | §17 D1, D2, D3 | The decisions section; 22, 23, 20; recorded by 24 |
-| §18 R-G1…R-G21 | R-G1 → 6/8/15/16; R-G2 → 1/2; R-G3 → 1; R-G4 → 1/5; R-G5 → Global Constraints/12; R-G6 → 6/11/17/19/20; R-G7 → 1; R-G8 → 10; R-G9 → 16; R-G10 → 15; R-G11 → 21; R-G12 → 19; R-G13 → 18; R-G14 → 6; R-G15 → 11; R-G16 → 5; R-G17 → Global Constraints; R-G18 → 20; R-G19 → every restyle checklist; R-G20 → 1/3/8; R-G21 → 1 |
+| §18 R-G1…R-G21 | R-G1 → 5/8/15/16; R-G2 → 1/2; R-G3 → 1; R-G4 → 1/4; R-G5 → Global Constraints/12; R-G6 → 5/11/17/19/20 (extended by R-GP8, also 5); R-G7 → 1; R-G8 → 10; R-G9 → 16; R-G10 → 15; R-G11 → 21; R-G12 → 19; R-G13 → 18; R-G14 → 5; R-G15 → 11; R-G16 → 4; R-G17 → Global Constraints; R-G18 → 20; R-G19 → every restyle checklist, and explicitly 5 (`main.tsx`); R-G20 → 1/3/8; R-G21 → 1 |
 
 **Requirements with no task: none.**
 
@@ -5098,21 +5356,23 @@ Two things are deliberately *not* built and are named rather than missed: the AI
 
 ### 2. Placeholder scan
 
-No "TBD", no "add appropriate error handling", no "similar to Task N", no "write tests for the above" without the test code. Three places name something a later task fills, and each says exactly what and where: Task 18's step-3 section is `data-step="playbook"` and Task 19 replaces it with the code given there; Task 17 leaves `onReviewUnchecked` unwired and Task 23 wires it with the code given there; Task 20's `onOpenPlaybook` takes a `clauseId` its only call site does not use, and says why in a comment. The restyle tasks (5–13) share a template stated once in full rather than repeated — the template is complete, and each task states its own components, class strings and state checklist rather than pointing at a neighbour.
+No "TBD", no "add appropriate error handling", no "similar to Task N", no "write tests for the above" without the test code. **No test that cannot fail** (R-GP10): the three the pre-flight scan caught — Task 17's button count, Task 20's input count, Task 2's `.css` case — are replaced by assertions of the behaviour each one names, and every new test in this plan is paired with the mutation that makes it fail. **No mandated fix for a defect that does not exist**: Task 10's phantom `bg-white` typo is gone (F9). **No dead contingency**: Task 18's `noUnusedLocals` branch is removed, since `tsconfig.json` enables neither that nor `strict` (F23b). Three places name something a later task fills, and each says exactly what and where: Task 18's step-3 section is `data-step="playbook"` and Task 19 replaces it with the code given there; Task 17 leaves `onReviewUnchecked` unwired and Task 23 wires it with the code given there; Task 20's `onOpenPlaybook` takes a `clauseId` its only call site does not use, and says why in a comment. The restyle tasks (4, 5, 7–13) share a template stated once in full rather than repeated — the template is complete, and each task states its own components, class strings and state checklist rather than pointing at a neighbour.
 
 ### 3. Type and name consistency
 
-- `scanSource(file, source)` / `collectScannableFiles(root)` / `SCAN_EXEMPT` — defined in Task 2, used in Tasks 5–13's scan step and Task 14.
-- `readTokens` / `contrastRatio` / `resolveColour` / `composite` — Task 4 only.
-- `data-busy="true"` + `aria-live="polite"` — defined in Task 3, used in Tasks 5, 7, 8, 9, 13, 23. **Never `role="status"` on a busy element** (R-GP2), which stays the chip/toast selector in Tasks 5 and 10.
+- `scanSource(file, source)` / `collectScannableFiles(root)` / `SCAN_EXEMPT` — defined in Task 2, used in Tasks 4, 5 and 7–13's scan step and Task 14.
+- `readTokens` / `contrastRatio` / `resolveColour` / `composite` — Task 6 only.
+- `data-busy="true"` + `aria-live="polite"` — defined in Task 3, used in Tasks 4, 7, 8, 9, 13, 23. **`role="status"` means "a chip" and nothing else claims it** (R-GP2): not a busy element, and not the `Toast`, which takes `aria-live` + `data-toast` in Task 4. `StateChip` keeps it (Task 4) and the grid relies on it (Task 10).
 - `data-testid="cell-summary"` (Task 3) — asserted in Task 3, preserved in Task 10.
 - `data-clause-row` (Task 3) — preserved in Task 11.
-- `data-scroll-x` — Task 22 only.
+- `data-scroll-x` and `data-sheet-below="sm"` — Task 22 only, both asserted by `src/test/responsive.test.tsx` and both mutation-tested there.
 - `summariseMatter` → `MatterStatSummary` (Task 15) consumed only by `MatterStats`.
 - `matterActivity` → `ActivityEntry` / `ActivityKind` (Task 16) consumed only by `MatterActivity`.
 - `buildPositionRows` → `PositionRow` / `PositionRowsInput` (Task 20) consumed by `StandardPositionsView` and `App.tsx`.
 - `ExportGateBannerProps.findings` is `Review['findings']`, matching `verificationCounts`'s parameter type exactly.
-- `ViewSwitchProps` (Task 21) is consumed unchanged by Task 23's finding column.
+- `ViewSwitchProps` (Task 21) is consumed unchanged by Task 23's finding column. `ViewSwitch` replaces **only** the grid's header control; `CollectionNotComparable`'s "Open in review" is untouched, because the switch renders `null` on a collection target (F4).
 - `IntakeWizardProps` is declared once in Task 18 and **not changed** by Task 19 — Task 19 only fills in the section that consumes the props already declared.
-- `MatterHomeProps` gains `localUserId` (Task 16), then `modelId` and `onOpenSettings` (Task 19). No task renames an existing prop.
-- Token names are used identically everywhere: `accent`, `accent-tint`, `accent-edge`, `risk-high`, `risk-high-tint`, `risk-high-edge`, `risk-med`, `risk-med-tint`, `risk-med-edge`, `risk-low`, `risk-low-tint`, `state-verified`, `state-flagged`, `state-rejected`, `state-unchecked`, `outcome-meets`, `outcome-deviates`, `outcome-unclear`, `health-held`, `health-conceded`, `health-untested`, `health-none`, `net-confirmed`, `net-amended`, `net-unconfirmed`, `draft`, `draft-tint`, `highlight-fill`, `highlight-edge`, `ink-1`…`ink-6`, `ink-prose`, `ink-quote`, `rule`, `rule-soft`, `rule-strong`, `chip-fill`, `paper`, `card`, `page`, `canvas`, `doc-gutter`. Every one of them is declared in Task 1 and exercised by Task 4's `PAIRS` or listed in its `SURFACE_ONLY` set.
+- `MatterHomeProps` gains `localUserId` (Task 16), then `modelId` and `onOpenSettings` (Task 19), the last of which is fed from **`settings.modelId`** — not `settings.model`, which does not exist (F21). No task renames an existing prop.
+- `MatterHome.tsx` is touched by Task 5 (one string, R-GP8), Task 7 (the restyle), Task 15, Task 16, Task 19 and Task 22 — six tasks, all on disjoint regions, and Task 5's is a single sentence named by its content.
+- `accent-strong` resolves to `--lex-teal-strong: #0e3f39`, **not** to `--lex-teal` (R-GP9), and Task 6 asserts it as a foreground pair so it cannot drift back to an alias.
+- Token names are used identically everywhere: `accent`, `accent-tint`, `accent-edge`, `risk-high`, `risk-high-tint`, `risk-high-edge`, `risk-med`, `risk-med-tint`, `risk-med-edge`, `risk-low`, `risk-low-tint`, `state-verified`, `state-flagged`, `state-rejected`, `state-unchecked`, `outcome-meets`, `outcome-deviates`, `outcome-unclear`, `health-held`, `health-conceded`, `health-untested`, `health-none`, `net-confirmed`, `net-amended`, `net-unconfirmed`, `draft`, `draft-tint`, `highlight-fill`, `highlight-edge`, `ink-1`…`ink-6`, `ink-prose`, `ink-quote`, `rule`, `rule-soft`, `rule-strong`, `chip-fill`, `paper`, `card`, `page`, `canvas`, `doc-gutter`. Every one of them is declared in Task 1 and exercised by Task 6's `PAIRS` or listed in its `SURFACE_ONLY` set.
