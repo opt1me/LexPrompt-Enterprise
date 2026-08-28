@@ -225,4 +225,25 @@ describe('App — the review header names the version this run ran against (Task
     expect(getVersionMock).not.toHaveBeenCalled();
     expect(container.textContent).toMatch(/no longer recorded|not recorded/i);
   });
+
+  // The fix this batch adds: a `getVersion` that THROWS (a DB read failure,
+  // not a successful lookup finding nothing) used to leave `resolvedVersion`
+  // as `undefined` — the same value the "not resolved yet" loading state
+  // uses — so `ResultsView` rendered the header line as if it had nothing to
+  // report. That is indistinguishable from "no version recorded" to the
+  // reader, and worse than the "deleted" case: it says nothing went wrong at
+  // all. This must now render its own loud line, distinct from both silence
+  // and "deleted".
+  it('says the lookup itself failed, not nothing at all, when getVersion throws', async () => {
+    getReviewMock.mockResolvedValue(makeReview('v1'));
+    getVersionMock.mockRejectedValue(new Error('indexeddb read failed'));
+    window.history.pushState(null, '', '/matters/m1/reviews/r1');
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect(getVersionMock).toHaveBeenCalledWith('v1');
+    expect(container.textContent).toMatch(/could not check|could not be (checked|loaded|read)/i);
+    expect(container.textContent).not.toMatch(/ran against v/i);
+    expect(container.textContent).not.toMatch(/deleted|no longer exists/i);
+  });
 });

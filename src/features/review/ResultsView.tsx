@@ -87,14 +87,20 @@ export interface ResultsViewProps {
    *  guessing one. */
   documentDates?: Record<string, number>;
   /** The result of the caller resolving `run.playbookVersionId` against the
-   *  LIVE playbookVersions store (R-D15) — `null` once that lookup has run
-   *  and found nothing (the version was deleted), a `PlaybookVersion` once
-   *  it succeeds. `undefined` means "not resolved yet" and is NOT the same
-   *  as `null`: while `run.playbookVersionId` is present but this is still
+   *  LIVE playbookVersions store (R-D15) — `null` once that lookup has run,
+   *  succeeded, and found nothing (the version was deleted), a
+   *  `PlaybookVersion` once it succeeds and finds one, or the literal
+   *  string `'error'` when the lookup attempt itself threw. `undefined`
+   *  means "not resolved yet" and is NOT the same as either `null` or
+   *  `'error'`: while `run.playbookVersionId` is present but this is still
    *  `undefined`, the header renders nothing rather than guessing "deleted"
-   *  before the lookup has actually run. Irrelevant (and ignored) when
-   *  `run.playbookVersionId` itself is absent. */
-  playbookVersion?: PlaybookVersion | null;
+   *  (or claiming a failure that hasn't happened) before the lookup has
+   *  actually run. A failed lookup, once it has actually happened, is
+   *  reported loudly (`ReviewVersionLine`'s `lookupFailed`) rather than
+   *  left indistinguishable from "still loading" — collapsing the two let a
+   *  `getVersion` throw hide the whole line with no error at all. Irrelevant
+   *  (and ignored) when `run.playbookVersionId` itself is absent. */
+  playbookVersion?: PlaybookVersion | null | 'error';
   /** Opens Version History for the playbook this run ran against. Optional:
    *  omitted, a resolved "Ran against vN" line renders as plain text with
    *  nothing to click. */
@@ -392,12 +398,20 @@ export function ResultsView({
         {/* R-D15: only render once the caller has actually tried to resolve
            `run.playbookVersionId` — while it is present but `playbookVersion`
            is still `undefined` (the lookup hasn't settled yet), this stays
-           silent rather than guessing "deleted" ahead of the real answer. */}
+           silent rather than guessing "deleted" ahead of the real answer.
+           `'error'` is a SETTLED outcome (the lookup ran and threw), not the
+           "still loading" `undefined` case, so it renders too — as a loud
+           failure via `lookupFailed`, never as silence or a false "deleted". */}
         {(run.playbookVersionId === undefined || playbookVersion !== undefined) && (
           <div className="px-4 py-1.5 border-b border-white/10 shrink-0">
             <ReviewVersionLine
               versionId={run.playbookVersionId}
-              version={run.playbookVersionId === undefined ? null : (playbookVersion ?? null)}
+              version={
+                run.playbookVersionId === undefined || playbookVersion === 'error'
+                  ? null
+                  : (playbookVersion ?? null)
+              }
+              lookupFailed={playbookVersion === 'error'}
               onOpenHistory={onShowVersionHistory}
             />
           </div>

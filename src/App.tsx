@@ -329,16 +329,22 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [run, setRun] = useState<ReviewRun | null>(null);
   // Task 10 / R-D15: `run.playbookVersionId` resolved against the LIVE
   // playbookVersions store, for the results header's "ran against vN" line.
-  // Three states, not two: `undefined` means "no lookup has settled for the
-  // CURRENT run yet" (rendered as nothing by `ResultsView` — never guessed
-  // at), `null` means the lookup ran and found nothing (the version was
-  // deleted), and a `PlaybookVersion` is the ordinary resolved case. Kept
-  // out of `run` itself — this is a read of a DIFFERENT store than anything
-  // else `run` carries, and re-deriving it from `run.templateSnapshot`
-  // would silently mask a live deletion the snapshot has no way to know
-  // about (the snapshot's own `id` doesn't stop existing just because the
-  // live version record does).
-  const [runPlaybookVersion, setRunPlaybookVersion] = useState<PlaybookVersion | null | undefined>(undefined);
+  // FOUR states, not three (a browser check found the third collapsed into
+  // the first, hiding a real failure as if nothing had gone wrong):
+  // `undefined` means "no lookup has settled for the CURRENT run yet"
+  // (rendered as nothing by `ResultsView` — never guessed at, and this is a
+  // genuinely quiet case: there is nothing wrong to report yet), `null`
+  // means the lookup ran, succeeded, and found nothing (the version was
+  // deleted), `'error'` means the lookup itself threw (a DB read failure —
+  // proves nothing about whether the version exists, and must not be
+  // presented as "deleted" or as silence), and a `PlaybookVersion` is the
+  // ordinary resolved case. Kept out of `run` itself — this is a read of a
+  // DIFFERENT store than anything else `run` carries, and re-deriving it
+  // from `run.templateSnapshot` would silently mask a live deletion the
+  // snapshot has no way to know about (the snapshot's own `id` doesn't stop
+  // existing just because the live version record does).
+  const [runPlaybookVersion, setRunPlaybookVersion] =
+    useState<PlaybookVersion | null | undefined | 'error'>(undefined);
   const [isRunning, setIsRunning] = useState(false);
   const abortControllerRef = useRef<AbortController | null>(null);
   // Tracks the latest `run` state during an in-flight run, for the one path
@@ -736,19 +742,22 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // does not (Task 3's cascade), and this is what tells the header
       // whether Version History still has anywhere to send the reader. No
       // id at all resolves to `null` without a lookup (there is nothing to
-      // look up); a lookup that itself fails leaves this `undefined` (never
-      // a false "deleted") — a `describeLoadError`-grade screen failure
-      // would already be visible elsewhere in this same load if the store
-      // were genuinely unreadable, so this small header detail degrades to
-      // silence rather than duplicating that error state.
-      let resolvedVersion: PlaybookVersion | null | undefined = review.playbookVersionId
+      // look up); a lookup that itself throws resolves to `'error'`, NOT
+      // `undefined` — `undefined` is the "not resolved yet" state
+      // `ResultsView` renders as silence, and a caught `getVersion` failure
+      // is a SETTLED outcome, not an in-flight one. Collapsing the two used
+      // to hide a real read failure as if the header simply had nothing to
+      // say; `'error'` renders its own loud line instead
+      // (`ReviewVersionLine`'s `lookupFailed`) rather than reusing "deleted",
+      // a specific claim this catch has no evidence for.
+      let resolvedVersion: PlaybookVersion | null | undefined | 'error' = review.playbookVersionId
         ? undefined
         : null;
       if (review.playbookVersionId) {
         try {
           resolvedVersion = await getVersion(review.playbookVersionId);
         } catch {
-          resolvedVersion = undefined;
+          resolvedVersion = 'error';
         }
       }
       setRunPlaybookVersion(resolvedVersion);

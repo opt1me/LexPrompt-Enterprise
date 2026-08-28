@@ -69,4 +69,28 @@ describe('ReviewVersionLine (R-D15)', () => {
     expect(buttonNamed(el, /ran against v2/i)).toBeUndefined();
     expect(el.textContent).toMatch(/ran against v2/i);
   });
+
+  // A failed lookup is a FOURTH, distinct outcome: the resolution attempt
+  // itself threw, so nothing is known about whether the version still
+  // exists. It must read differently from "deleted" (a specific claim the
+  // app has no evidence for here) and must not render as silence either —
+  // both would be the confident-wrong-answer / quiet-failure shape
+  // CLAUDE.md's "fail loudly" rule exists to close.
+  it('says the lookup itself failed, distinctly from "deleted", when lookupFailed is set', () => {
+    const out = mount(<ReviewVersionLine versionId="v4" version={null} lookupFailed />).textContent!;
+    expect(out).toMatch(/could not check|could not be (checked|loaded|read)/i);
+    expect(out).not.toMatch(/deleted|no longer exists/i);
+    expect(out).not.toMatch(/ran against v/i);
+  });
+
+  it('lookupFailed wins over a version that happens to be present', () => {
+    // Not reachable through the app's own resolution (a lookup that threw
+    // never also returns a version), but the component's own guarantee is
+    // that a caller cannot render a version claim without a clean
+    // resolution — `lookupFailed` must not be silently ignored just because
+    // `version` looks populated.
+    const out = mount(<ReviewVersionLine versionId={v2.id} version={v2} lookupFailed />).textContent!;
+    expect(out).not.toMatch(/ran against v/i);
+    expect(out).toMatch(/could not check|could not be (checked|loaded|read)/i);
+  });
 });
