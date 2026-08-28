@@ -1,0 +1,253 @@
+/**
+ * The wire contract between the browser, `apps/api` and `apps/gateway`.
+ *
+ * Lives in `packages/core` because all three speak it, and because a
+ * second copy of a purpose list or an error code is exactly the drift
+ * S14 exists to prevent — here it would mean a call the gateway refuses
+ * for a reason the browser has no wording for.
+ */
+
+/** §10's purpose allowlist. Closed set: the gateway refuses anything else,
+ *  and "what does this system send to a model, and why" is answerable from
+ *  this array rather than by reading the application. */
+export const PURPOSES = [
+  'review.clause',
+  'review.collection_clause',
+  'assistant.chat',
+  'playbook.draft',
+  'playbook.suggest',
+  'redlines.infer',
+  'changeset.build',
+  'export.email',
+  'export.suggest_fix',
+] as const;
+
+export type Purpose = (typeof PURPOSES)[number];
+
+export function isPurpose(value: unknown): value is Purpose {
+  return typeof value === 'string' && (PURPOSES as readonly string[]).includes(value);
+}
+
+/** The provider backends an operator may configure (owner decision 1).
+ *  Adding a sixth means adding it here, adding an adapter, and adding a
+ *  conformance fixture — and nothing else. */
+export const PROVIDER_IDS = [
+  'azure-foundry',
+  'azure-openai',
+  'openai',
+  'anthropic',
+  'openrouter',
+  // The offline recorded-response provider (§5.1). It is an ADAPTER, not a
+  // bypass: being on this list is what puts it through the registry
+  // completeness test, the stream conformance suite and the jurisdiction
+  // gate exactly like the other five, and what lets a firm deployment refuse
+  // it through S27's existing mechanism rather than through a new one.
+  'recorded',
+] as const;
+
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+
+export function isProviderId(value: unknown): value is ProviderId {
+  return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+/**
+ * The closed set of processing blocs. **Deliberately NOT ISO country codes.**
+ *
+ * `UK`, never `GB`. Two of these four — `EU` and `other` — are not countries,
+ * so one ISO alpha-2 code sitting among them would invite the wrong
+ * inference: that these join to country data, and that `DE` or `FR` would be
+ * valid. They are not; a German deployment declares `EU`. This comment
+ * exists because the next reader's instinct is to "correct" `UK` to `GB`,
+ * and the value reaches configuration, every audit record and a picker
+ * label — so a rename is a data migration, not a typo fix.
+ */
+export type Bloc = 'UK' | 'EU' | 'US' | 'other';
+
+/**
+ * Where a call is processed (owner decision 3).
+ *
+ * Declared per allowlist entry by the operator, checked against the
+ * gateway's permitted blocs at startup, returned to the browser so it can
+ * be shown on the option itself, and written to every audit record. A firm
+ * must not be able to believe it is UK-only while routing privileged text
+ * to a US region, and the defence against that is this value being
+ * unavoidable rather than documented.
+ */
+export interface Jurisdiction {
+  bloc: Bloc;
+  /** The provider's own region identifier, e.g. 'uksouth', 'swedencentral', 'us'. */
+  region: string;
+  /** Human wording for the region, e.g. 'UK South'. */
+  label: string;
+}
+
+export function jurisdictionLabel(j: Jurisdiction): string {
+  return `${j.bloc} · ${j.label}`;
+}
+
+/**
+ * The operator's record of the retention, training and sub-processing terms
+ * they hold with a provider (S26) — **their record of terms they agreed**,
+ * not the system's assessment of the provider. `lastCheckedAt` exists so the
+ * note can be shown as stale and prompt the operator to re-read their own
+ * contract; no code path grades, scores or infers anything from this value.
+ */
+export interface DataHandling {
+  summary: string;
+  lastCheckedAt: string;
+  reference?: string;
+}
+
+/**
+ * One entry on the operator's allowlist: a provider and a model on it
+ * (S15, as revised to provider+model pairs).
+ *
+ * `id` is what the browser names. `model` is the provider-side name and
+ * never crosses the wire outwards — a user who could name one could name
+ * an unreviewed egress destination, which is the whole of what S15 forbids.
+ */
+export interface AllowedModel {
+  id: string;
+  provider: ProviderId;
+  model: string;
+  label: string;
+  jurisdiction: Jurisdiction;
+  contextLength: number;
+  supportsImages: boolean;
+  supportsStructuredOutput: boolean;
+  isDefault: boolean;
+  /** S26's dated note. Optional in Stage 1; rendered in Stage 2. */
+  dataHandling?: DataHandling;
+}
+
+/**
+ * What the call was for, in the app's own terms — logged so a client's
+ * "what of ours went where, and when" is answerable.
+ *
+ * `documentIds` is a deliberate addition to §10's listed body fields. §10
+ * requires matter/review/clause ids; Stage 1's own goal is that the record
+ * says "which document or review the call served", and a clause extraction
+ * over three documents cannot say that from a review id alone.
+ */
+export interface InferContext {
+  matterId?: string;
+  reviewId?: string;
+  clauseId?: string;
+  documentIds?: string[];
+}
+
+export interface InferRequest {
+  /** An `AllowedModel.id` — never a provider-side model name (S15). */
+  modelChoiceId: string;
+  purpose: Purpose;
+  system?: string;
+  user: string;
+  images?: { mime: string; data: string }[];
+  jsonSchema?: object;
+  temperature?: number;
+  /** Anthropic requires one; the OpenAI-shaped providers do not. The
+   *  gateway supplies its configured default when a caller omits it, so no
+   *  call site has to know which provider it happens to be talking to. */
+  maxTokens?: number;
+  context?: InferContext;
+}
+
+export interface InferUsage {
+  promptTokens: number;
+  completionTokens: number;
+}
+
+export interface InferResponse {
+  content: string;
+  usage: InferUsage;
+  /** Quotable to IT when something is wrong. Present on success and on error. */
+  callId: string;
+  /** Which backend actually answered, and from where. Returned, not just
+   *  logged, so the browser can show it rather than assert it. */
+  provider: ProviderId;
+  jurisdiction: Jurisdiction;
+}
+
+// There is deliberately NO `stubbed` flag. `provider === 'recorded'` is the
+// fact, and a second field carrying the same fact is the sibling drift S14
+// exists to prevent — in the one place where the two copies disagreeing
+// would mean the app telling a lawyer an answer came from a model when it
+// came from a file (§5.1).
+
+export type ModelErrorCode =
+  | 'sign_in_required'
+  | 'not_permitted'
+  | 'group_overage'
+  | 'model_not_allowed'
+  | 'jurisdiction_not_allowed'
+  | 'purpose_not_allowed'
+  | 'prompt_too_large'
+  | 'budget_exhausted'
+  | 'rate_limited'
+  | 'service_misconfigured'
+  | 'upstream_failed'
+  | 'stream_truncated'
+  | 'network'
+  | 'unknown';
+
+/** Retries only 429 and 5xx, exactly as `openrouter.ts` did. Retrying a
+ *  rejected credential or a refused deployment wastes the user's time
+ *  before telling them the same thing. */
+export function isRetryableStatus(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
+export class ModelError extends Error {
+  code: ModelErrorCode;
+  status: number;
+  retryable: boolean;
+  callId?: string;
+
+  constructor(message: string, code: ModelErrorCode, status: number, callId?: string) {
+    super(message);
+    this.name = 'ModelError';
+    this.code = code;
+    this.status = status;
+    this.callId = callId;
+    // 'network' has no HTTP response at all (status 0) and is always
+    // transient; everything else follows the status.
+    this.retryable = code === 'network' ? true : isRetryableStatus(status);
+  }
+}
+
+const SIGN_IN_CODES: ReadonlySet<ModelErrorCode> = new Set(['sign_in_required', 'not_permitted']);
+const SERVICE_CONFIG_CODES: ReadonlySet<ModelErrorCode> = new Set([
+  'service_misconfigured', 'model_not_allowed', 'purpose_not_allowed',
+  // S27's per-call refusal (Task 11). The user chose a model an
+  // administrator put on the allowlist; the deployment then declined its
+  // jurisdiction. Neither signing in nor anything in Settings can resolve
+  // that — an administrator reconciles the allowlist with
+  // GATEWAY_ALLOWED_JURISDICTIONS.
+  'jurisdiction_not_allowed',
+  // Group overage (§7): the token carried no `groups` claim because the user
+  // is in too many groups for one to fit. An admin fixes it; signing in again
+  // cannot, and nothing in Settings can. So it classifies here and NOT as a
+  // sign-in error — the whole point of detecting it separately is that
+  // "you have no access" would be a wrong answer told confidently.
+  'group_overage',
+]);
+
+/**
+ * True when the person at the keyboard can fix it by signing in again.
+ * The successor to `openrouter.ts`'s `isAuthError` for the half of its
+ * meaning that still belongs to the user. Routes to the sign-in action.
+ */
+export function isSignInError(error: unknown): boolean {
+  return error instanceof ModelError && SIGN_IN_CODES.has(error.code);
+}
+
+/**
+ * True when the FIRM's configuration is wrong: a credential that could not
+ * be resolved, a model that is not allowlisted, a purpose the gateway does
+ * not know. A different message to a different person — there is nothing
+ * in Settings for the user to change, so this must never route there.
+ */
+export function isServiceConfigError(error: unknown): boolean {
+  return error instanceof ModelError && SERVICE_CONFIG_CODES.has(error.code);
+}

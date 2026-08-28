@@ -32,7 +32,10 @@ describe('import boundary (S14)', () => {
   //    'decodeFrame', 'readFrames', 'isPurpose', 'isProviderId',
   //    'jurisdictionLabel', 'isRetryableStatus', 'isSignInError',
   //    'isServiceConfigError']
-  const exported = ['parseJsonLoose'];
+  const exported = [
+    'parseJsonLoose', 'isPurpose', 'isProviderId', 'jurisdictionLabel',
+    'isRetryableStatus', 'isSignInError', 'isServiceConfigError',
+  ];
 
   it('nothing outside packages/core defines an export of packages/core', () => {
     const files = [

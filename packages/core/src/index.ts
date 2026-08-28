@@ -1,1 +1,10 @@
 export { parseJsonLoose } from './json/parseJsonLoose.ts';
+export {
+  PURPOSES, isPurpose, PROVIDER_IDS, isProviderId, jurisdictionLabel,
+  ModelError, isSignInError, isServiceConfigError, isRetryableStatus,
+} from './model/protocol.ts';
+export type {
+  Purpose, ProviderId, Bloc, Jurisdiction, DataHandling, AllowedModel,
+  InferContext, InferRequest, InferUsage, InferResponse, ModelErrorCode,
+} from './model/protocol.ts';
+export type { ModelClient } from './model/client.ts';
