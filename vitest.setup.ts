@@ -30,3 +30,24 @@ if (typeof Blob !== 'undefined' && !Blob.prototype.text) {
     });
   };
 }
+
+// Polyfill Blob.arrayBuffer() for jsdom if not available. Routed through
+// FileReader (jsdom's own object) rather than `node:buffer`'s Blob, so the
+// ArrayBuffer this produces lives in the same realm as jsdom's global
+// `ArrayBuffer` — code such as `docxRedlines.ts` hands the result straight
+// to `jszip`, which type-checks with `instanceof ArrayBuffer` against
+// whatever realm it was loaded into. An ArrayBuffer built by Node's native
+// `Blob.arrayBuffer()` fails that check under jsdom even though it is a
+// perfectly real ArrayBuffer — a cross-realm identity mismatch, not a data
+// problem — which is why fixtures in this project build with the global
+// `Blob`, not `node:buffer`'s.
+if (typeof Blob !== 'undefined' && !Blob.prototype.arrayBuffer) {
+  Blob.prototype.arrayBuffer = async function() {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as ArrayBuffer);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsArrayBuffer(this);
+    });
+  };
+}

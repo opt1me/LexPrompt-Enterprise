@@ -53,6 +53,19 @@ export function buildDocxWithoutBody(): Promise<ArrayBuffer> {
   return zip.generateAsync({ type: 'arraybuffer' });
 }
 
+/** A `.docx` carrying `word/comments.xml` alongside its body — for
+ *  `docxRedlines.test.ts`, which (unlike `detectDocxMarkup`) needs to read
+ *  comment text and author, not merely notice a `w:commentRangeStart`
+ *  marker exists. */
+export function buildDocxWithComments(body: string, commentsXml: string): Promise<ArrayBuffer> {
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', CONTENT_TYPES);
+  zip.file('_rels/.rels', RELS);
+  zip.file('word/document.xml', documentXml(body));
+  zip.file('word/comments.xml', commentsXml);
+  return zip.generateAsync({ type: 'arraybuffer' });
+}
+
 export const CLEAN_BODY = '<w:p><w:r><w:t>The Tenant shall pay all costs.</w:t></w:r></w:p>';
 
 /**
