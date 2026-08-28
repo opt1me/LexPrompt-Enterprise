@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
-import type { PlaybookClause, Finding } from '../../types';
+import type { PlaybookClause, Finding, RiskLevel } from '../../types';
 import type { VerificationChange } from '../../lib/verification';
 import { RiskChip } from '../../components/RiskChip';
 import { StateChip } from '../../components/StateChip';
@@ -83,7 +83,21 @@ export interface FindingCardProps {
 // formatter into things like `flex - 1 py - 3 text - sm`, with stray spaces
 // inside the Tailwind class names, so those elements render unstyled in the
 // old app. Nothing here is copied from that file.
-const CARD_SHELL = 'bg-[#1a1a1a] rounded-xl border';
+const CARD_SHELL = 'bg-card rounded-card border';
+
+// The card's left accent, by the MODEL's risk rating — a third, glance-able
+// signal alongside RiskChip, distinct from the human StateChip's border. No
+// accent at all for Info: an informational finding is not a risk. Applied
+// only to the `done` shell, the only branch a riskLevel is ever known on.
+const RISK_ACCENT: Record<RiskLevel, string> = {
+  High: 'border-l-2 border-l-risk-high',
+  Medium: 'border-l-2 border-l-risk-med',
+  Low: 'border-l-2 border-l-risk-low',
+  Info: '',
+};
+function riskAccent(level: RiskLevel | undefined): string {
+  return level ? RISK_ACCENT[level] : '';
+}
 
 /**
  * One clause's finding for the active document. `status` drives the whole
@@ -104,11 +118,11 @@ export function FindingCard({
 
   if (status === 'pending') {
     return (
-      <div className={`${CARD_SHELL} border-white/5 border-dashed p-4 ${interrupted ? '' : 'opacity-40'} space-y-3`}>
-        <span className="text-sm text-gray-500">{clause.title}</span>
+      <div className={`${CARD_SHELL} border-rule border-dashed p-4 ${interrupted ? '' : 'opacity-60'} space-y-3`}>
+        <span className="font-prose text-clause font-medium text-ink-1">{clause.title}</span>
         {interrupted && (
           <>
-            <p className="text-xs text-gray-400 leading-relaxed">
+            <p className="font-ui text-ui-sm text-ink-2 leading-relaxed">
               This review was interrupted before this clause was reviewed.
             </p>
             <Button variant="ghost" onClick={() => onRetry(clause.id)} className="w-full text-xs">
@@ -122,31 +136,34 @@ export function FindingCard({
 
   if (status === 'running') {
     return (
-      <div className={`${CARD_SHELL} border-white/5`}>
+      <div className={`${CARD_SHELL} border-rule`}>
         <div
-          className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl"
+          className="p-3 border-b border-rule flex justify-between items-center bg-chip-fill rounded-t-card"
           data-busy="true"
           aria-live="polite"
         >
-          <span className="font-semibold text-sm text-white">{clause.title}</span>
+          <span className="font-prose text-clause font-medium text-ink-1">{clause.title}</span>
           {/* R-G20: a busy state whose only signal is an animation is
               invisible to a reader who turned animation off, and a stalled
               cell that looks blank rather than busy is the "cell spinning
               forever, unfinishable" defect in a different disguise. The word
               is the part that survives `prefers-reduced-motion`. */}
-          <span className="text-[11px] text-gray-400 flex items-center gap-1.5">
-            <Loader className="w-3.5 h-3.5 text-violet-400 animate-spin" aria-hidden="true" />
+          <span className="font-mono text-pin text-ink-4 flex items-center gap-1.5">
+            <Loader className="w-3.5 h-3.5 text-accent animate-spin" aria-hidden="true" />
             Extracting…
           </span>
         </div>
+        {/* One class carries the loop (`.lex-pulse`), so
+            `prefers-reduced-motion` collapses all three bars to static
+            tinted bars in one place rather than three (R-G20). */}
         <div className="p-4 space-y-2">
-          <div className="h-2.5 bg-white/10 rounded w-full animate-pulse" />
-          <div className="h-2.5 bg-white/10 rounded w-5/6 animate-pulse" />
-          <div className="h-2.5 bg-white/10 rounded w-2/3 animate-pulse" />
+          <div className="h-2.5 bg-chip-fill rounded-inset w-full lex-pulse" />
+          <div className="h-2.5 bg-chip-fill rounded-inset w-5/6 lex-pulse" />
+          <div className="h-2.5 bg-chip-fill rounded-inset w-2/3 lex-pulse" />
         </div>
         {interrupted && (
           <div className="px-4 pb-4 space-y-2">
-            <p className="text-xs text-gray-400 leading-relaxed">
+            <p className="font-ui text-ui-sm text-ink-2 leading-relaxed">
               This review was interrupted before this clause finished — it will never complete on its own.
             </p>
             <Button variant="ghost" onClick={() => onRetry(clause.id)} className="w-full text-xs">
@@ -159,14 +176,19 @@ export function FindingCard({
   }
 
   if (status === 'error') {
+    // Errored, not rejected: the model never answered, so there is no
+    // summary, no evidence, and no StateChip to carry — only this message
+    // and a Retry. A rejected-by-human finding is the `done` branch below
+    // instead, carrying the model's answer plus a StateChip; the two must
+    // never be visually interchangeable (spec §8.5).
     return (
-      <div className={`${CARD_SHELL} border-red-500/20`}>
-        <div className="p-3 border-b border-red-500/10 flex justify-between items-center bg-red-500/5 rounded-t-xl">
-          <span className="font-semibold text-sm text-white">{clause.title}</span>
-          <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+      <div className={`${CARD_SHELL} bg-risk-high-tint border-risk-high-edge`}>
+        <div className="p-3 border-b border-risk-high-edge flex justify-between items-center rounded-t-card">
+          <span className="font-prose text-clause font-medium text-ink-1">{clause.title}</span>
+          <AlertTriangle className="w-3.5 h-3.5 text-risk-high" aria-hidden="true" />
         </div>
         <div className="p-4 space-y-3">
-          <p className="text-xs text-red-300 leading-relaxed">{finding?.error || 'Something went wrong.'}</p>
+          <p className="font-ui text-ui-sm text-risk-high leading-relaxed">{finding?.error || 'Something went wrong.'}</p>
           <Button variant="ghost" onClick={() => onRetry(clause.id)} className="w-full text-xs">
             <RotateCcw className="w-3 h-3" /> Retry
           </Button>
@@ -182,13 +204,13 @@ export function FindingCard({
   // step once the user is ready.
   if (status === 'cancelled') {
     return (
-      <div className={`${CARD_SHELL} border-white/10`}>
-        <div className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl">
-          <span className="font-semibold text-sm text-white">{clause.title}</span>
-          <CircleSlash className="w-3.5 h-3.5 text-gray-400" />
+      <div className={`${CARD_SHELL} bg-chip-fill border-rule`}>
+        <div className="p-3 border-b border-rule flex justify-between items-center rounded-t-card">
+          <span className="font-prose text-clause font-medium text-ink-1">{clause.title}</span>
+          <CircleSlash className="w-3.5 h-3.5 text-ink-4" aria-hidden="true" />
         </div>
         <div className="p-4 space-y-3">
-          <p className="text-xs text-gray-400 leading-relaxed">Cancelled before this clause was reviewed.</p>
+          <p className="font-ui text-ui-sm text-ink-2 leading-relaxed">Cancelled before this clause was reviewed.</p>
           <Button variant="ghost" onClick={() => onRetry(clause.id)} className="w-full text-xs">
             <RotateCcw className="w-3 h-3" /> Retry
           </Button>
@@ -199,9 +221,9 @@ export function FindingCard({
 
   // done
   return (
-    <div className={`${CARD_SHELL} border-white/5`}>
-      <div className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl">
-        <span className="font-semibold text-sm text-white">{clause.title}</span>
+    <div className={`${CARD_SHELL} border-rule ${riskAccent(finding?.riskLevel)}`}>
+      <div className="p-3 border-b border-rule flex justify-between items-center rounded-t-card">
+        <span className="font-prose text-clause font-medium text-ink-1">{clause.title}</span>
         <div className="flex items-center gap-2">
           <RiskChip level={finding?.riskLevel} />
           <PositionChip outcome={finding?.positionOutcome} />
@@ -217,7 +239,7 @@ export function FindingCard({
             type="button"
             onClick={() => onRetry(clause.id)}
             title="Re-run this clause"
-            className="p-1 rounded text-gray-500 hover:text-white hover:bg-white/10 transition-colors"
+            className="p-1 rounded-control text-ink-4 hover:text-ink-1 hover:bg-chip-fill transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
             <span className="sr-only">Retry</span>
@@ -226,8 +248,8 @@ export function FindingCard({
       </div>
       <div className="p-4 space-y-3">
         {finding?.truncated && (
-          <div className="flex items-start gap-2 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded text-[11px] text-yellow-300">
-            <TriangleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <div className="flex items-start gap-2 p-2 bg-risk-med-tint border border-risk-med-edge rounded-inset font-ui text-ui-sm text-risk-med">
+            <TriangleAlert className="w-3.5 h-3.5 shrink-0 mt-0.5" aria-hidden="true" />
             {/* Named, whenever the finding recorded names. A finding derived
                 from a whole collection used to show the singular sentence
                 below, which cannot tell a reviewer whether the amendment
@@ -258,20 +280,20 @@ export function FindingCard({
           <PositionComparison position={clause.standardPosition} finding={finding} />
         )}
 
-        <p className="text-xs text-gray-300 leading-relaxed">{finding?.summary}</p>
+        <p className="font-prose text-finding text-ink-prose [text-wrap:pretty]">{finding?.summary}</p>
 
         {finding?.riskAnalysis && (
-          <div className="bg-red-900/10 p-2 rounded border border-red-500/10">
-            <div className="text-[10px] text-red-400 font-bold mb-1 flex items-center gap-1">
-              <ShieldAlert className="w-3 h-3" /> RISK ANALYSIS
+          <div className="bg-risk-high-tint p-2 rounded-inset border border-risk-high-edge">
+            <div className="font-mono text-label uppercase text-risk-high mb-1 flex items-center gap-1">
+              <ShieldAlert className="w-3 h-3" aria-hidden="true" /> Risk analysis
             </div>
-            <p className="text-xs text-gray-400">{finding.riskAnalysis}</p>
+            <p className="font-ui text-ui-sm text-ink-2">{finding.riskAnalysis}</p>
             {onSuggestFix && (finding.riskLevel === 'High' || finding.riskLevel === 'Medium') && (
               <Button
                 variant="ghost"
                 onClick={() => onSuggestFix(clause, finding)}
                 loading={suggestFixLoading}
-                className="mt-2 w-full py-1 text-[10px] bg-red-500/20 text-red-300 border-red-500/10 hover:bg-red-500/30"
+                className="mt-2 w-full py-1 text-[10px] text-risk-high border-risk-high-edge hover:bg-risk-high-tint"
               >
                 <Wand2 className="w-3 h-3" /> Suggest Fix
               </Button>

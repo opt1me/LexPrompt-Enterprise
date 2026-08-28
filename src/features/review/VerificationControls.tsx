@@ -13,7 +13,7 @@ export interface VerificationControlsProps {
   onChange: (change: VerificationChange) => void;
 }
 
-const ACTION = 'text-[11px] px-2.5 py-1 rounded-lg border transition-colors disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1';
+const ACTION = 'font-ui text-ui-sm px-2.5 py-1 rounded-control border transition-colors disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1';
 
 /**
  * The human's four moves on a finding: verify, flag, reject-with-reason, and
@@ -31,41 +31,46 @@ export function VerificationControls({ verification, busy = false, onChange }: V
 
   return (
     <>
-      <div className="flex flex-wrap gap-1.5">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onChange({ state: 'verified' })}
-          className={`${ACTION} ${active === 'verified' ? 'bg-emerald-500/25 text-emerald-200 border-emerald-500/30' : 'bg-white/5 text-gray-400 border-white/10 hover:text-emerald-300'}`}
-        >
-          <CheckCircle2 className="w-3 h-3" aria-hidden="true" /> Verify
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onChange({ state: 'flagged' })}
-          className={`${ACTION} ${active === 'flagged' ? 'bg-amber-500/25 text-amber-200 border-amber-500/30' : 'bg-white/5 text-gray-400 border-white/10 hover:text-amber-300'}`}
-        >
-          <Flag className="w-3 h-3" aria-hidden="true" /> Flag
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => setRejectOpen(true)}
-          className={`${ACTION} ${active === 'rejected' ? 'bg-red-500/25 text-red-200 border-red-500/30' : 'bg-white/5 text-gray-400 border-white/10 hover:text-red-300'}`}
-        >
-          <XCircle className="w-3 h-3" aria-hidden="true" /> Reject
-        </button>
-        {active !== 'unchecked' && (
+      <div className="bg-card border-t border-rule pt-3 space-y-1.5">
+        <div className="font-mono text-label uppercase text-ink-4">Disposition</div>
+        {/* No `role="status"` here (R-GP2 — that role is StateChip's alone);
+           the busy signal is the disabled buttons plus this data hook. */}
+        <div className="flex flex-wrap gap-1.5" data-busy={busy || undefined} aria-live="polite">
           <button
             type="button"
             disabled={busy}
-            onClick={() => onChange({ state: 'unchecked' })}
-            className={`${ACTION} bg-transparent text-gray-500 border-transparent hover:text-gray-300`}
+            onClick={() => onChange({ state: 'verified' })}
+            className={`${ACTION} ${active === 'verified' ? 'bg-accent text-page border-accent' : 'border-accent-edge text-accent hover:bg-accent-tint'}`}
           >
-            <RotateCcw className="w-3 h-3" aria-hidden="true" /> Clear
+            <CheckCircle2 className="w-3 h-3" aria-hidden="true" /> Verify
           </button>
-        )}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onChange({ state: 'flagged' })}
+            className={`${ACTION} ${active === 'flagged' ? 'bg-risk-med text-page border-risk-med' : 'border-risk-med-edge text-risk-med hover:bg-risk-med-tint'}`}
+          >
+            <Flag className="w-3 h-3" aria-hidden="true" /> Flag
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setRejectOpen(true)}
+            className={`${ACTION} ${active === 'rejected' ? 'bg-risk-high text-page border-risk-high' : 'border-risk-high-edge text-risk-high hover:bg-risk-high-tint'}`}
+          >
+            <XCircle className="w-3 h-3" aria-hidden="true" /> Reject
+          </button>
+          {active !== 'unchecked' && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => onChange({ state: 'unchecked' })}
+              className={`${ACTION} bg-transparent text-ink-4 border-transparent hover:text-ink-2`}
+            >
+              <RotateCcw className="w-3 h-3" aria-hidden="true" /> Clear
+            </button>
+          )}
+        </div>
       </div>
 
       <RejectReasonModal

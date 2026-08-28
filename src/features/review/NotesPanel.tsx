@@ -34,17 +34,28 @@ export function NotesPanel({ notes, authorInitials, busy = false, onAddNote }: N
   const ordered = [...notes].sort((a, b) => a.at - b.at);
 
   return (
-    <div className="space-y-2 pt-2 border-t border-white/5">
+    <div className="space-y-2 pt-2 bg-card border border-rule rounded-card p-2.5">
       {ordered.length > 0 && (
         <ul className="space-y-1.5">
           {ordered.map(note => (
-            <li key={note.id} className="bg-white/[0.03] rounded-lg p-2 border border-white/5">
-              <p data-testid="note-text" className="text-[11px] text-gray-300 leading-relaxed whitespace-pre-wrap">
-                {note.text}
-              </p>
-              <span data-testid="note-meta" className="mt-1 block text-[10px] text-gray-600">
-                {formatWhen(note.at)}
+            <li key={note.id} className="flex items-start gap-2 bg-chip-fill rounded-inset p-2 border border-rule">
+              {/* R-GP5: this app has no store of any name but the local
+                 profile's, so a note's avatar and attribution are always
+                 the local profile's — never an invented one. */}
+              <span
+                className="shrink-0 w-[22px] h-[22px] rounded-meter bg-accent text-page font-ui text-meta flex items-center justify-center"
+                aria-hidden="true"
+              >
+                {authorInitials}
               </span>
+              <div className="min-w-0 flex-1">
+                <p data-testid="note-text" className="font-ui text-ui text-ink-2 leading-relaxed whitespace-pre-wrap">
+                  {note.text}
+                </p>
+                <span data-testid="note-meta" className="mt-1 block font-mono text-pin text-ink-4">
+                  You · {formatWhen(note.at)}
+                </span>
+              </div>
             </li>
           ))}
         </ul>
@@ -55,7 +66,7 @@ export function NotesPanel({ notes, authorInitials, busy = false, onAddNote }: N
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={`Add a note as ${authorInitials}`}
-          className="flex-1 bg-white/5 border border-white/10 rounded-lg p-2 text-[11px] text-white outline-none"
+          className="flex-1 bg-card border border-rule-strong rounded-control p-2 font-ui text-ui text-ink-1 outline-none focus:ring-1 focus:ring-accent"
         />
         <Button
           variant="ghost"

@@ -361,14 +361,14 @@ export function ResultsView({
   }, [focusIndex]);
 
   return (
-    <div className="h-full flex flex-col lg:flex-row bg-[#09090b]">
-      <div className="w-full lg:w-1/3 border-r border-white/10 flex flex-col bg-[#111] min-h-0">
-        <div className="p-4 border-b border-white/10 flex items-center justify-between gap-3">
+    <div className="h-full flex flex-col lg:flex-row bg-paper">
+      <div className="w-full lg:w-1/3 border-r border-rule flex flex-col bg-card min-h-0">
+        <div className="p-4 border-b border-rule flex items-center justify-between gap-3">
           {run.documentIds.length > 1 ? (
             <select
               value={activeDocId}
               onChange={(e) => handleSwitchDoc(e.target.value)}
-              className="flex-1 min-w-0 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-sm text-white outline-none"
+              className="flex-1 min-w-0 bg-card border border-rule-strong rounded-control px-2 py-1.5 font-ui text-ui text-ink-1 outline-none focus:ring-1 focus:ring-accent"
             >
               {run.documentIds.map(id => {
                 const doc = documents.find(d => d.id === id);
@@ -378,19 +378,19 @@ export function ResultsView({
               })}
             </select>
           ) : (
-            <span className="text-sm font-medium text-white truncate">{activeDoc?.name ?? 'Document'}</span>
+            <span className="font-ui text-ui font-medium text-ink-1 truncate">{activeDoc?.name ?? 'Document'}</span>
           )}
 
-          <span className="shrink-0 text-[11px] text-gray-400" title="Findings a human has verified">
+          <span className="shrink-0 font-mono text-pin text-ink-4" title="Findings a human has verified">
             {progressLabel(run.findings)}
           </span>
 
           {onOpenTabular && (
             <button
               onClick={onOpenTabular}
-              className="shrink-0 flex items-center gap-1.5 text-xs text-gray-400 hover:text-white bg-white/5 hover:bg-white/10 px-2.5 py-1.5 rounded-lg border border-white/5 transition-colors"
+              className="shrink-0 flex items-center gap-1.5 font-ui text-ui-sm text-ink-2 hover:text-ink-1 bg-chip-fill hover:bg-rule px-2.5 py-1.5 rounded-control border border-rule transition-colors"
             >
-              <Table className="w-3.5 h-3.5" /> Tabular view
+              <Table className="w-3.5 h-3.5" aria-hidden="true" /> Tabular view
             </button>
           )}
         </div>
@@ -403,7 +403,7 @@ export function ResultsView({
            "still loading" `undefined` case, so it renders too — as a loud
            failure via `lookupFailed`, never as silence or a false "deleted". */}
         {(run.playbookVersionId === undefined || playbookVersion !== undefined) && (
-          <div className="px-4 py-1.5 border-b border-white/10 shrink-0">
+          <div className="px-4 py-1.5 border-b border-rule shrink-0">
             <ReviewVersionLine
               versionId={run.playbookVersionId}
               version={
@@ -417,51 +417,69 @@ export function ResultsView({
           </div>
         )}
 
-        <div className="flex border-b border-white/10 shrink-0">
+        <div className="flex border-b border-rule shrink-0">
           <button
             onClick={() => setTab('findings')}
-            className={`flex-1 py-3 text-sm font-medium transition-colors ${tab === 'findings' ? 'text-violet-400 border-b-2 border-violet-500' : 'text-gray-500 hover:text-gray-300'}`}
+            className={`flex-1 py-3 font-ui text-ui font-medium transition-colors ${tab === 'findings' ? 'text-accent border-b-2 border-accent' : 'text-ink-3 hover:text-ink-1'}`}
           >
             Findings
           </button>
           <button
             onClick={() => setTab('chat')}
-            className={`flex-1 py-3 text-sm font-medium transition-colors ${tab === 'chat' ? 'text-violet-400 border-b-2 border-violet-500' : 'text-gray-500 hover:text-gray-300'}`}
+            className={`flex-1 py-3 font-ui text-ui font-medium transition-colors ${tab === 'chat' ? 'text-accent border-b-2 border-accent' : 'text-ink-3 hover:text-ink-1'}`}
           >
             Assistant
           </button>
         </div>
 
         {tab === 'findings' && onVerify && (
-          <div className="px-4 py-1.5 text-[11px] text-gray-500 border-b border-white/10 shrink-0">
-            j/k move · v verify · f flag · r reject
+          <div className="px-4 py-1.5 flex flex-wrap items-center gap-1 font-mono text-pin text-ink-4 border-b border-rule shrink-0">
+            <span className="bg-chip-fill rounded-chip px-1">j/k</span>
+            <span>move</span>
+            <span className="mx-0.5" aria-hidden="true">·</span>
+            <span className="bg-chip-fill rounded-chip px-1">v</span>
+            <span>verify</span>
+            <span className="mx-0.5" aria-hidden="true">·</span>
+            <span className="bg-chip-fill rounded-chip px-1">f</span>
+            <span>flag</span>
+            <span className="mx-0.5" aria-hidden="true">·</span>
+            <span className="bg-chip-fill rounded-chip px-1">r</span>
+            <span>reject</span>
           </div>
         )}
 
-        <div className="h-1 bg-white/5 shrink-0" role="progressbar" aria-valuenow={progressPercent(run.findings)} aria-valuemin={0} aria-valuemax={100}>
-          <div className="h-full bg-emerald-500/60 transition-all" style={{ width: `${progressPercent(run.findings)}%` }} />
+        <div className="h-1 bg-rule shrink-0" role="progressbar" aria-valuenow={progressPercent(run.findings)} aria-valuemin={0} aria-valuemax={100}>
+          <div className="h-full bg-accent transition-all" style={{ width: `${progressPercent(run.findings)}%` }} />
         </div>
 
         {tab === 'findings' ? (
           <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
             <div className="flex justify-between items-center">
-              <h3 className="font-bold text-white text-sm">Analysis</h3>
+              <h3 className="font-prose text-section text-ink-1">Analysis</h3>
               <div className="flex gap-2">
                 <button
                   onClick={handleDraftEmail}
                   disabled={emailLoading || !activeDocId}
                   title="Draft Email"
-                  className="p-2 bg-white/5 rounded hover:bg-white/10 transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-2 bg-chip-fill rounded-control hover:bg-paper transition-colors text-ink-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {emailLoading ? <Loader className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                  {emailLoading ? (
+                    <span data-busy="true" aria-live="polite" className="flex items-center">
+                      <Loader className="w-4 h-4 animate-spin" aria-hidden="true" />
+                    </span>
+                  ) : <Mail className="w-4 h-4" aria-hidden="true" />}
                 </button>
                 <button
                   onClick={handleExport}
                   disabled={exportLoading || !activeDocId}
                   title="Export DOCX"
-                  className="p-2 bg-violet-600 rounded hover:bg-violet-500 transition-colors text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="p-2 bg-accent rounded-control hover:bg-accent-strong transition-colors text-page disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {exportLoading ? <Loader className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
+                  {exportLoading ? (
+                    <span data-busy="true" aria-live="polite" className="flex items-center">
+                      <Loader className="w-4 h-4 animate-spin" aria-hidden="true" />
+                    </span>
+                  ) : <FileDown className="w-4 h-4" aria-hidden="true" />}
                 </button>
                 {/* Beside the DOCX export, deliberately. The tabular grid was
                     the only place that offered a CSV, and it refuses to render
@@ -472,9 +490,9 @@ export function ResultsView({
                 <button
                   onClick={() => downloadTabularCsv(run, documents)}
                   title="Export CSV"
-                  className="p-2 bg-white/5 rounded hover:bg-white/10 transition-colors text-white"
+                  className="p-2 bg-chip-fill rounded-control hover:bg-paper transition-colors text-ink-2"
                 >
-                  <Table className="w-4 h-4" />
+                  <Table className="w-4 h-4" aria-hidden="true" />
                 </button>
               </div>
             </div>
@@ -483,7 +501,7 @@ export function ResultsView({
               <div
                 key={clause.id}
                 ref={(el) => { cardRefs.current[i] = el; }}
-                className={`rounded-lg transition-shadow ${focusIndex === i ? 'ring-1 ring-violet-500/40' : ''}`}
+                className={`rounded-card transition-shadow ${focusIndex === i ? 'ring-1 ring-accent-edge' : ''}`}
               >
                 <FindingCard
                   clause={clause}
@@ -508,7 +526,7 @@ export function ResultsView({
             ))}
           </div>
         ) : (
-          <Suspense fallback={<div className="p-4 text-xs text-gray-500">Loading assistant…</div>}>
+          <Suspense fallback={<div className="p-4 font-ui text-ui-sm text-ink-4">Loading assistant…</div>}>
             <ChatPanel documents={activeDoc ? [activeDoc] : []} settings={settings} onAuthError={onAuthError} />
           </Suspense>
         )}

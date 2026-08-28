@@ -54,7 +54,7 @@ export function EvidenceList({ citations, documentNames, onCiteClick }: Evidence
 
   return (
     <div className="space-y-1.5">
-      <div className="text-[10px] font-bold text-gray-500 uppercase tracking-wide flex items-center gap-1">
+      <div className="font-mono text-label uppercase text-ink-4 flex items-center gap-1">
         <Quote className="w-3 h-3" aria-hidden="true" /> Evidence
       </div>
       {citations.map((citation, i) => (
@@ -62,11 +62,12 @@ export function EvidenceList({ citations, documentNames, onCiteClick }: Evidence
           key={`${citation.documentId}-${i}`}
           type="button"
           onClick={() => onCiteClick([citation.quote], citation.documentId)}
-          className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/5 hover:border-white/15 rounded-lg p-2.5 transition-colors group"
+          className="w-full text-left border-l-2 border-l-rule pl-3.5 py-2 pr-2.5 bg-chip-fill/40 hover:bg-chip-fill transition-colors group"
         >
-          <p className="text-[11px] text-gray-300 leading-relaxed italic">&ldquo;{citation.quote}&rdquo;</p>
-          <span className="mt-1.5 block text-[10px] text-gray-500 group-hover:text-violet-300 transition-colors">
-            {pinLabel(citation, documentNames)}
+          <p className="font-prose italic text-quote text-ink-quote">&ldquo;{citation.quote}&rdquo;</p>
+          <span className="mt-1.5 flex items-center justify-between gap-2">
+            <span className="font-mono text-pin text-ink-4 uppercase">{pinLabel(citation, documentNames)}</span>
+            <span className="font-ui text-meta text-accent group-hover:underline shrink-0">Show in document</span>
           </span>
         </button>
       ))}
