@@ -90,8 +90,25 @@ export function buildServer(deps: ServerDeps, httpsOptions?: MtlsHttpsOptions): 
       bodyLimit: deps.config.maxPromptChars * 4,
     });
   // Only `apps/api` may call this gateway (Task 15). `/healthz` is excluded
-  // because a liveness probe has neither a client certificate nor a token —
-  // it is checked by URL, ahead of the auth hook itself, not inside it.
+  // by URL, ahead of the auth hook rather than inside it.
+  //
+  // What that exclusion actually buys differs by mode, and saying so matters
+  // because the obvious reading — "a liveness probe needs no credential" —
+  // is only half true:
+  //
+  //   entra: the server is plain HTTP behind internal-only ingress, so the
+  //     platform's probe reaches `/healthz` with no token. The exclusion is
+  //     doing real work here; without it every probe would 401.
+  //
+  //   mtls: `main.ts` sets `requestCert`/`rejectUnauthorized` at the TLS
+  //     layer, so a caller presenting NO certificate fails the handshake
+  //     before Fastify routes anything. This exclusion never runs for them.
+  //     A compose healthcheck therefore MUST present the client certificate
+  //     (`curl --cert certs/api.pem`); one written without it reports the
+  //     gateway permanently unhealthy while the gateway is in fact fine —
+  //     which restarts a healthy container on a schedule.
+  //
+  // Verified by hand against a running server, not inferred.
   const callerAuth = makeCallerAuthHook(deps.config.caller, deps.verifyEntra ?? NO_VERIFY_ENTRA);
   app.addHook('preHandler', async (req, reply) => {
     if (req.url === '/healthz') return;
