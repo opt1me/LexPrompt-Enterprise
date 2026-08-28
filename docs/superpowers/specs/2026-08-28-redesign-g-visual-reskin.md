@@ -513,7 +513,7 @@ This section is normative. Each item names the component, the state, and the pro
 
 `ReviewVersionLine` has four visually distinct outcomes and they must stay four:
 
-1. `versionId` absent → "Ran against a playbook version that is no longer recorded."
+1. `versionId` absent → "This review predates playbook versioning, so it does not record which version it ran against."
 2. `lookupFailed` → "Could not check which playbook version this review ran against.
    Try reloading."
 3. resolved → "Ran against v*N*", a link when history is reachable.
@@ -530,7 +530,8 @@ produced a confident false claim.
   "n/a", not a dashed placeholder. A clause with no house rule is not a question with
   a blank answer.
 - `positionHealthLabel`'s four kinds stay four and stay visually distinct:
-  `HELD n of n` (accent), `CONCEDED n times` (risk-med), `UNTESTED` (ink-4),
+  `HELD n of n` (accent), `CONCEDED n time(s)` — singular "CONCEDED 1 time",
+  plural "CONCEDED 2 times" (etc.) — (risk-med), `UNTESTED` (ink-4),
   `NO POSITION` (ink-5, and deliberately not styled like `UNTESTED` — "we have no
   rule" and "we have a rule nothing has tested" are different facts).
 - `StateChip` always renders, including `unchecked`. There is no "no chip" state for
@@ -540,6 +541,19 @@ produced a confident false claim.
 
 The following strings are load-bearing and are **not** reworded in G. Where a
 prototype shows different words, the shipped words win.
+
+**A standing note on how to read this list.** It was transcribed once, at the time this
+spec was written, against the source as it stood then. Sub-projects D and E's fix rounds
+have rewritten copy since — correctly, in every case found so far — and this document was
+not updated alongside those fixes. Three of the quotes below (and one in §8.2, one in
+§9.4) had gone stale this way before this correction; see `rulings.md` for the recorded
+ruling. **Before any task applies a string from this section verbatim, check it against
+the shipped source file, not against this document.** This document says what must stay
+frozen — which component, which branch, which fact — not what the exact characters are
+if the two ever disagree. If they disagree, the shipped source is right until someone
+deliberately changes it, and that change belongs in a commit that declares itself
+structural, per this plan's own rule that a copy edit inside a "no test edited" restyle
+task is a finding, not a chore.
 
 - Everything `src/lib/findingOutcome.ts` exports: `verificationLabel`
   ("UNVERIFIED AI OUTPUT", "FLAGGED", …), `netPositionLabel`
@@ -654,7 +668,7 @@ architecture changes, and the change is called out here rather than smuggled in.
 | `EvidenceList` | Italic Newsreader quote + mono pin (`LEASE · p.14 · cl.5.2`) | Cosmetic | The pin's content is unchanged; `derivePage` still decides the page and still omits it rather than guessing |
 | `VerificationControls` | Sticky disposition bar, three role-shaped buttons | Cosmetic | Await-then-apply is untouched. The `J` hint is kept; no new shortcuts are added in G |
 | `NotesPanel` | Card, avatar = local profile initials | Cosmetic | Keeps `[data-testid="note-text"]` |
-| `PositionComparison` | "We ask for" / "This lease says" two-column box | Cosmetic | Renders only when there is an outcome |
+| `PositionComparison` | "We ask for" / "This document says" two-column box | Cosmetic | Renders only when there is an outcome |
 | `NetPositionPanel` | Unconfirmed = amber dashed; confirmed = accent with attribution | Cosmetic | The confirm/amend semantics are C's and are untouched |
 | `VariationTrailModal` | `1d` timeline: original → varied by → net | Cosmetic | Unavailable-member wording (R-C2R1) preserved verbatim |
 | `RejectReasonModal` | Restyled modal | Cosmetic | — |

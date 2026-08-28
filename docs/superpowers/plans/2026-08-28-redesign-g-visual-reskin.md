@@ -43,7 +43,7 @@ Copied verbatim from the spec and CLAUDE.md. Every task's requirements implicitl
 - **The three chips differ in shape, not only in hue** (R-G16). `RiskChip` = filled dot + uppercase mono label, **no border**. `StateChip` = lucide icon + uppercase mono label, hairline border, chip fill. `PositionChip` = uppercase mono label inside a 1px role-coloured border, transparent fill. Never merged into one badge.
 - **A clause with no standard position gets no chip.** `PositionChip` returns `null` on an absent outcome and the absence is the message — no default, no placeholder, no grey "n/a" pill.
 - **Verification state is set only by a human action; nothing derives it.** G renders it. G never writes it.
-- **Copy frozen by spec §8.4 is not reworded.** Everything `src/lib/findingOutcome.ts` exports; `positionHealthLabel`'s four strings; `ReviewVersionLine`'s four sentences; `SettingsPanel`'s two disclosure blocks; `TemplateEditor`/`TemplateLibrary`'s unpublished-changes badges and the disabled-publish tooltip; `RunPanel`'s four banner sentences; the model-capability refusal; `SourcePicker`'s privacy sentence; `TEMPLATE_DIRTY_MESSAGE` and `AUTHORING_DRAFT_DIRTY_MESSAGE`; `MatterHome`'s "Preparing documents for review…". Where a prototype's wording differs, **the shipped wording wins** (R-G5).
+- **Copy frozen by spec §8.4 is not reworded.** Everything `src/lib/findingOutcome.ts` exports; `positionHealthLabel`'s four strings; `ReviewVersionLine`'s four sentences; `SettingsPanel`'s two disclosure blocks; `TemplateEditor`/`TemplateLibrary`'s unpublished-changes badges and the disabled-publish tooltip; `RunPanel`'s four banner sentences; the model-capability refusal; `SourcePicker`'s privacy sentence; `TEMPLATE_DIRTY_MESSAGE` and `AUTHORING_DRAFT_DIRTY_MESSAGE`; `MatterHome`'s "Preparing documents for review…". Where a prototype's wording differs, **the shipped wording wins** (R-G5). **The frozen list above was transcribed when the spec was written; later fix rounds have rewritten some of that copy since.** Before applying any of these strings verbatim, check it against the shipped source file, not against the spec or this plan — see §8.4's standing note and `rulings.md`.
 - **Uppercase is a CSS decision, not a string decision.** Use `text-transform: uppercase`; never uppercase the string — several frozen strings are printed into a DOCX or a CSV cell where the chip's styling does not exist.
 - **The permitted copy changes are enumerated** (R-G6, extended by R-GP3 and R-GP8 below), and **each is a declared change**: the nav's `Library` → `Playbooks`, **and with it the two other user-facing strings that name that tab** — `App.tsx`'s `Back to Library` button and `MatterHome`'s "Create one in the Library first" (R-GP8, Task 5); the playbook editor's derived coverage line; the export-gate banner; the intake wizard's step labels; the `Standard positions` tab's own strings.
 - **Failure, disclosure and warning text may never use `ink-4` or below** (R-G19).
@@ -2062,13 +2062,13 @@ No test edited.
 **State checklist for this task:**
 
 - **`ReviewVersionLine` keeps all four outcomes, in four distinguishable renderings**, with the four sentences verbatim:
-  1. `versionId` absent → "Ran against a playbook version that is no longer recorded." — `text-ink-3`.
+  1. `versionId` absent → "This review predates playbook versioning, so it does not record which version it ran against." — `text-ink-3`.
   2. `lookupFailed` → "Could not check which playbook version this review ran against. Try reloading." — `text-risk-med`.
   3. resolved → "Ran against v*N*", a link (`text-accent underline underline-offset-2`) when `onOpenHistory` is supplied, plain `text-ink-3` when not.
   4. `version === null` → "The version this review ran against has been deleted." — `text-risk-med`.
   **Branches 2 and 4 may not be collapsed into one colour, one wording or one branch** — they are different facts, and R-D15 exists because collapsing them once produced a confident false claim. Both are amber; both keep their own sentence.
 - **All four run banners survive, stay distinct, and stay above the content**: `RunProgressBar` (accent bar + Cancel), `RunCancelledBanner` (neutral, calm), `RunInterruptedBanner` (`risk-med` on `risk-med-tint`), `RunEmptyFindingsBanner` (`risk-med`, and still returns `null` at `noContent === 0`). Their four sentences are frozen copy.
-- `PositionComparison` renders **only** when there is an outcome, and keeps its two-column "We ask for" / "This lease says" shape.
+- `PositionComparison` renders **only** when there is an outcome, and keeps its two-column "We ask for" / "This document says" shape.
 - `NetPositionPanel`: unconfirmed is `border-dashed border-net-unconfirmed` on `risk-med-tint` with the confirm action visible; confirmed is `border-net-confirmed` with attribution. **A net position must not read as settled until a human confirms it.** The confirm/amend semantics are C's and are untouched.
 - `VariationTrailModal` keeps the unavailable-member wording verbatim (R-C2R1) and keeps its three node forms distinct: original (outline ring), varied-by (solid amber dot), net (teal dot with a check).
 - `DocumentViewer`: `bg-doc-gutter` around a `bg-page` sheet carrying `shadow-page` — **the only card-like shadow in the app** — and keeps its own "no document" and parse-error branches.
@@ -2084,7 +2084,7 @@ Only the four class strings change; the four sentences, the prop contract and th
   if (versionId === undefined) {
     return (
       <span className="font-ui text-meta text-ink-3">
-        Ran against a playbook version that is no longer recorded.
+        This review predates playbook versioning, so it does not record which version it ran against.
       </span>
     );
   }
@@ -2313,7 +2313,7 @@ No test edited.
 
 **State checklist for this task:**
 
-- `positionHealthLabel`'s **four** kinds stay four and stay visually distinct: `HELD n of n` → `text-health-held`; `CONCEDED n times` → `text-health-conceded`; `UNTESTED` → `text-health-untested`; `NO POSITION` → `text-health-none`. **`UNTESTED` and `NO POSITION` are deliberately not styled alike** — "we have no rule" and "we have a rule nothing has tested" are different facts (§8.3). The four strings are frozen.
+- `positionHealthLabel`'s **four** kinds stay four and stay visually distinct: `HELD n of n` → `text-health-held`; `CONCEDED n time(s)` (singular "CONCEDED 1 time", plural "CONCEDED 2 times" etc.) → `text-health-conceded`; `UNTESTED` → `text-health-untested`; `NO POSITION` → `text-health-none`. **`UNTESTED` and `NO POSITION` are deliberately not styled alike** — "we have no rule" and "we have a rule nothing has tested" are different facts (§8.3). The four strings are frozen — verify each against `positionHealth.ts` itself before rendering it, not against this line.
 - `TemplateEditor`'s "Unpublished changes — reviews still run v*N*" badge and `TemplateLibrary`'s "Unpublished changes" badge keep their exact wording, in `draft` on `draft-tint`.
 - The disabled-publish tooltip "Nothing to publish — this is the published version." is frozen.
 - `[draggable="true"]` stays on the drag handle; the chevrons stay as the keyboard path; `data-clause-row` from Task 3 stays.
@@ -4363,8 +4363,19 @@ describe('StandardPositionsView', () => {
     expect(c.textContent).toContain('Lease');
     expect(c.textContent).toContain('Break right');
     // The four health strings are frozen copy — positionHealthLabel is the
-    // only place they live.
+    // only place they live. Check the shipped source, not this comment,
+    // before touching this string (see spec §8.4's standing note).
     expect(c.textContent).toContain('CONCEDED 2 times');
+  });
+
+  it('pluralises the conceded count correctly, including the singular', () => {
+    // count: 2 alone would still pass against a regression to the
+    // unconditional 'CONCEDED n times' template — 'CONCEDED 2 times' reads
+    // the same either way. Only count: 1 distinguishes the two: the correct,
+    // shipped rendering is 'CONCEDED 1 time', not 'CONCEDED 1 times'.
+    const c = mount(<StandardPositionsView rows={[row({ clauseId: 'c1', health: { kind: 'conceded', count: 1 } })]} error={null} onRetry={() => {}} onOpenPlaybook={() => {}} />);
+    expect(c.textContent).toContain('CONCEDED 1 time');
+    expect(c.textContent).not.toContain('CONCEDED 1 times');
   });
 
   it('says a firm has no standard positions rather than showing an empty table', () => {

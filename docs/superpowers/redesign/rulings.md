@@ -545,6 +545,39 @@ cost-if-wrong.
   visual review surface and enormous blast radius. Radii and type sizes are *not*
   snapped: those are named roles with explicit values, so they reproduce the prototype
   exactly. *Cost if wrong: padding differs from the mock by up to 2px in places.*
+- **R-G22. A "frozen copy" list transcribed at spec-writing time goes stale as later
+  fix rounds rewrite the copy it froze — verify the shipped source before applying it,
+  not the spec.** An audit (`.superpowers/sdd/2026-08-28-redesign-g-visual-reskin/frozen-copy-audit.md`)
+  found the spec's §8.2/§8.3/§8.4/§9.4 and the plan's Task 9/11/20 sections quoting three
+  strings sub-project D's honesty review had since moved past: `ReviewVersionLine`'s
+  first branch (spec/plan quoted "Ran against a playbook version that is no longer
+  recorded.", which D's review rejected as a false claim — a review that predates
+  versioning never recorded a version to begin with — and replaced with "This review
+  predates playbook versioning, so it does not record which version it ran against.",
+  guarded by a live test asserting the old phrase never reappears); `positionHealthLabel`'s
+  `CONCEDED` string (D fixed "CONCEDED 1 times" to pluralise correctly — "CONCEDED 1
+  time" / "CONCEDED 2 times" — but the spec/plan still quoted the unconditional "CONCEDED
+  n times" template, which reads identically to the correct form at every count except
+  one); and `PositionComparison`'s second column, which the spec transcribed from the
+  owner's lease-specific mockup as "This lease says" when the shipped, deliberately
+  generic component (this app reviews any contract type) has always said "This document
+  says" — `git log -S` shows the lease wording never existed in the file. Task 9 had
+  already run by the time of the audit and its implementer caught the `ReviewVersionLine`
+  divergence by hand, correctly keeping the shipped sentence rather than reverting to the
+  spec's stale quote — but the source documents were never corrected, so a later reader
+  (Task 24's documentation pass, or any of the fifteen G tasks still to run that touch
+  these three strings) re-deriving "what does the frozen copy say" from the spec or plan
+  themselves would get the wrong answer again. Corrected in both documents, everywhere
+  they appeared, plus Task 20's drafted test (which asserted only `count: 2` — a value
+  that cannot distinguish the correct pluralised form from a regression to the
+  unconditional template — now also asserts `count: 1` renders "CONCEDED 1 time" and not
+  "CONCEDED 1 times"). A standing note added at spec §8.4 makes the general instruction
+  explicit for every string in that list, not only these three. *Cost if wrong: a
+  restyle task reads its own spec as authoritative, "fixes" the already-correct shipped
+  string back to the stale wording, and reintroduces a rejected false claim, a grammar
+  defect, or lease-specific wording into a generic component — each requiring a test
+  edit to do it, which this project's own process treats as the signal that a "pure
+  restyle" commit quietly changed behaviour or copy.*
 
 ---
 
