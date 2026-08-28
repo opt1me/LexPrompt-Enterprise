@@ -1,4 +1,5 @@
 import type { PlaybookClause, PlaybookDraft } from '../types';
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_FORMAT_PROMPT } from './playbookDefaults';
 
 /** Sub-project E — playbook authoring. See
  *  `docs/superpowers/specs/2026-08-27-redesign-e-playbook-authoring.md`.
@@ -43,16 +44,15 @@ export interface AuthoringDraft {
   clauses: DraftClause[];
 }
 
-/** Neither the AI-draft form nor the by-hand route collects a system/format
- *  prompt — those govern how the *review engine* behaves, not what a clause
- *  asks, so a freshly authored draft gets the same generic starting point
- *  `newPlaybookDraft` (`src/lib/db/playbooks.ts`) gives a brand-new empty
- *  playbook. Duplicated rather than imported: importing from `db/playbooks`
- *  here would pull IndexedDB's connection module into a module this
- *  sub-project deliberately keeps pure (no React, no store, no
- *  persistence). If a third place needs this text, extract it then. */
-const DEFAULT_SYSTEM_PROMPT = 'You are an expert legal contract reviewer.';
-const DEFAULT_FORMAT_PROMPT = 'Answer strictly from the document text. Quote verbatim.';
+// Neither the AI-draft form nor the by-hand route collects a system/format
+// prompt — those govern how the *review engine* behaves, not what a clause
+// asks, so a freshly authored draft gets the same generic starting point
+// `newPlaybookDraft` (`src/lib/db/playbooks.ts`) gives a brand-new empty
+// playbook. Imported from `playbookDefaults.ts` (drift review, D2) rather
+// than `db/playbooks` directly: that would pull IndexedDB's connection
+// module into a module this sub-project deliberately keeps pure (no React,
+// no store, no persistence) — see that module's docstring for why a THIRD
+// place for the literal strings, not a second copy of them, is the fix.
 
 function valuesEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;

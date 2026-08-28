@@ -440,6 +440,47 @@ describe('drafts are persisted on explicit intent, and discardable', () => {
     await expect(discardDraft(playbook.id)).resolves.toBeUndefined();
     await expect(discardDraft('no-such-playbook')).resolves.toBeUndefined();
   });
+
+  // Minor 1 (integrity review). `discardDraft` used to read the raw record
+  // with `db.get` (its own incidental transaction) and write the cleared
+  // one back through `savePlaybook` (a second, separate transaction) — the
+  // last surviving instance of the two-write shape `publishAndPoint` was
+  // built to eliminate elsewhere in this file. Anything that published to
+  // this playbook in the gap between the two — fired unawaited from a
+  // synchronous `window.confirm` guard, so it genuinely can happen — got
+  // silently reverted: `currentVersionId` went back to the pre-publish
+  // version and the just-published one became an orphan nothing enumerates.
+  // Same assertion style as "savePlaybook allocates seq and put in one
+  // transaction" and "deletePlaybook removes the record and its versions in
+  // ONE transaction" above: reverting the fix restores the `db.get` +
+  // `savePlaybook` pair, which shows up here as MORE than one call to
+  // `db.transaction`, so this fails for the right reason.
+  it('discardDraft reads and writes in ONE transaction, not two', async () => {
+    const { playbook } = await published('Lease');
+    await saveDraft(playbook, { ...newPlaybookDraft('Lease'), name: 'Rejected' });
+    const db = await getDb();
+    const txSpy = vi.spyOn(db, 'transaction');
+    await discardDraft(playbook.id);
+    expect(txSpy).toHaveBeenCalledTimes(1);
+    expect(txSpy).toHaveBeenCalledWith(STORES.playbooks, 'readwrite');
+    txSpy.mockRestore();
+  });
+
+  it('discardDraft rejects with a clear message when storage is full', async () => {
+    const { playbook } = await published('Lease');
+    await saveDraft(playbook, { ...newPlaybookDraft('Lease'), name: 'Rejected' });
+    const db = await getDb();
+    const txSpy = vi.spyOn(db, 'transaction').mockImplementation((() => {
+      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+    }) as typeof db.transaction);
+    try {
+      await expect(discardDraft(playbook.id)).rejects.toThrow(/storage is full/i);
+    } finally {
+      txSpy.mockRestore();
+    }
+    // A failed discard discards nothing — the draft is still there.
+    expect((await getPlaybook(playbook.id))!.draft?.name).toBe('Rejected');
+  });
 });
 
 describe('import / export', () => {

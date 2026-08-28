@@ -8,6 +8,7 @@ import {
 import { getVersion, publishVersionIn } from './playbookVersions';
 import { SCHEMA_VERSION, type Playbook, type PlaybookDraft, type PlaybookVersion } from '../../types';
 import { uid } from '../uid';
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_FORMAT_PROMPT } from '../playbookDefaults';
 
 /** A playbook record as it actually sits in IndexedDB: the public
  *  `Playbook` shape plus a write sequence number. `_seq` exists to break
@@ -22,9 +23,6 @@ interface StoredPlaybook extends Playbook {
 
 const STORAGE_FULL_MESSAGE =
   'Could not save — your browser storage is full. Try deleting an old playbook, or exporting and removing some data.';
-
-const DEFAULT_SYSTEM_PROMPT = 'You are an expert legal contract reviewer.';
-const DEFAULT_FORMAT_PROMPT = 'Answer strictly from the document text. Quote verbatim.';
 
 /** A new playbook's IDENTITY. Its content is a separate `PlaybookDraft`
  *  (see `newPlaybookDraft`) that becomes v1 on the first publish — the two
@@ -254,7 +252,7 @@ export async function saveDraft(playbook: Playbook, draft: PlaybookDraft): Promi
  * Resolves rather than throwing when there is no such playbook, or no
  * draft on it: this runs as the user LEAVES the editor, and there is
  * nothing they could do about the news. A genuine storage failure still
- * rejects, through `savePlaybook`.
+ * rejects, with the same message `savePlaybook` uses for the same fault.
  *
  * Reads the RAW record, not `getPlaybook`'s migrated one (R-D7: repair-on-
  * read stays off write paths). `migratePlaybookRecord` builds a whitelist,
@@ -264,16 +262,42 @@ export async function saveDraft(playbook: Playbook, draft: PlaybookDraft): Promi
  * That is "never delete what you cannot read", broken by a repair nobody
  * asked for. Deleting one key from the record as found leaves the rest
  * exactly as found.
+ *
+ * The read and the write share ONE readwrite transaction (`publishAndPoint`'s
+ * shape), not `db.get` followed by `savePlaybook`'s own transaction. This
+ * used to be the last surviving two-transaction read-then-write in the
+ * module: it is fired unawaited (`void`) from a synchronous
+ * `window.confirm` guard, so it genuinely overlaps other work, and a
+ * `publishAndPoint` landing between the old read and the old write got
+ * silently reverted — `currentVersionId` went back to the pre-publish
+ * version and the just-published one became an orphan nothing enumerates.
+ * Nothing non-IDB is awaited inside the transaction, for the same reason
+ * `savePlaybook`/`publishAndPoint` say so: that is what keeps IndexedDB from
+ * auto-committing it early and reopening the same race.
  */
 export async function discardDraft(playbookId: string): Promise<void> {
   const db = await getDb();
-  const raw = (await db.get(STORES.playbooks, playbookId)) as StoredPlaybook | undefined;
-  if (!raw || !('draft' in raw)) return;
-  const cleared: StoredPlaybook = { ...raw };
-  delete cleared.draft;
-  // `savePlaybook` re-allocates `_seq` inside its own transaction, so the
-  // stale one carried by the spread is overwritten rather than persisted.
-  await savePlaybook(cleared);
+  try {
+    const tx = db.transaction(STORES.playbooks, 'readwrite');
+    const raw = (await tx.store.get(playbookId)) as StoredPlaybook | undefined;
+    if (!raw || !('draft' in raw)) {
+      await tx.done;
+      return;
+    }
+    const cleared: StoredPlaybook = { ...raw };
+    delete cleared.draft;
+    const seq = await nextSeq(tx.store);
+    const saved: StoredPlaybook = {
+      ...cleared,
+      _seq: seq,
+      updatedAt: Date.now(),
+      schemaVersion: SCHEMA_VERSION,
+    };
+    await tx.store.put(saved);
+    await tx.done;
+  } catch {
+    throw new Error(STORAGE_FULL_MESSAGE);
+  }
 }
 
 /**

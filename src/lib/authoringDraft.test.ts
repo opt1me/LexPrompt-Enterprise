@@ -4,6 +4,8 @@ import {
   positionProvenance,
   type AuthoringDraft, type DraftClause,
 } from './authoringDraft';
+import { newPlaybookDraft } from './db/playbooks';
+import { DEFAULT_SYSTEM_PROMPT, DEFAULT_FORMAT_PROMPT } from './playbookDefaults';
 
 const clause = (id: string, over: Partial<DraftClause> = {}): DraftClause => ({
   id, title: `Clause ${id}`, extractPrompt: `Extract ${id}.`,
@@ -238,5 +240,30 @@ describe('provenance on a saved standard position (Major 3)', () => {
 
   it('writes no provenance for a clause with no position', () => {
     expect(positionProvenance(draft([clause('a')]), clause('a'))).toBeUndefined();
+  });
+});
+
+// Drift review, D2 — the riskiest of the three drift findings. An
+// AI-drafted playbook (this module) and a hand-built one
+// (`db/playbooks.ts`'s `newPlaybookDraft`) used to declare
+// `DEFAULT_SYSTEM_PROMPT`/`DEFAULT_FORMAT_PROMPT` as two independent,
+// byte-identical literals with nothing pinning them equal — so improving
+// the wording in one place would silently leave the other's playbooks on
+// stale text, with no test to catch it. Both now import the same constants
+// from `playbookDefaults.ts`; this test pins that they still produce the
+// SAME text for the two "new playbook" paths, and would fail if either
+// route ever hardcoded its own literal again.
+describe('default prompts match the hand-built path (D2)', () => {
+  it('toPlaybookDraft seeds the same system/format prompts newPlaybookDraft does', () => {
+    const built = toPlaybookDraft(draft([clause('a', { disposition: 'kept' })]), 'Authored');
+    const handBuilt = newPlaybookDraft('Hand-built');
+    expect(built.systemPrompt).toBe(handBuilt.systemPrompt);
+    expect(built.formatPrompt).toBe(handBuilt.formatPrompt);
+  });
+
+  it('both are literally the shared constants, not a local copy of them', () => {
+    const built = toPlaybookDraft(draft([clause('a', { disposition: 'kept' })]), 'Authored');
+    expect(built.systemPrompt).toBe(DEFAULT_SYSTEM_PROMPT);
+    expect(built.formatPrompt).toBe(DEFAULT_FORMAT_PROMPT);
   });
 });
