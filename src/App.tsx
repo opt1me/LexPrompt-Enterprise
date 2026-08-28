@@ -298,7 +298,7 @@ function MigrationBlockedScreen(
         <p className="text-risk-high text-sm break-words">{error}</p>
         <button
           onClick={onRetry}
-          className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+          className="px-4 py-2 rounded-control bg-accent text-page hover:bg-accent-strong"
         >
           Retry
         </button>
@@ -3247,8 +3247,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             deep link would promise a draft that cannot be restored. */}
         {view === 'authoring-form' && (
           <div className="p-6 max-w-3xl mx-auto">
-            <h2 className="text-xl font-bold text-white mb-1">Draft a playbook with AI</h2>
-            <p className="text-xs text-gray-500 mb-6">
+            <h2 className="font-prose text-screen-title text-ink-1 mb-1">Draft a playbook with AI</h2>
+            <p className="font-ui text-meta text-ink-4 mb-6">
               Describe the contract and the model proposes a clause list. You review every clause
               before any of it becomes a playbook.
             </p>
@@ -3276,7 +3276,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               saving={savingAuthoringDraft}
             />
           ) : (
-            <div className="p-8 text-gray-500">No draft in progress.</div>
+            <div className="p-8 font-ui text-ui text-ink-3">No draft in progress.</div>
           )
         )}
         {/* Sub-project F's three session-only screens (Task 10A). None has a
@@ -3287,7 +3287,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           <div className="pb-6">
             <PrecedentUploadPanel onFilesSelected={handleAddRedlinesFiles} busy={redlinesBusy} />
             {redlinesError && (
-              <p className="max-w-5xl mx-auto px-6 pt-3 text-sm text-red-400">{redlinesError}</p>
+              <p className="max-w-5xl mx-auto px-6 pt-3 font-ui text-ui text-risk-high">{redlinesError}</p>
             )}
             <PrecedentIntake
               documents={redlinesDocs}
@@ -3325,12 +3325,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               questionsUnavailableReason={REDLINES_NO_QUESTIONS_REASON}
             />
             {redlinesError && (
-              <p className="max-w-4xl mx-auto px-6 text-sm text-red-400">{redlinesError}</p>
+              <p className="max-w-4xl mx-auto px-6 font-ui text-ui text-risk-high">{redlinesError}</p>
             )}
             <div className="max-w-4xl mx-auto px-6 pt-2 flex items-center justify-between">
               <button
                 onClick={() => setView('redlines-intake')}
-                className="text-xs text-gray-500 hover:text-gray-300"
+                className="font-ui text-meta text-ink-3 hover:text-ink-1"
               >
                 &larr; Back to documents
               </button>
@@ -3351,7 +3351,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onClose={() => setView('redlines-learned')}
             />
           ) : (
-            <div className="p-8 text-gray-500">No position selected.</div>
+            <div className="p-8 font-ui text-ui text-ink-3">No position selected.</div>
           )
         )}
         {view === 'matter' && (
@@ -3359,10 +3359,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             <LoadErrorPanel message={matterError} onRetry={() => matterRouteId && loadMatterHome(matterRouteId)} />
           ) : matterNotFound ? (
             <div className="p-8 max-w-md mx-auto text-center space-y-4">
-              <p className="text-gray-400">This matter could not be found. It may have been deleted.</p>
+              <p className="font-prose text-screen-title text-ink-1">This matter could not be found. It may have been deleted.</p>
               <button
                 onClick={() => requestView('matters')}
-                className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+                className="px-4 py-2 rounded-control bg-accent text-page hover:bg-accent-strong"
               >
                 Back to Matters
               </button>
@@ -3398,7 +3398,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             <p className="font-prose text-screen-title text-ink-1">This page could not be found.</p>
             <button
               onClick={() => requestView('matters')}
-              className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+              className="px-4 py-2 rounded-control bg-accent text-page hover:bg-accent-strong"
             >
               Back to Matters
             </button>
@@ -3412,16 +3412,16 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             />
           ) : route.name === 'playbook' && playbookNotFound ? (
             <div className="p-8 max-w-md mx-auto text-center space-y-4">
-              <p className="text-gray-400">This playbook could not be found. It may have been deleted.</p>
+              <p className="font-prose text-screen-title text-ink-1">This playbook could not be found. It may have been deleted.</p>
               <button
                 onClick={() => navigate({ name: 'playbooks' })}
-                className="px-4 py-2 rounded-md bg-violet-600 text-white hover:bg-violet-500"
+                className="px-4 py-2 rounded-control bg-accent text-page hover:bg-accent-strong"
               >
                 Back to Playbooks
               </button>
             </div>
           ) : route.name === 'playbook' && playbookLoading && !editorContent ? (
-            <div className="p-8 text-gray-500">Loading playbook…</div>
+            <div className="p-8 font-ui text-ui text-ink-3">Loading playbook…</div>
           ) : editorContent ? (
             <TemplateEditor
               version={activeVersion ?? undefined}
@@ -3445,7 +3445,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onAuthError={handleAuthError}
             />
           ) : (
-            <div className="p-8 text-gray-500">No template selected.</div>
+            <div className="p-8 font-ui text-ui text-ink-3">No template selected.</div>
           )
         )}
         {view === 'run' && (
@@ -3458,7 +3458,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               initialDocuments={activeMatterId ? documents : []}
             />
           ) : (
-            <div className="p-8 text-gray-500">No template selected.</div>
+            <div className="p-8 font-ui text-ui text-ink-3">No template selected.</div>
           )
         )}
         {(view === 'results' || view === 'tabular') && (
@@ -3468,7 +3468,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onRetry={() => openReview(route.matterId, route.reviewId)}
             />
           ) : route.name === 'review' && reviewLoading ? (
-            <div className="p-8 text-gray-500">Loading review…</div>
+            <div className="p-8 font-ui text-ui text-ink-3">Loading review…</div>
           ) : run ? (
             <div className="h-[calc(100vh-64px)] flex flex-col">
               {isRunning && <RunProgressBar run={run} onCancel={handleCancelRun} />}

@@ -89,12 +89,12 @@ describe('collectScannableFiles', () => {
   });
 });
 
-// ── The repo-wide guards. Un-skipped by Task 14, once every screen has
-// been restyled. Skipped (not deleted, not weakened) until then because
-// today's raw palette utilities are the work this sub-project exists
-// to remove: a guard that passes today would be a guard that asserts
-// nothing.
-describe.skip('palette guard — SKIPPED UNTIL TASK 14 un-skips it', () => {
+// ── The repo-wide guard. Live as of Task 14: every screen has been
+// restyled onto semantic role tokens, and this now runs on every test
+// pass. From here, a raw colour anywhere under `src/` (outside
+// index.css, where the tokens live, and PdfCanvas.tsx's canvas draw
+// calls) is a test failure — no later task may reintroduce one.
+describe('palette guard', () => {
   it('no application source references a raw colour', () => {
     const violations = collectScannableFiles(SRC)
       .flatMap(rel => scanSource(rel, readFileSync(resolve(SRC, rel), 'utf8')));
