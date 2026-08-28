@@ -76,11 +76,11 @@ export function GroupDocumentsDialog({ isOpen, documents, onClose, onConfirm }: 
       }
     >
       {documents.length < 2 ? (
-        <p className="text-sm text-red-400">Select at least two documents to group them into a collection.</p>
+        <p className="text-sm text-risk-high">Select at least two documents to group them into a collection.</p>
       ) : (
         <>
           <div>
-            <label className="text-xs text-gray-400 uppercase font-semibold tracking-wider" htmlFor="collection-name">
+            <label className="font-mono text-label text-ink-4 uppercase" htmlFor="collection-name">
               Name
             </label>
             <input
@@ -89,17 +89,17 @@ export function GroupDocumentsDialog({ isOpen, documents, onClose, onConfirm }: 
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Lease as varied"
-              className="mt-1 w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-sm text-white outline-none focus:border-violet-500/50"
+              className="mt-1 w-full bg-chip-fill border border-rule rounded-control px-3 py-2 text-sm text-ink-1 outline-none focus:border-accent"
             />
           </div>
 
           <div className="space-y-2">
-            <p className="text-xs text-gray-400 uppercase font-semibold tracking-wider">
+            <p className="font-mono text-label text-ink-4 uppercase">
               Choose the base document — the rest amend it, in this order
             </p>
             <ul className="space-y-1.5">
               {documents.map(doc => (
-                <li key={doc.id} className="flex items-center gap-3 bg-white/5 rounded-lg px-3 py-2">
+                <li key={doc.id} className="flex items-center gap-3 bg-chip-fill rounded-control px-3 py-2">
                   <input
                     type="radio"
                     name="base-document"
@@ -108,10 +108,16 @@ export function GroupDocumentsDialog({ isOpen, documents, onClose, onConfirm }: 
                     onChange={() => setBaseDocumentId(doc.id)}
                     className="shrink-0"
                   />
-                  <label htmlFor={`base-${doc.id}`} className="text-sm text-white truncate flex-1 cursor-pointer">
+                  <label htmlFor={`base-${doc.id}`} className="text-sm text-ink-1 truncate flex-1 cursor-pointer">
                     {doc.name}
                   </label>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider shrink-0 bg-white/10 text-gray-300">
+                  <span
+                    className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border shrink-0 ${
+                      baseDocumentId === doc.id
+                        ? 'bg-accent-tint text-accent border-accent-edge'
+                        : 'bg-chip-fill text-ink-3 border-rule'
+                    }`}
+                  >
                     {baseDocumentId === doc.id ? 'Base' : 'Varies'}
                   </span>
                 </li>

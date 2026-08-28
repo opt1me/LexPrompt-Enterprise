@@ -51,7 +51,7 @@ export function DeleteMatterModal({ isOpen, onClose, onConfirm }: DeleteMatterMo
         </>
       }
     >
-      <p className="text-sm text-gray-400 leading-relaxed">
+      <p className="text-sm text-ink-3 leading-relaxed">
         Are you sure you want to permanently delete this matter? This will also delete all of
         its documents and reviews. This action cannot be undone.
       </p>
@@ -105,8 +105,8 @@ export function MattersList({ matters, onCreate, onDelete, onOpen }: MattersList
     <div className="p-8 max-w-5xl mx-auto h-full overflow-y-auto">
       <div className="flex justify-between items-end mb-8">
         <div>
-          <h2 className="text-3xl font-bold text-white mb-2">Matters</h2>
-          <p className="text-gray-400">Every matter's documents and reviews, kept together.</p>
+          <h2 className="font-prose text-screen-title text-ink-1 mb-2">Matters</h2>
+          <p className="text-ink-3">Every matter's documents and reviews, kept together.</p>
         </div>
         <Button onClick={() => setCreateOpen(true)}><Plus className="w-4 h-4" /> New Matter</Button>
       </div>
@@ -121,14 +121,14 @@ export function MattersList({ matters, onCreate, onDelete, onOpen }: MattersList
             onKeyDown={(e) => {
               if (onOpen && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onOpen(matter.id); }
             }}
-            className={`group relative flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-5 py-4 hover:border-violet-500/50 transition-colors shadow-lg ${onOpen ? 'cursor-pointer' : ''}`}
+            className={`group relative flex items-center gap-4 bg-card border border-rule rounded-card px-5 py-4 hover:border-accent-edge transition-colors ${onOpen ? 'cursor-pointer' : ''}`}
           >
-            <div className="w-10 h-10 rounded-lg bg-violet-600/20 text-violet-300 flex items-center justify-center shrink-0">
+            <div className="w-10 h-10 rounded-card bg-accent-tint text-accent flex items-center justify-center shrink-0">
               <Briefcase className="w-5 h-5" />
             </div>
             <div className="flex-1 min-w-0">
-              <h3 className="font-bold text-white text-base truncate">{matter.name}</h3>
-              <p className="text-xs text-gray-500 truncate">
+              <h3 className="font-prose text-matter-title text-ink-1 truncate">{matter.name}</h3>
+              <p className="font-mono text-pin text-ink-4 truncate">
                 {matter.client && <span>{matter.client}</span>}
                 {matter.client && ' · '}
                 {reviewCount !== undefined && (
@@ -140,7 +140,7 @@ export function MattersList({ matters, onCreate, onDelete, onOpen }: MattersList
             </div>
             <button
               onClick={(e) => { e.stopPropagation(); setDeleteId(matter.id); }}
-              className="p-2 bg-[#222] border border-white/10 text-gray-400 hover:text-red-400 hover:bg-red-900/20 hover:border-red-500/50 rounded-lg transition-all shadow-md shrink-0"
+              className="p-2 bg-paper border border-rule text-ink-4 hover:text-risk-high hover:bg-risk-high-tint hover:border-risk-high-edge rounded-control transition-all shrink-0"
               title="Delete Matter"
             >
               <Trash2 className="w-4 h-4" />
@@ -148,7 +148,7 @@ export function MattersList({ matters, onCreate, onDelete, onOpen }: MattersList
           </div>
         ))}
         {matters.length === 0 && (
-          <div className="text-gray-500 border border-dashed border-white/10 p-8 rounded-xl text-center">
+          <div className="text-ink-4 border border-dashed border-rule p-8 rounded-card text-center">
             No matters yet. Create one to get started.
           </div>
         )}
@@ -168,22 +168,22 @@ export function MattersList({ matters, onCreate, onDelete, onOpen }: MattersList
         }
       >
         <div>
-          <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">Matter Name</label>
+          <label className="block font-mono text-label text-ink-4 uppercase mb-1">Matter Name</label>
           <input
             value={name}
             onChange={e => setName(e.target.value)}
             placeholder="e.g. Acme Corp — Series B Financing"
-            className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+            className="w-full bg-paper border border-rule rounded-control p-3 text-ink-1 text-sm outline-none focus:border-accent transition-colors placeholder-ink-5"
             autoFocus
           />
         </div>
         <div>
-          <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">Client (Optional)</label>
+          <label className="block font-mono text-label text-ink-4 uppercase mb-1">Client (Optional)</label>
           <input
             value={client}
             onChange={e => setClient(e.target.value)}
             placeholder="e.g. Acme Corp"
-            className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+            className="w-full bg-paper border border-rule rounded-control p-3 text-ink-1 text-sm outline-none focus:border-accent transition-colors placeholder-ink-5"
           />
         </div>
       </Modal>

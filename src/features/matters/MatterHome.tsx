@@ -287,8 +287,8 @@ export function MatterHome({
     <div className="p-8 max-w-5xl mx-auto h-full overflow-y-auto">
       <div className="flex justify-between items-start mb-8">
         <div>
-          <h2 className="text-3xl font-bold text-white mb-1">{matter.name}</h2>
-          <p className="text-gray-400 text-sm">
+          <h2 className="font-prose text-matter-title text-ink-1 mb-1">{matter.name}</h2>
+          <p className="font-ui text-meta text-ink-4">
             {matter.client && <span>{matter.client}</span>}
             {matter.client && matter.reference && ' · '}
             {matter.reference && <span>{matter.reference}</span>}
@@ -297,7 +297,7 @@ export function MatterHome({
         </div>
         <button
           onClick={() => setDeleteMatterOpen(true)}
-          className="p-2 bg-[#1a1a1a] border border-white/10 text-gray-400 hover:text-red-400 hover:bg-red-900/20 hover:border-red-500/50 rounded-lg transition-all shrink-0"
+          className="p-2 bg-card border border-rule text-ink-4 hover:text-risk-high hover:bg-risk-high-tint hover:border-risk-high-edge rounded-control transition-all shrink-0"
           title="Delete Matter"
         >
           <Trash2 className="w-4 h-4" />
@@ -307,8 +307,8 @@ export function MatterHome({
       {/* Documents */}
       <section className="mb-10">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-bold text-white flex items-center gap-2">
-            <FileText className="w-4 h-4 text-gray-500" /> Documents
+          <h3 className="font-prose text-section text-ink-1 flex items-center gap-2">
+            <FileText className="w-4 h-4 text-ink-4" /> Documents
           </h3>
           <div className="flex items-center gap-2">
             <span title={selectedIds.length < 2 ? 'Select at least two documents to group them into a collection.' : undefined}>
@@ -334,19 +334,19 @@ export function MatterHome({
         {!documentsError && suggestions.map(s => (
           <div
             key={suggestionKey(s)}
-            className="mb-3 flex items-start gap-3 bg-violet-950/20 border border-violet-500/20 rounded-xl px-4 py-3"
+            className="mb-3 flex items-start gap-3 bg-accent-tint border border-accent-edge rounded-card px-4 py-3"
           >
-            <Lightbulb className="w-4 h-4 text-violet-300 shrink-0 mt-0.5" />
+            <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-              <p className="text-sm text-white">Group "{s.name}"?</p>
-              <p className="text-xs text-gray-400 mt-0.5">{s.reason}</p>
+              <p className="text-sm text-ink-1">Group "{s.name}"?</p>
+              <p className="text-xs text-ink-3 mt-0.5">{s.reason}</p>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <Button variant="ghost" onClick={() => openGroupDialogFromSuggestion(s)}>Review</Button>
               <button
                 onClick={() => dismissSuggestion(s)}
                 aria-label="Dismiss suggestion"
-                className="p-1.5 text-gray-500 hover:text-white"
+                className="p-1.5 text-ink-4 hover:text-ink-1"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -395,12 +395,12 @@ export function MatterHome({
             {documents.map(doc => (
               <div
                 key={doc.id}
-                className="flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3"
+                className="flex items-center gap-4 bg-card border border-rule rounded-card px-4 py-3"
               >
-                <FileText className="w-4 h-4 text-gray-500 shrink-0" />
+                <FileText className="w-4 h-4 text-ink-4 shrink-0" />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm text-white truncate">{doc.name}</div>
-                  <div className="text-[11px] text-gray-500">
+                  <div className="text-sm text-ink-1 truncate">{doc.name}</div>
+                  <div className="font-mono text-pin text-ink-4">
                     {doc.kind.toUpperCase()} · grouping unavailable until collections load
                   </div>
                 </div>
@@ -410,7 +410,7 @@ export function MatterHome({
         ) : (
           <>
             {documents.length === 0 ? (
-              <div className="text-gray-500 border border-dashed border-white/10 p-6 rounded-xl text-center text-sm">
+              <div className="text-ink-4 border border-dashed border-rule p-6 rounded-card text-center text-sm">
                 No documents yet. Add one to get started.
               </div>
             ) : standaloneDocuments.length > 0 ? (
@@ -418,7 +418,7 @@ export function MatterHome({
                 {standaloneDocuments.map(doc => (
                   <div
                     key={doc.id}
-                    className="flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3"
+                    className="flex items-center gap-4 bg-card border border-rule rounded-card px-4 py-3"
                   >
                     <input
                       type="checkbox"
@@ -428,32 +428,33 @@ export function MatterHome({
                       className="shrink-0"
                     />
                     {doc.parseError
-                      ? <FileWarning className="w-4 h-4 text-red-400 shrink-0" />
+                      ? <FileWarning className="w-4 h-4 text-risk-high shrink-0" />
                       : doc.markupNotice
-                        ? <FileWarning className="w-4 h-4 text-yellow-400 shrink-0" />
-                        : <FileText className="w-4 h-4 text-gray-500 shrink-0" />}
+                        ? <FileWarning className="w-4 h-4 text-risk-med shrink-0" />
+                        : <FileText className="w-4 h-4 text-ink-4 shrink-0" />}
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm text-white truncate">{doc.name}</p>
-                      <p className="text-xs text-gray-500">
+                      <p className="text-sm text-ink-1 truncate">{doc.name}</p>
+                      <p className="font-mono text-pin text-ink-4">
                         {doc.kind.toUpperCase()} · Added {formatDate(doc.addedAt)}
                       </p>
                       {doc.parseError && (
-                        <p className="text-xs text-red-400 mt-0.5">Unreadable: {doc.parseError}</p>
+                        <p className="text-xs text-risk-high mt-0.5">Unreadable: {doc.parseError}</p>
                       )}
-                      {/* Yellow, not red, and never "unreadable": this
-                          document parsed and is reviewable — the caveat is
-                          that its text is the file with every tracked change
-                          accepted. The same wording appears beside the
-                          findings (`DocumentViewer`), because whoever reads
-                          the review may never have seen this screen. */}
+                      {/* risk-med, not risk-high, and never "unreadable":
+                          this document parsed and is reviewable — the
+                          caveat is that its text is the file with every
+                          tracked change accepted. The same wording appears
+                          beside the findings (`DocumentViewer`), because
+                          whoever reads the review may never have seen this
+                          screen. */}
                       {doc.markupNotice && (
-                        <p className="text-xs text-yellow-300/90 mt-0.5">{doc.markupNotice}</p>
+                        <p className="text-xs text-risk-med mt-0.5">{doc.markupNotice}</p>
                       )}
                     </div>
                     <button
                       onClick={() => handleRemove(doc)}
                       disabled={removingId === doc.id}
-                      className="p-1.5 text-gray-500 hover:text-red-400 disabled:opacity-50 shrink-0"
+                      className="p-1.5 text-ink-4 hover:text-risk-high disabled:opacity-50 shrink-0"
                       aria-label={`Remove ${doc.name}`}
                     >
                       {removingId === doc.id ? <Loader className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
@@ -469,8 +470,8 @@ export function MatterHome({
       {/* Reviews */}
       <section>
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-bold text-white flex items-center gap-2">
-            <ClipboardList className="w-4 h-4 text-gray-500" /> Reviews
+          <h3 className="font-prose text-section text-ink-1 flex items-center gap-2">
+            <ClipboardList className="w-4 h-4 text-ink-4" /> Reviews
           </h3>
           <Button onClick={() => openRunPicker(undefined)}>
             <Play className="w-4 h-4" /> Run a review
@@ -480,7 +481,7 @@ export function MatterHome({
         {reviewsError ? (
           <LoadErrorPanel compact message={reviewsError} onRetry={onRetryReviews} />
         ) : reviews.length === 0 ? (
-          <div className="text-gray-500 border border-dashed border-white/10 p-6 rounded-xl text-center text-sm">
+          <div className="text-ink-4 border border-dashed border-rule p-6 rounded-card text-center text-sm">
             No reviews yet. Run one to get started.
           </div>
         ) : (
@@ -489,17 +490,17 @@ export function MatterHome({
               <button
                 key={review.id}
                 onClick={() => onOpenReview(review)}
-                className="flex items-center gap-4 bg-[#1a1a1a] border border-white/10 rounded-xl px-4 py-3 text-left hover:border-violet-500/50 transition-colors"
+                className="flex items-center gap-4 bg-card border border-rule rounded-card px-4 py-3 text-left hover:border-accent-edge transition-colors"
               >
-                <div className="w-9 h-9 rounded-lg bg-violet-600/20 text-violet-300 flex items-center justify-center shrink-0">
+                <div className="w-9 h-9 rounded-card bg-accent-tint text-accent flex items-center justify-center shrink-0">
                   <ClipboardList className="w-4 h-4" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-white truncate">{review.playbookSnapshot.name}</p>
-                  <p className="text-xs text-gray-500">
+                  <p className="text-sm font-medium text-ink-1 truncate">{review.playbookSnapshot.name}</p>
+                  <p className="font-mono text-pin text-ink-4">
                     Started {formatDate(review.startedAt)} · {reviewStatusLabel(review)}
                   </p>
-                  <span className="text-[11px] text-gray-500">{progressLabel(review.findings)}</span>
+                  <span className="font-mono text-pin text-ink-4">{progressLabel(review.findings)}</span>
                 </div>
               </button>
             ))}
@@ -527,28 +528,32 @@ export function MatterHome({
         footer={<Button variant="ghost" onClick={() => setRunPickerOpen(false)} disabled={!!startingReviewId}>Cancel</Button>}
       >
         {runTargetCollectionName && (
-          <p className="text-xs text-gray-500">
-            Reviewing the <span className="text-white">{runTargetCollectionName}</span> collection.
+          <p className="font-mono text-pin text-ink-4">
+            Reviewing the <span className="text-ink-1">{runTargetCollectionName}</span> collection.
           </p>
         )}
         {playbooksError ? (
           <LoadErrorPanel compact message={playbooksError} onRetry={onRetryPlaybooks} />
         ) : playbooks.length === 0 ? (
-          <p className="text-sm text-gray-400">
+          <p className="text-sm text-ink-3">
             No playbooks yet. Create one in Playbooks first, then run it against this matter's documents.
           </p>
         ) : (
           <div className="space-y-2">
-            <p className="text-xs text-gray-500 uppercase font-semibold tracking-wider mb-1">Choose a playbook</p>
+            <p className="font-mono text-label text-ink-4 uppercase mb-1">Choose a playbook</p>
             {playbooks.map(playbook => (
               <button
                 key={playbook.id}
                 onClick={() => handlePickPlaybook(playbook)}
                 disabled={!!startingReviewId}
-                className="w-full flex items-center justify-between gap-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-3 py-2.5 text-left text-sm text-white transition-colors disabled:opacity-50"
+                className="w-full flex items-center justify-between gap-3 bg-chip-fill hover:bg-rule-soft border border-rule rounded-control px-3 py-2.5 text-left text-sm text-ink-1 transition-colors disabled:opacity-50"
               >
                 <span className="truncate">{playbook.name}</span>
-                {startingReviewId === playbook.id && <Loader className="w-4 h-4 animate-spin shrink-0" />}
+                {startingReviewId === playbook.id && (
+                  <span data-busy="true" aria-live="polite" className="shrink-0">
+                    <Loader className="w-4 h-4 animate-spin" aria-hidden="true" />
+                  </span>
+                )}
               </button>
             ))}
             {/* A bare per-item spinner reads as "the click registered", not
@@ -560,8 +565,12 @@ export function MatterHome({
                never shows for a run that turns out to need no regeneration
                at all — it just doesn't stick around long in that case. */}
             {startingReviewId && (
-              <p className="text-xs text-gray-400 flex items-center gap-2 pt-1">
-                <Loader className="w-3.5 h-3.5 animate-spin shrink-0" />
+              <p
+                data-busy="true"
+                aria-live="polite"
+                className="text-xs text-ink-2 flex items-center gap-2 pt-1"
+              >
+                <Loader className="w-3.5 h-3.5 animate-spin shrink-0" aria-hidden="true" />
                 Preparing documents for review — scanned pages can take a moment to render…
               </p>
             )}

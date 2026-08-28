@@ -74,13 +74,13 @@ export function CollectionCard({ collection, documents, onUngroup, onRepair, onR
   };
 
   return (
-    <div className="bg-[#1a1a1a] border border-white/10 rounded-xl p-4 space-y-3">
+    <div className="bg-card border border-rule rounded-card p-4 space-y-3">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
-          <Layers className="w-4 h-4 text-violet-400 shrink-0" />
-          <p className="text-sm font-semibold text-white truncate">{collection.name}</p>
+          <Layers className="w-4 h-4 text-accent shrink-0" />
+          <p className="font-prose text-section text-ink-1 truncate">{collection.name}</p>
           {broken && (
-            <span className="text-[10px] px-2 py-0.5 rounded-full uppercase font-bold border inline-flex items-center gap-1 bg-red-500/15 text-red-300 border-red-500/20 shrink-0">
+            <span className="font-mono text-chip uppercase px-2 py-0.5 rounded-chip border inline-flex items-center gap-1 bg-risk-high-tint text-risk-high border-risk-high-edge shrink-0">
               <AlertTriangle className="w-3 h-3" aria-hidden="true" />
               Broken
             </span>
@@ -100,15 +100,15 @@ export function CollectionCard({ collection, documents, onUngroup, onRepair, onR
       </div>
 
       {broken && (
-        <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 space-y-2">
-          <p className="text-xs text-red-400 flex items-start gap-1.5">
+        <div className="rounded-card border border-risk-high-edge bg-risk-high-tint p-3 space-y-2">
+          <p className="text-sm text-risk-high flex items-start gap-1.5">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             This collection's base document is missing. It cannot be reviewed until you choose a new
             base from its remaining documents, or ungroup it.
           </p>
           {repairCandidates.length > 0 && (
             <div className="space-y-1.5">
-              <p className="text-[11px] text-gray-500 uppercase font-semibold tracking-wider flex items-center gap-1">
+              <p className="font-mono text-label text-ink-4 uppercase flex items-center gap-1">
                 <Wrench className="w-3 h-3" /> Repair — choose a new base
               </p>
               <div className="flex flex-wrap gap-2">
@@ -117,7 +117,7 @@ export function CollectionCard({ collection, documents, onUngroup, onRepair, onR
                     key={m.documentId}
                     onClick={() => handleRepair(m.documentId)}
                     disabled={busy}
-                    className="text-xs px-2.5 py-1.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-white transition-colors disabled:opacity-50"
+                    className="text-xs px-2.5 py-1.5 rounded-control bg-chip-fill hover:bg-rule-soft border border-rule text-ink-1 transition-colors disabled:opacity-50"
                   >
                     Make "{m.document!.name}" the base
                   </button>
@@ -130,18 +130,20 @@ export function CollectionCard({ collection, documents, onUngroup, onRepair, onR
 
       <ul className="flex flex-col gap-1.5">
         {members.map(m => (
-          <li key={m.documentId} className="flex items-center gap-3 bg-white/5 rounded-lg px-3 py-2">
+          <li key={m.documentId} className="flex items-center gap-3 bg-chip-fill rounded-control px-3 py-2">
             <span
-              className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider shrink-0 ${
-                m.kind === 'original' ? 'bg-violet-600/20 text-violet-300' : 'bg-white/10 text-gray-300'
+              className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border shrink-0 ${
+                m.kind === 'original'
+                  ? 'bg-accent-tint text-accent border-accent-edge'
+                  : 'bg-chip-fill text-ink-3 border-rule'
               }`}
             >
               {m.kind === 'original' ? 'Base' : 'Varies'}
             </span>
             {m.document ? (
-              <span className="text-sm text-white truncate">{m.document.name}</span>
+              <span className="text-sm text-ink-1 truncate">{m.document.name}</span>
             ) : (
-              <span className="text-sm text-red-400 flex items-center gap-1.5">
+              <span className="text-sm text-risk-high flex items-center gap-1.5">
                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
                 Unavailable — this document could not be found
               </span>

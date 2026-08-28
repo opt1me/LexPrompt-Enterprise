@@ -86,7 +86,7 @@ export function MatterPickerModal({
       onClose={handleClose}
       footer={<Button variant="ghost" onClick={handleClose} disabled={busy}>Cancel</Button>}
     >
-      <p className="text-xs text-gray-500">
+      <p className="font-ui text-meta text-ink-4">
         Reviews are saved to a matter, alongside its documents, so every run — including this one — needs a matter
         to belong to. Choose an existing matter or create a new one.
       </p>
@@ -96,7 +96,7 @@ export function MatterPickerModal({
       ) : creating ? (
         <div className="space-y-3">
           <div>
-            <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+            <label className="block font-mono text-label text-ink-4 uppercase mb-1">
               Matter name
             </label>
             <input
@@ -104,18 +104,18 @@ export function MatterPickerModal({
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Acme Corp — Series B Financing"
               autoFocus
-              className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+              className="w-full bg-paper border border-rule rounded-control p-3 text-ink-1 text-sm outline-none focus:border-accent transition-colors placeholder-ink-5"
             />
           </div>
           <div>
-            <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+            <label className="block font-mono text-label text-ink-4 uppercase mb-1">
               Client (optional)
             </label>
             <input
               value={client}
               onChange={(e) => setClient(e.target.value)}
               placeholder="e.g. Acme Corp"
-              className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 transition-colors placeholder-gray-600"
+              className="w-full bg-paper border border-rule rounded-control p-3 text-ink-1 text-sm outline-none focus:border-accent transition-colors placeholder-ink-5"
             />
           </div>
           <div className="flex gap-2">
@@ -129,7 +129,7 @@ export function MatterPickerModal({
       ) : (
         <div className="space-y-3">
           {matters.length === 0 ? (
-            <p className="text-sm text-gray-400">
+            <p className="text-sm text-ink-3">
               No matters yet. Create one below to run this review against it.
             </p>
           ) : (
@@ -139,11 +139,15 @@ export function MatterPickerModal({
                   key={m.id}
                   onClick={() => handlePick(m.id)}
                   disabled={busy}
-                  className="w-full flex items-center gap-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg px-3 py-2.5 text-left text-sm text-white transition-colors disabled:opacity-50"
+                  className="w-full flex items-center gap-3 bg-chip-fill hover:bg-rule-soft border border-rule rounded-control px-3 py-2.5 text-left text-sm text-ink-1 transition-colors disabled:opacity-50"
                 >
-                  <Briefcase className="w-4 h-4 text-violet-300 shrink-0" />
+                  <Briefcase className="w-4 h-4 text-accent shrink-0" />
                   <span className="truncate flex-1">{m.name}</span>
-                  {busyMatterId === m.id && <Loader className="w-4 h-4 animate-spin shrink-0" />}
+                  {busyMatterId === m.id && (
+                    <span data-busy="true" aria-live="polite" className="shrink-0">
+                      <Loader className="w-4 h-4 animate-spin" aria-hidden="true" />
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
