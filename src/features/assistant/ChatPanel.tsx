@@ -10,10 +10,14 @@ import { sendChatMessage, type ChatMessage } from './chatContext';
 export interface ChatPanelProps {
   documents: DocumentFile[];
   settings: Settings;
-  /** A rejected API key (401/403) must never be presented as if it were a
-   *  model's answer (Important 4) — reported here instead of appearing in
-   *  the chat history, so the caller can route to Settings. */
-  onAuthError?: () => void;
+  /** An auth-class failure (a rejected sign-in, or the firm's own
+   *  configuration) must never be presented as if it were a model's answer
+   *  (Important 4) — reported here instead of appearing in the chat
+   *  history, with the real error, so the caller can split it into the
+   *  right sentence for the right audience (Task 23's `handleModelError`)
+   *  rather than a single "route to Settings" this project no longer has a
+   *  credential there to justify. */
+  onAuthError?: (error: unknown) => void;
   /** The matter `documents` belongs to, if any — passed straight through to
    *  `sendChatMessage`'s `InferContext` (Task 21). Absent for documents
    *  loaded outside a matter. */
@@ -104,12 +108,13 @@ export function ChatPanel({ documents, settings, onAuthError, matterId }: ChatPa
       ]);
     } catch (error) {
       if (isAuthFailure(error)) {
-        // A rejected key must never be presented as if it were a model's
-        // answer — drop the empty placeholder bubble entirely rather than
-        // filling it with the rejection, and let the caller route to
-        // Settings (Important 4).
+        // An auth-class rejection must never be presented as if it were a
+        // model's answer — drop the empty placeholder bubble entirely
+        // rather than filling it with the rejection, and hand the real
+        // error to the caller so it can show the right sentence to the
+        // right audience (Important 4 / Task 23).
         setHistory(prev => prev.slice(0, -1));
-        onAuthError?.();
+        onAuthError?.(error);
         return;
       }
       const message = error instanceof Error ? error.message : 'Error processing request.';

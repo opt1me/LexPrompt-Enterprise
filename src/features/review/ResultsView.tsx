@@ -2,12 +2,14 @@ import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'rea
 import { Table, Mail, FileDown, Loader, FileText, X } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun, Settings } from '../../types';
 import { isAuthFailure } from '../../lib/model/authFailure';
+import { ModelError } from '@lexprompt/core';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { isVerifiable } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 import { FindingCard } from './FindingCard';
+import { ServiceConfigError } from '../../components/ServiceConfigError';
 import { ClauseIndex } from './ClauseIndex';
 import { ViewSwitch } from './ViewSwitch';
 import { ReviewVersionLine } from './ReviewVersionLine';
@@ -28,6 +30,23 @@ import { RevisionModal, type RevisionData } from '../assistant/RevisionModal';
 // out of the entry chunk for the common case where neither is touched.
 const ChatPanel = lazy(() => import('../assistant/ChatPanel').then(m => ({ default: m.ChatPanel })));
 const EmailModal = lazy(() => import('../assistant/EmailModal').then(m => ({ default: m.EmailModal })));
+
+/**
+ * Task 23: `Finding.authError` keeps its name and its persisted meaning (a
+ * failure Retry cannot fix) — what changes is which sentence a reader sees
+ * when it is set. `extractClause.ts` is unchanged by this task and stores
+ * only `error.message` on the finding, never a `ModelError.code`, so this
+ * is the one signal available: the real gateway text for a
+ * `service_misconfigured` failure (`callModel.ts`, `credentials/resolve.ts`)
+ * names itself this way on purpose, precisely so a reader — human or code —
+ * can tell "the firm's configuration is broken" apart from any other
+ * failure without guessing. A finding carrying older wording (a stale
+ * OpenRouter-era rejection, say) simply doesn't match, and renders as an
+ * ordinary error card exactly as it always has.
+ */
+function namesConfigurationFault(errorText: string | undefined): boolean {
+  return !!errorText && /not something you can fix here/i.test(errorText);
+}
 
 export interface ResultsViewProps {
   run: ReviewRun;
@@ -52,11 +71,14 @@ export interface ResultsViewProps {
    *  the caller can surface it however it surfaces other errors (a toast in
    *  App.tsx). Failures here are non-fatal to the run itself. */
   onError?: (message: string) => void;
-  /** A 401/403 from OpenRouter anywhere in this view (draft email, export,
-   *  suggest fix, or the chat panel) — routed here instead of through
-   *  `onError` so the caller can send the user to Settings rather than
-   *  showing the rejection as if it were a normal failure (Important 4). */
-  onAuthError?: () => void;
+  /** An auth-class failure from anywhere in this view (draft email, export,
+   *  suggest fix, or the chat panel) — routed here, with the real error,
+   *  instead of through `onError`, so the caller can split it into the
+   *  right sentence for the right audience (`handleModelError`, Task 23)
+   *  rather than showing it as if it were a normal failure (Important 4).
+   *  Settings no longer holds anything that could fix either half of this
+   *  split, so this never implies "go there". */
+  onAuthError?: (error: unknown) => void;
   /** Mirrors `FindingCard`'s `interrupted` prop (Important 1): true when this
    *  run is not currently live (reopened after an abandoned run), so
    *  pending/running cards get a Retry action instead of looking like work
@@ -301,11 +323,12 @@ export function ResultsView({
   );
 
   const reportError = (fallback: string, error: unknown) => {
-    // A rejected API key is never just "this one action failed" — it means
-    // every subsequent call will fail the same way, so it routes to
-    // Settings instead of surfacing as an ordinary toast (Important 4).
+    // An auth-class failure is never just "this one action failed" — it
+    // means every subsequent call will fail the same way, so it's handed to
+    // the caller's split (`handleModelError`) instead of surfacing as an
+    // ordinary toast (Important 4).
     if (isAuthFailure(error)) {
-      onAuthError?.();
+      onAuthError?.(error);
       return;
     }
     onError?.(error instanceof Error ? error.message : fallback);
@@ -605,34 +628,54 @@ export function ResultsView({
               </div>
             </div>
 
-            {clauses.map((clause, i) => (
-              <div
-                key={clause.id}
-                ref={(el) => { cardRefs.current[i] = el; }}
-                className={`rounded-card transition-shadow ${focusIndex === i ? 'ring-1 ring-accent-edge' : ''}`}
-              >
-                <FindingCard
-                  clause={clause}
-                  finding={findings[clause.id]}
-                  onCiteClick={handleCiteClick}
-                  onRetry={(clauseId) => onRetryCell(activeDocId, clauseId)}
-                  onSuggestFix={handleSuggestFix}
-                  suggestFixLoading={revisionLoadingClauseId === clause.id}
-                  interrupted={interrupted}
-                  onVerify={onVerify ? (change) => onVerify(activeDocId, clause.id, change) : undefined}
-                  onAddNote={onAddNote ? (text) => onAddNote(activeDocId, clause.id, text) : undefined}
-                  verifyBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
-                  noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
-                  documentNames={documentNames}
-                  authorInitials={authorInitials}
-                  localUserId={localUserId}
-                  onConfirmNetPosition={onConfirmNetPosition ? () => onConfirmNetPosition(activeDocId, clause.id) : undefined}
-                  onAmendNetPosition={onAmendNetPosition ? (text) => onAmendNetPosition(activeDocId, clause.id, text) : undefined}
-                  netPositionBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
-                  documentInfo={documentInfo}
-                />
-              </div>
-            ))}
+            {clauses.map((clause, i) => {
+              const finding = findings[clause.id];
+              // Task 23: a finding whose OWN error text names a
+              // configuration fault renders the same panel a live one
+              // would, in place of the ordinary card — never both at once,
+              // and never a Settings affordance either way.
+              const showServiceConfigError =
+                !!finding?.authError && namesConfigurationFault(finding.error);
+              return (
+                <div
+                  key={clause.id}
+                  ref={(el) => { cardRefs.current[i] = el; }}
+                  className={`rounded-card transition-shadow ${focusIndex === i ? 'ring-1 ring-accent-edge' : ''}`}
+                >
+                  {showServiceConfigError ? (
+                    <ServiceConfigError
+                      error={new ModelError(
+                        finding!.error ?? 'LexPrompt could not reach the model service.',
+                        'service_misconfigured',
+                        503,
+                      )}
+                      onRetry={() => onRetryCell(activeDocId, clause.id)}
+                    />
+                  ) : (
+                    <FindingCard
+                      clause={clause}
+                      finding={finding}
+                      onCiteClick={handleCiteClick}
+                      onRetry={(clauseId) => onRetryCell(activeDocId, clauseId)}
+                      onSuggestFix={handleSuggestFix}
+                      suggestFixLoading={revisionLoadingClauseId === clause.id}
+                      interrupted={interrupted}
+                      onVerify={onVerify ? (change) => onVerify(activeDocId, clause.id, change) : undefined}
+                      onAddNote={onAddNote ? (text) => onAddNote(activeDocId, clause.id, text) : undefined}
+                      verifyBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                      noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                      documentNames={documentNames}
+                      authorInitials={authorInitials}
+                      localUserId={localUserId}
+                      onConfirmNetPosition={onConfirmNetPosition ? () => onConfirmNetPosition(activeDocId, clause.id) : undefined}
+                      onAmendNetPosition={onAmendNetPosition ? (text) => onAmendNetPosition(activeDocId, clause.id, text) : undefined}
+                      netPositionBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                      documentInfo={documentInfo}
+                    />
+                  )}
+                </div>
+              );
+            })}
           </div>
         ) : (
           <Suspense fallback={<div className="p-4 font-ui text-ui-sm text-ink-4">Loading assistant…</div>}>

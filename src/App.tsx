@@ -36,8 +36,10 @@ import { findingsKeyFor, isCollectionTarget } from './lib/reviewTarget';
 import { useRoute, type Route } from './lib/router';
 import { gatewayModelClient } from './lib/model/gatewayModelClient';
 import { isAuthFailure } from './lib/model/authFailure';
+import { ModelError, isSignInError, isServiceConfigError } from '@lexprompt/core';
 import { useToast, Toast } from './components/Toast';
 import { LoadErrorPanel } from './components/LoadErrorPanel';
+import { ServiceConfigError } from './components/ServiceConfigError';
 import { SettingsPanel } from './features/settings/SettingsPanel';
 import { MattersList, type MattersListItem, type CreateMatterParams } from './features/matters/MattersList';
 import { MatterHome } from './features/matters/MatterHome';
@@ -263,7 +265,42 @@ function withUpdatedFinding(
   };
 }
 
-const AUTH_ERROR_MESSAGE = 'Your OpenRouter API key was rejected. Update it in Settings and try again.';
+/**
+ * Task 23's copy split. `openrouter.ts`'s old contract — a 401/403 means
+ * the user's key was rejected, route to Settings — retires along with
+ * `AUTH_ERROR_MESSAGE`, the string that named it: there is no OpenRouter
+ * key in the browser any more, so that sentence is simply false now. It has
+ * split into two facts for two audiences (`isSignInError`/
+ * `isServiceConfigError`, `packages/core/src/model/protocol.ts`): the
+ * user's own session, which they fix by signing in again, and the firm's
+ * deployment, which only an administrator can fix and which must never be
+ * sent to Settings — Settings holds no credential to change any more.
+ */
+const SIGN_IN_ERROR_MESSAGE = 'Your sign-in has expired. Sign in again to continue.';
+const NOT_PERMITTED_MESSAGE =
+  'Your account does not have access to LexPrompt. Ask your IT team to add you.';
+/**
+ * §7's group overage. Kept as a separate string from `NOT_PERMITTED_MESSAGE`
+ * on purpose: they are two different facts about two different people, and
+ * the whole reason the gateway detects overage separately is that showing
+ * the message above to a partner in forty groups would be a wrong answer
+ * told with complete confidence.
+ */
+const GROUP_OVERAGE_MESSAGE =
+  'Your account is in too many groups for LexPrompt to read them from your sign-in. '
+  + 'This is not something signing in again will fix — ask your IT team to grant LexPrompt '
+  + 'directory read access, or to reduce your group memberships.';
+const MODEL_UNAVAILABLE_MESSAGE =
+  'The model this review was set up with is no longer available. Choose another in Settings.';
+
+/** A live per-clause failure this app cannot classify further than "auth
+ *  class" (see `handleModelError`'s doc comment on why this stays generic).
+ *  Never claims Settings will help — the affected finding, rendered below,
+ *  is where the specific detail (and, when it names a configuration fault,
+ *  `<ServiceConfigError>`) actually lives. */
+const PER_CLAUSE_MODEL_FAILURE_MESSAGE =
+  'This review stopped: a clause failed for a reason a retry will not fix. '
+  + 'See the affected finding below for what the model reported.';
 
 /** Where the user's playbooks still are, per failed step.
  *
@@ -374,7 +411,7 @@ const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
  * mount this component at all while migration is pending or failed, so
  * there is no ordering race to get right here; it's structural.
  */
-function AppShell({ migratedCount }: { migratedCount: number | null }) {
+function AppShell({ migratedCount, signIn }: { migratedCount: number | null; signIn: () => void }) {
   // The inline closure defers the actual `confirmDiscardIfDirty` reference
   // (declared further down, once `view`/`activeTemplate` exist) until the
   // guard is actually invoked — never before this render has finished, so
@@ -502,6 +539,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [settings, setSettings] = useState<Settings>(() => loadSettings().settings);
   const [keyPurgeNoticeDismissed, setKeyPurgeNoticeDismissed] = useState(false);
   const { notify, toast } = useToast();
+  /** A `service_misconfigured`-class failure (Task 23): shown "in place",
+   *  wherever the user already is, and never routed to Settings — there is
+   *  nothing there to fix it. Set by `handleModelError`'s default branch;
+   *  cleared by the panel's own Retry. */
+  const [serviceConfigError, setServiceConfigError] = useState<ModelError | null>(null);
 
   // Render-time profile, for `authorInitials` (a note's placeholder needs a
   // value to render with, and an `await` can't supply one). Write handlers
@@ -1361,11 +1403,25 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     return () => { cancelled = true; };
   }, [settings.modelChoiceId]);
 
-  // Important 4: a rejected API key must route to Settings with an
-  // explanation, not sit as a wall of identical red error cards. Per-clause
-  // failures are isolated by design (extractClause never rejects), so the
-  // only reliable place to notice "the key itself is bad" is by watching
-  // the findings as they land.
+  // Important 4: a wall of identical red error cards must not sit there with
+  // no explanation. Per-clause failures are isolated by design (extractClause
+  // never rejects — it always resolves to an error `Finding`), so the only
+  // reliable place to notice "something unrecoverable happened" is by
+  // watching the findings as they land.
+  //
+  // Task 23: this used to notify with a fixed "your key was rejected" string
+  // and always route to Settings. It no longer can — a `Finding` carries only
+  // `authError: boolean` and the model's own message text, never the
+  // `ModelError.code` that would say WHICH of the new split's audiences this
+  // is for, and `extractClause.ts` is unchanged by this task (it stays
+  // outside this task's file list; teaching it to carry a code is a
+  // different, larger change). Guessing "Settings" here, when the true cause
+  // might be the firm's configuration, is exactly the confidently-wrong
+  // instruction this app exists not to give — so this stays generic and
+  // never navigates, and the affected finding (rendered below, either as a
+  // plain error card or, when its text names a configuration fault, as
+  // `<ServiceConfigError>` — see `ResultsView`) is where the real detail and
+  // the real repair (Retry) live.
   useEffect(() => {
     if (!run || authErrorHandledRef.current) return;
     const hasAuthError = Object.values(run.findings).some(byClause =>
@@ -1373,13 +1429,54 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     if (!hasAuthError) return;
     authErrorHandledRef.current = true;
     abortControllerRef.current?.abort();
-    notify(AUTH_ERROR_MESSAGE, 'error');
-    setView('settings');
+    notify(PER_CLAUSE_MODEL_FAILURE_MESSAGE, 'error');
   }, [run]);
 
-  const handleAuthError = () => {
-    notify(AUTH_ERROR_MESSAGE, 'error');
-    setView('settings');
+  /**
+   * Replaces `handleAuthError`, which sent every 401/403 to Settings.
+   *
+   * With the credentials held server-side, "your key was rejected" has split
+   * into two facts with two audiences: the user's session expired, which
+   * they fix by signing in; and the firm's deployment cannot reach a
+   * provider (or has refused this model/purpose/jurisdiction), which they
+   * cannot fix themselves. Sending a lawyer to a screen with nothing on it
+   * that could help is a wrong instruction delivered with authority.
+   */
+  const handleModelError = (error: unknown): void => {
+    if (isSignInError(error)) {
+      const e = error as ModelError;
+      notify(e.code === 'not_permitted' ? NOT_PERMITTED_MESSAGE : SIGN_IN_ERROR_MESSAGE, 'error');
+      if (e.code === 'sign_in_required') signIn();
+      return;
+    }
+    if (isServiceConfigError(error)) {
+      const e = error as ModelError;
+      if (e.code === 'group_overage') {
+        notify(GROUP_OVERAGE_MESSAGE, 'error');
+        return; // not Settings, not sign-in: neither can fix it
+      }
+      if (e.code === 'jurisdiction_not_allowed') {
+        // The message carries the jurisdiction and the reassurance that
+        // nothing was sent, and both come from the gateway rather than being
+        // reassembled here — a second wording of "nothing was sent" is the
+        // drift this app's copy exists to prevent, and it's the sentence a
+        // lawyer reads first.
+        notify(e.message, 'error');
+        setView('settings');
+        return;
+      }
+      if (e.code === 'model_not_allowed' || e.code === 'purpose_not_allowed') {
+        notify(MODEL_UNAVAILABLE_MESSAGE, 'error');
+        setView('settings');
+        return;
+      }
+      // `service_misconfigured` and anything else in this class: stays where
+      // the user is, with a Retry and a reference id. There is nothing in
+      // Settings for them to change.
+      setServiceConfigError(e);
+      return;
+    }
+    notify(error instanceof Error ? error.message : 'Something went wrong.', 'error');
   };
 
   /**
@@ -1839,7 +1936,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
           await persistFinal();
           return;
         }
-        notify(error instanceof Error ? error.message : 'Review failed.', 'error');
+        // `runReview` itself never throws an auth-class error today
+        // (`extractClause` never rejects); this is the general safety net
+        // for whatever DOES escape it, so it goes through the same split as
+        // every other model call rather than a bare toast.
+        handleModelError(error);
       });
   };
 
@@ -2708,7 +2809,13 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // reads the same way — a cancelled request is not a failure.)
       if (generation.signal.aborted) return;
       if (isAuthFailure(e)) {
+        // `DraftForm` (unmodified by this task) only needs to know THAT
+        // this was an auth-class failure, to hide its own inline error box
+        // (its "authFailed" contract predates the split and only supports
+        // an on/off signal) — the actual sentence and any routing decision
+        // happens here, where the real `ModelError` is still in scope.
         setAuthoringAuthFailed(true);
+        handleModelError(e);
       } else {
         setAuthoringError(
           e instanceof Error ? e.message : 'The playbook could not be drafted. Try again.',
@@ -2766,7 +2873,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       // to write it.
       notify(`Published v${version.version}.`);
     } catch (e) {
-      if (isAuthFailure(e)) handleAuthError();
+      if (isAuthFailure(e)) handleModelError(e);
       else notify(e instanceof Error ? e.message : 'The playbook could not be saved.', 'error');
     } finally {
       setSavingAuthoringDraft(false);
@@ -3025,7 +3132,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       setRedlinesQuestions(questions);
       setView('redlines-learned');
     } catch (e) {
-      if (isAuthFailure(e)) handleAuthError();
+      if (isAuthFailure(e)) handleModelError(e);
       else setRedlinesError(e instanceof Error ? e.message : 'Positions could not be inferred from these documents.');
     } finally {
       setRedlinesBusy(false);
@@ -3251,6 +3358,21 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     <div className="h-screen flex flex-col bg-paper">
       <Toast toast={toast} />
 
+      {/* Task 23: a `service_misconfigured`-class failure, wherever it came
+          from (a run, the chat panel, a suggested field, drafting or
+          publishing a playbook, redlines) — rendered here, once, so it
+          shows up "in place" no matter which screen triggered it, and is
+          never confused with a navigation. Never routes to Settings: there
+          is nothing there that could fix it. */}
+      {serviceConfigError && (
+        <div className="shrink-0 border-b border-rule bg-card px-6 py-3">
+          <ServiceConfigError
+            error={serviceConfigError}
+            onRetry={() => setServiceConfigError(null)}
+          />
+        </div>
+      )}
+
       {/* Said ONCE, and only when a key was actually there to remove. The
           only actionable half is the revocation: a key deleted from this
           browser is still a live credential at OpenRouter until the user
@@ -3415,7 +3537,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               busy={authoringBusy}
               error={authoringError}
               authFailed={authoringAuthFailed}
-              onAuthError={handleAuthError}
+              // No `onAuthError`: the generation catch above already calls
+              // `handleModelError(e)` directly, with the real `ModelError`
+              // still in scope. `DraftForm`'s own callback is a no-arg
+              // signal this task does not touch — routing through it here
+              // too would risk a second, duplicate notification.
               onSubmit={handleGenerateDraft}
               onCancel={() => navigate({ name: 'playbooks' })}
             />
@@ -3601,7 +3727,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               healthError={healthError ?? undefined}
               onRetryHealth={() => { if (playbookRouteId) loadPositionHealth(playbookRouteId); }}
               settings={settings}
-              onAuthError={handleAuthError}
+              onAuthError={handleModelError}
             />
           ) : (
             <div className="p-8 font-ui text-ui text-ink-3">No template selected.</div>
@@ -3683,7 +3809,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                     onOpenTabular={() => { setOpenReviewAt(undefined); setView('tabular'); }}
                     openAt={openReviewAt}
                     onError={(message) => notify(message, 'error')}
-                    onAuthError={handleAuthError}
+                    onAuthError={handleModelError}
                     interrupted={isInterrupted}
                     onVerify={handleVerify}
                     onAddNote={handleAddNote}
@@ -3861,5 +3987,5 @@ export default function App() {
     return <MigrationBlockedScreen error={migration.error} phase={migration.phase} onRetry={runMigration} />;
   }
 
-  return <AppShell migratedCount={migration.migratedCount} />;
+  return <AppShell migratedCount={migration.migratedCount} signIn={signIn} />;
 }

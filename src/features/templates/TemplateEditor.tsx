@@ -70,14 +70,16 @@ export interface TemplateEditorProps {
    *  dependency is how `suggestField`/`suggestMissingClauses` shipped tested
    *  and wired to nothing for an entire merge. */
   settings: Settings;
-  /** A rejected API key (401/403) on either AI trigger below must route to
-   *  Settings, exactly as it does for `ChatPanel`/`DraftForm` (spec §7,
-   *  `isAuthFailure`'s contract) — never render as inline text
-   *  beside the field, which is not a per-clause problem a retry can fix.
-   *  Entering this editor is not gated by `ensureConfigured`, so a user with
-   *  no key configured yet meets these controls before anything has asked
-   *  them for one. */
-  onAuthError?: () => void;
+  /** An auth-class failure on either AI trigger below (spec §7,
+   *  `isAuthFailure`'s contract) is reported here, with the real error,
+   *  instead of rendered as inline text beside the field — it is not a
+   *  per-clause problem a retry can fix, and only the caller
+   *  (`handleModelError`, Task 23) can tell whether it's the user's
+   *  sign-in or the firm's own configuration, and show the right sentence
+   *  to the right audience. Entering this editor is not gated by
+   *  `ensureConfigured`, so a user with no model chosen yet meets these
+   *  controls before anything has asked them for one. */
+  onAuthError?: (error: unknown) => void;
 }
 
 /** One in-flight or completed "draft this for me" for one field of one
@@ -231,13 +233,13 @@ export function TemplateEditor({
         setFieldSuggestions((prev) => ({ ...prev, [key]: { text, busy: false } }));
       })
       .catch((err: unknown) => {
-        // A rejected key is not a per-clause problem a retry can fix, and
-        // showing it as inline text next to the field tells the user to fix
-        // the wrong thing — route it to Settings instead, exactly as
-        // ChatPanel/DraftForm do.
+        // An auth-class failure is not a per-clause problem a retry can
+        // fix, and showing it as inline text next to the field tells the
+        // user to fix the wrong thing — hand the real error to the caller's
+        // split instead, exactly as ChatPanel/DraftForm do.
         if (isAuthFailure(err)) {
           setFieldSuggestions((prev) => ({ ...prev, [key]: { text: prev[key]?.text, busy: false } }));
-          onAuthError?.();
+          onAuthError?.(err);
           return;
         }
         // Any other failure leaves whatever was already displayed (nothing,
@@ -315,10 +317,10 @@ export function TemplateEditor({
       })
       .catch((err: unknown) => {
         setMissingBusy(false);
-        // Same auth routing as `requestFieldSuggestion` above — a rejected
-        // key routes to Settings rather than rendering here.
+        // Same auth routing as `requestFieldSuggestion` above — hand the
+        // real error to the caller's split rather than rendering it here.
         if (isAuthFailure(err)) {
-          onAuthError?.();
+          onAuthError?.(err);
           return;
         }
         setMissingError(err instanceof Error ? err.message : 'Could not check for missing clauses. Try again.');
