@@ -55,4 +55,14 @@ describe('strengthLabel', () => {
     expect(strengthLabel('mixed', 3, 4)).toBe('Mixed — 3 of 4');
     expect(strengthLabel('weak', 1, 1)).toBe('Weak — a single instance');
   });
+
+  it('says there is no evidence rather than rendering "0 of 0"', () => {
+    // `computeStrength` already refuses to call an empty basis `consistent`,
+    // because unanimity over nothing is guessed from silence. The label has
+    // to refuse the same thing in words: "0 of 0" reads as a ratio someone
+    // computed over documents, when no document was ever read.
+    const label = strengthLabel('weak', 0, 0);
+    expect(label).not.toMatch(/0 of 0/);
+    expect(label).toMatch(/no supporting documents/i);
+  });
 });

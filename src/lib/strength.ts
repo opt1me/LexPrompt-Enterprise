@@ -83,6 +83,11 @@ export function isContradicted(basis: BasisEntry[]): boolean {
  * honest about an empty basis as the number itself is.
  */
 export function strengthLabel(strength: PositionStrength, supporting: number, total: number): string {
+  // An empty basis is `weak`, but "0 of 0" reads as a ratio computed over
+  // evidence — the same vacuous shape `computeStrength` refuses when it
+  // declines to call an empty basis `consistent`, surfacing one layer up in
+  // the words a reader actually sees. Say there is no evidence instead.
+  if (total === 0) return 'Weak — no supporting documents yet';
   if (strength === 'weak' && total === 1) return 'Weak — a single instance';
   const label = strength === 'consistent' ? 'Consistent' : strength === 'mixed' ? 'Mixed' : 'Weak';
   return `${label} — ${supporting} of ${total}`;
