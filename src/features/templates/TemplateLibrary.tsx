@@ -41,7 +41,7 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
     <div className="p-8 max-w-7xl mx-auto h-full overflow-y-auto">
       <div className="flex justify-between items-end mb-8">
         <div>
-          <h2 className="text-3xl font-bold text-white mb-2">Library</h2>
+          <h2 className="text-3xl font-bold text-white mb-2">Playbooks</h2>
           <p className="text-gray-400">Manage your contract review templates.</p>
         </div>
         <div className="flex gap-4">

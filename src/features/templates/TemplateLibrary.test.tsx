@@ -43,6 +43,20 @@ function playbook(overrides: Partial<Playbook> = {}): Playbook {
 // render for any playbook the user actually owned — a UI element promising
 // a state the app could not reach. These tests pin the three rows apart so
 // they cannot converge again.
+describe('TemplateLibrary — the screen names itself the way the nav does', () => {
+  it('is headed "Playbooks", not "Library"', () => {
+    // The nav tab was renamed Library -> Playbooks, but this heading was
+    // missed: clicking "Playbooks" landed on a page titled "Library". It
+    // survived the rename's own verification sweep because that grep
+    // filtered out the string "TemplateLibrary" to drop component-name
+    // noise, and `grep -n` prefixes every line with the filename — so the
+    // filter also hid every genuine match inside this very file.
+    const c = mount(<TemplateLibrary templates={[]} {...wiring} />);
+    expect(c.querySelector('h2')?.textContent).toBe('Playbooks');
+    expect(c.querySelector('h2')?.textContent).not.toMatch(/library/i);
+  });
+});
+
 describe('TemplateLibrary — a row says which of three states the playbook is in', () => {
   it('says "Unpublished changes" when a draft is stored against the playbook', () => {
     const c = mount(<TemplateLibrary templates={[playbook({ draft: draft() })]} {...wiring} />);
