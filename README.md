@@ -133,6 +133,50 @@ This matters if you're evaluating LexPrompt for real contract work, so it's stat
 
 This is a deliberate reversal of an earlier, stricter position (contract text was never persisted at all). It was made because a matter that can't be returned to isn't a matter — but the reversal is bounded to your own browser, and it's stated here because you shouldn't have to find out otherwise.
 
+## How it's built
+
+A React 19 + TypeScript single-page app, built with Vite, styled with Tailwind 4. No backend, no server-side anything — the whole app is `dist/` and a static host.
+
+```
+src/
+  lib/            pure logic and persistence — no React
+    db/           IndexedDB via `idb`; one repository per store
+                  (matters, documents, blobs, reviews, playbooks,
+                   collections, playbookVersions, changesets, profile)
+    openrouter.ts the ONLY route to a model provider
+    citations.ts  matches a verbatim quote to page coordinates
+    strength.ts   how strongly a house position is supported — arithmetic,
+                  never a model's opinion
+    ...
+  features/       one folder per screen area
+    review/       the findings ledger, evidence, document viewer
+    tabular/      the comparison grid
+    templates/    the playbook editor, versions, publishing
+    authoring/    the three routes to a new playbook
+    redlines/     learning house positions from marked-up documents
+    matters/      matter home, status board, intake
+    positions/    the cross-playbook standard-positions view
+  components/     the shared primitives every screen composes
+  test/           the harness, plus the guards described below
+```
+
+Some deliberate shapes worth knowing before changing things:
+
+- **`src/lib/` holds no React.** Persistence, parsing, citation matching and every derived summary are plain functions over data, so they can be tested without mounting anything and the IO stays in the container components.
+- **One route to a model.** Every request goes through `openrouter.ts`. It retries only on 429 and 5xx and fails fast on 4xx, because retrying a rejected key just burns time before telling you the same thing.
+- **The card view, the comparison grid and the clause index are three renderers over one findings map.** None of them derives its own counts. The moment two of them compute "how many are verified" separately, they can disagree, and a reader has no way to know which to believe.
+- **Derived state is derived, not stored.** Position health, matter statistics and the activity feed are computed at read time from what already exists. A stored summary is a second source of truth that can drift from the thing it summarises.
+
+### The rule the codebase is organised around
+
+**Fail loudly rather than answer quietly wrong.**
+
+This app tells lawyers what is in contracts. A visible error costs someone a retry; a confident wrong answer costs them a mistake in advice. Almost every serious defect found while building this was a variant of one thing — something incomplete or stale presented as if it were complete and correct. A scanned PDF reviewed by a text-only model answering "the agreement is silent on this point" for every clause. A CSV writing unreviewed clauses as blank cells, which reads in a spreadsheet as "checked, nothing found". A summary row showing three zeroes where nothing had been assessed.
+
+So the codebase leans hard on a few habits: a load path must distinguish *empty* from *broken* from *not yet known*; a default must never assert something (a missing outcome becomes "unclear", never "meets"); an absent fact renders as nothing at all rather than a placeholder that looks like an answer; and anything a person judged is set only by that person, never inferred.
+
+`CLAUDE.md` in this repository records these as working rules, each with the defect that motivated it. `docs/superpowers/` holds the designs and the decision log — every ruling made during the build, with what it would cost if it turned out wrong.
+
 ## Local development
 
 Requires **Node.js >= 22.13** (Node 20 will fail to install dependencies — see [Node version requirement](#node-version-requirement) below for why).
@@ -152,6 +196,10 @@ npm run test:watch  # watch mode
 ```
 
 The suite is unit and integration tests (Vitest) covering the IndexedDB storage layer (matters, documents, blobs, reviews, playbooks, and the cascade-delete and localStorage-to-IndexedDB migration paths, run against `fake-indexeddb`), the OpenRouter client, PDF/DOCX parsing, citation matching, the review engine, and CSV/DOCX export. It does not include end-to-end browser tests or make real network calls — everything that talks to OpenRouter is mocked.
+
+At the time of writing that is **1,742 tests across 130 files**, and two of them are guards rather than tests of behaviour: a palette scanner that fails the build if a raw colour is used anywhere instead of a semantic design token, and a contrast test that checks every colour pair in the design system against its assigned legibility floor — so a warning or a disclosure cannot quietly become too faint to read.
+
+One convention worth adopting if you contribute: **anything load-bearing gets mutation-tested.** Break the implementation deliberately, confirm the test fails, then restore it. A green suite is not evidence on its own — a test that fails when you break the thing is. This project has shipped tests that passed against unfixed code and proved nothing, which is why the rule is written down.
 
 ## Building and deploying
 

@@ -37,3 +37,6 @@ test_docs/
 
 # Agent worktrees — transient, created by isolated subagents
 .claude/worktrees/
+
+# Design handoff (owner-supplied prototypes, not part of the app)
+design_handoff_lexprompt_redesign/
