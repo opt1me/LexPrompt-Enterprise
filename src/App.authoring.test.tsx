@@ -535,8 +535,17 @@ describe('Save as v1 publishes what the screen holds, not a stale copy (Major 4)
     let release: (value: unknown) => void = () => {};
     publishAndPointMock.mockReturnValue(new Promise((resolve) => { release = resolve; }));
 
+    // Re-review N2: the active clause carries a suggestion, so "Add as
+    // clause" and "Dismiss suggestion" are actually on screen to assert
+    // against — Major 4's fix threaded `saving` into Keep, Cut and the
+    // textareas but left these two live.
+    const draft = draftWithTwoClauses();
+    draft.clauses[1]!.suggestions = ['Consider a break option at year 3.'];
+    generateDraftMock.mockResolvedValueOnce(draft);
+
     await reachTheDraftReviewScreen();
     keepEveryClause();
+    expect(buttonNamed(/add as clause/i)).toBeTruthy();
     click(buttonNamed(/save as v1/i));
     await flush();
 
@@ -549,6 +558,12 @@ describe('Save as v1 publishes what the screen holds, not a stale copy (Major 4)
     expect(buttonNamed(/break clause/i)!.disabled).toBe(true);
     expect(extractionField().disabled).toBe(true);
     expect(buttonNamed(/discard/i)!.disabled).toBe(true);
+    // N2's own two: clicking either mid-publish used to insert an
+    // `unreviewed` clause into the ref (failing the re-checked gate, or
+    // being silently discarded with the whole draft) — a control that
+    // responds normally but cannot reach the version being written.
+    expect(buttonNamed(/add as clause/i)!.disabled).toBe(true);
+    expect(buttonNamed(/dismiss suggestion/i)!.disabled).toBe(true);
 
     await act(async () => {
       release({ playbook: publishedPlaybook, version: publishedVersion });

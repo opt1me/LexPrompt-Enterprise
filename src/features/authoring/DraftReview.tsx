@@ -257,9 +257,14 @@ interface ClauseEditorProps {
   onPendingChange: (edits: Partial<PlaybookClause>) => void;
   onAddSuggestion: (text: string) => void;
   onDismissSuggestion: (text: string) => void;
-  /** Keep and Cut are dead while a publish is in flight: a control that
-   *  responds normally but cannot reach the version being written is worse
-   *  than a disabled one (Major 4). */
+  /** Every control that can mutate the draft is dead while a publish is in
+   *  flight: a control that responds normally but cannot reach the version
+   *  being written is worse than a disabled one (Major 4). Re-review N2:
+   *  Major 4's fix threaded this into Keep, Cut and the textareas but left
+   *  the two suggestion buttons live — "Add as clause" could insert an
+   *  `unreviewed` clause into the ref mid-`saveDraftAsV1`, either failing a
+   *  publish that had already started or being silently discarded along
+   *  with the whole draft. Both suggestion buttons take `saving` now too. */
   saving?: boolean;
 }
 
@@ -398,14 +403,16 @@ function ClauseEditor({
               <span className="text-xs text-gray-300 flex-1">{s}</span>
               <button
                 onClick={() => onAddSuggestion(s)}
-                className="text-[10px] font-semibold text-violet-300 hover:text-violet-200 flex items-center gap-1 shrink-0"
+                disabled={saving}
+                className="text-[10px] font-semibold text-violet-300 hover:text-violet-200 flex items-center gap-1 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Plus className="h-3 w-3" aria-hidden="true" /> Add as clause
               </button>
               <button
                 onClick={() => onDismissSuggestion(s)}
+                disabled={saving}
                 aria-label="Dismiss suggestion"
-                className="text-gray-500 hover:text-gray-300 shrink-0"
+                className="text-gray-500 hover:text-gray-300 shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <X className="h-3 w-3" aria-hidden="true" />
               </button>
