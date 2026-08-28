@@ -4,6 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Matter, Review, DocumentRecord, PlaybookVersion, TrailStep } from './types';
 import { unconfirmedPosition } from './lib/netPosition';
+import { flushUntil } from './test/mount';
 
 // No @testing-library/react in this project — see App.interrupted.test.tsx /
 // App.reviewSaveError.test.tsx for the precedent this follows: drive a real
@@ -291,7 +292,12 @@ describe('App — persisting a net position (Task 8)', () => {
   async function openReview() {
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
     act(() => { root.render(<App />); });
-    await flush();
+    // Waits for the load to SETTLE rather than for a fixed tick count — see
+    // `flushUntil` for why counting ticks here was wrong.
+    await flushUntil(
+      () => !(container.textContent ?? '').includes('Loading review'),
+      'the review to finish loading',
+    );
   }
 
   it('confirms a net position and shows it only after the write resolves', async () => {
@@ -467,7 +473,12 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
   async function openReview() {
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
     act(() => { root.render(<App />); });
-    await flush();
+    // Waits for the load to SETTLE rather than for a fixed tick count — see
+    // `flushUntil` for why counting ticks here was wrong.
+    await flushUntil(
+      () => !(container.textContent ?? '').includes('Loading review'),
+      'the review to finish loading',
+    );
   }
 
   it('persists a verification and shows it only after the write resolves', async () => {
@@ -977,7 +988,12 @@ describe('App — reading and writing a collection review\'s findings (Task 8A)'
   async function openReview() {
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
     act(() => { root.render(<App />); });
-    await flush();
+    // Waits for the load to SETTLE rather than for a fixed tick count — see
+    // `flushUntil` for why counting ticks here was wrong.
+    await flushUntil(
+      () => !(container.textContent ?? '').includes('Loading review'),
+      'the review to finish loading',
+    );
   }
 
   it('renders a collection review\'s findings — not an empty pane', async () => {

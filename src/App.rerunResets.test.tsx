@@ -10,6 +10,7 @@ import { unconfirmedPosition, confirmPosition } from './lib/netPosition';
 // actual `openReview` reconstruction path rather than a stand-in for it.
 import { saveCollection } from './lib/db/collections';
 import { closeDb } from './lib/db/open';
+import { flushUntil } from './test/mount';
 
 // No @testing-library/react in this project — see App.interrupted.test.tsx
 // for the precedent this follows: drive a real react-dom root directly,
@@ -317,7 +318,12 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
   async function openReview() {
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
     act(() => { root.render(<App />); });
-    await flush();
+    // Waits for the load to SETTLE rather than for a fixed tick count — see
+    // `flushUntil` for why counting ticks here was wrong.
+    await flushUntil(
+      () => !(container.textContent ?? '').includes('Loading review'),
+      'the review to finish loading',
+    );
   }
 
   function retryC1(container: HTMLDivElement) {
@@ -752,7 +758,12 @@ describe('App — retrying a collection clause calls the collection extractor (T
   async function openReview() {
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
     act(() => { root.render(<App />); });
-    await flush();
+    // Waits for the load to SETTLE rather than for a fixed tick count — see
+    // `flushUntil` for why counting ticks here was wrong.
+    await flushUntil(
+      () => !(container.textContent ?? '').includes('Loading review'),
+      'the review to finish loading',
+    );
   }
 
   it('calls retryCell with the collection\'s target and ordered members, not with extractClause\'s single document', async () => {
@@ -941,7 +952,12 @@ describe('App — a retry on a reopened review re-hydrates its documents for rev
   async function openReview() {
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
     act(() => { root.render(<App />); });
-    await flush();
+    // Waits for the load to SETTLE rather than for a fixed tick count — see
+    // `flushUntil` for why counting ticks here was wrong.
+    await flushUntil(
+      () => !(container.textContent ?? '').includes('Loading review'),
+      'the review to finish loading',
+    );
   }
 
   function retryC1() {

@@ -44,6 +44,39 @@ afterEach(() => {
   }
 });
 
+/**
+ * Flushes microtasks until `settled()` holds, then returns — and throws a
+ * named failure if it never does.
+ *
+ * The alternative, a fixed `await flush(8)`, counts async ticks, and that
+ * count is a property of the code under test rather than of the test. Sub-
+ * project F's `DB_VERSION` 3 -> 4 bump added exactly one tick to App's
+ * review-open path (the first `getDb()` in a suite now runs an upgrade
+ * transaction before any read completes) and pushed two collection tests one
+ * tick past their budget. They failed as "no Retry button" and as an empty
+ * findings pane: symptoms that read as defects in the feature, when the
+ * screen was in fact still showing "Loading review...". Waiting on the
+ * condition keeps that failure honest — a load that genuinely never settles
+ * fails here, saying which condition it was waiting for, instead of
+ * downstream on an assertion about content that was never going to arrive.
+ *
+ * `min` flushes always run first, so this is a strict superset of the fixed
+ * flush it replaces; `max` bounds the wait so a hung load fails loudly
+ * rather than spinning the suite.
+ */
+export async function flushUntil(
+  settled: () => boolean,
+  what: string,
+  { min = 8, max = 200 }: { min?: number; max?: number } = {},
+): Promise<void> {
+  for (let i = 1; i <= max; i++) {
+    // eslint-disable-next-line no-await-in-loop
+    await act(async () => { await Promise.resolve(); });
+    if (i >= min && settled()) return;
+  }
+  throw new Error(`flushUntil gave up after ${max} flushes waiting for ${what}.`);
+}
+
 export function buttons(container: ParentNode): HTMLButtonElement[] {
   return Array.from(container.querySelectorAll('button'));
 }
