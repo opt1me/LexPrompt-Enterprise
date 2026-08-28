@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { X, FileText, BookOpen } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding } from '../../types';
 import type { VerificationChange } from '../../lib/verification';
+import { Button } from '../../components/Button';
 import { FindingCard } from '../review/FindingCard';
 import { DocumentViewer } from '../review/DocumentViewer';
 
@@ -87,34 +88,31 @@ export function CellDetail({ doc, documents, clause, finding, onClose, onRetry, 
   }, [doc?.id, clause.id]);
 
   return (
-    <div className="w-full lg:w-[420px] shrink-0 border-l border-white/10 bg-[#0e0e0e] flex flex-col h-full">
-      <div className="h-14 border-b border-white/10 flex items-center justify-between px-4 bg-[#161616] shrink-0">
+    <div className="w-full lg:w-[420px] shrink-0 border-l border-rule bg-card flex flex-col h-full">
+      <div className="h-14 border-b border-rule flex items-center justify-between px-4 bg-card shrink-0">
         <div className="flex items-center gap-2 overflow-hidden">
-          <FileText className="w-4 h-4 text-violet-400 shrink-0" />
-          <span className="text-xs font-bold text-gray-200 truncate" title={doc?.name}>
+          <FileText className="w-4 h-4 text-accent shrink-0" aria-hidden="true" />
+          <span className="font-ui text-ui-sm font-semibold text-ink-1 truncate" title={doc?.name}>
             {doc?.name ?? 'Document'}
           </span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           {onOpenInReview && (
-            <button
-              onClick={onOpenInReview}
-              className="flex items-center gap-1.5 text-[11px] font-semibold text-gray-300 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 px-2 py-1 rounded transition-colors"
-            >
+            <Button variant="ghost" onClick={onOpenInReview} className="py-1 text-[11px]">
               <BookOpen className="w-3.5 h-3.5" aria-hidden="true" /> Open in review
-            </button>
+            </Button>
           )}
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-white p-1 hover:bg-white/10 rounded transition-colors"
+            className="text-ink-4 hover:text-ink-1 p-1 rounded-control hover:bg-chip-fill transition-colors"
             aria-label="Close"
           >
-            <X className="w-4 h-4" />
+            <X className="w-4 h-4" aria-hidden="true" />
           </button>
         </div>
       </div>
 
-      <div className="p-4 border-b border-white/10 overflow-y-auto max-h-[50%] shrink-0">
+      <div className="p-4 border-b border-rule overflow-y-auto max-h-[50%] shrink-0">
         <FindingCard
           clause={clause}
           finding={finding}
