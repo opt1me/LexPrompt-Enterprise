@@ -1048,21 +1048,21 @@ a note about a road not taken. If it is built but a collaborative affordance shi
 its mechanism, the failure is exactly the one R-G1 named — a lawyer waiting on a review
 nobody was asked for — which is why the supersession is staged rather than immediate.*
 
-The server design's own rulings (S1–S24, after the 2026-08-28 revision below) live in that
+The server design's own rulings (S1–S27, after the 2026-08-28 revisions below) live in that
 spec's §16 rather than being duplicated here, because they are design rulings awaiting owner
 review, not decisions taken during execution without it. Anything decided without review
 while BUILDING it belongs here, in this file's format, as every sub-project's did.
 
 ---
 
-# Owner decisions, 2026-08-28 — two parts of the server design change
+# Owner decisions, 2026-08-28 — three parts of the server design change
 
-Both are the owner's, taken after the spec was written and recorded here because this file
-is the decision log: a reader must be able to see that the position CHANGED, not find a
+All three are the owner's, taken after the spec was written and recorded here because this
+file is the decision log: a reader must be able to see that the position CHANGED, not find a
 document that always said the new thing. The spec
 (`docs/superpowers/specs/2026-08-28-lexprompt-server-design.md`) has been rewritten to
-match, and its own S4 and S19 carry the same supersession notes rather than being edited
-away.
+match, and its own S4, S19, S2 and S15 carry the same supersession notes rather than being
+edited away.
 
 ## D1 — verification is mutable, and a Partner may override it
 
@@ -1224,3 +1224,115 @@ wrong. The separation and its tests are the guard. If the firm instead decides p
 must not be stored after all, reverting is cheap in code — the session-only path is what
 exists today — but the on-screen promise would then have changed twice, and a privacy
 sentence that has flip-flopped is worth less than one that never moved.*
+
+## D3 — the inference gateway is multi-provider, not Azure-Foundry-only
+
+The owner: *"I think we probably want different AI layers — Foundry, OpenRouter, Claude,
+OpenAI, Azure OpenAI etc. And they choose. That's particularly useful for any smaller firms
+or individuals running it locally who won't have Azure infrastructure."*
+
+**Superseded, 2026-08-28: design ruling S2's second sentence** — "There are no provider API
+keys anywhere in the system." That was TRUE, and it was true only of the case the design then
+had: one provider, Azure AI Foundry, reached by Entra managed identity. With OpenAI,
+Anthropic or OpenRouter configurable, an operator API key exists. **Superseded, not deleted:**
+the sentence was memorable, it appeared in several places, and a reader of an earlier draft
+must be able to see that it was retired deliberately rather than lost in an edit. S15 is
+AMENDED rather than superseded — its allowlist survives with a different entry shape.
+
+**The security guarantee is restated, not weakened, and the restatement is two sentences that
+must never become one:**
+
+> **No credential ever leaves the gateway, and every call is logged with its provider and its
+> jurisdiction, whichever backend is configured.**
+
+> **Separately: an Azure-only deployment authenticating by Entra managed identity retains the
+> stronger property — no key exists at all — and that is the recommended posture for a firm
+> with Azure infrastructure.**
+
+Both are true. The first is ARCHITECTURAL: it holds in every deployment, a Risk reviewer
+verifies it once, and `apps/web` and `apps/api` never see a credential in any configuration.
+The second is a DEPLOYMENT CHOICE and must be checked per environment. **Merging them into
+the old shorthand would state a security property that is false for half the deployments** —
+telling a firm there is nothing to steal in a system holding an operator API key, which is not
+an overstated benefit but a false control, and a false control is worse than a missing one
+because nobody looks for it. The spec's new §12.0 makes the split a TABLE rather than a
+phrasing, so re-merging requires deleting a row instead of tightening a sentence; the pressure
+to re-merge is permanent, because one sentence is shorter and sounds better.
+
+**Four things follow, all decided here rather than left to the implementation.**
+
+**One adapter interface, one registration point, and the gateway core keeps everything that
+is not provider-specific.** An adapter owns credential acquisition, request shaping, response
+parsing, stream-frame mapping and error classification. The allowlist check, the jurisdiction
+check, the purpose check, budgets, the prompt-size cap, the timeout, the retry policy and the
+call log live in the core and run ONCE, around every adapter. Adding a sixth provider touches
+the registry and no call site. This is stated in the strongest terms the spec has (S25) and
+enforced by an import-boundary test, because five parallel implementations of one idea would
+be this project's most expensive recurring defect at a factor of five, in the component whose
+entire purpose is to be the one describable egress — and the divergence would be between what
+the firm believes it logs, retries and allowlists and what it actually does for the one
+provider nobody exercised.
+
+**Every allowlist entry declares its processing jurisdiction, and the entry is provider+model,
+not a Foundry deployment.** Jurisdiction is recorded on every call-log line, returned on every
+gateway response, and stored on the `run` row as a SNAPSHOT — never re-derived from current
+configuration, because a firm that later changes its allowlist must not silently rewrite where
+last March's review was processed. That is `playbookSnapshot`'s rule applied to the one fact a
+data-protection question turns on. A user still cannot name an arbitrary model; the PROVIDER
+became a choice, the USER's ability to name one did not.
+
+**A disallowed jurisdiction is REFUSED, not merely surfaced (S27), and the reasoning is
+recorded because this is the decision most likely to be reopened.** Refusing is the same
+mechanism the allowlist already is, so surfacing would create a second, weaker class of rule
+inside one check. A surfaced warning is enforcement by attentiveness, and every defect on
+`CLAUDE.md`'s list is something incorrect that read as correct — a "US processing" badge is
+exactly a thing read past at 17:40. The person seeing the badge cannot give the consent it
+asks for: a cross-border transfer of privileged client text is a firm-level decision — DPIA,
+engagement terms, possibly the client's own instructions — and a record of a lawyer appearing
+to authorise one is worse than no record. And the costs are asymmetric with only one of them
+recoverable: refuse wrongly and a call fails loudly with a 403 naming the provider, its
+declared jurisdiction and the allowed set — one config change, minutes, nothing lost; surface
+wrongly and the text has already crossed a border and cannot be un-sent. **Fail closed on
+UNDECLARED**: an entry with no jurisdiction is refused, there is no default allow-set, and the
+gateway refuses to START on either misconfiguration or with no log sink configured. Surfacing
+still happens, at two altitudes — the operator sees jurisdiction where the choice is made, and
+the model picker labels EVERY model with its provider and jurisdiction, never only the non-UK
+ones, because a badge shown only on the bad entries makes its ABSENCE carry meaning, which is
+the blank-CSV-cell defect exactly.
+
+**A no-Azure deployment is first-class, and the design says exactly how far that reaches.**
+Same gateway, same allowlist, same jurisdiction refusal, same per-call log with the same
+fields — a local deployment does not get to skip the record because it is small, and one that
+did would teach its operator to expect a gateway that does not log. What it does not get is
+the no-key property, and the README and admin screen say so in that deployment rather than
+repeating a sentence true only elsewhere. **What the design does NOT yet give it is identity
+and storage**: Postgres and blob substitute cleanly, but the spec's §7 is Entra-only by S10,
+and a firm with no Azure tenant has no Entra tenant either. Stage 1 is unaffected; Stages 2
+onward are. The spec's new open question 11 asks the owner what "running it locally" is meant
+to reach rather than letting the answer be assumed — claiming a deployment mode that was never
+specified is the same failure as claiming a security property that holds in only half of them.
+
+**Streaming is where this will actually break.** The suite already carries a regression for an
+SSE parser that dropped the final token and returned NOTHING against a CRLF server. That bug
+class now has one instance per adapter. The structural answer: ONE transport decoder in
+`packages/core` — line splitting, CRLF, chunk boundaries, the final frame with no trailing
+newline, all of it, once — plus a thin per-adapter frame mapper, plus a conformance suite that
+is table-driven over every registered adapter so a new adapter with no fixture entry FAILS THE
+BUILD. The assertion that matters is the one the original defect failed: the concatenated
+stream deltas equal the non-streamed completion, byte for byte. This is named as the
+highest-risk part of Stage 1, because its failure is quiet — a truncated clause analysis reads
+as a model that had little to say.
+
+*Cost if wrong: the design's central claim — the gateway is the only egress, nothing else can
+call a model — is untouched and still architectural, so what is at risk here is the SECOND
+claim, the one about keys and jurisdiction. If the two sentences are ever merged, a firm is
+told a control exists that does not, in the document its Risk function relies on. If the
+adapters grow their own logging, retries or allowlist checks, the firm's description of its own
+egress becomes true of some providers and not others, and nobody would find out until they
+switched provider. If a jurisdiction is surfaced rather than refused, privileged client text
+crosses a border on a lawyer's misread badge and there is no retry that un-sends it. If the
+local path skips logging or the allowlist, the smallest deployments — the ones with no Risk
+function at all — are the ones running without a record. Against all of that: if the owner
+decides after all that only Foundry will ever be configured, everything here still holds and
+the extra cost was one interface, four unused adapters and a quarter of a sub-project in
+Stage 1.*
