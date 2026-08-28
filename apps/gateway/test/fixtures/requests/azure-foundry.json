@@ -1,0 +1,31 @@
+{
+  "entry": {
+    "id": "e",
+    "provider": "azure-foundry",
+    "model": "gpt-4o",
+    "label": "l",
+    "jurisdiction": { "bloc": "UK", "region": "uksouth", "label": "UK South" },
+    "contextLength": 128000,
+    "supportsImages": true,
+    "supportsStructuredOutput": true,
+    "isDefault": false,
+    "endpoint": "https://firm.services.ai.azure.com",
+    "apiVersion": "2024-05-01-preview",
+    "credential": { "source": "managed-identity", "scope": "https://cognitiveservices.azure.com/.default" }
+  },
+  "request": {
+    "system": "You are a contract reviewer.",
+    "user": "Summarise clause 14.",
+    "maxTokens": 4096,
+    "stream": false
+  },
+  "credential": { "kind": "bearer", "token": "mi-token" },
+  "body": {
+    "model": "gpt-4o",
+    "max_tokens": 4096,
+    "messages": [
+      { "role": "system", "content": "You are a contract reviewer." },
+      { "role": "user", "content": "Summarise clause 14." }
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "azure-foundry": {
+    "text": "one two three",
+    "promptTokens": 14,
+    "completionTokens": 5,
+    "synthetic": true,
+    "nonStreamedBody": {
+      "choices": [{ "message": { "content": "one two three" } }],
+      "usage": { "prompt_tokens": 14, "completion_tokens": 5 }
+    }
+  },
+  "azure-openai": {
+    "text": "one two three",
+    "promptTokens": 14,
+    "completionTokens": 5,
+    "synthetic": true,
+    "nonStreamedBody": {
+      "choices": [{ "message": { "content": "one two three" } }],
+      "usage": { "prompt_tokens": 14, "completion_tokens": 5 }
+    }
+  },
+  "openai": {
+    "text": "one two three",
+    "promptTokens": 14,
+    "completionTokens": 5,
+    "synthetic": true,
+    "nonStreamedBody": {
+      "choices": [{ "message": { "content": "one two three" } }],
+      "usage": { "prompt_tokens": 14, "completion_tokens": 5 }
+    }
+  },
+  "openrouter": {
+    "text": "one two three",
+    "promptTokens": 14,
+    "completionTokens": 5,
+    "synthetic": true,
+    "nonStreamedBody": {
+      "choices": [{ "message": { "content": "one two three" } }],
+      "usage": { "prompt_tokens": 14, "completion_tokens": 5 }
+    }
+  },
+  "anthropic": {
+    "text": "one two three",
+    "promptTokens": 16,
+    "completionTokens": 5,
+    "synthetic": true,
+    "nonStreamedBody": {
+      "content": [{ "type": "text", "text": "one two three" }],
+      "usage": { "input_tokens": 16, "output_tokens": 5 }
+    }
+  }
+}

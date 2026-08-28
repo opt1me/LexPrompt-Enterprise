@@ -1,0 +1,30 @@
+{
+  "entry": {
+    "id": "e",
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-5",
+    "label": "l",
+    "jurisdiction": { "bloc": "US", "region": "us", "label": "United States" },
+    "contextLength": 200000,
+    "supportsImages": true,
+    "supportsStructuredOutput": true,
+    "isDefault": false,
+    "endpoint": "https://api.anthropic.com",
+    "credential": { "source": "env", "var": "ANTHROPIC_KEY" }
+  },
+  "request": {
+    "system": "You are a contract reviewer.",
+    "user": "Summarise clause 14.",
+    "maxTokens": 4096,
+    "stream": false
+  },
+  "credential": { "kind": "api-key", "key": "sk-ant-1" },
+  "body": {
+    "model": "claude-sonnet-4-5",
+    "max_tokens": 4096,
+    "system": "You are a contract reviewer.",
+    "messages": [
+      { "role": "user", "content": "Summarise clause 14." }
+    ]
+  }
+}

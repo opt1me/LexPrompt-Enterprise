@@ -1,0 +1,16 @@
+: hand-authored from OpenRouter's published OpenAI-compatible streaming format (synthetic)
+
+data: {"choices":[{"delta":{"role":"assistant","content":""}}]}
+
+data: {"choices":[{"delta":{"content":"one"}}]}
+
+data: {"choices":[{"delta":{"content":" two"}}]}
+
+data: {"choices":[{"delta":{"content":" three"}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: {"choices":[],"usage":{"prompt_tokens":14,"completion_tokens":5}}
+
+data: [DONE]
+

@@ -1,0 +1,31 @@
+{
+  "entry": {
+    "id": "e",
+    "provider": "azure-openai",
+    "model": "gpt4o-uks",
+    "label": "l",
+    "jurisdiction": { "bloc": "UK", "region": "uksouth", "label": "UK South" },
+    "contextLength": 128000,
+    "supportsImages": true,
+    "supportsStructuredOutput": true,
+    "isDefault": false,
+    "endpoint": "https://firm.openai.azure.com",
+    "apiVersion": "2024-10-21",
+    "credential": { "source": "key-vault", "vaultUrl": "https://firm.vault.azure.net", "secretName": "azure-openai-key" }
+  },
+  "request": {
+    "system": "You are a contract reviewer.",
+    "user": "Summarise clause 14.",
+    "maxTokens": 4096,
+    "stream": false
+  },
+  "credential": { "kind": "api-key", "key": "az-1" },
+  "body": {
+    "model": "gpt4o-uks",
+    "max_tokens": 4096,
+    "messages": [
+      { "role": "system", "content": "You are a contract reviewer." },
+      { "role": "user", "content": "Summarise clause 14." }
+    ]
+  }
+}
