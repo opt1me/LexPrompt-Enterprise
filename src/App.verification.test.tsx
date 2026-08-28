@@ -401,7 +401,7 @@ describe('App — persisting a net position (Task 8)', () => {
 
     act(() => { root.render(<App />); });
     await flush();
-    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
     await flush();
     act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
     await flush();
@@ -601,7 +601,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     act(() => { root.render(<App />); });
     await flush();
 
-    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
     await flush();
     act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
     await flush();
@@ -676,7 +676,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     act(() => { root.render(<App />); });
     await flush();
 
-    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
     await flush();
     act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
     await flush();
@@ -745,7 +745,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
 
     act(() => { root.render(<App />); });
     await flush();
-    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
     await flush();
     act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
     await flush();
@@ -815,7 +815,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
 
     act(() => { root.render(<App />); });
     await flush();
-    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
     await flush();
     act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
     await flush();
@@ -871,7 +871,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
 
     act(() => { root.render(<App />); });
     await flush();
-    act(() => { findButton(container, /^Library$/i, 0).click(); });
+    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
     await flush();
     act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
     await flush();

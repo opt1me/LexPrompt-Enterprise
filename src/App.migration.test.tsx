@@ -135,7 +135,7 @@ describe('App — startup playbook migration gate (Task 14)', () => {
     // empty state — may be present while this screen is up.
     expect(container.textContent).not.toContain('No matters yet');
     expect(container.textContent).not.toContain('Matters');
-    expect(container.textContent).not.toContain('Library');
+    expect(container.textContent).not.toContain('Playbooks');
     expect(listMattersMock).not.toHaveBeenCalled();
     expect(listPlaybooksMock).not.toHaveBeenCalled();
   });

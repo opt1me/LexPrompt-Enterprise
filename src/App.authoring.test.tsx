@@ -193,7 +193,7 @@ function contractTypeField(): HTMLInputElement {
 async function reachTheDraftReviewScreen() {
   act(() => { root.render(<App />); });
   await flush();
-  click(buttonNamed(/^library$/i));
+  click(buttonNamed(/^playbooks$/i));
   await flush();
   click(buttonNamed(/create template/i));
   click(buttonNamed(/draft with ai/i));
@@ -256,7 +256,7 @@ describe('the authoring route is reachable from the library', () => {
   it('offers all three routes on the chooser, with learn-from-redlines honestly inert (R-E6)', async () => {
     act(() => { root.render(<App />); });
     await flush();
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
 
@@ -273,7 +273,7 @@ describe('the authoring route is reachable from the library', () => {
   it('Build by hand opens D\'s editor on a new, empty, unsaved playbook', async () => {
     act(() => { root.render(<App />); });
     await flush();
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
     click(buttonNamed(/build by hand/i));
@@ -407,7 +407,7 @@ describe('losing a draft is warned about by BOTH routes out of it (R-E4)', () =>
   it('does not warn while only the form is open — nothing has been generated yet', async () => {
     act(() => { root.render(<App />); });
     await flush();
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
     click(buttonNamed(/draft with ai/i));
@@ -425,7 +425,7 @@ describe('a generation failure keeps the form and everything typed into it (spec
     generateDraftMock.mockRejectedValue(new Error('The model returned no clauses that could be used.'));
     act(() => { root.render(<App />); });
     await flush();
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
     click(buttonNamed(/draft with ai/i));
@@ -448,7 +448,7 @@ describe('a matters load failure on the draft form reads as broken, not empty (M
     listMattersMock.mockReset().mockRejectedValue(new Error('boom'));
     act(() => { root.render(<App />); });
     await flush();
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
     click(buttonNamed(/draft with ai/i));
@@ -463,7 +463,7 @@ describe('a matters load failure on the draft form reads as broken, not empty (M
       .mockResolvedValueOnce([]);
     act(() => { root.render(<App />); });
     await flush();
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
     click(buttonNamed(/draft with ai/i));
@@ -488,7 +488,7 @@ describe('a ticked matter that contributed nothing is not credited (m2)', () => 
     listReviewsMock.mockReset().mockResolvedValue([]); // no reviews at all for m1
     act(() => { root.render(<App />); });
     await flush();
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
     click(buttonNamed(/draft with ai/i));
@@ -589,7 +589,7 @@ describe('a slow generation does not follow the user off the screen (Major 5)', 
     generateDraftMock.mockReturnValue(new Promise<AuthoringDraft>((resolve) => { release = resolve; }));
     act(() => { root.render(<App />); });
     await flush();
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
     click(buttonNamed(/draft with ai/i));
@@ -622,7 +622,7 @@ describe('a slow generation does not follow the user off the screen (Major 5)', 
   it('does not carry unpublished playbook edits off the editor with it', async () => {
     const release = await startAGenerationThatNeverFinishes();
 
-    click(buttonNamed(/^library$/i));
+    click(buttonNamed(/^playbooks$/i));
     await flush();
     click(buttonNamed(/create template/i));
     click(buttonNamed(/build by hand/i));
