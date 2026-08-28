@@ -223,4 +223,40 @@ describe.each([
     signinSilentMock.mockResolvedValue(FRESH_USER(profile));
     await expect(getAccessToken()).resolves.toBe('fresh-access-token');
   });
+
+describe('an identity provider that REFUSES the redirect', () => {
+  // A provider answers a redirect in TWO shapes: `?code=` on success and
+  // `?error=&error_description=` on refusal (RFC 6749 §4.1.2.1). Only `code`
+  // used to count as a callback, so a refusal fell through to `getUser()`,
+  // found nobody, and rendered the ordinary signed-out screen. A real
+  // misconfiguration then looked exactly like a person who had not signed in
+  // yet: press the button, come straight back, no explanation, forever.
+  //
+  // Found in a browser against a live Keycloak returning `invalid_scope`.
+  it('reaches failed with the provider reason, not signed-out, on an error redirect', async () => {
+    window.history.replaceState(null, '', '/?error=invalid_scope&error_description=Invalid+scopes&state=abc');
+    signinRedirectCallbackMock.mockRejectedValue(new Error('Invalid scopes: openid profile email'));
+    getUserMock.mockResolvedValue(null);
+
+    const { container, unmount } = mountProbe();
+    await flushUntil(() => statusOf(container) !== 'signing-in', 'useAuth to settle');
+    expect(statusOf(container)).toBe('failed');
+    expect(container.querySelector('[data-role="message"]')?.textContent)
+      .toContain('Invalid scopes');
+    // The decisive half: an error redirect IS the callback, so the hook must
+    // not fall back to asking whether a session happens to exist.
+    expect(getUserMock).not.toHaveBeenCalled();
+    unmount();
+  });
+
+  it('still treats a bare URL as "no callback here" and asks getUser', async () => {
+    window.history.replaceState(null, '', '/');
+    getUserMock.mockResolvedValue(null);
+    const { container, unmount } = mountProbe();
+    await flushUntil(() => statusOf(container) !== 'signing-in', 'useAuth to settle');
+    expect(statusOf(container)).toBe('signed-out');
+    expect(signinRedirectCallbackMock).not.toHaveBeenCalled();
+    unmount();
+  });
+});
 });

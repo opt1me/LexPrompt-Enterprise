@@ -75,8 +75,29 @@ export function useAuth(): UseAuthResult {
     const generation = ++generationRef.current;
     setState({ status: 'signing-in' });
     (async () => {
-      const hasCode = new URLSearchParams(window.location.search).has('code');
-      const user = hasCode
+      // An identity provider answers a redirect in TWO shapes, and both are
+      // this callback: `?code=...` on success, and
+      // `?error=...&error_description=...` on refusal (RFC 6749 §4.1.2.1).
+      //
+      // Only `code` used to count. An `error` response therefore fell
+      // through to `getUser()`, found nobody, and rendered `signed-out` —
+      // the ordinary "please sign in" screen, with no message. A real
+      // misconfiguration (Keycloak returning `invalid_scope` because the
+      // realm was missing its `profile` scope) looked exactly like a person
+      // who had simply not signed in yet: press the button, come straight
+      // back, no explanation, forever.
+      //
+      // That is the distinction the `failed` state below exists to make, and
+      // the catch already reasons about it correctly — it just never saw
+      // this case. `signinRedirectCallback` rejects on an error response, so
+      // routing `error` here puts it in the hands of that reasoning, with
+      // the provider's own `error_description` as the message.
+      //
+      // Found in a browser against a live Keycloak; no unit test reached it,
+      // because nothing under test ever returned an error-shaped redirect.
+      const params = new URLSearchParams(window.location.search);
+      const isRedirectCallback = params.has('code') || params.has('error');
+      const user = isRedirectCallback
         ? await userManager.signinRedirectCallback()
         : await userManager.getUser();
       if (generationRef.current !== generation) return; // superseded — discard
