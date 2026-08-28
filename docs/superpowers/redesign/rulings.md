@@ -1048,7 +1048,7 @@ a note about a road not taken. If it is built but a collaborative affordance shi
 its mechanism, the failure is exactly the one R-G1 named — a lawyer waiting on a review
 nobody was asked for — which is why the supersession is staged rather than immediate.*
 
-The server design's own rulings (S1–S27, after the 2026-08-28 revisions below) live in that
+The server design's own rulings (S1–S31, after the 2026-08-28 revisions below) live in that
 spec's §16 rather than being duplicated here, because they are design rulings awaiting owner
 review, not decisions taken during execution without it. Anything decided without review
 while BUILDING it belongs here, in this file's format, as every sub-project's did.
@@ -1336,3 +1336,135 @@ function at all — are the ones running without a record. Against all of that: 
 decides after all that only Foundry will ever be configured, everything here still holds and
 the extra cost was one interface, four unused adapters and a quarter of a sub-project in
 Stage 1.*
+
+---
+
+# Owner decision, 2026-08-28 — a fourth part of the server design changes
+
+Recorded separately from D1–D3 because it was taken after them, against a spec they had
+already rewritten. Same reason for recording it here: this file is the decision log, and a
+reader must be able to see that the position CHANGED rather than find a document that always
+said the new thing.
+
+## D4 — one system, two environments: a firm deployment and a laptop are the same code
+
+The owner, answering the spec's open question 11: *"I want it to work cohesively when
+deployed within a firm, but also make it easy for someone to build and test on their own
+machine for testing. So ideally best of both."*
+
+**Q11 offered three options and the owner took none of them, because the question was framed
+wrongly.** It asked which DEPLOYMENT MODE the local path is: (a) the inference path only,
+with the multi-user app remaining Azure/Entra; (b) a single-user local build, effectively
+today's app with a gateway in front; (c) a full local deployment with a non-Entra identity
+provider. The answer is that **local is not a deployment mode at all. It is a development
+environment for the one system the spec specifies** — so (a) is too little to build Stages 2
+onward against, (b) reopens R1 and could not exercise a single collaborative feature, and
+(c) buys a subsystem to solve a problem the owner did not have. What was asked for is that a
+developer can build and test THE WHOLE THING on a laptop, and the way to give them that is to
+make the local stack faithful, not to make it a second product.
+
+**One authentication path — OIDC — with two issuers.** Entra ID IS an OIDC provider. The
+application validates OIDC tokens against a CONFIGURED issuer and reads group claims from a
+CONFIGURED claim; it never special-cases Entra. Locally, a lightweight OIDC issuer runs in
+`docker compose` with seeded users and groups.
+
+**This GENERALISES S10 rather than reversing it, and the distinction is the whole point.**
+The three-role model survives untouched, and so do the group-to-role mapping, the absence of
+per-matter ACLs, custom roles and deny rules, and the refusal of SAML, Okta and any password
+the APPLICATION holds. Only "the issuer is Entra" becomes "the issuer is configured, and is
+Entra in the firm deployment". S10 carries a dated amendment note in the spec's §16 rather
+than being edited away, so a later reader does not conclude that "no SSO beyond Entra" was
+quietly abandoned. It was not: **a second ISSUER is not a second MECHANISM.**
+
+**There is no development bypass, and the reasoning matters more than the rule.** No
+`SKIP_AUTH`, no local anonymous mode, no trusted header. Two counts, and the second is the
+decisive one for this project. First, a bypass is a DEPLOYMENT LIABILITY: the recurring
+industry failure is precisely that such a flag reaches production enabled, and this system
+holds privileged client material — a control that depends on a flag never being set is a
+control held by discipline, and `CLAUDE.md`'s list is a record of what discipline loses to.
+Second, **a bypass TESTS A DIFFERENT CODE PATH FROM THE ONE THAT SHIPS**, which is the same
+class of error as a test that passes against unfixed code — the worst kind of test this
+project has shipped. A green local run under a bypass would prove nothing whatever about the
+deployed system, which would remove the only reason to have a faithful local stack at all.
+The cost of having no bypass is that a developer runs one more container.
+
+**The local issuer seeds SEVERAL users, across all three roles — a trainee, a partner, an
+admin, and a fourth in no mapped group.** This is not convenience. Every collaborative
+behaviour in the design is UNOBSERVABLE WITH ONE USER: first-to-verify, a Partner override,
+the stale-version refusal, assignment, presence, and a card changing attribution without a
+reload each need two browsers signed in as two different people. A single-user local mode
+could not exercise the features Stages 3 to 5 exist to build — it would not be a cheaper
+version of this, it would be a local stack that runs green on the half of the system that
+does not need testing. The fourth account exists because "told plainly that you have no
+access" is itself a load-bearing behaviour and needs an account to test with.
+
+**The same principle extends to the whole stack: local dependencies are FAITHFUL EMULATORS
+of the deployed services, not near-equivalents.** Azurite — Microsoft's own Blob emulator —
+never MinIO and never anything merely "S3-compatible", and the spec says so explicitly,
+because that phrase names exactly the class of near-equivalence that produces a defect
+visible only in production: the local run is green and the difference is in a header, an
+error code or a consistency guarantee nobody read. Postgres container for Postgres Flexible
+Server. Redis container for Azure Cache for Redis — with `api` at two replicas locally, or
+the fan-out path is never exercised at all. **The gateway with a keyed provider against the
+gateway with Foundry and managed identity is a GENUINE difference, and it is already ruled
+(D3/S2): it is named as the single deliberate divergence, so a reader knows the enumerated
+list is exhaustive rather than optimistic.**
+
+**What local deployment does NOT prove is written down, and being honest about the boundary
+is the point of listing it.** Managed-identity acquisition; Entra's group-claim shape,
+consent and the group-overage case; Azure networking and private endpoints; Postgres
+Flexible Server's own behaviour; Azurite's own gaps; real provider latency, rate limits and
+streams. **A developer must not read "it works on my machine" as "it will work in the
+tenant"**, and the list sits in the spec's §5.1 and in the README rather than in a place
+only a designer reads, because the person who needs it is the developer who has just had a
+green local run.
+
+**Three consequences the owner did not have to decide, recorded because they follow and
+somebody will otherwise rediscover them the hard way.** MSAL is Entra's library, so the
+browser uses a standards-only OIDC client instead — the alternative is two sign-in paths,
+this project's most repeated defect placed at the front door. `app_user`'s identity becomes
+`(issuer, subject)` rather than `entra_object_id`, and `role_mapping` is keyed by issuer and
+group value rather than by an Entra group object id. And Entra's GROUP OVERAGE — a user in
+too many groups gets no `groups` claim at all, just a pointer to Graph — reads naively as
+"in no mapped group", so a partner in forty groups would be told they have no access: a
+wrong answer delivered confidently, which is the shape this project exists to prevent. It is
+specified as its own detected error, and it is un-reproducible locally, which is exactly why
+it is specified rather than discovered.
+
+**The local issuer is Keycloak (spec ruling S31).** Criteria: a container, standard OIDC
+discovery, static users carrying group claims, small. Keycloak meets the first three and
+fails only the last (~450 MB, ~20 s cold start). Dex is an order of magnitude smaller and its
+static users carry NO GROUPS AT ALL, which is disqualifying when every role is read from a
+group claim. A configurable token mock is smaller still and worse: it mints whatever claims
+it is asked for, making it a PERMISSIVE ORACLE, and testing the shipped authentication path
+against something that cannot refuse is the no-bypass error wearing a different hat.
+
+**The sequencing is forced, not chosen: the local issuer ships in STAGE 1.** Stage 1 is the
+first stage that requires a signed-in user, and with no bypass to stand in for one, Stage 1
+is otherwise a stage nobody can run on a laptop. It ships with its full seeded set, because
+seeding one account in Stage 1 and three in Stage 3 is two edits to one file for no benefit.
+
+**Spec Q11 is marked ANSWERED, and a NEW Q13 is opened for the half it conflated.** Q11 ran
+"local development" and "a no-Azure production deployment" together. The owner's answer
+settles the first. The identity half of the second turns out to be smaller than it looked —
+Entra ID does not require an Azure subscription, so a firm with no Azure infrastructure still
+deploys against its own Entra tenant with a keyed gateway — but the storage and residency
+half is untouched, and Azurite says nothing about it, because Azurite is a development
+emulator and not a deployment target. Opening Q13 rather than letting Q11's closure imply an
+answer is the same posture the spec takes everywhere else: claiming a deployment mode that
+was never specified is the failure this decision exists to prevent.
+
+*Cost if wrong: the generalisation of S10 fails LOUDLY, at sign-in, in whichever environment
+is misconfigured — and if instead the app had special-cased Entra and a second issuer were
+ever needed, the cost would be a rewrite of the auth section rather than an edit to a
+configuration file. The no-bypass decision costs a developer one more container; the opposite
+error costs a green local run that proves nothing, in a system holding privileged client
+material, with a flag that only has to reach production once. The faithful-emulator decision
+costs a heavier Blob emulator and two boundary tests; the opposite error is a defect that
+only appears in the firm's tenant, found by a lawyer rather than by CI. The enumerated
+divergence list is the fragile part — everything else here is enforced by a test, but a list
+can rot, so the spec's §18 checks it mechanically (no module branches on the environment; the
+configuration key diff equals the table; the same suites run against both environments)
+rather than by asking anyone to keep it current. If the list is allowed to drift, "the same
+code runs in both" quietly becomes a comforting sentence, and it would be discovered on a
+first deployment, which is the most expensive place to discover anything.*
