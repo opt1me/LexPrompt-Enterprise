@@ -54,6 +54,14 @@ export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
           const s = db.createObjectStore(STORES.playbookVersions, { keyPath: 'id' });
           s.createIndex('byPlaybook', 'playbookId');
         }
+        // DB_VERSION 3 -> 4 (sub-project F, Task 8): additive only. Every
+        // branch above is untouched — no existing store is modified,
+        // reindexed, or cleared, so a database already at version 3 keeps
+        // every record it had.
+        if (!db.objectStoreNames.contains(STORES.changesets)) {
+          const s = db.createObjectStore(STORES.changesets, { keyPath: 'id' });
+          s.createIndex('byPlaybook', 'playbookId');
+        }
       },
       blocked() {
         // Another tab holds an older version open. Without this the open hangs

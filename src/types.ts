@@ -282,8 +282,85 @@ export const DEFAULT_SETTINGS: Settings = {
  *  in from `documentIds` on read).
  *  5 to 6: `Playbook` split into an identity record plus immutable
  *  `PlaybookVersion` content records, and `Template.mode` retired
- *  (sub-project D — see `src/lib/db/playbookMigration.ts`). */
-export const SCHEMA_VERSION = 6;
+ *  (sub-project D — see `src/lib/db/playbookMigration.ts`).
+ *  6 to 7: `Changeset` added (sub-project F, Task 8) — a new `changesets`
+ *  store, additive only. Nothing existing changed shape. */
+export const SCHEMA_VERSION = 7;
+
+/** A firm's redline against one clause during a changeset build — a single
+ *  insertion, deletion, moved passage, or margin comment, tagged with the
+ *  document it came from and how it was found. Spec §5 (sub-project F). This
+ *  is the PERSISTED counterpart of `docxRedlines.ts`'s in-session
+ *  `ParsedEdit`: a `ChangesetItem`'s `basis` is a durable copy of the edits
+ *  that produced it, taken at build time, so a changeset can still show its
+ *  evidence after the source documents (which are read, never stored — spec
+ *  §4.1) are gone.
+ *
+ *  `kind` reuses `docxRedlines.ts`'s `RedlineEditKind` rather than
+ *  re-declaring the same four-way union a second time (spec §5 itself lists
+ *  only `'insertion' | 'deletion' | 'comment'`, written before R-F3 added
+ *  `'moved'` to keep a relocated clause from being misreported as an
+ *  unrelated delete-then-insert; excluding it here would reopen exactly that
+ *  defect for anything a changeset carries as evidence). */
+export interface RedlineEdit {
+  documentId: string;
+  kind: import('./lib/docxRedlines').RedlineEditKind;
+  text: string;
+  context: string;
+  clauseRef?: string;
+  source: 'tracked' | 'diff';
+  author?: string;
+  at?: number;
+}
+
+/** How a changeset item's proposal relates to the playbook's live version:
+ *  `'confirm'` — the deal says the same thing the standing position already
+ *  does; `'drift'` — the deal proposes something different for a clause the
+ *  version already covers; `'new_clause'` — the deal raises something the
+ *  version never covered at all. */
+export type ChangeKind = 'confirm' | 'drift' | 'new_clause';
+
+/** One proposed change, produced by `buildChangeset` and accepted, reworded
+ *  or declined one at a time — never adopted wholesale (spec §2, §9). */
+export interface ChangesetItem {
+  id: string;
+  kind: ChangeKind;
+  /** Absent for `new_clause` — there is no existing clause to point at, and
+   *  a stray `clauseId: undefined` would persist (via `structuredClone`) as
+   *  a claim that this item refers to some clause. */
+  clauseId?: string;
+  /** What the live version currently says. Absent for `new_clause`, and for
+   *  a matched clause that has no standing position yet. */
+  currentText?: string;
+  proposedText: string;
+  /** Why, citing the deals it came from. A proposal without a reason is not
+   *  reviewable — every item MUST carry one. */
+  rationale: string;
+  basis: RedlineEdit[];
+  /** Starts `'open'` on every item, for the same reason a `Finding`'s
+   *  `Verification` starts `unchecked()` and a net position starts
+   *  unconfirmed: a decision is a person's act, and defaulting one would let
+   *  a changeset record agreement nobody gave. */
+  decision: 'open' | 'accepted' | 'reworded' | 'declined';
+  /** Present when reworded. */
+  rewordedText?: string;
+}
+
+/** The one durable artifact this sub-project produces (spec §5) — everything
+ *  upstream of it (precedent documents, parsed edits, inferred positions) is
+ *  session-scoped and dies with the tab. */
+export interface Changeset {
+  id: string;
+  playbookId: string;
+  fromVersionId: string;
+  /** "Brookvale Retail Park — our markup + executed, Jul 2026". */
+  sourceSummary: string;
+  items: ChangesetItem[];
+  createdAt: number;
+  createdByUserId: string;
+  /** Set on publish. */
+  publishedVersionId?: string;
+}
 
 export interface UserProfile {
   id: string;
