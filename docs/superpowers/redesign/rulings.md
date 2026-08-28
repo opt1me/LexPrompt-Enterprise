@@ -1048,7 +1048,179 @@ a note about a road not taken. If it is built but a collaborative affordance shi
 its mechanism, the failure is exactly the one R-G1 named — a lawyer waiting on a review
 nobody was asked for — which is why the supersession is staged rather than immediate.*
 
-The server design's own twenty rulings (S1–S20) live in that spec's §16 rather than being
-duplicated here, because they are design rulings awaiting owner review, not decisions taken
-during execution without it. Anything decided without review while BUILDING it belongs here,
-in this file's format, as every sub-project's did.
+The server design's own rulings (S1–S24, after the 2026-08-28 revision below) live in that
+spec's §16 rather than being duplicated here, because they are design rulings awaiting owner
+review, not decisions taken during execution without it. Anything decided without review
+while BUILDING it belongs here, in this file's format, as every sub-project's did.
+
+---
+
+# Owner decisions, 2026-08-28 — two parts of the server design change
+
+Both are the owner's, taken after the spec was written and recorded here because this file
+is the decision log: a reader must be able to see that the position CHANGED, not find a
+document that always said the new thing. The spec
+(`docs/superpowers/specs/2026-08-28-lexprompt-server-design.md`) has been rewritten to
+match, and its own S4 and S19 carry the same supersession notes rather than being edited
+away.
+
+## D1 — verification is mutable, and a Partner may override it
+
+The owner: *"Partner may override a verification (and something can change from Verified,
+back to another state, at any time)."*
+
+**Superseded, 2026-08-28: design ruling S4's original form** — "a finding carries at most
+one verification (insert-once, first wins) plus append-only challenges", resolved by
+`INSERT … ON CONFLICT DO NOTHING`, with the loser told who won. That shape was built on an
+earlier answer, "first to verify wins", which no longer holds. `finding_verification` and
+`finding_challenge` (with its `withdrawn_at`) are both gone. **Superseded, not deleted:**
+anyone reading an earlier draft of the spec, or a plan written against it, needs to be able
+to tell that the model changed rather than that they misread it.
+
+**The new model.** A finding carries ONE current disposition — `unchecked`, `verified`,
+`flagged` or `rejected` — and a COMPLETE append-only history of every change to it: who,
+when, from what state, to what state, and why where a reason exists. Any authorised user
+may change it at any time, in any direction, including back from `verified` to `unchecked`.
+Nothing is locked by having been verified once. A change submitted against a stale version
+is REFUSED with the current row and shown to the changer, never silently applied — the same
+posture S20 already takes for free text.
+
+The power is deliberately not Partner-only. The owner named a Partner because that is the
+case that prompted the question, but the mechanism is mutability, not hierarchy: a trainee
+who verifies the wrong finding must be able to undo it without waiting for a Partner, and
+building that wait would be the app manufacturing a silence again — the exact failure R-G1
+was written against. Narrowing it to Partners later is a role check on one route, because
+the history already records who did what.
+
+Three consequences, all of them load-bearing rather than incidental:
+
+**The audit trail stops being decorative.** When a disposition can change at any time,
+"who says this was checked, and as of when" is answerable ONLY from the history. The
+current row answers "as of right now" and nothing more. So the history ships NEVER LATER
+than the mutability — in the spec's staging it lands a stage earlier, with findings-as-rows,
+because the re-run reset needs it — and the attribution and export surfaces that make it
+visible ship in the same stage as change-by-others. Mutability without a visible history is
+not a smaller version of this decision, it is the quiet lie the app exists to prevent with
+the evidence written somewhere nobody is shown. It is recorded ONCE, in
+`finding_disposition_event`, and deliberately NOT
+also written to `audit_event`: two append-only copies of one fact is this project's most
+repeated defect placed exactly where a divergence would matter most and be noticed least —
+between the history a lawyer reads on a card and the history the firm exports as evidence.
+
+**An export is a point-in-time claim and must stop implying permanence.** Under insert-once,
+"Verified by Priya" aged well because the row could not change. It no longer does, and the
+failure is silent: an exported DOCX looks identical whether or not the disposition it
+reports still holds. Every export therefore carries the instant its dispositions were read,
+carries the same "was Rejected" and "changed twice" facts the card carries, and says in its
+own words that a disposition can change and that LexPrompt's history is authoritative over
+any printed copy. The full history is exportable in its own right, because "what would this
+report have said on the day it was signed" is a question a firm will eventually ask.
+
+**Attribution on the current state is not enough.** `by_user_id` is who set the state now
+shown — never who set the first one. A card reading "Verified by A. Trainee" for a finding
+a Partner reverted and re-verified would be a quiet lie of the exact kind on `CLAUDE.md`'s
+list. So: a disposition is never shown without its actor and time; a changed disposition
+says so on the face of the card and names the state it came from; the full history is one
+action away; and a disposition cleared by a re-run reads as a re-run, not as a person
+un-verifying by hand.
+
+**What does NOT change.** Verification is still set only by a human action and nothing
+derives it — mutable and derived are different axes, and conflating them is the easiest
+mistake available while reading the new §6.3. The one write that is not a fresh human
+judgement is the re-run reset, and it is constrained by check constraint to move a
+disposition only TO `unchecked`, never to `verified`: a rule that can only remove a claim of
+human checking cannot manufacture one. **The re-run reset itself is untouched and still
+reads correctly** — re-running a clause still clears its disposition and its net position,
+because the judgement described a specific answer and that answer is gone. If anything the
+argument strengthens: the reset is now an ordinary disposition change rather than a
+deletion, so the fact that the clause WAS verified survives in the history instead of
+vanishing with the row, and an export of a re-reviewed clause can say "unchecked — re-run
+by A. Gray at 11:07, previously verified by R. Okafor". Assignment is untouched and remains
+the way to ask a colleague to look.
+
+*Cost if wrong: a colleague can now move a judgement you made, and the only thing between
+that and a quiet overwrite is the history — written, shown on the card, and carried into the
+export. If any one of those three is skipped or shipped a stage later than the mutability,
+the app tells a lawyer "verified" with no way to find out by whom, when, or over what, which
+is WORSE than the insert-once model it replaced rather than better. If instead the firm
+decides overriding should have been Partner-only after all, that is a role check on one
+route and a UI gate — cheap, because the history already answers "who".*
+
+## D2 — precedent documents may be stored server-side
+
+The owner: *"Precedent documents can be stored server-side."* This answers the spec's open
+question 9.
+
+**Amended, 2026-08-28: design ruling S19.** S19 moved parsing server-side and left precedent
+documents to that open question; the spec's §11 offered "parsed in memory, never written to
+Postgres or Blob, asserted by a test (no row, no blob)" as the likely shape. That test is now
+INVERTED rather than written: there is a row and there is a blob. What the tests assert
+instead is that a precedent is distinguishable from a matter document and can never be
+reviewed as one.
+
+**The app's current on-screen promise becomes false, and the copy changes in the same stage
+as the storage — never after.** `src/features/redlines/PrecedentIntake.tsx` renders, at the
+top of the intake screen, **"Read once to learn from. Never stored."** That sentence is TRUE
+today and false the moment the first precedent byte reaches Blob Storage. Its own code
+comment explains that it was deliberately strengthened from a narrower phrasing because
+"understating a privacy promise is the one direction it must never drift" — which is the
+argument for changing it now, not for leaving it. Shipping the storage while that sentence is
+still on screen would be this project's founding defect in its purest form, shown to a lawyer
+at the moment they are choosing which of their client's documents to hand over.
+
+So, as acceptance conditions and not as a note: the migration that adds
+`document.kind = 'precedent'` and the copy change land together, in the same change; the
+replacement sentence lives in `src/lib/privacyCopy.ts`, the extracted single home for
+disclosure wording (R-G5), not inline; it is still said ONCE, in the strong form, by
+`PrecedentIntake`'s header, with `PrecedentUploadPanel.tsx` continuing to say only what is
+READ ("Marked-up .docx files are read for tracked changes; anything else, including PDFs, can
+be compared against another version instead"), because two wordings of one promise was
+already a real defect on this exact screen; the tests that assert the old promise
+(`src/App.redlines.test.tsx`, which counts `'Never stored'` and has a describe block titled
+"a precedent document is read and never stored") are REWRITTEN, not deleted, since a deleted
+promise test is how the next reader learns there was never a promise; the stale comments
+carrying it are corrected too (`App.tsx`'s `redlinesDocs` note, `PrecedentUploadPanel.tsx`'s
+docstring, `types.ts`'s remark that a changeset keeps a durable basis because the sources
+"are read, never stored"); and the README's §Learning from redlines bullet — "stores none of
+them: not in IndexedDB, not in `localStorage`, not in the URL" — is replaced in the spec's
+"what becomes untrue" table alongside it.
+
+**Sub-project F's spec is superseded on this point and left standing.**
+`docs/superpowers/specs/2026-08-27-redesign-f-learning-from-redlines.md` §4.1 and §11 state
+the non-storage promise as a design commitment. Correct when written; superseded here, and
+not edited, for the same reason this file exists.
+
+**Retention now applies to them, and the matter-file schedule does not reach them.** A
+precedent belongs to no matter. A set is likely to hold ANOTHER client's executed documents,
+and a house position adopted from it may be relied on for years after the set would otherwise
+have been disposed of. The spec's open question 3 (retention) is extended to ask this
+explicitly, with the trade named rather than defaulted: delete the set and a position's basis
+becomes unresolvable — and must SAY so, not show an empty evidence panel — or keep it and the
+firm holds another client's papers for as long as the playbook lives.
+
+**Three things get better, and the third changes what the feature can claim.** Inference
+re-runs without re-uploading eight `.docx` files. The workings — the actual redline text
+behind each proposed position, with its margin comments and authors — can be revisited after
+the session. And a position's basis stays inspectable once the tab closes: "learning from
+redlines" asserts that an inferred house position is EVIDENCED, and session-only storage made
+that assertion true for about ninety seconds. A durable basis is what makes "a lawyer can
+check the evidence behind an inferred house position" a property of the app rather than of
+one sitting.
+
+**Precedent documents are distinguished from matter documents, in storage and in the UI.**
+Ruled, not left open: `document.kind` is `matter` or `precedent`, NOT NULL, with a check
+constraint tying a precedent to a precedent set and a NULL `matter_id`; every review-target,
+collection-member and matter-document query filters on it; precedent sets live on the
+playbook side of the app and never in a matter's documents; a precedent open in the viewer is
+labelled as one. The reason is not tidiness. A precedent is another party's deal, usually
+still carrying an opposing party's markup, and if it can be opened as though it were the deal
+under review it can be reviewed, collected and CITED — a citation with apparent authority
+pointing into the wrong client's document, which is `derivePage`'s failure mode one level up.
+
+*Cost if wrong: storing them puts another client's papers into a database whose access model,
+retention schedule and deletion cascade were all designed around matter files, and the query
+that forgets the `kind` predicate fails by showing too MUCH, with nothing on screen looking
+wrong. The separation and its tests are the guard. If the firm instead decides precedents
+must not be stored after all, reverting is cheap in code — the session-only path is what
+exists today — but the on-screen promise would then have changed twice, and a privacy
+sentence that has flip-flopped is worth less than one that never moved.*

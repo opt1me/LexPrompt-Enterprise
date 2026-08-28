@@ -1,10 +1,20 @@
 # LexPrompt Server — from a browser-only tool to a firm-deployed, collaborative one
 
 **Date:** 2026-08-28
+**Revised:** 2026-08-28, for two owner decisions — see "Revision" below.
 **Status:** Spec written. Three spikes gate parts of it (§15); none of them gates the sequencing, because Stage 1 does not depend on any of the three.
 **Builds on:** the whole of the redesign (sub-projects A–G) and `docs/superpowers/redesign/rulings.md`, which this document continues.
 **Supersedes:** ruling **R1** and its sub-project-G restatement **R-G1** — see §3.
 **Source:** the owner's constraints, gathered in conversation on 2026-08-28. Those constraints are settled and are not relitigated here; where this design adds something they did not settle, it is a ruling in §16 or an open question in §17.
+
+### Revision, 2026-08-28 — two decisions the owner has made
+
+The owner has answered §17 Q1 and §17 Q9, and both answers change what this document says. They are recorded here at the top, and the body has been rewritten to match rather than annotated around:
+
+1. **Verification is mutable, and a Partner may override it.** *"Partner may override a verification (and something can change from Verified, back to another state, at any time)."* This **supersedes** the first-to-verify-wins model the original §6.3 and ruling **S4** were built on. A finding now carries **one current disposition** and a **complete append-only history** of every change to it. §6.3 is rewritten; §3, §4, §7, §8, §9.1, §12, §13, §14, §16 and §18 are swept for the old model. **No part of this document still describes insert-once verification or first-to-verify-wins**, and if a reader finds one, it is a defect in this revision, not a surviving decision.
+2. **Precedent documents may be stored server-side.** *"Precedent documents can be stored server-side."* This answers §17 Q9 and amends ruling **S19**. §11.1 is new and specifies it, including the on-screen sentence that becomes false and must change in the same stage.
+
+Neither decision is relitigated below. Where each one creates a consequence the owner did not settle, that consequence is a new ruling (**S21–S24**) or a sharpened open question, not a silent choice.
 
 ---
 
@@ -32,7 +42,9 @@ And its companion, which is the answer to the first question every Risk reviewer
 
 The README is a promise about privacy, and this design breaks specific sentences in it. They are listed precisely, because a stale privacy claim is worse than none: a reader who trusts an out-of-date sentence has been misled by us, not by their own carelessness.
 
-| README location | What it says | What replaces it |
+The table below now covers **the app's own on-screen copy as well as the README**, because the revision's second decision (§11.1) falsifies a sentence a user reads while uploading, not only one a developer reads in a repository. A false sentence on a screen is worse than a false sentence in a README by exactly the distance between the two readers.
+
+| Location | What it says | What replaces it |
 |---|---|---|
 | Line 3, intro | "no backend, no database, and no user accounts — a static site that runs entirely in your browser and talks directly to OpenRouter" | A deployed service: a static web app, an API, an inference gateway, Postgres and Blob Storage, all in the firm's own Azure subscription. |
 | §"No backend, no accounts" (101–103) | The whole section | Deleted. Replaced by a deployment section describing `docker compose up` locally and `azd up` to Azure. |
@@ -46,7 +58,11 @@ The README is a promise about privacy, and this design breaks specific sentences
 | §Visual system (97) | "The chrome is honest about being single-user … no assignee chip … The matter activity feed is derived … not a stored event log" | Superseded (§3). Assignee chips, an "assigned to me" counter and an activity feed with real actors become honest, and the feed is read from the stored audit log. |
 | §"How it's built" (138) | "No backend, no server-side anything" | A monorepo: `packages/core`, `apps/web`, `apps/api`, `apps/gateway`. |
 | §"Building and deploying" (204–225) | Static host, SPA rewrite, Firebase | `azd up`. The SPA rewrite note survives for the web app's own hosting. |
-| §Known limitations (243) | "Verification is single-reviewer … nothing here notifies anybody of anything" | Superseded. Verification is attributed to a real account, assignment reaches a real person, and §17 Q2 decides whether it also leaves the app. |
+| §Known limitations (243) | "Verification is single-reviewer … nothing here notifies anybody of anything" | Superseded. A finding's disposition is attributed to a real account, is **changeable by any authorised user at any time**, and carries a full history of who changed it from what to what (§6.3). Assignment reaches a real person, and §17 Q2 decides whether it also leaves the app. |
+| §Learning from redlines (70) | "LexPrompt reads them for this one session and **stores none of them**: not in IndexedDB, not in `localStorage`, not in the URL. Close the tab and they're gone" | **False under §11.1.** Precedent documents are stored server-side, in the firm's tenant, as `kind = 'precedent'` documents belonging to a precedent set. Replaced by: they are stored in the firm's Azure like any other document, kept separate from matter documents, never offered as something to review, and covered by the firm's retention schedule (§17 Q3). What survives verbatim from that bullet: *only the standard positions you go on to adopt reach a playbook* — storing a precedent does not put it in a playbook. |
+| **App copy** — `src/features/redlines/PrecedentIntake.tsx` | "Read once to learn from. Never stored." | **False under §11.1, and it is on screen at the moment of upload.** Must change in the same stage as the storage — §11.1 states the requirement and its non-negotiable ordering. |
+| **App copy** — `src/features/redlines/PrecedentUploadPanel.tsx` | "Marked-up .docx files are read for tracked changes; anything else, including PDFs, can be compared against another version instead." | **Unchanged.** It is true, it is about what is *read*, and it says nothing about storage. §11.1 rules that the new storage sentence goes where the old one was — `PrecedentIntake`'s header — so the promise is still said exactly **once**, which two wordings on this same screen have already cost the project once. |
+| **App copy** — `src/lib/privacyCopy.ts` | The storage disclosures, which today have no precedent clause at all because there was nothing to disclose | Gains one. `privacyCopy.ts` is the extracted single home for disclosure wording (R-G5); a new storage promise that lives anywhere else is the drift that module exists to prevent. |
 
 **What stays true, verbatim:** page images are never persisted (§6, and now not server-side either); citations never guess a page; scan detection is per page; re-running a clause resets its verification and its net position; a review snapshots what it claims to have checked; deleting a matter genuinely purges its documents' bytes.
 
@@ -64,13 +80,15 @@ A network makes this harder, not easier, in exactly one way, and it is the most 
 
 **`await-then-apply` survives verbatim, and realtime does not soften it.** The rule is that a reviewer never sees a state the store did not take. On a server that means three separate things, and they must not be conflated:
 
-1. **Your own write** is an HTTP request that returns the persisted row. The UI renders from that response and from nothing else. There is **no optimistic update** for any human-authored state — not for a verification, a challenge, a note, a net-position confirmation, or an assignment. The control shows a busy affordance and then the confirmed value.
+1. **Your own write** is an HTTP request that returns the persisted row. The UI renders from that response and from nothing else. There is **no optimistic update** for any human-authored state — not for a disposition change, a note, a net-position confirmation, or an assignment. The control shows a busy affordance and then the confirmed value.
 2. **Someone else's write** arrives as a push. It is a fact about the server's state, so rendering it is not optimism.
 3. **Your own write also arrives back as a push.** It is dropped if its version is not newer than the row the client already holds, so the confirmed value never flickers into and out of existence.
 
 The app will *feel* live. It will never be live ahead of the database.
 
-**Verification is set only by a human action, and nothing derives it.** Unchanged, and §6's shape makes it structurally harder to break: a verification is a row a person's request inserts, and the review engine's database role has no permission to insert it.
+**Verification is set only by a human action, and nothing derives it.** Unchanged by the revision, and §6's shape makes it structurally harder to break: a disposition is a row a person's request writes, and **the run worker's database role has no grant on `finding_disposition` or `finding_disposition_event` at all** — it can neither insert, update nor delete them.
+
+The revision makes verification *mutable*, which is a different axis from *derived*, and conflating the two would be the easiest mistake to make while reading §6.3. Mutable means a person may change their mind, or a colleague may change it for them, and the change is recorded. Derived would mean the engine inferring a human judgement from a model's output, which nothing anywhere does. The one write that is not a fresh human judgement is the re-run reset, and it is safe for a specific, checkable reason: **it only ever moves a disposition *to* `unchecked`, never to `verified`.** A rule that can only remove a claim of human checking cannot manufacture one. That direction constraint is a check constraint in the database, not a convention (S21).
 
 **A review snapshots what it claims to have checked.** `playbookSnapshot` stays a deep copy — now a `jsonb` column rather than a structured-clone, which is the same guarantee by different means.
 
@@ -96,10 +114,11 @@ Recorded so a future reader finding R-G1 does not conclude this design violated 
 4. **Entra ID authentication and three roles** mapped from Entra security groups.
 5. **The review engine server-side** — runs as queued, resumable, cancellable jobs.
 6. **Realtime collaboration** — presence, live findings, live human judgements, with an explicit resynchronisation path.
-7. **The collaboration model** — first-to-verify-wins with attribution, separately attributed challenges (flag / reject), and assignment that reaches a person in-app.
-8. **An append-only audit log**, and the activity feed built from it.
-9. **Deployment** — `docker compose up` locally and `azd up` to Azure, the same shape both ways.
-10. **A one-time migration** for the data currently in the owner's browser.
+7. **The collaboration model** — one current, attributed disposition per finding (`unchecked` / `verified` / `flagged` / `rejected`), changeable by any authorised user in any direction at any time, over a complete append-only history of every change; and assignment that reaches a person in-app.
+8. **An append-only audit log**, and the activity feed built from it. A disposition's history is part of that log, not a second copy of it (S22).
+9. **Server-side storage for precedent documents** — the "Learn from redlines" inputs, stored as first-class documents distinguished from matter documents in both storage and UI (§11.1), with the on-screen non-storage promise replaced in the same stage.
+10. **Deployment** — `docker compose up` locally and `azd up` to Azure, the same shape both ways.
+11. **A one-time migration** for the data currently in the owner's browser.
 
 ### Out, and why
 
@@ -176,7 +195,7 @@ Postgres 16 on Azure Database for PostgreSQL Flexible Server, UK South. Every ta
 |---|---|---|
 | `profile` (one record, key `'local'`) | `app_user` | One row per person. The single-record store is gone. |
 | `matters` | `matter` | `owner_id` already exists as `Matter.ownerId`. |
-| `documents` | `document` | `added_by_user_id` already exists. Gains `blob_key`, `content_sha256`, `parse_state`. |
+| `documents` | `document` | `added_by_user_id` already exists. Gains `blob_key`, `content_sha256`, `parse_state`, and — new in the 2026-08-28 revision — `kind text not null` (`matter` \| `precedent`) with `matter_id` nullable and `precedent_set_id` populated exactly when `kind = 'precedent'` (§11.1). |
 | `blobs` | *(none)* | Bytes move to Blob Storage; `document.blob_key` points at them. No bytes in Postgres. |
 | `collections` | `collection` | `created_by_user_id` already exists. |
 | `playbooks` | `playbook` | `draft` stays embedded as `jsonb` — a draft is edited as one document, and splitting it invents a merge problem that does not exist. |
@@ -218,22 +237,32 @@ finding
 
 ### 6.3 The collaboration tables
 
-**A finding carries at most one verification, and any number of challenges.** This is the owner's model — first to verify wins and is attributed; a colleague who disagrees flags or rejects, as a separately attributed action — expressed as a constraint rather than as a convention.
+**A finding carries exactly one current disposition and a complete history of every change to it.** This is the owner's model as revised on 2026-08-28: a Partner may override a verification, and a finding may move from `verified` back to any other state, at any time, by any authorised user. Nothing is locked by having been verified once.
 
 ```
-finding_verification                      -- insert-once. First to verify wins.
+finding_disposition                       -- exactly one row per finding. Mutable.
   review_id, findings_key, clause_id      primary key  (FK to finding)
-  by_user_id       uuid not null
-  at               timestamptz not null
+  state            text not null          -- unchecked|verified|flagged|rejected
+  reason           text                   -- NOT NULL when state='rejected' (check constraint)
+  by_user_id       uuid                   -- who set the CURRENT state, not who set the first.
+                                          -- NULL only while changed_count = 0 (check constraint):
+                                          -- a never-touched finding has no actor, and that is a
+                                          -- different fact from an unchecked one someone reset.
+  at               timestamptz            -- when the CURRENT state was set; NULL on the same terms
+  changed_count    int  not null default 0 -- 0 = never touched by anyone
+  version          bigint not null default 1  -- optimistic concurrency (§8)
 
-finding_challenge                         -- append-only. Zero or more.
-  id               uuid primary key
+finding_disposition_event                 -- append-only. One row per change, forever.
+  id               bigint generated always as identity
   review_id, findings_key, clause_id      (FK to finding)
-  kind             text not null          -- 'flag' | 'reject'
-  reason           text                   -- NOT NULL when kind='reject' (check constraint)
-  by_user_id       uuid not null
+  from_state       text not null          -- 'unchecked' on the first change; never NULL
+  to_state         text not null          -- unchecked|verified|flagged|rejected
+  reason           text                   -- NOT NULL when to_state='rejected'
+  cause            text not null          -- 'human' | 'rerun_reset'
+  by_user_id       uuid not null          -- the person; on a rerun_reset, whoever asked for the re-run
   at               timestamptz not null
-  withdrawn_at     timestamptz            -- only the author may withdraw; never deleted
+  -- check: cause = 'rerun_reset' implies to_state = 'unchecked'
+  -- GRANT INSERT, SELECT only. No UPDATE, no DELETE, to any app role (S11's grant).
 
 note
   id               uuid primary key
@@ -253,19 +282,44 @@ assignment
   resolved_by_user_id uuid
 ```
 
-**First-to-verify-wins is `INSERT … ON CONFLICT DO NOTHING`, and losing is a visible answer, not an error.** A second person's verify request that hits the conflict gets back the existing verification and the UI says *"Already verified by Priya, 14:22"* — a specific, true, non-alarming outcome. It does not say "failed", and it does not silently do nothing.
+**The two tables are written in one transaction, always.** A disposition change is an `UPDATE finding_disposition … RETURNING` plus an `INSERT INTO finding_disposition_event`, in the same transaction as the `event` row that pushes it to other clients. There is no path that writes one without the other, so a current state whose history does not explain it cannot exist. `finding_disposition` is a **cache of the last row of the history** — it exists because every card render needs the current state and no card render needs to fold three years of changes — and a reconciliation check that recomputes it from the history is part of §14's suite, because a derived cache that can silently disagree with its source is this project's favourite defect wearing a database hat.
 
-**A challenge never overwrites a verification.** A verified finding that someone then rejects shows both: *"Verified by Priya · Rejected by Andy — 'the break date is wrong'"*. That is the legible chain the owner asked for, and it is more useful than either fact alone.
+**Flag and reject are dispositions now, not a separate table.** The old model needed `finding_challenge` because a verification could not be changed: a colleague who disagreed had nowhere to put the disagreement except beside the verification. Once the disposition itself can move, a rejection *is* a disposition change, and the "both facts standing" property the challenge table existed to give is now the property the history gives — better, because it covers every change rather than only disagreements, and it covers a person changing their own mind. `withdrawn_at` disappears with it: withdrawing a rejection is changing the disposition back, which is the same mechanism as everything else rather than a special case with its own rules about who may perform it.
 
-**The one word a card shows is derived in exactly one place.** `dispositionFor(verification, challenges)` in `packages/core` is the single home for "what does this finding's human state say", alongside `verificationLabel` and `exportSummaryLine`, which already exist to stop the DOCX and CSV exporters drifting apart. **This does not weaken "nothing derives verification"**: that rule forbids *inferring a human judgement from a model's output*. Composing a display label from acts people actually took is what `verificationLabel` has always done. Nothing here writes a verification; only a person's request does, and the engine's database role lacks the grant to.
+**A stale change is refused, loudly, and never silently applied.** Every disposition change carries the `version` the client was looking at. If the row has moved on, the request is refused with `409` and the current row, and the UI says *"Priya changed this to Rejected at 14:22, after you loaded it. Your change was not applied."* — with the change offered again against the new state. This is S20's posture for free text applied to dispositions, and it is the whole of the answer to "what happens when two people change it at once": **not** last-write-wins, and **not** a silent overwrite of a judgement the changer never saw. Two people racing produce one change and one refusal; a person who then repeats the change produces a second history row, so both intentions are on the record.
 
-**Notes are their own table now.** R-B3 kept them on the `Finding` and said "a notes store becomes a later migration". This is that migration. Notes survive a re-run, as they always have, because they are about the clause rather than about one run's output.
+**Attribution is of the current state, and the card must say when it is not the whole story.** `finding_disposition.by_user_id` is *who set the state the card is showing* — never who set the first one. A card reading "Verified by A. Trainee" for a finding a Partner reverted and re-verified would be a quiet lie of exactly the kind this project exists to prevent, and it is the most likely defect in this section. The requirements, as requirements:
 
-**`Verification.assigneeId` is retired** (S17). It existed for schema-readiness under R1 and reached nobody. A real assignment needs an assigner, a time and a resolution, none of which a single id can carry.
+- A disposition is **never** shown without its actor and its time. "Verified" alone is not a legal statement; "Verified by R. Okafor, 16:04" is. The one disposition with no actor is a never-touched `unchecked` (`changed_count = 0`), which renders as "Not checked" and names nobody — the honest reading of a NULL, and the reason the column is nullable rather than back-filled with whoever ran the review.
+- Whenever `changed_count > 0`, the card shows that fact inline and makes the history reachable in one action — *"Verified by R. Okafor, 16:04 · changed twice"*, opening the full list.
+- The immediately preceding state is named on the face of the card, not only inside the history, because it is the single most load-bearing fact after the current one: *"Verified by R. Okafor, 16:04 · was Rejected"*. It is not stored twice to achieve this: the finding read returns its current disposition **and its most recent `finding_disposition_event`**, and `finding.disposition_changed` carries both (§8), so `from_state` is on hand at first render and after every push without a second query and without a duplicated column.
+- A disposition set by a re-run reset (`cause = 'rerun_reset'`) reads as what it is — *"Unchecked — this clause was re-run by A. Gray at 11:07"* — and never as a person having un-verified it by hand. The two are different acts and the history distinguishes them; the card must not flatten them.
+
+**The one word a card shows still has exactly one home.** The current state is now stored rather than folded from two tables, so the folding function goes; what remains is the *wording*, and that stays where wording has always lived: `verificationLabel` and `exportSummaryLine` in `findingOutcome.ts`, moving to `packages/core`, gain `dispositionLabel(disposition)` and `dispositionHistoryLine(event)` beside them. The DOCX exporter, the CSV exporter, the card and the history panel all call these. They have drifted apart once before over exactly this kind of string.
+
+**Notes are their own table now.** R-B3 kept them on the `Finding` and said "a notes store becomes a later migration". This is that migration. Notes survive a re-run, as they always have, because they are about the clause rather than about one run's output — and they are untouched by a disposition change for the same reason: a note is a person's remark about the clause, not a component of their judgement on one answer.
+
+**`Verification.assigneeId` is retired** (S17). It existed for schema-readiness under R1 and reached nobody. A real assignment needs an assigner, a time and a resolution, none of which a single id can carry. **Assignment is unchanged by the 2026-08-28 revision** and remains the way to ask a colleague to look at something — a request, not a disposition. Overriding a disposition and asking someone to check one are different acts, and the app keeps them different.
+
+### 6.3.1 The history is load-bearing, and an export is a point-in-time claim
+
+Under the old model, "has a human checked this, and who" was answerable from a row that could never change, so an export could state it as a fact with no shelf life. **That is no longer true, and the export must not go on implying it is.** With a disposition changeable by anyone at any time, the only complete answer to *"who says this was checked, and as of when"* is the history; the current row answers only *"as of right now"*.
+
+So, three requirements that hold together:
+
+1. **Every export carries the instant its dispositions were read**, on the document, not in a filename: *"Dispositions as at 2026-08-28 16:41 (Europe/London)."* Without it the document silently claims to be current forever.
+2. **Every export carries the same "was X" and "changed N times" facts the card carries.** A DOCX or CSV that flattens a contested finding into "Verified" is the network-era version of the CSV that wrote unreviewed clauses as blank cells: technically the current state, read by a partner as the whole state.
+3. **An export states, in its own words, that a disposition can change**, and that LexPrompt's history is authoritative over any printed copy. One sentence in the export's summary block, composed by `exportSummaryLine` like every other piece of export wording.
+
+The full history is exportable in its own right — per review, and per workspace for the audit export (§12 Q3) — because "reconstruct what this report would have said on the day it was signed" is a question a firm will eventually ask, and only the history can answer it.
+
+**The re-run reset still applies and still reads correctly.** Re-running a clause still clears its disposition, for exactly the reason it always did: the judgement described a specific answer, and once that answer is replaced, keeping it would let an export claim a human checked text they never saw. Under a mutable disposition that argument gets *stronger*, not weaker — the reset is now the same operation any person could perform (a change to `unchecked`), so it needs no special mechanism, and it is the one write the system performs on its own behalf, which is why it is constrained to that single direction (§3) and why its history row names the person who asked for the re-run rather than "system".
 
 ### 6.4 What already carries identity and needs no change
 
 `Matter.ownerId`, `DocumentRecord.addedByUserId`, `Collection.createdByUserId`, `Review.createdByUserId`, `PlaybookVersion.publishedByUserId`, `Changeset.createdByUserId`, `Note.byUserId`, `Verification.byUserId`, `NetPosition.byUserId`. Every one of these is already populated from the local profile. They become foreign keys to `app_user` and are otherwise untouched. **This is R1's schema-readiness paying for itself**, and it is the single largest reason this migration is a data move rather than a redesign.
+
+`Verification.byUserId` and `Verification.at` land in `finding_disposition` **and** seed the finding's first `finding_disposition_event` row (`from_state = 'unchecked'`, `cause = 'human'`) at migration time, so a migrated finding's history is not empty. An empty history under a non-`unchecked` current state would be indistinguishable from a change that failed to record itself, which is precisely the ambiguity §6.3's one-transaction rule exists to make impossible — a migration must not be the one place it is allowed.
 
 ### 6.5 What is new
 
@@ -283,12 +337,25 @@ app_user            id uuid pk
 
 audit_event         id bigint generated always as identity  -- append-only (S11)
                     workspace_id, at, actor_user_id
-                    action text                             -- e.g. finding.verified
+                    action text                             -- e.g. playbook.published
                     subject_type, subject_id
                     matter_id, review_id
                     detail jsonb
                     -- GRANT INSERT, SELECT only. No UPDATE, no DELETE, to any app role.
                     -- Partitioned monthly.
+                    -- Does NOT restate a disposition change: finding_disposition_event
+                    -- is that change's one record, under the same grant (S22).
+
+precedent_set       id, workspace_id, name                  -- §11.1
+                    created_by_user_id, created_at
+                    playbook_id                             -- NULL until a playbook adopts from it
+                    -- The batch brought in for one "learn from redlines" session.
+                    -- Its documents are document rows with kind = 'precedent'.
+
+position_basis      standard_position_id, precedent_set_id  -- §11.1
+                    document_id, edit_locator jsonb
+                    -- The durable link from an inferred house position to the
+                    -- precedent text that produced it. Was in-session only.
 
 run                 id, review_id, workspace_id
                     state text          -- queued|running|cancelling|cancelled|succeeded|failed
@@ -333,9 +400,13 @@ role_mapping        entra_group_object_id text pk, role text
 
 | Role | Can |
 |---|---|
-| `reviewer` | Create and edit matters, documents, collections and reviews; run reviews; verify, flag, reject and note; assign; confirm or amend net positions; edit playbook drafts; export. |
-| `partner` | Everything a reviewer can, **plus** publish a playbook version. Whether a partner may also override a verification is **§17 Q1, undecided**. |
-| `admin` | Everything a partner can, plus: role mapping, model deployment selection, retention configuration, disabling a user, and exporting the audit log. An admin is not a super-reviewer; the actions are administrative. |
+| `reviewer` | Create and edit matters, documents, collections and reviews; run reviews; **set a finding's disposition to any state, including one a colleague set** (§6.3); note; assign; confirm or amend net positions; edit playbook drafts; bring in precedent documents and infer positions from them; export. |
+| `partner` | Everything a reviewer can, **plus** publish a playbook version. |
+| `admin` | Everything a partner can, plus: role mapping, model deployment selection, retention configuration, disabling a user, and exporting the audit log — including the disposition history export (§6.3.1). An admin is not a super-reviewer; the actions are administrative. |
+
+**§17 Q1 is answered, and the answer is broader than the question.** The owner asked whether a Partner may override a verification and said yes. The design does not build "override" as a Partner-only power, because the mechanism the owner actually described — *"something can change from Verified, back to another state, at any time"* — is not a hierarchy feature, it is the disposition being mutable. A trainee who verifies the wrong finding at 09:00 must be able to un-verify it at 09:01 without waiting for a Partner; a rule that made overriding a partner privilege would produce exactly that wait, and the app would be manufacturing a silence again. **What makes this safe is not who may change it. It is that every change is recorded, attributed, and shown** (§6.3).
+
+*If the firm later wants overrides restricted to Partners*, that is a role check on one route plus a UI gate — not a data-model change, because the history already records who did what. Recorded here so a later narrowing is understood as cheap rather than as a reversal of the design.
 
 **Deliberately not built:** per-matter ACLs, guest accounts, deny rules, delegated permissions, custom roles. One firm, one workspace, everybody sees the work (S10).
 
@@ -359,6 +430,10 @@ role_mapping        entra_group_object_id text pk, role text
 4. While disconnected, the client shows a persistent, non-modal *stale* indicator. **It never shows disconnected data as though it were current.** This is the fourth load state from §3, and it is the one most likely to be skipped, because the app looks fine without it.
 
 **Events are idempotent and version-guarded.** Each carries the `version` of the row it describes; an event whose version is not newer than what the client holds is dropped. That makes replay safe, makes your own write's echo a no-op, and makes out-of-order delivery survivable.
+
+**A disposition change is the event type this matters most for**, because it is the only one where a dropped or out-of-order event leaves a *human judgement* on screen that the database does not hold. `finding.disposition_changed` carries the whole new `finding_disposition` row plus the `finding_disposition_event` that produced it, so a client applies one push and has both the current state and the fact that it changed — it never has to re-derive "was Rejected" from an event it may not have received. The client's local `version` is also what it sends back on its own next change, which is how the `409` in §6.3 happens at all: **the stale-change refusal and the realtime version guard are the same number doing two jobs, and they must not be allowed to become two numbers.**
+
+Combined with the four load states of §3, this produces the rule a reviewer's safety actually rests on: **a disconnected client must not offer to change a disposition.** It is showing a state it cannot vouch for, and a change submitted against a version that may be minutes old would be refused anyway. The stale indicator disables the disposition controls and says why — one more place where "empty is not broken" becomes "stale is not current".
 
 **Presence** is a heartbeat every 10 seconds with a 15-second TTL, carrying `{ userId, initials, screen, clauseId? }`. The roster is broadcast to the subscription on change. **Presence is never persisted** (S6): it is ephemeral, and a stale "Priya is here" row surviving a crash is a lie the app would tell indefinitely. It is also **advisory** — it locks nothing, blocks nothing, and gates no write. Its whole job is to let two people see each other and not collide.
 
@@ -384,22 +459,39 @@ The engine moves because collaboration forces it: with two people in one review,
 
 `carryHumanState` exists because `runReview` owns its own copy of the run and emits a full snapshot roughly twice per cell, so anything a human wrote from outside the engine was invisible to it and got overwritten by the next unrelated cell. That is a consequence of a whole-object write from a single in-browser orchestrator.
 
-With findings as rows (§6.2), the engine writes only the model-authored columns of the one cell it just ran, and a human write goes to `finding_verification`, `finding_challenge` or `note` — tables the engine's role cannot write to at all. There is no snapshot, so there is nothing to merge, so nothing can clobber a human write. **`carryHumanState` and `findingMerge.ts` are deleted, not ported.** One writer replaces N racing browsers, and this is the single largest simplification in the design.
+With findings as rows (§6.2), the engine writes only the model-authored columns of the one cell it just ran, and a human write goes to `finding_disposition` / `finding_disposition_event` or `note` — tables the run worker's role cannot write to at all. There is no snapshot, so there is nothing to merge, so nothing can clobber a human write. **`carryHumanState` and `findingMerge.ts` are deleted, not ported.** One writer replaces N racing browsers, and this is the single largest simplification in the design.
 
-**What does not retire is the re-run reset.** Re-running a clause still resets its verification and its net position, for the reason it always did: the judgement described a specific answer, and once that answer is replaced, keeping it would let an export claim a human checked text they never saw. Server-side this becomes stronger, not weaker — it is one transaction:
+**What does not retire is the re-run reset.** Re-running a clause still resets its disposition and its net position, for the reason it always did: the judgement described a specific answer, and once that answer is replaced, keeping it would let an export claim a human checked text they never saw. A mutable disposition does not weaken that by one word — if anything it sharpens it, because the reset is now expressible as an ordinary disposition change rather than a deletion, so the fact that the clause *was* verified before the re-run survives in the history instead of vanishing with the row.
+
+Server-side it is one transaction, run **in the retry request handler** — a person asked for this — and not by the worker, which has no grant on either disposition table:
 
 ```sql
 BEGIN;
-  UPDATE finding SET … , version = version + 1 WHERE (review_id, findings_key, clause_id) = …;
-  DELETE FROM finding_verification WHERE (review_id, findings_key, clause_id) = …;
-  UPDATE finding_challenge SET withdrawn_at = now() WHERE … AND withdrawn_at IS NULL;
+  UPDATE finding SET status = 'pending', … , version = version + 1
+    WHERE (review_id, findings_key, clause_id) = …;
+
+  -- The disposition moves to 'unchecked'. It is never deleted: deleting the row
+  -- would lose who last held it, and the history's from_state would have nothing
+  -- to be read against.
+  INSERT INTO finding_disposition_event
+         (…, from_state, to_state, reason, cause, by_user_id, at)
+  SELECT  …, state,      'unchecked', NULL, 'rerun_reset', :actor, now()
+    FROM finding_disposition WHERE (review_id, findings_key, clause_id) = …;
+
+  UPDATE finding_disposition
+     SET state = 'unchecked', reason = NULL, by_user_id = :actor, at = now(),
+         changed_count = changed_count + 1, version = version + 1
+   WHERE (review_id, findings_key, clause_id) = …;
+
+  -- the net position is cleared by the same transaction, for the same reason
   -- notes are NOT touched: a note is about the clause, not about one run's output
-  INSERT INTO audit_event …;   -- 'finding.rerun_reset', naming what was cleared
   INSERT INTO event …;
 COMMIT;
 ```
 
-A partial reset is now impossible rather than merely tested against. It stays mutation-tested regardless (§14), because it is the load-bearing claim in every export the app produces.
+Note what the history row makes visible that the old `DELETE` did not: **the export of a re-reviewed clause can now say "unchecked — re-run by A. Gray at 11:07, previously verified by R. Okafor"**, which is a materially more useful sentence than "unchecked" and is the first thing a partner reading a re-run report wants to know.
+
+A partial reset is now impossible rather than merely tested against. It stays mutation-tested regardless (§14), because it is the load-bearing claim in every export the app produces — and the mutation test gains a case: breaking the `cause = 'rerun_reset'` history insert while leaving the `UPDATE` must fail, because a reset that clears a verification without recording that it did is the same lie as a reset that does not happen.
 
 ---
 
@@ -461,7 +553,44 @@ The engine now runs server-side, and a scanned document needs page images at run
 
 **Server-side PDF rendering is unproven here and is Spike 1** (§15). If it fails, the fallback is Azure AI Document Intelligence OCR at ingest, in-region, which produces a text layer and removes the image path entirely — better for citations, but a new subprocessor and a new line in §12.
 
-**"Learn from redlines" needs an explicit decision, and it is §17 Q9.** Today, precedent documents are read in the browser and stored nowhere — a promise the README makes in so many words. If they are uploaded to be parsed server-side, that promise changes shape: they would be parsed in memory and never written to Postgres or Blob. That may well be acceptable, but it is not the same sentence, and it must be re-stated in the README and asserted by a test (no row, no blob, for a `purpose: 'redlines'` upload) rather than assumed.
+### 11.1 Precedent documents are stored server-side
+
+**§17 Q9 is answered: precedent documents may be stored server-side, and they are.** They become ordinary documents — a blob, a row, a `parse_state`, the same ingest path as everything else — rather than the session-only special case sub-project F built.
+
+**What this makes better, and it is more than convenience.** Three things, in ascending order of how much they matter:
+
+- **Inference can be re-run without re-uploading.** Today, changing the prompt, the model or the clause set means the lawyer goes and finds eight `.docx` files again. That is a per-iteration cost on the feature whose whole value is iteration.
+- **The workings can be revisited.** "Learn from redlines" shows the actual redline text behind each proposed position — deletions struck through, insertions underlined, the margin comment and its author. Today that evidence dies with the tab, so a position adopted on Tuesday cannot be re-examined on Wednesday.
+- **A position's basis stays inspectable after the session ends.** This is the one that changes the feature's claim rather than its ergonomics. "Learning from redlines" asserts that an inferred house position is *evidenced* — that a lawyer can check what it was built from. Session-only storage made that assertion true for about ninety seconds. `position_basis` (§6.5) makes it durable: a position adopted six months ago still resolves to the documents and the specific edits that produced it, and a partner asking *"where did this house rule come from?"* gets the four leases and the four strikes rather than a shrug. `Changeset.basis` already took a durable copy of the edits for exactly this reason (`types.ts` says so, and says it takes the copy *because* the source documents are gone); with the sources kept, the copy becomes a corroboration rather than the only surviving witness.
+
+**Precedent documents are distinguished from matter documents, in storage and in the UI. This is a ruling (S23), not a detail.** A precedent is somebody else's deal, brought in to learn from, usually with an opposing party's markup still in it. If it appeared in a matter's document list it could be opened as though it were the deal under review, added to a collection, run through a playbook, or cited in an export — and a citation pointing into the wrong client's lease is the kind of error this app exists to make impossible. So:
+
+- **In storage:** `document.kind` is `matter` or `precedent`, `NOT NULL`, with a check that a `precedent` row has a `precedent_set_id` and a `NULL` `matter_id`, and a `matter` row the reverse. Not a nullable `matter_id` alone, and not a naming convention: this is a distinction that must survive somebody writing a new query.
+- **In queries:** every review-target, collection-member and matter-document query filters `kind = 'matter'`. §14 gets a test that a precedent document cannot be added to a collection or named as a review target, refused by the API rather than merely absent from a picker.
+- **In the UI:** precedent sets live in the playbook side of the app, where they were brought in, and never in a matter's documents. A precedent document opened in the viewer is labelled as precedent on the document itself, not only in the list it was reached from.
+
+**Retention now applies to them, and they do not fit the matter-file schedule.** A precedent belongs to no matter, so "document retention follows the firm's matter-file policy" (§17 Q3) does not reach it. Two facts make this a real question rather than a formality: a precedent set is likely to contain *another client's* executed documents, and a house position adopted from it may be relied on for years after the set that produced it would otherwise have been disposed of. **§17 Q3 is extended to ask it explicitly**, with the trade named: delete the set and a position's basis becomes unresolvable (and must then say so on screen rather than showing an empty evidence panel — "empty is not broken", again); keep the set and the firm holds another client's documents for as long as the playbook lives. The design does not decide this; it refuses to let it be decided by default.
+
+**The copy change ships in the same stage as the storage. Never after.**
+
+`src/features/redlines/PrecedentIntake.tsx` renders, today, at the top of the intake screen:
+
+> **"Read once to learn from. Never stored."**
+
+That sentence is **true today** and becomes **false the moment the first precedent byte reaches Blob Storage**. The component's own comment explains that it was deliberately strengthened from a narrower phrasing because "understating a privacy promise is the one direction it must never drift" — which is the argument for changing it now, not against. Shipping the storage while that sentence is still on the screen would be precisely the failure this project is organised against: something incorrect presented as if it were correct, to a lawyer, at the moment they are deciding whether to hand over a document.
+
+The requirement, stated as an acceptance condition rather than a note:
+
+1. **The same stage, and the same change.** The migration that adds `document.kind = 'precedent'` and the copy change land together. There is no release in which the storage exists and the sentence does.
+2. **The replacement lives in `src/lib/privacyCopy.ts`**, not inline. That module is the extracted single home for disclosure wording (R-G5), and a storage promise written anywhere else is the exact drift it exists to prevent.
+3. **It is still said once, in the strong form.** `PrecedentIntake.tsx` and `PrecedentUploadPanel.tsx` are siblings on that route, and the panel's comment records that two wordings of one promise was a real defect that had to be fixed. The new sentence goes in the same place the old one did — `PrecedentIntake`'s header — and the panel keeps saying only what is read. `PrecedentUploadPanel.tsx`'s existing sentence, *"Marked-up .docx files are read for tracked changes; anything else, including PDFs, can be compared against another version instead,"* stays true and stays where it is.
+4. **The tests that assert the promise are rewritten in the same change, not deleted.** `src/App.redlines.test.tsx` asserts `occurrences('Never stored') === 1` and has a whole describe block titled *"a precedent document is read and never stored (spec §4, §11)"*. Those become assertions about the new promise. A promise test that is deleted rather than replaced is how the next person learns there was never a promise.
+5. **The comments carrying the old promise are corrected too** — `App.tsx`'s "read once, never stored" note on `redlinesDocs`, `PrecedentUploadPanel.tsx`'s docstring, `types.ts`'s remark that a changeset's basis exists because the source documents "are read, never stored". A stale comment is how a true statement gets restored by a well-meaning refactor.
+6. **The README's §Learning from redlines bullet** — *"stores none of them: not in IndexedDB, not in `localStorage`, not in the URL"* — is in §2's table and is replaced with it.
+
+**Sub-project F's spec is superseded on this point, and not edited.** `docs/superpowers/specs/2026-08-27-redesign-f-learning-from-redlines.md` §4.1 and its §11 state the non-storage promise as a design commitment. It was correct when written; it is superseded here, as of 2026-08-28, and the F spec is left standing so a reader can see the position changed rather than finding it quietly rewritten — the same posture `rulings.md` takes.
+
+**What does not change.** Storing a precedent does not put it in a playbook: *"only the standard positions you go on to adopt survive, inside the playbook you eventually save"* stays exactly as true as it was. A playbook is house rules, not a document archive, and F's reasoning for that separation is untouched. Tracked changes are still read from the OOXML directly and never through `mammoth` — the defect that rule prevents (reading a counterparty's redline back as though every change were accepted) is unaffected by where the file lives.
 
 ---
 
@@ -472,23 +601,33 @@ Written as answers, because these are the questions actually asked.
 **1. Where does client data live?**
 In the firm's own Azure subscription, UK South. Document metadata, extracted text, findings, playbooks and the audit log in Azure Database for PostgreSQL Flexible Server (encrypted at rest, private endpoint, no public network access). Original document bytes in Azure Blob Storage (private container, no anonymous access, service-side encryption, private endpoint). Nothing persists in the browser except a rendered view and a short-lived Entra token; browser-local persistence is retired and the old IndexedDB database is removed after §13's migration.
 
+**This now includes precedent documents** (§11.1) — the "Learn from redlines" inputs, which were previously read in the browser and stored nowhere. A Risk reviewer should be told this explicitly rather than left to infer it from "documents", because a precedent set is the one place in this app where **another client's** executed documents are likely to be held, brought in as house-rule evidence rather than as work on the matter they belong to. They are stored in the same database and container as everything else, distinguished by `document.kind` and separated in the UI, and they are the reason §17 Q3 now asks a retention question the matter-file schedule does not answer.
+
 **2. Who can access it?**
 Named members of the firm's Entra tenant who are in one of three mapped security groups. There is no password login, no shared key, no API key, no anonymous link, and no external sharing. Access is removed by Entra group removal or account disable: HTTP access ends at the next token refresh (≤ 60 minutes) and WebSocket connections for a disabled user are closed immediately by the server. Infrastructure access (DBA, blob) is Azure RBAC with PIM approval and is recorded in Azure activity logs, outside the application's control.
 
 **3. What is logged?**
-Two logs, deliberately separate. **`audit_event`** records who did what to which record: every human judgement (verify, flag, reject, note, confirm, amend), every assignment, every publish, every export, every document added or deleted, every role change, every run started or cancelled. It is append-only by database grant, not by convention (S11) — the application role holds `INSERT` and `SELECT` and nothing else. **The gateway call log** records metadata for every model call and no content (§10). Application logs never contain document text; a redaction test enforces it (§14).
+Two logs, deliberately separate. **`audit_event`** records who did what to which record: every assignment, every publish, every export, every document added or deleted, every role change, every run started or cancelled, every net position confirmed or amended. It is append-only by database grant, not by convention (S11) — the application role holds `INSERT` and `SELECT` and nothing else. **The gateway call log** records metadata for every model call and no content (§10). Application logs never contain document text; a redaction test enforces it (§14).
+
+**`finding_disposition_event` is the third — and it is a log, not a convenience.** Every change to a finding's disposition, in either direction, with the state it came from, the state it went to, the reason where one exists, whether it was a human act or a re-run reset, who, and when. It is held to the same insert-only grant as `audit_event`, and it is what makes "who says this was checked, and as of when" answerable at all now that a disposition can change (§6.3.1).
+
+**It is deliberately *not* also written into `audit_event`, and that is a ruling (S22).** Two append-only records of the same fact is this project's most repeated defect — two implementations of one idea, drifting — in the worst possible location: the divergence would be between the history a lawyer reads on the card and the history the firm exports for an audit, and the audit export is precisely the artefact nobody re-reads until it matters. So a disposition change is recorded once, in the table the card reads, and the audit export and activity feed read that table alongside `audit_event` rather than a copy of it. `audit_event` carries every other kind of act; the join is a `UNION` in one query, which is a smaller thing to get right than two writers staying in agreement forever.
 
 **4. What is retained, and for how long?**
-Documents, reviews and findings until the firm deletes them; deleting a matter cascades to its documents' rows and their blobs. Audit log: 7 years by default — **§17 Q3, the firm's retention schedule decides.** Gateway call log: 90 days. Realtime event outbox: 7 days (a reconnection buffer, not an archive). Postgres point-in-time backups: 35 days. **Foundry abuse monitoring: up to 30 days unless the exemption in §10.1 is granted — §17 Q4.**
+Documents, reviews and findings until the firm deletes them; deleting a matter cascades to its documents' rows and their blobs. Audit log: 7 years by default — **§17 Q3, the firm's retention schedule decides.** A finding's disposition history is retained **for as long as the finding**, not on the audit log's clock: it is what the finding's current state means, and a finding outliving the record of how it got there would leave "Verified by R. Okafor" standing with nothing behind it. Gateway call log: 90 days. Realtime event outbox: 7 days (a reconnection buffer, not an archive). Postgres point-in-time backups: 35 days. **Foundry abuse monitoring: up to 30 days unless the exemption in §10.1 is granted — §17 Q4.**
+
+**Precedent documents** (§11.1) are retained until the firm deletes their precedent set. They belong to no matter, so the matter-file schedule does not reach them, and a house position adopted from a set may be relied on long after the set itself would have been disposed of — **§17 Q3 asks this explicitly.** Deleting a set deletes its documents' rows and blobs by the same cascade a matter uses; positions that cited it then say their basis is no longer held, rather than showing an empty evidence panel.
 
 **5. Who are the subprocessors?**
 Microsoft only: Azure Container Apps, Azure Database for PostgreSQL, Azure Blob Storage, Azure AI Foundry, Microsoft Entra ID, Azure Monitor. **OpenRouter is removed**, and with it every model provider it fronted — which is the single largest change to this answer and the reason Stage 1 is sequenced first. Inference is region-pinned: only UK/EU Foundry deployments are on the allowlist, and the gateway refuses anything else. Where a desired model has no UK/EU deployment, it is not allowlisted and the app cannot use it — a capability limit accepted deliberately in exchange for the answer to this question.
 
 **6. What happens on breach?**
-The gateway holds nothing at rest; compromising it exposes calls in flight, not the archive, and it holds no credential that reaches Postgres or Blob. Postgres and Blob have no public endpoint. Response: disable the Entra app registration (all sessions end at next refresh; WebSockets are closed), rotate managed-identity role assignments, and read `audit_event` for the actor's complete trail. **The audit log being append-only with no `UPDATE`/`DELETE` grant is what makes that trail evidence rather than a claim.**
+The gateway holds nothing at rest; compromising it exposes calls in flight, not the archive, and it holds no credential that reaches Postgres or Blob. Postgres and Blob have no public endpoint. Response: disable the Entra app registration (all sessions end at next refresh; WebSockets are closed), rotate managed-identity role assignments, and read `audit_event` **and `finding_disposition_event`** for the actor's complete trail. **Both being append-only with no `UPDATE`/`DELETE` grant is what makes that trail evidence rather than a claim** — and the disposition history is the half that answers the question a compromised account raises here: *did anyone touch the professional judgements?* Under the superseded model an attacker could only add a verification; under a mutable disposition they could change one, and the history is why that is detectable rather than merely feared.
 
 **7. What happens on offboarding?**
 Disabling the Entra account ends access. The person's authored records remain, attributed: a verification is a professional judgement someone made, and a report that silently loses its reviewer is a report that lies. `app_user.status = 'disabled'` renders as "A. Gray (no longer active)". **Deleting a user is not offered**, because it would either orphan or falsify the verification chain. That has a GDPR-erasure consequence and it is **§17 Q6** for the firm's DPO — not a decision this design makes on its own.
+
+**The 2026-08-28 revision widens this, and the widening is not cosmetic.** Under the superseded model a leaver's name appeared on the verifications they still held — a bounded, shrinking set, since a re-run deleted the row. Under a mutable disposition, a leaver's name appears on **every change they ever made**, in `finding_disposition_event`, including ones a colleague has since superseded and ones a re-run reset away. Those rows are permanent by grant (S11): they cannot be updated or deleted by any application role, which is the property that makes them evidence. So the question the DPO is being asked is larger than it was, and §17 Q6 is restated to ask it accurately rather than leaving the DPO to discover the difference. A pseudonymisation path, if one is required, has to act on `app_user` — replacing a display name with a stable pseudonym while the `by_user_id` foreign keys stay intact — because rewriting the history rows is the one remedy this design cannot offer without destroying what the history is for.
 
 ---
 
@@ -506,9 +645,15 @@ Staged so the app keeps working at every point, and ordered so the Risk posture 
 
 **Stage 2 — storage and auth.** Postgres and Blob behind the nine repositories' existing interfaces. **R3's seam holds a second time**: those repositories are already Promise-returning, precisely so a storage swap would not touch callers. Entra sign-in becomes the real gate; roles are mapped; `app_user` replaces the local profile. Behaviour stays single-user. Browser-local mode is retired at the end of this stage, and §13.1's uploader ships with it.
 
+**Precedent storage (§11.1) lands here**, because it is document storage and nothing more — `document.kind`, `precedent_set`, `position_basis`, and the ingest path they already share. **The copy change lands in the same stage, in the same change**: `PrecedentIntake.tsx`'s "Read once to learn from. Never stored." cannot survive into a release where the storage exists. If Stage 2 is decomposed further (§13 says a stage larger than its estimate is split rather than compressed), that split must not put the storage in one piece and the sentence in the next.
+
 **Stage 3 — the server-side engine.** Runs become jobs; the browser stops orchestrating; `carryHumanState` and `findingMerge.ts` are deleted; cancel and resume become real. Findings become rows, which is the largest single data migration in the plan and is done here rather than in Stage 2 because the engine is what forces it.
 
-**Stage 4 — realtime and collaboration.** WebSocket, presence, live findings, first-to-verify-wins, challenges, assignment, and the activity feed read from `audit_event`.
+**`finding_disposition` and `finding_disposition_event` land here too, with the findings they belong to** — the re-run reset (§9.1) is a Stage 3 transaction and needs both tables to exist. Behaviour stays single-user: a person changes their own dispositions and the history records it. What Stage 3 does **not** ship is the collaborative half — one user changing another's disposition, the stale-version refusal, the realtime push, the history and attribution surfaces, and the export's point-in-time framing — all of which are Stage 4. The ordering constraint from S4 is satisfied a fortiori by this: **the history exists a stage before mutability-by-others does, and never the other way round.**
+
+**Stage 4 — realtime and collaboration.** WebSocket, presence, live findings, **one person changing another's disposition** with the stale-version refusal, assignment, and the activity feed read from `audit_event` and `finding_disposition_event`.
+
+**The attribution and export surfaces ship with the mutability, in the same stage — they are one feature.** Stage 3 has already built the history; what Stage 4 must not do is turn on change-by-others while the card still shows a bare "Verified" and the export still reads like a permanent claim. That is not a lesser version of this design, it is the quiet lie the design exists to prevent, with the evidence written to a table nobody is shown. The card's attribution, the "was Rejected" line, the reachable history and the export's "as at" stamp (§6.3.1) are not polish on top of the mechanism — they are what makes the mechanism honest, and a plan that sequences them after it has sequenced them wrong.
 
 **Stage 5 — the superseded surfaces.** Assignee chips, "assigned to me", actors in the feed, firm-wide search. **Not before Stage 4** — R-G1 binds until the mechanism behind each affordance is real (§3.1).
 
@@ -539,11 +684,15 @@ So the migration is much smaller than "~130 tests to rewrite", and saying so is 
 
 **The 22 DB tests are rewritten against a real Postgres**, not a fake. Testcontainers locally and in CI (or the compose-provided database), each test in a transaction rolled back at teardown. **A fake Postgres is not acceptable**: a substitute that behaves subtly differently from the real thing is the exact defect class this project keeps finding, and half the point of moving to Postgres is that it enforces constraints IndexedDB could not. Those constraints get tests of their own, which are new work rather than ports:
 
-- first-to-verify-wins really conflicts under two concurrent inserts, and the loser gets the winner's row;
-- `finding_challenge` cannot be deleted or updated by another user;
+- a disposition change against a stale `version` is refused with `409` and the current row, and does **not** apply — under two genuinely concurrent changes, one applies and one is refused;
+- `finding_disposition_event` cannot be updated or deleted by any app role, by anyone, ever;
+- every disposition change writes exactly one history row, and `finding_disposition` recomputed from the history always equals the stored row (the cache-versus-source reconciliation of §6.3);
+- the run worker's role cannot write `finding_disposition` or `finding_disposition_event` at all — asserted by attempting it and getting a permission error, not by grepping for call sites;
+- `cause = 'rerun_reset'` can only ever produce `to_state = 'unchecked'`, refused by check constraint (§3's direction rule);
+- a `kind = 'precedent'` document cannot be added to a collection or named as a review target, refused by the API;
 - a published `playbook_version` cannot be updated by the app role;
 - `audit_event` cannot be updated or deleted by the app role;
-- the re-run reset is atomic — a failure mid-transaction leaves neither a new finding nor a cleared verification.
+- the re-run reset is atomic — a failure mid-transaction leaves neither a new finding, nor a cleared disposition, nor a history row without the change it describes.
 
 `fake-indexeddb` is deleted along with the last IndexedDB test. So is the `node:buffer` Blob workaround, which existed only because Blobs do not round-trip through `fake-indexeddb`.
 
@@ -561,10 +710,14 @@ So the migration is much smaller than "~130 tests to rewrite", and saying so is 
 | `egress` | an integration test asserting `api` cannot reach the model endpoint directly (Spike 2 establishes how) |
 | `loadStates` | in-flight, failed, empty and stale each render distinctly, on every screen that loads from the API |
 | `migration` | the browser uploader reports what it moved and what it could not; a partial migration never reports success; the local copy is not deleted |
+| `disposition` | a card never shows a disposition without its actor and time; a changed disposition shows that it changed and names the state it came from; a re-run reset renders as a re-run and not as a person un-verifying; a stale client's disposition controls are disabled and say why; an export carries its "as at" instant and its changed-from facts |
+| `precedentCopy` | the intake screen states the storage promise **once**, in its current true form, and the string asserted by the test is the one in `privacyCopy.ts` — so a future change to the promise breaks a test rather than silently disagreeing with the disclosure module |
 
-**Mutation-test, without exception:** the re-run reset (now transactional), first-to-verify-wins, the `resync_required` path, the audit log's insert-only grant, and the egress restriction. Break each, confirm a test fails, restore. A green suite is not evidence.
+**Mutation-test, without exception:** the re-run reset (now transactional, including its history row), the stale-change refusal, the disposition history's insert-only grant, the `resync_required` path, the audit log's insert-only grant, and the egress restriction. Break each, confirm a test fails, restore. A green suite is not evidence.
 
-**Browser verification is still mandatory and now needs two accounts.** The claims this design adds — presence, live updates, first-to-verify-wins, assignment reaching a person — cannot be verified by one person on one machine, and unit tests will not catch what breaks. `CLAUDE.md`'s rule applies: if it cannot be done, say so plainly rather than implying it was.
+**Two of those deserve naming as the specific mutations to try**, because both have an obvious wrong implementation that passes a careless test: (a) delete the `INSERT INTO finding_disposition_event` from the re-run reset and leave the `UPDATE` — a disposition that clears without recording that it cleared; (b) make the stale-change path apply the write and *then* return the current row — a UI that looks correct and a database where the later click silently won. Neither is caught by asserting the happy path.
+
+**Browser verification is still mandatory and now needs two accounts.** The claims this design adds — presence, live updates, a Partner overriding a trainee's verification and the card immediately reading the Partner's name, the loser of a race being told rather than silently overwritten, assignment reaching a person — cannot be verified by one person on one machine, and unit tests will not catch what breaks. The override case in particular is a two-account, two-browser check: **verify as one user, override as the other, and confirm the first user's card changes attribution without a reload.** `CLAUDE.md`'s rule applies: if it cannot be done, say so plainly rather than implying it was.
 
 ---
 
@@ -587,7 +740,8 @@ Recorded in `rulings.md`'s format. Each carries its cost if wrong.
 - **S1. Four workspaces — `packages/core`, `apps/web`, `apps/api`, `apps/gateway` — and `api` may not egress.** The topology is the security control. *Cost if wrong: a monorepo and one extra container to operate for a firm-sized deployment; the alternative makes the design's central claim unprovable.*
 - **S2. The gateway is the only egress, and it authenticates to Foundry by Entra managed identity. There are no provider API keys anywhere in the system.** *Cost if wrong: nothing runs where managed identity is unavailable, and local development without Azure credentials needs a stubbed gateway — which is built anyway.*
 - **S3. Findings become rows keyed `(review_id, findings_key, clause_id)`, not a JSON blob on the review.** *Cost if wrong: a larger migration and more SQL than a `jsonb` column; keeping the blob makes concurrent writes lose work with nothing on screen to show it, which is not a cost, it is the defect.*
-- **S4. A finding carries at most one verification (insert-once, first wins) plus append-only challenges.** *Cost if wrong: a person who verified in error cannot un-verify without a partner override (§17 Q1); the alternative lets a second person quietly overwrite a colleague's judgement.*
+- **S4 (rewritten 2026-08-28, on the owner's decision). A finding carries one current disposition (`unchecked` / `verified` / `flagged` / `rejected`) and a complete append-only history of every change to it. Any authorised user may change it in any direction at any time; nothing is locked by having been verified once; a change against a stale version is refused rather than applied.** *Cost if wrong: a colleague can move a judgement you made, and the only thing standing between that and a quiet overwrite is the history being written, shown on the card and carried into the export. If the history is skipped, weakened, or shipped a stage later than the mutability, the app tells a lawyer "verified" with no way to find out by whom, when, or over what — which is worse than the model this replaced, not better. The three of them are one feature.*
+  - *Superseded, 2026-08-28: the original S4 read "a finding carries at most one verification (insert-once, first wins) plus append-only challenges", with the cost "a person who verified in error cannot un-verify without a partner override (§17 Q1)". The owner has decided that a Partner may override and that a disposition may change from verified back to any other state at any time, so insert-once is no longer the shape. `finding_challenge` folds into the disposition; `withdrawn_at` disappears. Recorded rather than deleted, so a reader of an earlier draft can see the position changed.*
 - **S5. `carryHumanState` and `findingMerge.ts` are deleted; the re-run reset becomes one transaction and is not deleted.** *Cost if wrong: none identified — the merge exists only to defend against a whole-object write that no longer happens. Deleting the reset instead would let an export claim a human checked text they never saw.*
 - **S6. Presence is never persisted and locks nothing.** *Cost if wrong: presence is lost on an api restart and rebuilds within one heartbeat.*
 - **S7. WebSocket with a monotonic event cursor, replay on reconnect, and an explicit `resync_required` that the UI shows.** *Cost if wrong: a 7-day outbox costs storage; without the cursor a reconnected client diverges silently, which is the network-era version of every defect on `CLAUDE.md`'s list.*
@@ -602,24 +756,36 @@ Recorded in `rulings.md`'s format. Each carries its cost if wrong.
 - **S16. `Settings` shrinks to genuine UI preferences; R6 survives for those and its API-key clause is void.** *Cost if wrong: none — the fields being removed have no server-side meaning.*
 - **S17. `Verification.assigneeId` is retired in favour of an `assignment` table.** *Cost if wrong: one field's worth of migration; keeping it would under-specify an assignment, which needs an assigner, a time and a resolution.*
 - **S18. R1 / R-G1 is superseded as of 2026-08-28, and its collaborative affordances land in Stage 5 — not before Stage 4.** *Cost if wrong: shipping a chip before its mechanism reproduces exactly the silence R-G1 was written to prevent, which is why the staging is part of the ruling rather than a note.*
-- **S19. Document parsing moves server-side; the browser keeps `pdfjs` only for the viewer and `findQuoteRects`. Ingest is asynchronous with a real `parse_state`.** *Cost if wrong: if Spike 1 fails, ingest OCR replaces server-side rendering — a subprocessor added and a better citation story gained. Parsing in the browser instead would make a queued run depend on a browser having the document open, which is not a queue.*
+- **S19 (amended 2026-08-28). Document parsing moves server-side; the browser keeps `pdfjs` only for the viewer and `findQuoteRects`. Ingest is asynchronous with a real `parse_state`. Precedent documents go through that same ingest and are stored, not held in memory.** *Cost if wrong: if Spike 1 fails, ingest OCR replaces server-side rendering — a subprocessor added and a better citation story gained. Parsing in the browser instead would make a queued run depend on a browser having the document open, which is not a queue.*
+  - *Superseded, 2026-08-28: S19 as originally written left precedent documents to §17 Q9, and §11 offered "parsed in memory and never written to Postgres or Blob, asserted by a test (no row, no blob, for a `purpose: 'redlines'` upload)" as the likely shape. The owner has decided they may be stored server-side, so that test is inverted, not written: there **is** a row and there **is** a blob, and what the tests assert instead is that a precedent is distinguishable from a matter document and cannot be reviewed as one (S23). Recorded rather than deleted.*
 - **S20. Free-text conflicts are last-write-wins with the loser told and shown what replaced their text; no OT, no CRDT.** *Cost if wrong: a rare simultaneous edit costs one person a retype, having been told; a merge engine is a subsystem defending against something the owner expects to be rare.*
+- **S21 (2026-08-28). The re-run reset is the only non-human write to a disposition, it runs in the retry request handler rather than the worker, it is attributed to the person who asked for the re-run, and a check constraint holds it to `to_state = 'unchecked'`.** *Cost if wrong: one constraint and one handler placement. Without the direction constraint, "nothing derives a verification" stops being a structural fact and becomes a code-review habit, on the one code path that writes a disposition without a person deciding to — which is exactly where it would eventually fail.*
+- **S22 (2026-08-28). A disposition change is recorded once, in `finding_disposition_event`, and is not also written to `audit_event`. The activity feed and the audit export read both tables.** *Cost if wrong: one `UNION` in the feed and export queries, and an auditor who must be told there are two tables rather than one. The alternative is two append-only records of the same fact, which is this project's most repeated defect placed exactly where a divergence would be least likely to be noticed and most damaging — between what a lawyer reads on the card and what the firm exports as evidence.*
+- **S23 (2026-08-28). Precedent documents are stored, and are distinguished from matter documents in storage (`document.kind`, enforced by check constraint), in every query, and in the UI. A precedent can never be a review target or a collection member.** *Cost if wrong: one `NOT NULL` column, one predicate on the matter-document queries, and a separate place in the UI for precedent sets. Without it, another client's marked-up lease can be opened, reviewed and cited as though it were the deal in hand — a citation with apparent authority pointing at the wrong client's document, which is the failure mode `derivePage` exists to prevent, one level up.*
+- **S24 (2026-08-28). The on-screen non-storage promise changes in the same stage and the same change as the storage, its replacement lives in `privacyCopy.ts`, and the tests that assert the old promise are rewritten rather than deleted.** *Cost if wrong: none if followed — it is one sentence and one test file. If not followed, the app shows a lawyer "Never stored" on the screen where they choose which of their client's documents to upload, while storing them. That is not a copy defect; it is the founding defect of this project in its purest form, and it would be shipped deliberately.*
 
 ---
 
 ## 17. Open questions for the owner
 
-Not rhetorical. Each changes something in this document, and none is answered here.
+Not rhetorical. Each changes something in this document. **Two are now answered** — Q1 and Q9, decided by the owner on 2026-08-28. They are kept in place with their answers rather than deleted, so a reader can see what was asked, what was decided, and when.
 
-1. **May a Partner override a trainee's verification, or only flag it?** *My recommendation is flag-only:* an override erases a professional judgement someone made and leaves no trace of the disagreement, whereas a flag leaves both facts standing. But this is a professional-hierarchy question, not a technical one. **Affects §6.3 and §7.**
+1. **~~May a Partner override a trainee's verification, or only flag it?~~ ANSWERED 2026-08-28: yes, and more than that.** The owner: *"Partner may override a verification (and something can change from Verified, back to another state, at any time)."*
+   *The recommendation in this document was flag-only*, on the reasoning that an override erases a professional judgement and leaves no trace of the disagreement. **The owner's answer removes the premise rather than overruling the reasoning**: an override erases nothing, because §6.3's append-only history keeps every superseded disposition with its actor, its time and the state it came from. The concern was right; the fix was a history, not a prohibition.
+   The design goes one step past the question, deliberately and on the record: the power is **not** Partner-only, because the mechanism the owner described is mutability rather than hierarchy, and restricting it would make a trainee wait for a Partner to undo their own mistake (§7). Narrowing it later is a role check on one route.
+   **Changed §2, §3, §4, §6.3, §6.3.1, §6.4, §7, §8, §9.1, §12 Q3, §12 Q4, §12 Q6, §12 Q7, §13 (Stages 3 and 4), §14, §16 (S4 rewritten, S21–S22 added), §17 Q6, §18, §19 and §20.**
 2. **Does assignment notify by email or Teams, or in-app only?** In-app is the floor and is built. Each external channel adds a subprocessor and a line to §12. **Affects §4, §12.**
-3. **Retention.** How long is the audit log kept (7 years is a default standing in for the firm's own schedule, not a decision this design makes)? Is a matter ever hard-deleted, or only closed? Does document retention follow the firm's matter-file policy? **Affects §12 Q4.**
+3. **Retention.** How long is the audit log kept (7 years is a default standing in for the firm's own schedule, not a decision this design makes)? Is a matter ever hard-deleted, or only closed? Does document retention follow the firm's matter-file policy? **And, new on 2026-08-28: how long are precedent documents kept?** They belong to no matter, so the matter-file schedule does not reach them; a set is likely to contain another client's executed documents; and a house position adopted from a set may be relied on for years after the set would otherwise have been disposed of. The trade, stated so it is not decided by default: delete the set and a position's basis becomes unresolvable (and must say so, rather than showing an empty evidence panel); keep it and the firm holds another client's documents for as long as the playbook lives. **Affects §11.1 and §12 Q4.**
 4. **Foundry abuse monitoring (§10.1).** Apply for the modified-abuse-monitoring exemption before go-live, or accept and disclose up-to-30-day retention with possible human review? **Affects §12 Q4 and the disclosure the app itself shows.**
 5. **The data currently in the owner's browser** — migrate it with §13.1's uploader, or start clean?
-6. **GDPR erasure versus the verification chain.** A leaver's name stays on their verifications (§12 Q7). Does the firm's DPO accept that as a business record, or is a pseudonymisation path required? **Affects §6.5 and §12 Q7.**
+6. **GDPR erasure versus the disposition history — sharpened by Q1's answer, and the DPO should be asked the sharpened version.** It is no longer only "a leaver's name stays on the verifications they still hold". Under a mutable disposition, a leaver's name stays on **every disposition change they ever made** — the ones that still stand, the ones a colleague has since superseded, and the ones a re-run reset away — in `finding_disposition_event`, which no application role can update or delete, because that permanence is what makes it evidence rather than a claim (§12 Q7). The set is therefore larger than before, permanent rather than shrinking, and includes judgements the person themselves later changed their mind about.
+   Does the firm's DPO accept that as a business record? If not, the only remedy this design can offer is pseudonymisation at `app_user` — a stable pseudonym replacing the display name while every `by_user_id` foreign key stays intact — because rewriting the history rows destroys the thing they exist to be. **Affects §6.3, §6.5 and §12 Q7.**
 7. **One region or two.** UK South alone, or a paired region for disaster recovery? What RPO and RTO does the firm need? **Affects §5's infrastructure and §12 Q1.**
 8. **A content-logging debug mode.** Should one exist at all — admin-enabled, time-boxed, itself audit-logged — or is "the gateway never logs content, full stop" the simpler thing to defend? *My recommendation is the latter*, because a mode that can be enabled is a mode a Risk reviewer must be told about.
-9. **"Learn from redlines" (§11).** Do precedent documents now pass through the server to be parsed — read in memory, never written, asserted by a test — or does that feature keep a browser-only parse path so the current README sentence stays literally true?
+9. **~~"Learn from redlines" (§11). Do precedent documents pass through the server to be parsed — read in memory, never written — or keep a browser-only parse path so the current README sentence stays literally true?~~ ANSWERED 2026-08-28: neither. They are stored.** The owner: *"Precedent documents can be stored server-side."*
+   The question offered two ways to keep the non-storage promise; the answer declines both and changes the promise instead. That is the more useful outcome — inference re-runs without re-uploading, the workings survive the session, and a position's basis stays inspectable, which is the feature's central claim and was previously true for about as long as the tab stayed open (§11.1).
+   **The cost is a sentence on a screen, and it is not optional**: `PrecedentIntake.tsx`'s "Read once to learn from. Never stored." is true today and false the moment this ships, so S24 requires it to change in the same stage and the same change.
+   **Changed §2 (five rows), §4, §6.1, §6.5, §11.1 (new), §12 Q1, §12 Q4, §13 Stage 2, §14, §16 (S19 amended, S23–S24 added), §17 Q3, §18, §19 and §20.**
 10. **Whether the assistant / chat feature is in scope for the server release.** It streams and it sends document text, so it is a second egress path through the gateway with its own purpose tag and rate limit. *My recommendation is to keep it* (R4's reasoning holds: it works, it declines honestly, and dropping a working feature by omission is the wrong reading of silence) — but it is work, and the owner may prefer it deferred to a later stage.
 
 ---
@@ -630,9 +796,9 @@ Per stage, since this ships in five.
 
 1. `tsc --noEmit` clean across all four workspaces; every suite passes; every app builds clean.
 2. **Stage 1:** no OpenRouter key exists anywhere in the codebase or in any browser; every model call goes through the gateway; the gateway holds no key and authenticates by managed identity; the call log contains no prompt content, asserted by a test.
-3. **Stage 2:** a user signs in with Entra and sees only what their role permits, refused by the API and not merely hidden by the UI; every record type round-trips through Postgres; document bytes round-trip through Blob Storage; deleting a matter purges its blobs; the browser uploader moves the owner's data and names anything it could not.
-4. **Stage 3:** a run survives a worker restart mid-run and completes; cancelling leaves no cell in `pending`; re-running a clause clears its verification and its net position in one transaction; `carryHumanState` is deleted and nothing regressed.
-5. **Stage 4:** two people in one review see each other's presence and each other's writes without reloading; a verify race produces one verification and tells the loser who won; a disconnected client shows itself as stale and resynchronises visibly; an assignment reaches the assignee.
+3. **Stage 2:** a user signs in with Entra and sees only what their role permits, refused by the API and not merely hidden by the UI; every record type round-trips through Postgres; document bytes round-trip through Blob Storage; deleting a matter purges its blobs; the browser uploader moves the owner's data and names anything it could not. **And: a precedent document is stored, is not offerable as a review target or a collection member, and no screen in the app says it is not stored** — searched for, not assumed, across `src/`, the README and the test suite.
+4. **Stage 3:** a run survives a worker restart mid-run and completes; cancelling leaves no cell in `pending`; re-running a clause clears its disposition and its net position in one transaction **and records the clearing in `finding_disposition_event`, attributed to whoever asked for the re-run**; the run worker's role provably cannot write either disposition table; `carryHumanState` is deleted and nothing regressed.
+5. **Stage 4:** two people in one review see each other's presence and each other's writes without reloading; **a Partner overrides a trainee's verification and the trainee's open card immediately reads the Partner's name and time, without a reload**; a change submitted against a stale version is refused, shown what replaced it, and offered again; every disposition on screen carries its actor and time, and a changed one says so; an export carries its "as at" instant; a disconnected client shows itself as stale, disables its disposition controls and resynchronises visibly; an assignment reaches the assignee.
 6. **Stage 5:** every affordance R-G1 dropped is back only where its mechanism is real.
 7. `api` provably cannot reach a model endpoint directly, asserted by a test (Spike 2).
 8. §12 is answerable end to end by someone who did not write it, and the README's untrue sentences (§2) are all replaced.
@@ -646,13 +812,19 @@ Per stage, since this ships in five.
 
 **The audit log is only evidence if nothing can rewrite it.** S11 makes that a grant rather than a habit, but a future migration run as a superuser could still alter it. The mutation test for the insert-only grant is the guard, and it must run in CI against the real database rather than being asserted once at deploy.
 
-**The realtime stale state is the defect this design is most likely to ship.** Everything else fails loudly by construction; a client showing yesterday's findings because its socket dropped looks completely normal. It is the reason §3 adds a fourth load state and §14 gives it a suite of its own, and it is still the thing to check first in browser verification.
+**The realtime stale state is the defect this design is most likely to ship *in the app*.** Everything else fails loudly by construction; a client showing yesterday's findings because its socket dropped looks completely normal. It is the reason §3 adds a fourth load state and §14 gives it a suite of its own, and it is still the thing to check first in browser verification. (The 2026-08-28 revision adds one that is worse in consequence though not in likelihood — the export, below — because a stale card has a reader who can refresh it and an exported DOCX does not.)
 
 **Server-side page rendering is unproven** (Spike 1). The whole scanned-document path depends on it, and the scanned-document path is this project's founding defect. The OCR fallback is real but is a Risk-story change, not a drop-in.
 
 **A client/server split doubles the surface for sibling drift**, which is this project's most repeated failure by a wide margin — six findings from two implementations of one idea. `packages/core` plus the import-boundary test is the structural defence, and it has to be enforced from Stage 0 rather than retrofitted, because the first duplicated helper will be written the week the split lands.
 
 **Retiring browser-local mode removes the app's fallback.** Today a network failure means one broken feature; afterwards it means an unusable app. That is the correct trade for a firm tool with one persistence story, but it raises the cost of every availability decision in §5, and it is worth saying out loud to the owner rather than discovering during the first Azure incident.
+
+**A mutable disposition makes the export a snapshot of something that moves, and the export is the artefact that leaves the building.** A card is read next to its history; a DOCX is read on a train, six weeks later, by a partner who was not in the review. Under the superseded insert-once model an export was a claim about a row that could not change, so "Verified by Priya" aged well. It no longer does, and the failure is completely silent: the document looks exactly the same whether or not the disposition it reports still holds. §6.3.1's three requirements — the "as at" instant, the changed-from facts, the sentence saying a disposition can change — are the whole of the defence, and every one of them is the kind of thing that gets trimmed for looking like boilerplate. **This is the worst-consequence defect the revision introduces**: less likely to be shipped than the realtime stale state above, but unrecoverable when it is, because the reader of a printed report has no refresh button and no reason to suspect there is anything to refresh.
+
+**The disposition history is a cache away from being wrong.** `finding_disposition` is derived from `finding_disposition_event` and stored anyway, for render cost. This project has been bitten by a derived value that could disagree with its source more than once; the difference here is that the disagreement would be between what a card says a person judged and what actually happened. The one-transaction rule and §14's reconciliation test are the guard, and the reconciliation must run over real data in CI rather than being asserted once by construction.
+
+**Storing precedent documents puts another client's papers in the matter database for the first time.** Not a legal problem in itself — a firm holds its own executed documents — but it is a new *category* of content in a store whose access model, retention schedule and deletion cascade were all designed around matter files. S23's separation is the structural answer and §17 Q3 is the policy one; the thing to watch in implementation is a query that forgets the `kind` predicate, because such a query fails by showing too much rather than too little, and nothing on screen would look wrong.
 
 ---
 
@@ -677,5 +849,7 @@ In this project's own units — a "sub-project" being roughly what A through G e
 | Infrastructure and deployment, spread across all | ~1 |
 
 **Total: roughly 8–11 sub-project equivalents**, against the redesign's seven — with the caveat that Stages 2 and 3 are each larger and less forgiving than any single redesign sub-project was, because a mistake in them is a data migration rather than a component rewrite.
+
+**The 2026-08-28 revision does not move these numbers much, and it is worth saying why rather than leaving it inferred.** Stage 2 gains precedent storage, which is a `kind` column, two small tables and a copy change on a flow whose ingest path already exists — inside the noise of a 2.5–3 estimate. Stage 4 gains the disposition history, which *replaces* the insert-once verification and the challenge table rather than adding to them: one mutable row plus one append-only log is not more work than one immutable row plus one append-only log with withdrawal semantics. What genuinely grows is the **UI and export surface** — attribution on every disposition, "was X", a history panel, the stale-change refusal dialogue, and the export's point-in-time framing — which is real work at the top of Stage 4's ~1.5–2 rather than a new stage. If anything in the revision is under-estimated it is that, and it is the half that must not be trimmed (§19).
 
 The mitigating fact is real and worth stating: **111 of 133 test files and almost all of `src/lib` move to `packages/core` unchanged.** The domain logic this app is actually made of — citation matching, scan detection, position strength, net positions, the extractors — does not change at all. What changes is everything around it.
