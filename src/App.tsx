@@ -54,6 +54,7 @@ import { useUnsavedDraftGuard } from './features/authoring/useUnsavedDraftGuard'
 import type { AuthoringDraft } from './lib/authoringDraft';
 import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, RunInterruptedBanner } from './features/review/RunPanel';
 import { ResultsView } from './features/review/ResultsView';
+import { ExportGateBanner } from './features/review/ExportGateBanner';
 import { emptyRun, runReview, retryCell, type CollectionRunInput } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
 import { parseFiles, parseFile, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
@@ -3488,6 +3489,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
                  nothing here needing to be told about it. */}
               {isInterrupted && <RunInterruptedBanner run={run} />}
               {!isRunning && run.completedAt && <RunEmptyFindingsBanner run={run} />}
+              {/* Stated where the export decision is made. Renders nothing
+                  when everything has been checked, and gates nothing ever:
+                  export is never blocked (B §7, §10.3). */}
+              <ExportGateBanner findings={run.findings} />
               <div className="flex-1 min-h-0">
                 {view === 'results' ? (
                   <ResultsView
