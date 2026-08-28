@@ -325,6 +325,17 @@ export type ChangeKind = 'confirm' | 'drift' | 'new_clause';
 export interface ChangesetItem {
   id: string;
   kind: ChangeKind;
+  /** The clause title this item is about — the matched clause's own title
+   *  for `confirm`/`drift`, or the model's proposed title for `new_clause`.
+   *  Set by `buildChangeset.ts`'s `resolveItem`. Optional only because a
+   *  changeset saved before this field existed has none: `changesets.ts`'s
+   *  `newClauseTitle` and `ChangesetReview.tsx`'s `itemTitle` both fall back
+   *  to `basis[0]?.clauseRef` for such a record. Every item built going
+   *  forward carries it, making explicit what was previously an implicit
+   *  contract between those two files and `buildChangeset.ts` (an item is
+   *  never kept with an empty `basis`, so the fallback was always safe, but
+   *  nothing said so at the type level). */
+  title?: string;
   /** Absent for `new_clause` — there is no existing clause to point at, and
    *  a stray `clauseId: undefined` would persist (via `structuredClone`) as
    *  a claim that this item refers to some clause. */

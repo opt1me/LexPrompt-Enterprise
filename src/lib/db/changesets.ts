@@ -9,6 +9,38 @@ const STORAGE_FULL_MESSAGE =
   'Could not save — your browser storage is full. Try deleting an old playbook, or exporting and removing some data.';
 
 /**
+ * Thrown by `publishChangeset` when the playbook has moved on since this
+ * changeset was built — `Playbook.currentVersionId` no longer matches
+ * `Changeset.fromVersionId`. Someone published a newer version in the
+ * meantime (from the playbook editor, or another changeset), and that
+ * version's clauses are not in this changeset's `basis` at all: it was
+ * built by reading a version that is no longer the live one.
+ *
+ * Publishing anyway would build the next version from `fromVersionId`'s
+ * OLD clause list (see `publishChangeset`'s docstring) and silently
+ * REVERT whatever the newer version added — a lost update dressed as a
+ * normal publish, presented with the same confidence as a version anyone
+ * actually approved. CLAUDE.md's rule outranks convenience here: refusing
+ * is the loud, recoverable failure; reverting a colleague's published
+ * work with no trace is the quiet, catastrophic one.
+ *
+ * A distinguishable type (not a generic `Error`) so `ChangesetReview` — or
+ * any future caller — can choose to react to it specifically rather than
+ * just display its text; today it is displayed exactly like the generic
+ * storage-full message, through the same `publishError` string prop.
+ */
+export class ChangesetStaleBaseError extends Error {
+  constructor() {
+    super(
+      'This playbook has moved on since this changeset was built — a newer version has already been published. ' +
+        'The decisions recorded on this changeset are safe and have not been lost, but it needs to be rebuilt ' +
+        'against the current version before it can be published.',
+    );
+    this.name = 'ChangesetStaleBaseError';
+  }
+}
+
+/**
  * Persists a changeset — a create or an update, since `Changeset.id` is
  * minted once by `buildChangeset` and never reused, so `put` is always an
  * upsert of the SAME record rather than a risk of colliding with another
@@ -131,18 +163,16 @@ function provenanceFor(changeset: Changeset, item: ChangesetItem): string {
 /**
  * The title for a brand-new clause a `new_clause` item proposes.
  *
- * `ChangesetItem` itself carries no title field. `buildChangeset.ts`'s
- * `resolveItem` (Task 8) puts the proposed title ONLY on each `basis`
- * entry's `clauseRef` (`matched?.title ?? clauseTitle` — so for a
- * `new_clause` item, every `clauseRef` in `basis` is the model's proposed
- * title for the new topic). `resolveItem` never returns an item with an
- * empty `basis` — an item resting on zero resolvable edits is dropped
- * entirely rather than kept with no evidence — so this is always available.
- * Reading it here rather than inventing a second field for the same fact is
- * the sibling-drift rule CLAUDE.md names directly.
+ * Reads `item.title` — `buildChangeset.ts`'s `resolveItem` sets it directly
+ * now (`matched?.title ?? clauseTitle`). Falls back to `basis[0]?.clauseRef`
+ * only for a changeset saved before that field existed: `resolveItem` never
+ * returns an item with an empty `basis` — an item resting on zero resolvable
+ * edits is dropped entirely rather than kept with no evidence — so the
+ * fallback is always available for such a record. `ChangesetReview.tsx`'s
+ * `itemTitle` makes the identical read, for the identical reason.
  */
 function newClauseTitle(item: ChangesetItem): string {
-  const title = item.basis[0]?.clauseRef?.trim();
+  const title = item.title?.trim() || item.basis[0]?.clauseRef?.trim();
   if (!title) throw new Error('This new-clause proposal has no title recorded to publish it under.');
   return title;
 }
@@ -249,6 +279,21 @@ function changeSummaryFor(changeset: Changeset, applied: ChangesetItem[]): strin
  * (via `recordDecision`, before this call) is left exactly as it was (spec
  * §8 — "the review work is the expensive part and must not be lost to a
  * write failure").
+ *
+ * REFUSES if the playbook's `currentVersionId` no longer matches
+ * `changeset.fromVersionId` — throwing `ChangesetStaleBaseError` before
+ * touching `playbookVersions` or `changesets` at all, for the same
+ * "decisions are never lost to a write failure" reason above. This is not
+ * a write failure; it is a diagnosed conflict caught before any write is
+ * attempted, but the guarantee it must uphold is identical. Without this
+ * check, the draft built below would start from `fromVersionId`'s clause
+ * list even though a newer version is live — silently REVERTING whichever
+ * clauses that newer version added or changed, with nothing on screen to
+ * say so (ruling, `docs/superpowers/redesign/rulings.md`). Reconciling the
+ * two instead of refusing is deliberately NOT attempted: merging a
+ * changeset's proposals against clauses it never saw would produce a
+ * version no human actually reviewed, which is worse than making someone
+ * rebuild it.
  */
 export async function publishChangeset(changeset: Changeset, byUserId: string): Promise<PlaybookVersion> {
   if (changeset.items.some((item) => !isDecided(item))) {
@@ -260,6 +305,7 @@ export async function publishChangeset(changeset: Changeset, byUserId: string): 
 
   const playbook = await getPlaybook(changeset.playbookId);
   if (!playbook) throw new Error('The playbook this changeset belongs to no longer exists.');
+  if (playbook.currentVersionId !== changeset.fromVersionId) throw new ChangesetStaleBaseError();
   const base = await getVersion(changeset.fromVersionId);
   if (!base) throw new Error('The version this changeset was built against no longer exists.');
 

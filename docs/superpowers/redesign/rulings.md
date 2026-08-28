@@ -580,3 +580,50 @@ loading state with no error and no retry, indistinguishable from "still working"
   through `App.tsx` sees its generic "could not be loaded" message rather than the specific,
   reassuring one — mechanically correct (a loud, recoverable error, not a silent hang) but
   not yet the exact wording this ruling specifies. One-line addition when picked up.
+
+---
+
+# `publishChangeset`'s stale-base lost update (2026-08-28)
+
+Flagged by the implementer who built `publishChangeset` (sub-project F) and correctly left
+for a ruling rather than deciding alone: the function built the new version's clause list
+from `changeset.fromVersionId` — the version the changeset was built against — never
+re-checking whether the playbook had since moved on. If anyone published a newer version in
+the meantime (from the playbook editor, or from another changeset), that version's clauses
+were absent from the draft this function was about to publish, and it published anyway,
+presenting the result as authoritative. Nobody was told. No test covered it. This is a lost
+update wearing the clothes of a normal publish — CLAUDE.md's founding rule in a new shape:
+something incomplete presented as though it were complete.
+
+- **R-F6. `publishChangeset` REFUSES rather than merges when the playbook has moved on.**
+  At publish time it re-reads the playbook and compares `Playbook.currentVersionId` against
+  `Changeset.fromVersionId`. On a mismatch it throws `ChangesetStaleBaseError` — a
+  distinguishable type, not a generic `Error` — before touching `playbookVersions` or
+  `changesets` at all, so nothing is written on this path and the changeset's own recorded
+  decisions are left exactly as they were, mirroring the existing "a failed publish preserves
+  every decision" guarantee. The message says the playbook has moved on, that the decisions
+  recorded on the changeset are safe, and that it needs to be rebuilt against the current
+  version. Reconciling the two — merging the changeset's proposals against clauses it never
+  saw — was deliberately NOT attempted: that would produce a version no human ever reviewed,
+  which is a worse failure than making someone rebuild it. Mutation-tested in
+  `changesets.test.ts`: with the `currentVersionId` comparison removed, publishing proceeds,
+  builds v3 from the stale `fromVersionId`'s clause list, and the test fails by showing the
+  independently-published "Force Majeure" clause missing from the playbook's new current
+  version — the assertion is about the published version's contents, not merely that an error
+  was thrown, so it demonstrates what the guard actually prevents. *Cost if this ruling is
+  wrong: someone with a legitimately stale changeset has to rebuild it — visible, recoverable,
+  and their decisions are still there. Cost of the behaviour it replaces: another person's
+  published house position vanishes from the playbook with no trace and no error.*
+- **R-F7. `ChangesetItem.title` is now an explicit, optional field, populated by
+  `buildChangeset.ts`'s `resolveItem`.** Previously `ChangesetItem` carried no title at all;
+  both `changesets.ts`'s `newClauseTitle` and `ChangesetReview.tsx`'s `itemTitle` derived one
+  from `item.basis[0]?.clauseRef`, relying on `resolveItem` never producing an empty `basis`
+  — an implicit contract between three files, the shape this project keeps paying for. Made
+  explicit without disturbing Task 8's committed surface: the field is optional so a changeset
+  persisted before this change (with no `title`) still reads correctly, since both derivation
+  sites fall back to the old `basis[0]?.clauseRef` read when `title` is absent. No schema
+  version bump — additive optional field on a store already documented as "additive only"
+  (`SCHEMA_VERSION` 6→7's own note), with no migration needed because absence is handled at
+  read time exactly as `rewordedText`'s absence already is. *Cost if wrong: one optional field
+  nothing yet requires, and a fallback branch in two readers that stays live indefinitely for
+  pre-existing changesets.*

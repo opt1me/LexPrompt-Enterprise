@@ -19,13 +19,13 @@ import type { ChangeKind, Changeset, ChangesetItem, PlaybookVersion } from '../.
  * been decided yet, since the honest reading of "not live" doesn't change
  * once a few items are.
  *
- * `itemTitle` reads a clause's name from `item.basis[0]?.clauseRef` rather
- * than a `title` field on `ChangesetItem` — there isn't one.
- * `buildChangeset.ts`'s `resolveItem` (Task 8) puts the proposed title only
- * on each basis entry's `clauseRef` (`matched?.title ?? clauseTitle`), and
- * an item is never kept with an empty basis, so this is always available.
- * See `src/lib/db/changesets.ts`'s `newClauseTitle` for the same read, used
- * for the same reason on the publish side.
+ * `itemTitle` reads `item.title` — set directly by `buildChangeset.ts`'s
+ * `resolveItem` (`matched?.title ?? clauseTitle`) — falling back to
+ * `item.basis[0]?.clauseRef` only for a changeset saved before that field
+ * existed; an item is never kept with an empty basis, so the fallback is
+ * always available for such a record. See `src/lib/db/changesets.ts`'s
+ * `newClauseTitle` for the same read, used for the same reason on the
+ * publish side.
  */
 
 export interface ChangesetReviewProps {
@@ -45,7 +45,7 @@ export interface ChangesetReviewProps {
 }
 
 function itemTitle(item: ChangesetItem): string {
-  return item.basis[0]?.clauseRef?.trim() || 'Untitled clause';
+  return item.title?.trim() || item.basis[0]?.clauseRef?.trim() || 'Untitled clause';
 }
 
 const KIND_BADGE_LABEL: Record<ChangeKind, string> = {

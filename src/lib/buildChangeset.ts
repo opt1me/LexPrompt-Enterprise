@@ -194,6 +194,11 @@ function resolveItem(raw: RawItem, version: PlaybookVersion, byId: Map<string, E
   const item: ChangesetItem = {
     id: uid(),
     kind,
+    // The clause title this item is about, made explicit rather than left
+    // for readers to dig out of `basis[0]?.clauseRef` (see `ChangesetItem`'s
+    // `title` doc comment). Always non-empty here: `clauseTitle` was already
+    // validated above, and `matched.title` comes from a real playbook clause.
+    title: matched?.title ?? clauseTitle,
     proposedText,
     rationale,
     basis,

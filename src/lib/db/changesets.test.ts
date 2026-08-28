@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { saveChangeset, getChangeset, listChangesets, recordDecision, publishChangeset } from './changesets';
-import { newPlaybook, publishAndPoint } from './playbooks';
+import { saveChangeset, getChangeset, listChangesets, recordDecision, publishChangeset, ChangesetStaleBaseError } from './changesets';
+import { newPlaybook, publishAndPoint, getPlaybook } from './playbooks';
 import { listVersions } from './playbookVersions';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
@@ -254,6 +254,58 @@ describe('publishChangeset', () => {
 
     await expect(publishChangeset(cs, 'u1')).rejects.toThrow(/undecided|open/i);
     expect(await listVersions(playbook.id)).toHaveLength(1);
+  });
+
+  it('refuses to publish when the playbook has moved on since the changeset was built, and reverts nothing', async () => {
+    const { playbook, version: v1 } = await seedPlaybook([]);
+    const cs = changeset({
+      playbookId: playbook.id,
+      fromVersionId: v1.id,
+      items: [newClauseItem('Accepted clause', 'accepted')],
+    });
+    await saveChangeset(cs);
+
+    // Someone else publishes v2 in the meantime — independently of this
+    // changeset, which was built against v1 and knows nothing about it.
+    const identity = (await getPlaybook(playbook.id))!;
+    const draftV2: PlaybookDraft = {
+      name: v1.name,
+      contractType: v1.contractType,
+      systemPrompt: v1.systemPrompt,
+      formatPrompt: v1.formatPrompt,
+      clauses: [{ id: 'c-fm', title: 'Force Majeure', extractPrompt: 'x' }],
+      changeSummary: 'Added Force Majeure independently of this changeset.',
+    };
+    const { version: v2 } = await publishAndPoint(identity, draftV2, 'someone-else');
+
+    await expect(publishChangeset(cs, 'u1')).rejects.toThrow(ChangesetStaleBaseError);
+
+    // (a) the error is the specific, distinguishable one, not a generic
+    // failure — asserted via the class above and its message here.
+    await expect(publishChangeset(cs, 'u1')).rejects.toThrow(/moved on|rebuilt/i);
+
+    // (b) no new version was created.
+    const versions = await listVersions(playbook.id);
+    expect(versions).toHaveLength(2);
+
+    // The mutation-tested assertion: this is about the CONTENTS of the
+    // playbook's actual current version, not merely that publishing threw.
+    // If the `currentVersionId` comparison guard were removed, this call
+    // would have built a v3 from v1's clause list (the changeset's own
+    // `fromVersionId`), pointed the playbook at it, and silently dropped
+    // "Force Majeure" — the exact clause v2 added and this changeset never
+    // saw. With the guard in place, v2 is still the playbook's live
+    // version and still carries it.
+    const current = (await getPlaybook(playbook.id))!;
+    expect(current.currentVersionId).toBe(v2.id);
+    const currentVersion = versions.find((v) => v.id === current.currentVersionId)!;
+    expect(currentVersion.clauses.map((c) => c.title)).toContain('Force Majeure');
+
+    // (c) the changeset's own decisions are unchanged — the review work is
+    // still there, exactly as recorded, and it was never marked published.
+    const reloaded = await getChangeset(cs.id);
+    expect(reloaded!.items.map((i) => i.decision)).toEqual(['accepted']);
+    expect('publishedVersionId' in reloaded!).toBe(false);
   });
 
   it('a failed publish preserves every decision already recorded on the changeset', async () => {
