@@ -4,7 +4,7 @@ import type { DocumentFile, Finding, Review, ReviewRun, RiskLevel } from '../../
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
-import { verificationCounts, isVerifiable } from '../../lib/findingOutcome';
+import { verificationCounts, isVerifiable, positionOutcomeCounts } from '../../lib/findingOutcome';
 import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';
 import { Button } from '../../components/Button';
@@ -49,49 +49,6 @@ const RISK_CELL: Record<RiskLevel, string> = {
   Low: 'bg-risk-low-tint',
   Info: 'bg-draft-tint',
 };
-
-/**
- * Task 12: how many FINDINGS across this run deviate from a standard
- * position, and whether any clause carries one at all. Derived the same
- * flat walk `verificationCounts` uses — every document's every clause's
- * finding — because "absent is not zero": a run where nothing was ever
- * compared to a house position must show no count at all, not a
- * "0 deviating" chip implying a comparison that never happened.
- *
- * m7 (final honesty review): this counts finding-INSTANCES, not distinct
- * clauses — a single clause deviating in all three documents of a 3-doc run
- * contributes 3, not 1. The label this feeds says so explicitly ("deviating
- * findings"), because it sits beside a "N docs · M clauses" summary and a
- * bare "N deviating" reads as a tally of clauses, which it is not and can
- * exceed.
- *
- * `unclear` is deliberately excluded from the tally. It means the model
- * could not tell, not that it found a conflict — counting it here would
- * report a deviation nobody actually found, the same distinction
- * `positionOutcomeLabel` (`findingOutcome.ts`) draws for the exports.
- *
- * Gated on `isVerifiable`, the same guard `findingOutcome.ts`'s
- * `positionOutcomeLabel` applies via `hasStandingPosition`. Stale as of the
- * final honesty review: `failRetryCell` (`App.tsx`) does NOT carry a
- * previous attempt's `positionOutcome` forward — it builds from `busy`,
- * which already has none, and only carries `netPosition`. The gate stays
- * right regardless: `extractClause`'s `noContent` branch attaches a
- * `positionOutcome` to an `error` finding directly, and without this guard
- * the exporters and this index could disagree about whether that still
- * counts — exactly the sibling-drift shape this project keeps paying for.
- */
-function positionOutcomeCounts(findings: Review['findings']): { deviating: number; hasPosition: boolean } {
-  let deviating = 0;
-  let hasPosition = false;
-  for (const byClause of Object.values(findings ?? {})) {
-    for (const finding of Object.values(byClause ?? {})) {
-      if (!isVerifiable(finding) || finding.positionOutcome === undefined) continue;
-      hasPosition = true;
-      if (finding.positionOutcome === 'deviates') deviating++;
-    }
-  }
-  return { deviating, hasPosition };
-}
 
 /**
  * Rows are documents, columns are `run.templateSnapshot.clauses`. This is a

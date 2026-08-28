@@ -33,7 +33,29 @@ describe('summariseMatter', () => {
         c3: finding({ positionOutcome: 'meets' }),
       } },
     })]);
-    expect(s.needsAttention).toEqual({ flagged: 1, deviating: 1 });
+    expect(s.needsAttention).toEqual({ flagged: 1, deviating: 1, hasPosition: true });
+  });
+
+  it('reports no standard position (not a zero deviating count) when no finding anywhere carries one', () => {
+    // The defect found by driving the app: a matter where nothing was ever
+    // compared to a house position rendered "0 Deviating from a standard
+    // position" — a zero that reads as "compared, none deviated" when
+    // nothing was compared at all. `hasPosition` is the only way a caller
+    // can tell "no comparison happened" apart from "compared, zero deviated".
+    const s = summariseMatter([review({
+      findings: { d1: { c1: finding(), c2: finding({ verification: { state: 'flagged' } }) } },
+    })]);
+    expect(s.needsAttention).toEqual({ flagged: 1, deviating: 0, hasPosition: false });
+  });
+
+  it('does not count a positionOutcome carried onto a non-done finding', () => {
+    // Mirrors TabularReview's own guard (`isVerifiable`/`hasStandingPosition`):
+    // a comparison attached to a finding with no settled output must not be
+    // counted, and must not flip `hasPosition` to true either.
+    const s = summariseMatter([review({
+      findings: { d1: { c1: finding({ status: 'error', error: 'boom', positionOutcome: 'deviates' }) } },
+    })]);
+    expect(s.needsAttention).toEqual({ flagged: 0, deviating: 0, hasPosition: false });
   });
 
   it('counts risk levels, ignoring findings the model never rated', () => {

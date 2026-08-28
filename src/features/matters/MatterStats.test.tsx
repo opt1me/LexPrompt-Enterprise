@@ -61,4 +61,18 @@ describe('MatterStats', () => {
     // nothing assigns to anyone (R-G1).
     expect(c.textContent).not.toMatch(/unassigned|no owner|assigned to/i);
   });
+
+  it('renders no deviating line at all when no clause anywhere carried a standard position', () => {
+    // The defect found by driving the app: a matter with no standard
+    // positions rendered "0 Deviating from a standard position", which reads
+    // as "compared against the house position, none deviated" when nothing
+    // was ever compared. The honest render is no line, not a zero.
+    const c = mount(<MatterStats
+      reviews={[review({ findings: { d1: { c1: finding(), c2: finding({ verification: { state: 'flagged' } }) } } })]}
+      reviewsError={null}
+      onRetryReviews={() => {}}
+    />);
+    expect(c.textContent).toContain('Flagged for follow-up');
+    expect(c.textContent).not.toMatch(/deviat/i);
+  });
 });

@@ -3,7 +3,7 @@ import {
   describeFindingOutcome, verificationLabel, verificationCounts, exportSummaryLine, noteLines, isVerifiable,
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
-  positionOutcomeLabel,
+  positionOutcomeLabel, positionOutcomeCounts,
 } from './findingOutcome';
 import { unconfirmedPosition, confirmPosition, amendPosition } from './netPosition';
 import type { Finding, TrailStep, Verification } from '../types';
@@ -71,10 +71,11 @@ describe('describeFindingOutcome', () => {
   });
 });
 
-function finding(state: Verification['state'], reason?: string): Finding {
+function finding(state: Verification['state'], reason?: string, positionOutcome?: Finding['positionOutcome']): Finding {
   return {
     clauseId: 'c', status: 'done', summary: 's', citations: [], notes: [],
     verification: reason ? { state, reason } : { state },
+    ...(positionOutcome ? { positionOutcome } : {}),
   } as Finding;
 }
 
@@ -168,6 +169,42 @@ describe('verificationCounts and exportSummaryLine', () => {
 
   it('handles an empty review without dividing by zero or saying nothing', () => {
     expect(exportSummaryLine({})).toBe('0 findings: 0 verified, 0 unverified, 0 flagged, 0 rejected.');
+  });
+});
+
+// Moved here from `TabularReview.tsx`, which had the only copy, when
+// `matterStats.ts`'s `summariseMatter` grew a second one with neither the
+// `isVerifiable` gate nor the `hasPosition` distinction — the matter status
+// board then rendered "0 Deviating from a standard position" on a matter
+// where no clause anywhere carried a standard position.
+describe('positionOutcomeCounts', () => {
+  it('counts deviating findings and reports that a position existed', () => {
+    const findings = {
+      'doc-1': {
+        c1: finding('unchecked', undefined, 'deviates'),
+        c2: finding('unchecked', undefined, 'meets'),
+      },
+    };
+    expect(positionOutcomeCounts(findings)).toEqual({ deviating: 1, hasPosition: true });
+  });
+
+  it('reports no position at all when no finding carries a positionOutcome, not a zero', () => {
+    const findings = { 'doc-1': { c1: finding('unchecked') } };
+    expect(positionOutcomeCounts(findings)).toEqual({ deviating: 0, hasPosition: false });
+  });
+
+  it('does not count an unclear outcome as a deviation', () => {
+    const findings = { 'doc-1': { c1: finding('unchecked', undefined, 'unclear') } };
+    expect(positionOutcomeCounts(findings)).toEqual({ deviating: 0, hasPosition: true });
+  });
+
+  it('ignores a positionOutcome carried onto a finding with no standing output', () => {
+    const findings = {
+      'doc-1': {
+        c1: { ...finding('unchecked', undefined, 'deviates'), status: 'error' as const, error: 'boom' },
+      },
+    };
+    expect(positionOutcomeCounts(findings)).toEqual({ deviating: 0, hasPosition: false });
   });
 });
 

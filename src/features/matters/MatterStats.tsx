@@ -45,6 +45,13 @@ const CARD = 'bg-card border border-rule rounded-card p-5';
  *    verified" — that reads as "nothing outstanding", which is a claim
  *    about the matter's safety nobody made (the same defect class as the
  *    CSV writing unreviewed clauses as blank cells).
+ *  - The "Deviating from a standard position" line renders only when
+ *    `needsAttention.hasPosition` is true (`summariseMatter` via
+ *    `positionOutcomeCounts`). A matter where no clause anywhere carried a
+ *    standard position must show no deviating line at all, not "0
+ *    deviating" — that reads as "compared, none deviated," which nothing
+ *    compared. Found by driving the app: a matter with no standard
+ *    positions rendered exactly that zero.
  */
 export function MatterStats({ reviews, reviewsError, onRetryReviews }: MatterStatsProps) {
   if (reviewsError) {
@@ -96,10 +103,12 @@ export function MatterStats({ reviews, reviewsError, onRetryReviews }: MatterSta
           <span className={`font-mono text-clause ${RISK_INK.Medium}`}>{s.needsAttention.flagged}</span>
           <span className="font-ui text-ui-sm text-ink-2">Flagged for follow-up</span>
         </p>
-        <p className="mt-2 flex items-baseline gap-2">
-          <span className={`font-mono text-clause ${RISK_INK.High}`}>{s.needsAttention.deviating}</span>
-          <span className="font-ui text-ui-sm text-ink-2">Deviating from a standard position</span>
-        </p>
+        {s.needsAttention.hasPosition && (
+          <p className="mt-2 flex items-baseline gap-2">
+            <span className={`font-mono text-clause ${RISK_INK.High}`}>{s.needsAttention.deviating}</span>
+            <span className="font-ui text-ui-sm text-ink-2">Deviating from a standard position</span>
+          </p>
+        )}
       </section>
 
       <section className={CARD}>

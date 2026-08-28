@@ -438,6 +438,59 @@ export function positionRationaleLines(finding: Finding | undefined): string[] {
   return rationale ? [`Standard position rationale: ${rationale}`] : [];
 }
 
+export interface PositionOutcomeCounts {
+  deviating: number;
+  hasPosition: boolean;
+}
+
+/**
+ * How many FINDINGS across a set count as deviating from a standard
+ * position, and whether any clause carries one at all. Derived the same
+ * flat walk `verificationCounts` uses — every document's every clause's
+ * finding — because "absent is not zero": a run (or a matter) where nothing
+ * was ever compared to a house position must show no count at all, not a
+ * "0 deviating" chip implying a comparison that never happened.
+ *
+ * Originally lived only in `TabularReview.tsx`; `matterStats.ts`'s
+ * `summariseMatter` grew a second copy that counted `positionOutcome ===
+ * 'deviates'` directly, with neither the `isVerifiable` gate nor the
+ * `hasPosition` distinction — so a matter where no clause anywhere carried a
+ * standard position rendered "0 Deviating from a standard position" on the
+ * status board, the exact false-reassurance shape this project keeps
+ * shipping (a zero that reads as a comparison that never happened). Moved
+ * here, next to `positionOutcomeLabel` and `verificationCounts`, so the grid
+ * and the matter board can't drift apart on this again.
+ *
+ * m7 (final honesty review): this counts finding-INSTANCES, not distinct
+ * clauses — a single clause deviating in all three documents of a 3-doc run
+ * contributes 3, not 1. Callers that show this beside a "N docs · M clauses"
+ * summary should say "deviating findings", not "deviating clauses", because
+ * this can exceed the clause count.
+ *
+ * `unclear` is deliberately excluded from the tally. It means the model
+ * could not tell, not that it found a conflict — counting it here would
+ * report a deviation nobody actually found, the same distinction
+ * `positionOutcomeLabel` draws for the exports.
+ *
+ * Gated on `isVerifiable`, the same guard `positionOutcomeLabel` applies via
+ * `hasStandingPosition`. `extractClause`'s `noContent` branch attaches a
+ * `positionOutcome` to an `error` finding directly, and without this guard
+ * callers could disagree about whether that still counts — exactly the
+ * sibling-drift shape this project keeps paying for.
+ */
+export function positionOutcomeCounts(findings: Review['findings']): PositionOutcomeCounts {
+  let deviating = 0;
+  let hasPosition = false;
+  for (const byClause of Object.values(findings ?? {})) {
+    for (const finding of Object.values(byClause ?? {})) {
+      if (!isVerifiable(finding) || finding.positionOutcome === undefined) continue;
+      hasPosition = true;
+      if (finding.positionOutcome === 'deviates') deviating++;
+    }
+  }
+  return { deviating, hasPosition };
+}
+
 export function truncationLabel(finding: Finding | undefined): string | null {
   if (!isVerifiable(finding) || !finding.truncated) return null;
 
