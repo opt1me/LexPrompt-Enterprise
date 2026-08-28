@@ -41,23 +41,23 @@ export function MegaPromptModal({ isOpen, onClose, template }: MegaPromptModalPr
       }
     >
       <div className="flex items-center gap-3 -mt-2 mb-3">
-        <div className="flex rounded-md overflow-hidden border border-white/10">
+        <div className="flex rounded-control overflow-hidden border border-rule">
           <button
             onClick={() => setFormat('copilot')}
-            className={`px-3 py-1.5 text-xs font-medium flex items-center gap-1 ${format === 'copilot' ? 'bg-violet-600 text-white' : 'text-gray-400 bg-black/30'}`}
+            className={`px-3 py-1.5 font-ui text-ui-sm font-medium flex items-center gap-1 ${format === 'copilot' ? 'bg-accent text-page' : 'text-ink-4 bg-chip-fill'}`}
           >
             <MessageSquare className="h-3 w-3" /> CoPilot
           </button>
           <button
             onClick={() => setFormat('json')}
-            className={`px-3 py-1.5 text-xs font-medium flex items-center gap-1 ${format === 'json' ? 'bg-blue-600 text-white' : 'text-gray-400 bg-black/30'}`}
+            className={`px-3 py-1.5 font-ui text-ui-sm font-medium flex items-center gap-1 ${format === 'json' ? 'bg-draft text-page' : 'text-ink-4 bg-chip-fill'}`}
           >
             <Code className="h-3 w-3" /> JSON API
           </button>
         </div>
         <button
           onClick={() => setIncludeRisk(!includeRisk)}
-          className={`px-3 py-1.5 text-xs font-medium rounded-md flex items-center gap-1 border border-white/10 ${includeRisk ? 'bg-red-500/20 text-red-300' : 'text-gray-400 bg-black/30'}`}
+          className={`px-3 py-1.5 font-ui text-ui-sm font-medium rounded-control flex items-center gap-1 border border-rule ${includeRisk ? 'bg-risk-high-tint text-risk-high' : 'text-ink-4 bg-chip-fill'}`}
         >
           {includeRisk ? <ToggleRight className="h-3 w-3" /> : <ToggleLeft className="h-3 w-3" />} Risk
         </button>
@@ -65,7 +65,7 @@ export function MegaPromptModal({ isOpen, onClose, template }: MegaPromptModalPr
       <textarea
         value={promptText}
         readOnly
-        className="w-full h-[50vh] bg-black/50 border border-white/10 rounded-lg p-4 text-xs text-gray-300 font-mono resize-none focus:outline-none"
+        className="w-full h-[50vh] bg-page border border-rule rounded-card p-4 font-mono text-ui-sm text-ink-prose resize-none focus:outline-none"
       />
     </Modal>
   );

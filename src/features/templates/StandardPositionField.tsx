@@ -66,7 +66,7 @@ export function StandardPositionField({ position, onChange, disabled }: Standard
 
   return (
     <div>
-      <label className="text-[10px] text-violet-300 uppercase tracking-wider flex items-center gap-1 font-bold mb-1">
+      <label className="font-mono text-chip uppercase text-accent flex items-center gap-1 mb-1">
         <Scale className="h-3 w-3" aria-hidden="true" /> Standard position
       </label>
       <AutoResizeTextarea
@@ -74,7 +74,7 @@ export function StandardPositionField({ position, onChange, disabled }: Standard
         onChange={(e) => handleText(e.target.value)}
         disabled={disabled}
         aria-label="Standard position"
-        className="w-full bg-violet-500/5 border border-violet-500/20 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:border-violet-500/60 disabled:opacity-50"
+        className="w-full bg-accent-tint border border-accent-edge rounded-control p-2 text-field text-ink-prose outline-none min-h-[50px] focus:border-accent disabled:opacity-50"
         // A noun phrase, not a full sentence — `PositionComparison` (the
         // card) prepends its own "We ask for " label to whatever is typed
         // here. An earlier placeholder modelled a complete sentence
@@ -86,18 +86,18 @@ export function StandardPositionField({ position, onChange, disabled }: Standard
         placeholder="e.g. A 6-month break notice, no conditions."
       />
       {position === undefined ? (
-        <p className="mt-1 text-[11px] text-gray-500">
+        <p className="mt-1 font-ui text-meta text-ink-4">
           Optional — a position here enables deviation flagging: the review compares what the
           document says against it and reports meets, deviates or unclear. Leave it empty and the
           clause is extracted only.
         </p>
       ) : (
         <div className="mt-1 flex flex-wrap items-center gap-2">
-          <span className={`text-[11px] ${needsReview ? 'text-amber-300 font-medium' : 'text-gray-500'}`}>
+          <span className={`font-ui text-meta ${needsReview ? 'text-risk-med font-medium' : 'text-ink-4'}`}>
             {provenanceLine(position)}
           </span>
           {position.provenance && (
-            <span className="text-[11px] text-gray-600">— {position.provenance}</span>
+            <span className="font-ui text-meta text-ink-5">— {position.provenance}</span>
           )}
           {/* Without this, the only way to accept a suggestion would be to
              edit it — which would make "reviewed" unreachable for a
@@ -107,7 +107,7 @@ export function StandardPositionField({ position, onChange, disabled }: Standard
               type="button"
               onClick={() => onChange({ ...position, reviewedByHuman: true })}
               disabled={disabled}
-              className="text-[11px] flex items-center gap-1 px-2 py-0.5 rounded border border-violet-500/30 bg-violet-500/10 text-violet-200 hover:bg-violet-500/20 disabled:opacity-50"
+              className="font-ui text-ui-sm flex items-center gap-1 px-2 py-0.5 rounded-control border border-accent-edge bg-accent-tint text-accent hover:bg-chip-fill disabled:opacity-50"
             >
               <Check className="h-3 w-3" aria-hidden="true" /> Accept as our position
             </button>

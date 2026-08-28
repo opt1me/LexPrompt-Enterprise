@@ -62,44 +62,62 @@ export function VersionHistory({
       {error ? (
         <LoadErrorPanel message={error} onRetry={onRetry} compact />
       ) : loading ? (
-        <p className="text-sm text-gray-500">Loading versions…</p>
+        <p className="font-ui text-ui text-ink-4">Loading versions…</p>
       ) : versions.length === 0 ? (
-        <p className="text-sm text-gray-400">
+        <p className="font-ui text-ui text-ink-3">
           Nothing published yet. Publishing freezes the current draft as v1.
         </p>
       ) : (
+        // 4c timeline (§9.6): the current version is a FILLED node, every
+        // prior one an OUTLINE node, joined by a hairline connector — no
+        // "Current" label text, because the shapes already say which one is
+        // which and adding a word here would be new copy this cosmetic task
+        // has no licence for (R-G6). `versions[0]` is current because the
+        // caller hands them newest-first (see the prop doc comment).
         <ol className="space-y-3">
-          {versions.map(v => {
+          {versions.map((v, i) => {
             const matterNames = matterNamesByVersion?.[v.id] ?? [];
+            const isCurrent = i === 0;
             return (
-              <li key={v.id} className="border border-white/10 rounded-lg p-3 bg-black/30">
-                <div className="flex flex-wrap items-baseline gap-3">
-                  <span className="text-sm font-mono font-bold text-violet-300">v{v.version}</span>
-                  <span className="text-xs text-gray-500">
-                    {new Date(v.publishedAt).toLocaleString()}
-                  </span>
-                  <span className="text-xs text-gray-500">{v.clauses.length} clauses</span>
-                  {/* "Published by you", never the raw `publishedByUserId` —
-                     see the component doc comment / cd89c27. A version with
-                     no recorded author (pre-migration data) says nothing
-                     about who, rather than guessing. */}
-                  {v.publishedByUserId && (
-                    <span className="text-xs text-gray-500">Published by you</span>
-                  )}
+              <li key={v.id} className="relative pl-6">
+                {i < versions.length - 1 && (
+                  <span aria-hidden="true" className="absolute left-[5px] top-5 bottom-[-12px] w-px bg-rule" />
+                )}
+                <span
+                  aria-hidden="true"
+                  className={`absolute left-0 top-2 w-[11px] h-[11px] rounded-meter ${
+                    isCurrent ? 'bg-accent' : 'border border-ink-4 bg-card'
+                  }`}
+                />
+                <div className="border border-rule rounded-card p-3 bg-card">
+                  <div className="flex flex-wrap items-baseline gap-3">
+                    <span className="font-mono text-chip uppercase text-accent">v{v.version}</span>
+                    <span className="font-mono text-pin text-ink-4">
+                      {new Date(v.publishedAt).toLocaleString()}
+                    </span>
+                    <span className="font-mono text-pin text-ink-4">{v.clauses.length} clauses</span>
+                    {/* "Published by you", never the raw `publishedByUserId` —
+                       see the component doc comment / cd89c27. A version with
+                       no recorded author (pre-migration data) says nothing
+                       about who, rather than guessing. */}
+                    {v.publishedByUserId && (
+                      <span className="font-ui text-meta text-ink-4">Published by you</span>
+                    )}
+                  </div>
+                  {/* v1 legitimately has no summary — there was nothing for it to
+                     have changed from — and saying so reads as the fact it is,
+                     where a blank line reads as a rendering failure. */}
+                  <p className="mt-1 font-prose text-field text-ink-prose">
+                    {v.changeSummary || 'No change summary — this was the first version.'}
+                  </p>
+                  {/* A blank cell reads as a rendering failure; "not used by any
+                     review yet" reads as the fact it is. */}
+                  <p className="mt-2 font-ui text-meta text-ink-4">
+                    {matterNames.length > 0
+                      ? `Used by ${matterNames.join(', ')}`
+                      : 'Not used by any review yet.'}
+                  </p>
                 </div>
-                {/* v1 legitimately has no summary — there was nothing for it to
-                   have changed from — and saying so reads as the fact it is,
-                   where a blank line reads as a rendering failure. */}
-                <p className="mt-1 text-sm text-gray-300">
-                  {v.changeSummary || 'No change summary — this was the first version.'}
-                </p>
-                {/* A blank cell reads as a rendering failure; "not used by any
-                   review yet" reads as the fact it is. */}
-                <p className="mt-2 text-xs text-gray-500">
-                  {matterNames.length > 0
-                    ? `Used by ${matterNames.join(', ')}`
-                    : 'Not used by any review yet.'}
-                </p>
               </li>
             );
           })}

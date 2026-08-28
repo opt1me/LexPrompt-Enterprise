@@ -72,13 +72,13 @@ export function PublishDialog({ nextVersion, onPublish, onCancel, busy }: Publis
         </>
       }
     >
-      <p className="text-xs text-gray-400 leading-relaxed">
+      <p className="font-ui text-ui text-ink-3 leading-relaxed">
         Publishing freezes these clauses and prompts as v{nextVersion}. It cannot be edited
         afterwards — later edits become v{nextVersion + 1} — and every review from now on records
         that it ran against v{nextVersion}.
       </p>
       <div>
-        <label className="block text-xs text-gray-500 uppercase mb-1 font-semibold tracking-wider">
+        <label className="block font-mono text-chip uppercase text-ink-4 mb-1">
           Change summary {summaryRequired ? '(required)' : '(optional for v1)'}
         </label>
         <AutoResizeTextarea
@@ -91,11 +91,11 @@ export function PublishDialog({ nextVersion, onPublish, onCancel, busy }: Publis
           }}
           aria-label="Change summary"
           placeholder="e.g. Tightened the break-notice position and added a rent-review clause."
-          className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-white text-sm outline-none focus:border-violet-500 min-h-[80px]"
+          className="w-full bg-card border border-rule-strong rounded-control p-3 text-ink-prose font-prose text-field outline-none focus:border-accent min-h-[80px]"
         />
       </div>
       {refusal && (
-        <p role="alert" className="text-xs text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+        <p role="alert" className="font-ui text-ui text-risk-high bg-risk-high-tint border border-risk-high-edge rounded-card p-3">
           {refusal}
         </p>
       )}

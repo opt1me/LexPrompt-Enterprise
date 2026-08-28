@@ -1,5 +1,5 @@
 import React, { useRef, useState } from 'react';
-import { Play, Plus, Trash2, Upload, Loader } from 'lucide-react';
+import { Play, Plus, Trash2, Upload } from 'lucide-react';
 import type { Playbook } from '../../types';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
@@ -38,16 +38,16 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
   };
 
   return (
-    <div className="p-8 max-w-7xl mx-auto h-full overflow-y-auto">
+    <div className="p-8 max-w-7xl mx-auto h-full overflow-y-auto bg-paper">
       <div className="flex justify-between items-end mb-8">
         <div>
-          <h2 className="text-3xl font-bold text-white mb-2">Playbooks</h2>
-          <p className="text-gray-400">Manage your contract review templates.</p>
+          <h2 className="font-prose text-screen-title text-ink-1 mb-2">Playbooks</h2>
+          <p className="font-ui text-ui text-ink-3">Manage your contract review templates.</p>
         </div>
         <div className="flex gap-4">
           <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
-          <Button variant="ghost" onClick={handleImportClick} disabled={importing}>
-            {importing ? <Loader className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+          <Button variant="ghost" onClick={handleImportClick} disabled={importing} loading={importing}>
+            {!importing && <Upload className="w-4 h-4" />}
             Import
           </Button>
           <Button onClick={onCreate}><Plus className="w-4 h-4" /> Create Template</Button>
@@ -56,10 +56,10 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {templates.map(t => (
-          <div key={t.id} className="group relative bg-[#1a1a1a] border border-white/10 rounded-xl hover:border-violet-500/50 transition-colors shadow-lg flex flex-col">
+          <div key={t.id} className="group relative bg-card border border-rule rounded-card hover:border-accent-edge transition-colors flex flex-col">
             <div className="p-5 flex-1 flex flex-col cursor-pointer" onClick={() => onOpen(t)}>
-              <h3 className="font-bold text-white text-lg truncate pr-8 mb-2">{t.name}</h3>
-              <p className="text-xs text-gray-500 mb-4 line-clamp-2 min-h-[32px]">
+              <h3 className="font-prose text-clause font-medium text-ink-1 truncate pr-8 mb-2">{t.name}</h3>
+              <p className="font-ui text-meta text-ink-4 mb-4 line-clamp-2 min-h-[32px]">
                 {t.draft
                   ? 'Unpublished changes'
                   : t.currentVersionId
@@ -68,10 +68,10 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
               </p>
 
               <div className="mt-auto flex gap-2">
-                <button className="flex-1 py-2 bg-white/5 rounded text-xs text-gray-300 hover:bg-white/10 font-medium">Edit</button>
+                <button className="flex-1 py-2 bg-chip-fill rounded-control font-ui text-button font-medium text-ink-2 hover:bg-rule-soft">Edit</button>
                 <button
                   onClick={(e) => { e.stopPropagation(); onRun(t); }}
-                  className="flex-1 py-2 bg-violet-600/20 text-violet-300 rounded text-xs hover:bg-violet-600/30 font-bold flex items-center justify-center gap-2 z-10"
+                  className="flex-1 py-2 bg-accent-tint text-accent rounded-control font-ui text-button font-bold hover:bg-accent/20 flex items-center justify-center gap-2 z-10"
                 >
                   <Play className="w-3 h-3" /> Run
                 </button>
@@ -80,7 +80,7 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
 
             <button
               onClick={(e) => { e.stopPropagation(); setDeleteId(t.id); }}
-              className="absolute top-3 right-3 p-2 bg-[#222] border border-white/10 text-gray-400 hover:text-red-400 hover:bg-red-900/20 hover:border-red-500/50 rounded-lg transition-all shadow-md z-30"
+              className="absolute top-3 right-3 p-2 bg-card border border-rule text-ink-4 hover:text-risk-high hover:bg-risk-high-tint hover:border-risk-high-edge rounded-control transition-colors z-30"
               title="Delete Template"
             >
               <Trash2 className="w-4 h-4" />
@@ -88,7 +88,7 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
           </div>
         ))}
         {templates.length === 0 && (
-          <div className="col-span-full text-gray-500 border border-dashed border-white/10 p-8 rounded-xl text-center">
+          <div className="col-span-full font-ui text-ui text-ink-4 border border-dashed border-rule p-8 rounded-card text-center">
             No templates yet. Create one to get started.
           </div>
         )}
@@ -105,7 +105,7 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
           </>
         }
       >
-        <p className="text-sm text-gray-400 leading-relaxed">
+        <p className="font-ui text-ui text-ink-3 leading-relaxed">
           Are you sure you want to permanently delete this template? This action cannot be undone.
         </p>
       </Modal>

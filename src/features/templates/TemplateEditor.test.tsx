@@ -651,3 +651,22 @@ describe('TemplateEditor — a draft that has been through the store (Major 1)',
     }
   });
 });
+
+describe('TemplateEditor — position coverage line (sub-project G, R-G6)', () => {
+  it('counts the clauses that carry a standard position', () => {
+    const v = version({
+      clauses: [
+        { id: 'c1', title: 'Break', extractPrompt: 'Any break right?', standardPosition: { text: 'Six months.', origin: 'authored', reviewedByHuman: true } },
+        { id: 'c2', title: 'Rent', extractPrompt: 'What rent?' },
+      ],
+    });
+    const c = mount(<TemplateEditor version={v} draft={undefined} onDraftChange={() => {}} {...wiring} />);
+    expect(c.textContent).toContain('1 of 2 clauses have a standard position');
+  });
+
+  it('says none rather than hiding the line when no clause carries one', () => {
+    const v = version({ clauses: structuredClone(twoClauses) });
+    const c = mount(<TemplateEditor version={v} draft={undefined} onDraftChange={() => {}} {...wiring} />);
+    expect(c.textContent).toContain('0 of 2 clauses have a standard position');
+  });
+});

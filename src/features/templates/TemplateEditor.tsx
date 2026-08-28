@@ -7,6 +7,7 @@ import type {
   PlaybookClause, PlaybookDraft, PlaybookVersion, Settings, StandardPosition,
 } from '../../types';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
+import { Button } from '../../components/Button';
 import { draftFromVersion, newPlaybookDraft } from '../../lib/db/playbooks';
 import { positionHealthLabel, type PositionHealth } from '../../lib/positionHealth';
 import { StandardPositionField } from './StandardPositionField';
@@ -91,6 +92,26 @@ interface FieldSuggestionState {
 function suggestionKey(clauseId: string, field: SuggestableField): string {
   return `${clauseId}:${field}`;
 }
+
+/**
+ * `positionHealthLabel`'s four kinds, stay four, stay visually distinct
+ * (§8.3): `held` accent, `conceded` risk-med, `untested` ink-4, `no-position`
+ * ink-5 — deliberately NOT the same ink as `untested`, because "we have no
+ * house rule here" and "we have one nothing has tested" are different facts.
+ *
+ * A literal record, not a template-built class name: Tailwind's compiler
+ * only picks up class names it can find as complete strings in source, and
+ * `PositionHealth['kind']`'s `no-position` doesn't share a spelling with the
+ * `--color-health-none` token it maps to, so `text-health-${kind}` would
+ * both silently fail to compile AND read a class that doesn't exist for that
+ * one case.
+ */
+const HEALTH_INK: Record<PositionHealth['kind'], string> = {
+  held: 'text-health-held',
+  conceded: 'text-health-conceded',
+  untested: 'text-health-untested',
+  'no-position': 'text-health-none',
+};
 
 /** The one place a brand-new clause's defaults are built — `addClause` and
  *  `addMissingClause` both add a clause with nothing filled in but its
@@ -343,7 +364,7 @@ export function TemplateEditor({
         disabled={state?.busy}
         aria-label={`Draft the ${FIELD_LABEL[field]} for ${clause.title}`}
         title={`Draft the ${FIELD_LABEL[field]} with AI`}
-        className="text-[10px] flex items-center gap-1 text-violet-300 hover:text-violet-200 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+        className="font-ui text-meta flex items-center gap-1 text-draft hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
       >
         <Sparkles className="h-3 w-3" aria-hidden="true" /> {state?.busy ? 'Drafting…' : 'Draft this for me'}
       </button>
@@ -358,7 +379,7 @@ export function TemplateEditor({
     if (!state) return null;
     return (
       <div className="mt-1">
-        {state.error && <p className="text-[11px] text-red-400 mb-1">{state.error}</p>}
+        {state.error && <p className="font-ui text-meta text-risk-high mb-1">{state.error}</p>}
         {state.text !== undefined && (
           <FieldSuggestion
             text={state.text}
@@ -373,7 +394,7 @@ export function TemplateEditor({
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto h-[calc(100vh-64px)] flex flex-col bg-[#09090b]">
+    <div className="p-6 max-w-7xl mx-auto h-[calc(100vh-64px)] flex flex-col bg-paper">
       {/* Header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
         <div className="flex flex-wrap items-center gap-3 w-full md:w-auto">
@@ -381,10 +402,10 @@ export function TemplateEditor({
             value={working.name}
             onChange={(e) => updateDraft({ name: e.target.value })}
             aria-label="Playbook name"
-            className="text-2xl font-bold bg-transparent text-white border-b border-transparent hover:border-white/20 focus:border-violet-500 outline-none px-1 w-full md:w-auto"
+            className="font-prose text-screen-title font-medium bg-transparent text-ink-1 border-b border-transparent hover:border-rule focus:border-accent outline-none px-1 w-full md:w-auto"
           />
           {version && (
-            <span className="text-xs font-mono text-gray-500 border border-white/10 rounded px-2 py-1">
+            <span className="font-mono text-chip text-ink-4 border border-rule rounded-chip px-2 py-1">
               v{version.version}
             </span>
           )}
@@ -394,59 +415,59 @@ export function TemplateEditor({
              running the clauses they just wrote and running the previous
              ones without being told. */}
           {!version ? (
-            <span className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1">
+            <span className="font-ui text-ui-sm text-risk-med bg-risk-med-tint border border-risk-med-edge rounded-control px-2 py-1">
               Not published yet — publish before running a review
             </span>
           ) : hasUnpublishedChanges ? (
-            <span className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded px-2 py-1">
+            <span className="font-ui text-ui-sm text-risk-med bg-risk-med-tint border border-risk-med-edge rounded-control px-2 py-1">
               Unpublished changes — reviews still run v{version.version}
             </span>
           ) : null}
         </div>
 
         <div className="flex flex-wrap gap-2 md:gap-3 w-full md:w-auto justify-end items-center">
-          <button onClick={onShowMegaPrompt} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/20 text-blue-300 hover:bg-blue-500/30 transition-colors border border-blue-500/30 text-xs md:text-sm"><Copy className="h-4 w-4" /> DIY Mode</button>
+          <Button variant="ghost" onClick={onShowMegaPrompt}><Copy className="h-4 w-4" /> DIY Mode</Button>
           {/* Spec §8. Disabled rather than hidden when there is no published
              version: there is genuinely no history to show, and saying so
              is better than the control vanishing without explanation. */}
-          <button
+          <Button
+            variant="ghost"
             onClick={onShowVersionHistory}
             disabled={!version}
             title={version ? 'See what each published version said.' : 'Nothing published yet — there is no history.'}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <History className="h-4 w-4" /> Version history
-          </button>
-          <button onClick={onExport} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm"><Download className="h-4 w-4" /> Export</button>
+          </Button>
+          <Button variant="ghost" onClick={onExport}><Download className="h-4 w-4" /> Export</Button>
           {/* R-D16. Drafts are persisted on EXPLICIT INTENT — this control
              and the Keep branch of the leave prompt — never per keystroke:
              per-keystroke writes would contradict the in-memory discard
              semantics Task 3's fix round established. Until this existed,
              nothing in the app ever wrote a `Playbook.draft`, so the
              library's "Unpublished changes" badge could not appear. */}
-          <button
+          <Button
+            variant="ghost"
             onClick={onPersistDraft}
             disabled={!unsavedChanges || savingDraft}
+            loading={savingDraft}
             title={unsavedChanges ? 'Save these edits as a draft you can come back to.' : 'Nothing unsaved — this is what is stored.'}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 text-gray-300 hover:bg-white/10 transition-colors border border-white/10 text-xs md:text-sm disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            <Save className="h-4 w-4" /> {savingDraft ? 'Saving…' : 'Save draft'}
-          </button>
+            {!savingDraft && <Save className="h-4 w-4" />} {savingDraft ? 'Saving…' : 'Save draft'}
+          </Button>
           {/* Disabled unless the draft actually SAYS something the published
              version does not: republishing unchanged content produces two
              byte-identical versions minutes apart, which a version history
              cannot explain — a real library already carries one such pair.
              Gating on the draft merely existing left this enabled after an
              edit that was typed and undone (m2). */}
-          <button
+          <Button
             onClick={onPublish}
             disabled={!hasUnpublishedChanges}
             title={hasUnpublishedChanges ? undefined : 'Nothing to publish — this is the published version.'}
-            className="flex items-center gap-2 px-5 py-2 rounded-lg bg-green-500/20 text-green-400 hover:bg-green-500/30 transition-colors border border-green-500/30 text-xs md:text-sm font-bold disabled:opacity-40 disabled:cursor-not-allowed"
           >
             <UploadCloud className="h-4 w-4" /> Publish
-          </button>
-          <button onClick={onClose} className="text-gray-500 hover:text-white px-2">Close</button>
+          </Button>
+          <button onClick={onClose} className="font-ui text-ui-sm text-ink-4 hover:text-ink-1 px-2">Close</button>
         </div>
       </div>
 
@@ -454,35 +475,35 @@ export function TemplateEditor({
       <div className="flex-1 overflow-hidden grid grid-cols-1 lg:grid-cols-3 gap-6 pb-2">
         {/* Left Column: Global Settings */}
         <div className="space-y-6 overflow-y-auto pr-2 custom-scrollbar">
-          <div className="bg-[#111] border border-white/10 rounded-xl p-5 shadow-lg">
-            <label className="block text-sm font-medium text-gray-400 mb-2 flex items-center gap-2"><Cpu className="h-4 w-4" /> System Persona</label>
+          <div className="bg-card border border-rule rounded-card p-5">
+            <label className="block font-ui text-ui text-ink-3 mb-2 flex items-center gap-2"><Cpu className="h-4 w-4" /> System Persona</label>
             <AutoResizeTextarea
               value={working.systemPrompt}
               onChange={(e) => updateDraft({ systemPrompt: e.target.value })}
-              className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-sm text-gray-300 focus:border-violet-500 outline-none min-h-[120px]"
+              className="w-full bg-card border border-rule-strong rounded-control p-3 font-prose text-field text-ink-prose focus:border-accent outline-none min-h-[120px]"
             />
           </div>
-          <div className="bg-[#111] border border-white/10 rounded-xl p-5 shadow-lg">
-            <label className="block text-sm font-medium text-gray-400 mb-2 flex items-center gap-2"><FileOutput className="h-4 w-4" /> Format & Rules</label>
+          <div className="bg-card border border-rule rounded-card p-5">
+            <label className="block font-ui text-ui text-ink-3 mb-2 flex items-center gap-2"><FileOutput className="h-4 w-4" /> Format & Rules</label>
             <AutoResizeTextarea
               value={working.formatPrompt}
               onChange={(e) => updateDraft({ formatPrompt: e.target.value })}
-              className="w-full bg-black/50 border border-white/10 rounded-lg p-3 text-sm text-gray-300 focus:border-violet-500 outline-none min-h-[120px]"
+              className="w-full bg-card border border-rule-strong rounded-control p-3 font-prose text-field text-ink-prose focus:border-accent outline-none min-h-[120px]"
             />
           </div>
           {/* R-D1: always visible. The Standard/Risk toggle that used to hide
               this is gone, and what decides whether a review assesses risk is
               now whether this field (or a clause's own criteria) has anything
               in it — so a hidden field would be a hidden decision. */}
-          <div className="bg-red-900/10 border border-red-500/30 rounded-xl p-5">
-            <label className="block text-sm font-medium text-red-300 mb-2 flex items-center gap-2"><ShieldAlert className="h-4 w-4" /> Global Risk Tolerance</label>
+          <div className="bg-risk-high-tint border border-risk-high-edge rounded-card p-5">
+            <label className="block font-ui text-ui text-risk-high mb-2 flex items-center gap-2"><ShieldAlert className="h-4 w-4" /> Global Risk Tolerance</label>
             <AutoResizeTextarea
               value={working.riskTolerance || ''}
               onChange={(e) => setRiskTolerance(e.target.value)}
               placeholder="e.g. We are risk-averse regarding uncapped liability..."
-              className="w-full bg-black/50 border border-red-500/20 rounded-lg p-3 text-sm text-gray-300 focus:border-red-500 outline-none min-h-[100px]"
+              className="w-full bg-card border border-risk-high-edge rounded-control p-3 font-prose text-field text-ink-prose focus:border-risk-high outline-none min-h-[100px]"
             />
-            <p className="mt-2 text-[11px] text-gray-500">
+            <p className="mt-2 font-ui text-meta text-ink-4">
               Applies to every clause that has no criteria of its own. There is no risk mode any
               more: what is written here and in each clause's Risk Scorer is what decides. Leave
               them all empty and no risk criteria are sent at all.
@@ -491,10 +512,10 @@ export function TemplateEditor({
         </div>
 
         {/* Right Column: Clauses (Spans 2 cols on large screens) */}
-        <div className="lg:col-span-2 flex flex-col h-full bg-[#111] border border-white/10 rounded-xl overflow-hidden shadow-lg">
-          <div className="p-4 border-b border-white/10 bg-[#161616] flex justify-between items-center shrink-0">
-            <h3 className="text-lg font-semibold text-white flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-violet-500" /> Extraction Clauses ({working.clauses.length})</h3>
-            <button onClick={addClause} className="text-xs flex items-center gap-1 bg-violet-600 px-3 py-1.5 rounded hover:bg-violet-500 text-white transition-colors font-medium"><Plus className="h-3 w-3" /> Add Clause</button>
+        <div className="lg:col-span-2 flex flex-col h-full bg-card border border-rule rounded-card overflow-hidden">
+          <div className="p-4 border-b border-rule bg-paper flex justify-between items-center shrink-0">
+            <h3 className="font-prose text-section text-ink-1 flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-accent" /> Extraction Clauses ({working.clauses.length})</h3>
+            <Button onClick={addClause} className="px-3 py-1.5"><Plus className="h-3 w-3" /> Add Clause</Button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
@@ -518,28 +539,28 @@ export function TemplateEditor({
                     reorderClause(dragIndex, idx);
                     setDragIndex(null);
                   }}
-                  className={`group relative p-0.5 rounded-xl bg-gradient-to-r transition-all duration-300 ${dragIndex === idx ? 'from-violet-500/40 to-violet-500/20' : 'from-white/5 to-white/10'}`}
+                  className={`group bg-card border rounded-card transition-colors ${dragIndex === idx ? 'border-accent-edge bg-accent-tint' : 'border-rule'}`}
                 >
-                  <div className="bg-[#0a0a0a] p-4 rounded-[10px] flex flex-col md:flex-row gap-4 items-start relative border border-white/5">
+                  <div className="p-4 flex flex-col md:flex-row gap-4 items-start relative">
                     {/* Reordering Controls. The chevrons are the accessible
                        path and stay: a drag handle cannot be reached from a
                        keyboard. The handle below is a second affordance over
                        the same `reorderClause`, hidden from assistive tech
                        because it would announce a duplicate of what the
                        chevrons already offer. */}
-                    <div className="flex flex-col items-center gap-1 pt-1 md:border-r md:border-white/10 md:pr-4">
+                    <div className="flex flex-col items-center gap-1 pt-1 md:border-r md:border-rule md:pr-4">
                       <button
                         onClick={() => moveClause(idx, 'up')}
                         disabled={idx === 0}
                         aria-label={`Move ${clause.title} up`}
-                        className="p-1 rounded hover:bg-white/10 text-gray-500 hover:text-white transition-colors disabled:opacity-30"
+                        className="p-1 rounded-control hover:bg-chip-fill text-ink-4 hover:text-ink-1 transition-colors disabled:opacity-30"
                       ><ChevronUp className="h-4 w-4" /></button>
-                      <span className="text-[10px] text-gray-600 font-mono font-bold">{idx + 1}</span>
+                      <span className="font-mono text-pin text-ink-5 font-semibold">{idx + 1}</span>
                       <button
                         onClick={() => moveClause(idx, 'down')}
                         disabled={idx === working.clauses.length - 1}
                         aria-label={`Move ${clause.title} down`}
-                        className="p-1 rounded hover:bg-white/10 text-gray-500 hover:text-white transition-colors disabled:opacity-30"
+                        className="p-1 rounded-control hover:bg-chip-fill text-ink-4 hover:text-ink-1 transition-colors disabled:opacity-30"
                       ><ChevronDown className="h-4 w-4" /></button>
                       <span
                         draggable
@@ -553,31 +574,46 @@ export function TemplateEditor({
                           (e.dataTransfer as DataTransfer | undefined)?.setData('text/plain', String(idx));
                         }}
                         onDragEnd={() => setDragIndex(null)}
-                        className="mt-1 cursor-grab active:cursor-grabbing text-gray-700 hover:text-gray-400"
+                        className="mt-1 cursor-grab active:cursor-grabbing text-ink-6 hover:text-ink-4"
                       ><GripVertical className="h-4 w-4" /></span>
                     </div>
 
                     {/* Content */}
                     <div className="flex-1 w-full space-y-3">
-                      <div className="flex justify-between items-start">
-                        <input
-                          value={clause.title}
-                          onChange={(e) => updateClause(idx, { title: e.target.value })}
-                          className="bg-transparent font-bold text-white outline-none w-[90%] focus:text-violet-400 transition-colors text-sm md:text-base border-b border-transparent focus:border-violet-500/50"
-                          placeholder="Clause Title"
-                          aria-label="Clause title"
-                        />
-                        <button onClick={() => deleteClause(idx)} aria-label={`Delete ${clause.title}`} className="text-gray-600 hover:text-red-400 transition-colors p-1 opacity-0 group-hover:opacity-100"><X className="h-4 w-4" /></button>
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <input
+                            value={clause.title}
+                            onChange={(e) => updateClause(idx, { title: e.target.value })}
+                            className="bg-transparent font-prose text-clause font-medium text-ink-1 outline-none min-w-0 flex-1 focus:text-accent transition-colors border-b border-transparent focus:border-accent"
+                            placeholder="Clause Title"
+                            aria-label="Clause title"
+                          />
+                          {/* Reuses `PositionChip`'s shape (label in a 1px
+                             role-coloured border, transparent fill) so this
+                             row and a finding card agree on what that shape
+                             means — a house rule exists, or it doesn't. */}
+                          <span
+                            className={`font-mono text-chip uppercase px-1.5 py-0.5 rounded-chip border bg-transparent shrink-0 ${
+                              clause.standardPosition
+                                ? 'text-accent border-accent-edge'
+                                : 'text-ink-4 border-rule'
+                            }`}
+                          >
+                            {clause.standardPosition ? 'Has standard position' : 'No standard position'}
+                          </span>
+                        </div>
+                        <button onClick={() => deleteClause(idx)} aria-label={`Delete ${clause.title}`} className="text-ink-4 hover:text-risk-high transition-colors p-1 opacity-0 group-hover:opacity-100 shrink-0"><X className="h-4 w-4" /></button>
                       </div>
                       <div>
                         <div className="flex items-center justify-between gap-2 mb-1">
-                          <label className="text-[10px] text-gray-500 uppercase tracking-wider font-bold block">Extraction Instruction</label>
+                          <label className="font-mono text-chip uppercase text-ink-4 block">Extraction Instruction</label>
                           {fieldSuggestButton(idx, clause, 'extractPrompt')}
                         </div>
                         <AutoResizeTextarea
                           value={clause.extractPrompt}
                           onChange={(e) => updateClause(idx, { extractPrompt: e.target.value })}
-                          className="w-full bg-white/5 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:ring-1 focus:ring-violet-500/50 border border-transparent focus:border-violet-500/30"
+                          className="w-full bg-chip-fill rounded-control p-2 font-prose text-field text-ink-prose outline-none min-h-[50px] focus:ring-1 focus:ring-accent border border-transparent focus:border-accent"
                           placeholder="What to extract..."
                         />
                         {fieldSuggestBox(idx, clause, 'extractPrompt')}
@@ -598,19 +634,19 @@ export function TemplateEditor({
                          app inventing an answer to a question it could not
                          ask. */}
                       {clauseHealth && !healthError && (
-                        <p className="text-[10px] uppercase tracking-wider font-bold text-gray-500">
+                        <p className={`font-mono text-chip uppercase ${HEALTH_INK[clauseHealth.kind]}`}>
                           {positionHealthLabel(clauseHealth)}
                         </p>
                       )}
                       <div>
                         <div className="flex items-center justify-between gap-2 mb-1">
-                          <label className="text-[10px] text-red-400 uppercase tracking-wider flex items-center gap-1 font-bold"><ShieldAlert className="h-3 w-3" /> Risk Scorer</label>
+                          <label className="font-mono text-chip uppercase text-risk-high flex items-center gap-1"><ShieldAlert className="h-3 w-3" /> Risk Scorer</label>
                           {fieldSuggestButton(idx, clause, 'riskCriteria')}
                         </div>
                         <AutoResizeTextarea
                           value={clause.riskCriteria || ''}
                           onChange={(e) => updateClause(idx, { riskCriteria: e.target.value })}
-                          className="w-full bg-red-900/10 border border-red-500/10 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:border-red-500/50"
+                          className="w-full bg-risk-high-tint border border-risk-high-edge rounded-control p-2 font-prose text-field text-ink-prose outline-none min-h-[50px] focus:border-risk-high"
                           placeholder="Specific criteria (e.g., 'Must be mutual'). Leave blank to use Global Risk."
                         />
                         {fieldSuggestBox(idx, clause, 'riskCriteria')}
@@ -620,43 +656,50 @@ export function TemplateEditor({
                 </div>
               );
             })}
-            {working.clauses.length === 0 && <div className="text-center text-gray-500 py-10 border border-dashed border-white/10 rounded-xl">No clauses defined. Add one to get started.</div>}
+            {working.clauses.length === 0 && <div className="text-center font-ui text-ui text-ink-4 py-10 border border-dashed border-rule rounded-card">No clauses defined. Add one to get started.</div>}
+
+            {/* Declared new copy (R-G6). Derivable from `working.clauses` alone, and it
+                answers the question the left rail's position coverage is for: how much
+                of this playbook actually carries a house rule. */}
+            <p className="font-ui text-meta text-ink-3">
+              {working.clauses.filter(c => c.standardPosition).length} of {working.clauses.length} clauses have a standard position
+            </p>
 
             {/* "Suggest what I'm missing" (spec §6, Task 8). Titles only —
                each proposal is added or dismissed on its own; there is no
                "add all", because every clause entering a playbook is meant
                to be a decision, not a batch import. */}
-            <div className="pt-3 mt-2 border-t border-white/10 space-y-2">
+            <div className="pt-3 mt-2 border-t border-rule space-y-2">
               <button
                 type="button"
                 onClick={requestMissingClauses}
                 disabled={missingBusy}
-                className="text-xs flex items-center gap-1.5 text-violet-300 hover:text-violet-200 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                className="font-ui text-meta flex items-center gap-1.5 text-draft hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
               >
                 <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
                 {missingBusy ? 'Checking for gaps…' : "Suggest what I'm missing"}
               </button>
-              {missingError && <p className="text-xs text-red-400">{missingError}</p>}
+              {missingError && <p className="font-ui text-meta text-risk-high">{missingError}</p>}
               {missingSuggestions.length > 0 && (
                 <ul className="space-y-2">
                   {missingSuggestions.map((title) => (
                     <li
                       key={title}
-                      className="flex items-center justify-between gap-2 bg-violet-500/5 border border-dashed border-violet-500/40 rounded-lg p-2"
+                      className="flex items-center justify-between gap-2 bg-draft-tint border border-dashed border-draft rounded-card p-2"
                     >
-                      <span className="text-xs text-gray-200">{title}</span>
+                      <span className="font-ui text-meta text-ink-2">{title}</span>
                       <span className="flex gap-3 shrink-0">
                         <button
                           type="button"
                           onClick={() => dismissMissingClause(title)}
-                          className="text-[10px] font-semibold text-gray-400 hover:text-gray-200"
+                          className="font-ui text-meta font-semibold text-ink-3 hover:text-ink-1"
                         >
                           Dismiss
                         </button>
                         <button
                           type="button"
                           onClick={() => addMissingClause(title)}
-                          className="text-[10px] font-semibold text-violet-300 hover:text-violet-200 flex items-center gap-1"
+                          className="font-ui text-meta font-semibold text-accent hover:text-accent-strong flex items-center gap-1"
                         >
                           <Plus className="h-3 w-3" aria-hidden="true" /> Add clause
                         </button>

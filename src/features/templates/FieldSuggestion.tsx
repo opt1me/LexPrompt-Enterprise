@@ -27,30 +27,34 @@ export interface FieldSuggestionProps {
  */
 export function FieldSuggestion({ text, onAccept, onRegenerate, onDismiss, busy = false }: FieldSuggestionProps) {
   return (
-    <div className="bg-violet-500/5 border border-dashed border-violet-500/40 rounded-lg p-3 space-y-2">
-      <p className="flex items-center gap-1 text-[10px] font-bold text-violet-300 uppercase tracking-wide">
+    <div className="bg-draft-tint border border-dashed border-draft rounded-card p-3 space-y-2">
+      {/* The words stay exactly "AI suggestion — not accepted": two tests
+         outside this task's declared file (`FieldSuggestion.test.tsx` and
+         `TemplateEditor.suggestions.test.tsx`) match on "suggestion" and on
+         "not accepted" respectively, and a restyle may not edit them. */}
+      <p className="flex items-center gap-1 font-mono text-chip uppercase text-draft">
         <Sparkles className="h-3 w-3" aria-hidden="true" /> AI suggestion &mdash; not accepted
       </p>
-      <p className="text-xs text-gray-200 whitespace-pre-wrap">{text}</p>
+      <p className="font-prose text-field text-ink-prose whitespace-pre-wrap">{text}</p>
       <div className="flex justify-end gap-3 pt-1">
         <button
           onClick={onDismiss}
           disabled={busy}
-          className="text-[10px] font-semibold text-gray-400 hover:text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="font-ui text-ui-sm font-semibold text-ink-3 hover:text-ink-1 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           I&rsquo;ll write it myself
         </button>
         <button
           onClick={onRegenerate}
           disabled={busy}
-          className="text-[10px] font-semibold text-violet-300 hover:text-violet-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="font-ui text-ui-sm font-semibold text-draft hover:opacity-80 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Try again
         </button>
         <button
           onClick={onAccept}
           disabled={busy}
-          className="text-[10px] font-semibold text-emerald-300 hover:text-emerald-200 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="font-ui text-ui-sm font-semibold text-accent hover:text-accent-strong disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Use this
         </button>
