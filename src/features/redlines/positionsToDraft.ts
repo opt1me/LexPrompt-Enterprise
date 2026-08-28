@@ -58,7 +58,7 @@ export function positionText(position: InferredPosition): string {
  * a reviewer should go looking for the clause in a new contract. Rather
  * than ask a model to invent one (a second call, for a field the person is
  * about to be shown anyway), every clause starts from this plainly-derived
- * instruction and is shown in `DraftReview`'s "Extraction instructions"
+ * instruction and is shown in `DraftReview`'s "Extract"
  * field, where it must be read before the clause can be kept — E's save
  * gate does not let an unreviewed clause through.
  */
