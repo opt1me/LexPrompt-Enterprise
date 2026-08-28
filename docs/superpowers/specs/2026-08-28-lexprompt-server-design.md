@@ -485,7 +485,7 @@ run                 id, review_id, workspace_id
                     requested_by_user_id
                     provider text       -- foundry|azure_openai|openai|anthropic|openrouter
                     model text          -- the allowlisted model or deployment name
-                    jurisdiction text   -- e.g. 'GB', 'EU', 'US' — as declared at the moment
+                    jurisdiction text   -- e.g. 'UK', 'EU', 'US' — as declared at the moment
                                         -- of the call, NOT re-derived from current config
                     concurrency int
                     started_at, finished_at, heartbeat_at
@@ -670,10 +670,13 @@ Request body:
 
 ```
 { provider, model, purpose, system, user, images?, jsonSchema?, temperature?,
-  workspaceId, actorUserId, matterId?, reviewId?, clauseId? }
+  workspaceId, actorIssuer, actorSubject,
+  matterId?, reviewId?, clauseId?, documentIds? }
 ```
 
 **Both responses carry the provider, model and jurisdiction actually used.** The caller does not infer them from its own configuration — it is told, and it stores what it was told (§6.5). A gateway that answered without saying where it had been would make the run row a guess.
+
+**The actor is `(issuer, subject)` until Stage 2, and then `app_user.id` beside it.** `app_user` does not exist before Stage 2, so Stage 1's gateway records the pair the token carried — the configured `subjectClaim`'s value and its issuer — rather than an id it cannot yet resolve. Stage 2 adds `actorUserId` **alongside** the pair rather than replacing it, so records written before `app_user` existed stay joinable to records written after. An earlier draft of this section wrote `actorUserId` alone; that would have meant either an unresolvable id in Stage 1 or an Entra-shaped one, and S28 forbids the second.
 
 **Who may call it.** Only `apps/api`, authenticated by its Azure managed identity (or mTLS in local compose). The gateway has no public ingress and no route from the internet.
 
@@ -744,7 +747,9 @@ Adapters are registered in one table, keyed by `ProviderId`, and the gateway cor
 
 **Whose decision this is, stated first because everything below is a mechanism for it.** Choosing a provider is the operator's, and it is a decision made on the contracts and data provisions that provider gives them — standard contractual clauses, a data processing agreement, negotiated retention and training terms, whatever their own legal review settled on. **The API key is the interface into that service; the guarantees live in the contract behind it, not in the key.** A firm may hold perfectly sound provisions with a US provider and a different firm may hold none. This design has no standing to decide which, and does not try to. **What it enforces is the operator's own declared policy, faithfully and without exception** — nothing here is the system protecting an operator from a choice they made deliberately.
 
-**Every allowlist entry declares the jurisdiction its processing happens in.** Not the provider's head office and not where the account was opened — where the inference runs. `foundry/gpt-4o@uksouth` is `GB`; `openai/gpt-4o` is `US`; `anthropic/claude-*` direct is `US`; `openrouter/*` is `US` and additionally routes onward to a provider the operator did not individually choose, which is a distinct fact and is recorded as such in the entry's `dataHandling` note. These are statements of where processing occurs; none of them is a statement about whether an operator should be content with it.
+**The vocabulary is a closed set of processing blocs, and they are deliberately not ISO country codes.** The permitted values are `UK`, `EU`, `US` and `other`. Two of those — `EU` and `other` — are not countries at all, so a set containing one ISO alpha-2 code (`GB`) alongside them would invite exactly the wrong inference: that these are country codes, that they join to country data, and that `DE` or `FR` would be valid. They are not; a German deployment declares `EU`. **`UK`, never `GB`**, and this paragraph exists because the next reader's instinct will be to "correct" it. A finer-grained vocabulary is a later decision, and it would replace the set rather than extend it.
+
+**Every allowlist entry declares the jurisdiction its processing happens in.** Not the provider's head office and not where the account was opened — where the inference runs. `foundry/gpt-4o@uksouth` is `UK`; `openai/gpt-4o` is `US`; `anthropic/claude-*` direct is `US`; `openrouter/*` is `US` and additionally routes onward to a provider the operator did not individually choose, which is a distinct fact and is recorded as such in the entry's `dataHandling` note. These are statements of where processing occurs; none of them is a statement about whether an operator should be content with it.
 
 **The jurisdiction set is declared by the operator, and it has no default.** It is one configuration value — `GATEWAY_ALLOWED_JURISDICTIONS` — and it ships **unset**. Not `UK,EU`; not anything. A default here would encode an assumption about one particular firm's contracts, which is exactly the assumption this design has no standing to make, and a default that happens to match a firm's policy is indistinguishable at a glance from a firm that declared it. **The gateway refuses to start when the set is unset**, naming the variable and saying what it is for. Fail-closed is not weakened by removing the default — it is strengthened, because *unconfigured* becomes an error instead of a guess. The deployment template carries `UK,EU` as a **commented example with its reasoning written beside it**, so an operator reads why the line exists and then types their own.
 

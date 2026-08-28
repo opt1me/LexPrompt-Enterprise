@@ -32,7 +32,7 @@ Five consequences, each binding on this plan:
 
    Both are true. Conflating them is how a security claim quietly becomes false for half its deployments, which is this project's founding defect pointed at a Risk reviewer.
 
-3. **Every configured provider declares its processing jurisdiction**, surfaced to the operator **where the choice is made** — at gateway startup, in `GET /v1/models`, and on every option in the model picker — and recorded per call in the audit record. A firm must not be able to believe it is processing in one place while routing privileged text to another. **Which jurisdictions are acceptable is the operator's judgement, not this design's** (owner decision 5, D4): a firm may hold entirely sound provisions with a US provider — SCCs, a DPA, negotiated retention and training terms — settled with legal input long before anyone edits a config file, and **the key is the interface to a service whose guarantees live in the contract behind it.** So `GATEWAY_ALLOWED_JURISDICTIONS` has **no default anywhere** and the gateway refuses to start unset; an entry outside the declared set **refuses to start the gateway**; and the whole table prints on boot. The mechanism is unchanged and strict — what it enforces is the operator's declared policy.
+3. **Every configured provider declares its processing jurisdiction**, surfaced to the operator **where the choice is made** — at gateway startup, in `GET /v1/models`, and on every option in the model picker — and recorded per call in the audit record. A firm must not be able to believe it is processing in one place while routing privileged text to another. **Which jurisdictions are acceptable is the operator's judgement, not this design's** (owner decision 5, P4): a firm may hold entirely sound provisions with a US provider — SCCs, a DPA, negotiated retention and training terms — settled with legal input long before anyone edits a config file, and **the key is the interface to a service whose guarantees live in the contract behind it.** So `GATEWAY_ALLOWED_JURISDICTIONS` has **no default anywhere** and the gateway refuses to start unset; an entry outside the declared set **refuses to start the gateway**; and the whole table prints on boot. The mechanism is unchanged and strict — what it enforces is the operator's declared policy.
 
 4. **S15's allowlist becomes provider+model pairs**, each carrying its declared region. **A user still cannot name an arbitrary model** — that property is unchanged and is what S15 is for.
 
@@ -117,33 +117,36 @@ Copied verbatim from the spec and from `CLAUDE.md`. Every task's requirements im
 - **Verification state is set only by a human action; nothing derives it.** Stage 1 adds no writer of verification state and must not add one.
 - **Local development is the same shape.** `docker compose up` brings up web, api, gateway (and, from Stage 2, Postgres and Azurite). The compose network denies `api` egress the same way the Container Apps environment does, so the central claim is exercised in development rather than only asserted in production. (§5)
 - **`azd up` provisions the same shape in Azure.** (§4.10)
-- **R-G1 continues to bind until Stage 4.** Stage 1 must not add a collaborative affordance — no assignee chip, no assign action, no "assigned to me" counter, no second actor's name anywhere. Entra sign-in in this stage exists to authenticate a caller, not to introduce colleagues. (§3.1)
+- **R-G1 continues to bind until Stage 4.** Stage 1 must not add a collaborative affordance — no assignee chip, no assign action, no "assigned to me" counter, no second actor's name anywhere. Signing in, in this stage, exists to authenticate a caller, not to introduce colleagues. (§3.1)
 - **Nothing in Stage 1 touches persistence.** Matters, documents, reviews, playbooks and changesets stay in IndexedDB. Do not add a table, a repository or an HTTP route for any of them.
 - **When you find yourself writing a second copy of something, extract it then.** Not after the third. A client/server split doubles the surface for sibling drift, which is this project's most repeated defect. (§19, S14)
 - **Mutation-test anything load-bearing.** Break the implementation, confirm the named test fails, restore. A green suite is not evidence.
-- **Gates for every task:** `npx tsc --noEmit` clean at the repository root **and** in each workspace that has its own `tsconfig.json`; `npm test` green; `npm run build` clean with no externalization warning.
+- **Gates for every task:** `npm run typecheck` clean — which is `tsc --noEmit` at the root **plus** `-p apps/gateway/tsconfig.json` **plus** `-p apps/api/tsconfig.json`, three separate runs because the root config carries a DOM lib and the server workspaces do not, and type-checking one file under two global type sets makes `fetch` and `Response` resolve differently in each; `npm test` green; `npm run build` clean with no externalization warning.
 - **Commit at the end of every task**, by pathspec — never `git add -A`.
 
 ---
 
 ## Five decisions this plan makes, and why
 
+**They are labelled P1–P5, and the prefix is load-bearing.** `docs/superpowers/redesign/rulings.md` uses **D1–D5** for the *owner's* decisions — mutable disposition, precedent storage, multi-provider, one-system-two-environments, and the operator's declared policy. This plan's decisions are its own, so they take `P`. Anything written `D<n>` anywhere in this document is a reference to `rulings.md`; anything written `P<n>` is a reference to the list below. Resolving one to the wrong document gets you a different rule with the same number, which is sibling drift applied to labels.
+
+
 The spec settles the shape of the gateway but leaves these implementation choices open. They are recorded here because they are load-bearing across many tasks and a reader should not have to reconstruct them from the task list.
 
-**D1 — There is exactly one SSE event splitter in the system. Each provider contributes only a pure event decoder.**
+**P1 — There is exactly one SSE event splitter in the system. Each provider contributes only a pure event decoder.**
 `chatStream` exists because the assistant streams tokens, and this project has already shipped an SSE parser that dropped the last token of every answer and returned nothing on CRLF servers (`openrouter.ts`'s comments record both fixes). Five providers means five event framings, and the naive reading of that is five parsers — five surfaces for a bug this project has already paid for twice.
 
 The decomposition that avoids it: **the transport-level hazard and the provider-level difference are different problems and are separated.** `createSseEventReader` in `packages/core` owns everything transport (CRLF normalisation on the buffer, partial-event buffering across chunk boundaries, the final flush) and is written once and tested once. Each adapter contributes `decodeEvent(rawEvent: string): AdapterEvent | null` — a **pure string-to-value function** with no IO, no buffering and no knowledge of chunking, tested offline against recorded fixtures. The gateway then re-emits the canonical LexPrompt frame format; the **browser** reads that format with the *same* reader function from `packages/core`; and **`api` pipes bytes**, unexamined, from one socket to the other.
 
 So the count is: one splitter, five ~15-line decoders, one outward format, zero parsing in the middle. Task 18 asserts the bytes out of `api` equal the bytes in.
 
-**D2 — A stream that ends without a terminator frame is an error, not a short answer.**
+**P2 — A stream that ends without a terminator frame is an error, not a short answer.**
 Today, a connection dropped mid-stream resolves `chatStream` with whatever arrived, and the caller cannot tell a complete answer from a truncated one. Over three hops that becomes likely rather than theoretical. Every gateway stream ends with exactly one `done` frame (carrying usage and the call id) or one `error` frame. A stream that ends with neither raises `ModelError('stream_truncated')`. This is the founding rule applied to a new boundary and it is mutation-tested in Task 3 and Task 12.
 
-**D3 — The audit record is written *before* the upstream call, and a sink failure refuses the call.**
+**P3 — The audit record is written *before* the upstream call, and a sink failure refuses the call.**
 "It writes an audit record per call" cannot be satisfied by logging afterwards: a process that dies mid-call would then have made an unlogged egress, which is the one thing this component exists to make impossible. So each call writes a `call.started` record (everything except the outcome, including provider and jurisdiction) which is **awaited before the upstream request is issued**, and a `call.finished` record (status, tokens, latency, retries) afterwards. If the started record cannot be written, the gateway answers `503 service_misconfigured` and **makes no upstream call at all**. This holds identically in local development — owner decision 5. Task 6 mutation-tests the ordering.
 
-**D4 — The jurisdiction gate is startup configuration with NO default, and it enforces the operator's declared policy rather than a view of our own.**
+**P4 — The jurisdiction gate is startup configuration with NO default, and it enforces the operator's declared policy rather than a view of our own.**
 
 The owner's fifth decision settles whose judgement this is:
 
@@ -155,7 +158,7 @@ So: `GATEWAY_ALLOWED_JURISDICTIONS` **ships unset and has no default anywhere** 
 
 The mechanism is unchanged and stays strict. Every allowlist entry's declared jurisdiction is compared against the operator's set **at startup**; an entry outside it **stops the process**, naming the entry, its provider and its jurisdiction; the boot log prints the resulting table every time, so the answer to "where does our text go" is in the first screen of the gateway's logs. Tasks 4 and 5 mutation-test both halves — the refusal, and **the absence of the default**, which no happy-path test can see.
 
-**D5 — Every provider's stream decoding is proved by one table-driven conformance suite over recorded fixtures, and a provider with no fixture fails the build.**
+**P5 — Every provider's stream decoding is proved by one table-driven conformance suite over recorded fixtures, and a provider with no fixture fails the build.**
 Task 10's `adapterConformance.test.ts` runs the same battery over every registered adapter: the recorded fixture as-is; the same fixture with every `\n\n` replaced by `\r\n\r\n`; the same fixture delivered one byte at a time; the same fixture with the final blank line removed. All four must yield identical text. A separate test asserts every id in `PROVIDER_IDS` has a conformance entry, so a sixth provider added without a fixture turns the suite red rather than shipping untested.
 
 **What this can prove without network access, and what it cannot** — stated plainly because the honest version matters more than the reassuring one. Provable offline: event decoding (fixtures), request-body construction (recorded expectations per provider), auth header/token attachment (fake credential + fake transport), the retry policy (fake transport), the allowlist, the jurisdiction gate, the audit record, the whole route layer (injected fake adapter), and the end-to-end browser→api→gateway→adapter path against the stub. **Not provable offline: that a real provider accepts the body we build.** That is a manual smoke script (`npm run smoke -w apps/gateway`, Task 11 Step 8), it needs a real credential, and a fixture recorded from a live provider is the only thing that keeps the offline tests honest. Fixtures carry the date and provider version they were recorded against, in a header comment, so a stale one is visible.
@@ -186,7 +189,7 @@ packages/core/
 apps/gateway/
   package.json  tsconfig.json  Dockerfile  .dockerignore
   src/config.ts                    env → GatewayConfig; throws at startup on anything wrong
-  src/allowlist.ts                 allowlist lookup + the jurisdiction gate (S15, D4)
+  src/allowlist.ts                 allowlist lookup + the jurisdiction gate (S15, P4)
   src/audit.ts                     AuditRecord, AuditSink, JsonlAuditSink, fail-closed write
   src/credentials/types.ts         CredentialResolver interface + ResolvedCredential
   src/credentials/managedIdentity.ts   DefaultAzureCredential → bearer token
@@ -215,7 +218,7 @@ apps/gateway/
   src/main.ts                      entrypoint
   src/smoke.ts                     manual live-provider smoke script (needs a credential)
   test/*.test.ts
-  test/fixtures/streams/*.txt      recorded raw SSE per provider (D5)
+  test/fixtures/streams/*.txt      recorded raw SSE per provider (P5)
   test/fixtures/requests/*.json    recorded expected request bodies per provider
   fixtures/recorded/*.json         recorded responses for offline development
 
@@ -243,8 +246,8 @@ src/features/settings/ModelPicker.tsx              NEW  three load states over G
 src/features/settings/ModelPicker.test.tsx
 src/components/ServiceConfigError.tsx             NEW  "this is not something you can fix"
 
-src/lib/openrouter.ts              DELETE (Task 18)
-src/lib/openrouter.test.ts         DELETE / split (Tasks 1, 3, 8, 18)
+src/lib/openrouter.ts              DELETE (Task 20, with its replacement)
+src/lib/openrouter.test.ts         DELETE / split (Tasks 1, 3, 8, 20)
 src/lib/storage.ts                 MODIFY  purge a stored apiKey, once, loudly
 src/lib/privacyCopy.ts             MODIFY  API_KEY_PRIVACY replaced
 src/types.ts                       MODIFY  Settings loses apiKey; modelId becomes modelChoiceId
@@ -269,7 +272,7 @@ infra/keycloak/lexprompt-realm.json NEW  version-controlled realm: 4 seeded user
 azure.yaml                         NEW
 apps/api/test/configSurface.test.ts NEW  §18 item 10(a) and 10(b)
 README.md                          MODIFY  §2's Stage-1 rows
-docs/superpowers/redesign/rulings.md  MODIFY  S1/S2/S15 as executed, plus D1–D3
+docs/superpowers/redesign/rulings.md  MODIFY  S1/S2/S15 as executed, plus P1–P5
 ```
 
 ---
@@ -348,7 +351,7 @@ import { parseJsonLoose } from '@lexprompt/core';
 export { parseJsonLoose };
 ```
 
-(`openrouter.ts` is deleted in Task 18. Until then it re-exports so no call site changes twice.)
+(`openrouter.ts` is deleted in **Task 20**, the task that also builds its replacement. Until then it re-exports, so no call site changes twice — and so the app is never without a model client.)
 
 - [ ] **Step 3: Move its tests**
 
@@ -359,7 +362,7 @@ import { describe, it, expect } from 'vitest';
 import { parseJsonLoose } from './parseJsonLoose.ts';
 ```
 
-All seven cases move verbatim: clean JSON, prose preamble, fenced code block, nested braces and braces inside strings, no JSON at all, a non-JSON first brace, the last of several valid objects, a truncated unclosed brace.
+All **eight** cases move verbatim: clean JSON, prose preamble, fenced code block, nested braces and braces inside strings, no JSON at all, a non-JSON first brace, the last of several valid objects, a truncated unclosed brace.
 
 - [ ] **Step 4: Wire the root**
 
@@ -530,12 +533,12 @@ and use `walkIfPresent` for both roots.
 
 ```bash
 npm install
-npx tsc --noEmit
+npm run typecheck
 npm test
 npm run build
 ```
 
-Expected: `tsc` clean; four vitest projects reported (`web`, `core`, `gateway`, `api`) with `gateway`/`api` reporting no test files (that is fine — they gain files in Task 4 and Task 14); all previously-passing tests still pass; build clean with no externalization warning.
+Expected: `typecheck` clean; four vitest projects reported (`web`, `core`, `gateway`, `api`) with `gateway`/`api` reporting no test files (that is fine — they gain files in Task 4 and Task 14); all previously-passing tests still pass; build clean with no externalization warning.
 
 - [ ] **Step 8: Mutation test the boundary guard**
 
@@ -577,7 +580,8 @@ export outside the package.
   - `PURPOSES: readonly Purpose[]`, `type Purpose`, `isPurpose(v: unknown): v is Purpose`
   - `PROVIDER_IDS: readonly ProviderId[]`, `type ProviderId = 'azure-foundry' | 'azure-openai' | 'openai' | 'anthropic' | 'openrouter' | 'recorded'`, `isProviderId(v: unknown): v is ProviderId`
   - `type Bloc = 'UK' | 'EU' | 'US' | 'other'`, `interface Jurisdiction { bloc: Bloc; region: string; label: string }`, `jurisdictionLabel(j: Jurisdiction): string`
-  - `interface AllowedModel { id: string; provider: ProviderId; model: string; label: string; jurisdiction: Jurisdiction; contextLength: number; supportsImages: boolean; supportsStructuredOutput: boolean; isDefault: boolean }`
+  - `interface DataHandling { summary: string; lastCheckedAt: string; reference?: string }` — S26's dated note
+  - `interface AllowedModel { id: string; provider: ProviderId; model: string; label: string; jurisdiction: Jurisdiction; contextLength: number; supportsImages: boolean; supportsStructuredOutput: boolean; isDefault: boolean; dataHandling?: DataHandling }`
   - `interface InferContext { matterId?: string; reviewId?: string; clauseId?: string; documentIds?: string[] }`
   - `interface InferRequest { modelChoiceId: string; purpose: Purpose; system?: string; user: string; images?: { mime: string; data: string }[]; jsonSchema?: object; temperature?: number; maxTokens?: number; context?: InferContext }`
   - `interface InferUsage { promptTokens: number; completionTokens: number }`
@@ -677,6 +681,13 @@ describe('error classification — who is being told, and what they can do', () 
     expect(isServiceConfigError(new ModelError('x', 'purpose_not_allowed', 400))).toBe(true);
   });
 
+  it('a refused jurisdiction is an admin problem, not the user\'s', () => {
+    const e = new ModelError('processed in US', 'jurisdiction_not_allowed', 403);
+    expect(isServiceConfigError(e)).toBe(true);
+    expect(isSignInError(e)).toBe(false);
+    expect(e.retryable).toBe(false);
+  });
+
   // §7: a partner in forty groups must never be told they have no access.
   it('group overage is an admin problem, and is NOT a sign-in problem', () => {
     const e = new ModelError('overage', 'group_overage', 403);
@@ -765,6 +776,17 @@ export function isProviderId(value: unknown): value is ProviderId {
   return typeof value === 'string' && (PROVIDER_IDS as readonly string[]).includes(value);
 }
 
+/**
+ * The closed set of processing blocs. **Deliberately NOT ISO country codes.**
+ *
+ * `UK`, never `GB`. Two of these four — `EU` and `other` — are not countries,
+ * so one ISO alpha-2 code sitting among them would invite the wrong
+ * inference: that these join to country data, and that `DE` or `FR` would be
+ * valid. They are not; a German deployment declares `EU`. This comment
+ * exists because the next reader's instinct is to "correct" `UK` to `GB`,
+ * and the value reaches configuration, every audit record and a picker
+ * label — so a rename is a data migration, not a typo fix.
+ */
 export type Bloc = 'UK' | 'EU' | 'US' | 'other';
 
 /**
@@ -807,6 +829,8 @@ export interface AllowedModel {
   supportsImages: boolean;
   supportsStructuredOutput: boolean;
   isDefault: boolean;
+  /** S26's dated note. Optional in Stage 1; rendered in Stage 2. */
+  dataHandling?: DataHandling;
 }
 
 /**
@@ -868,6 +892,7 @@ export type ModelErrorCode =
   | 'not_permitted'
   | 'group_overage'
   | 'model_not_allowed'
+  | 'jurisdiction_not_allowed'
   | 'purpose_not_allowed'
   | 'prompt_too_large'
   | 'budget_exhausted'
@@ -906,6 +931,12 @@ export class ModelError extends Error {
 const SIGN_IN_CODES: ReadonlySet<ModelErrorCode> = new Set(['sign_in_required', 'not_permitted']);
 const SERVICE_CONFIG_CODES: ReadonlySet<ModelErrorCode> = new Set([
   'service_misconfigured', 'model_not_allowed', 'purpose_not_allowed',
+  // S27's per-call refusal (Task 11). The user chose a model an
+  // administrator put on the allowlist; the deployment then declined its
+  // jurisdiction. Neither signing in nor anything in Settings can resolve
+  // that — an administrator reconciles the allowlist with
+  // GATEWAY_ALLOWED_JURISDICTIONS.
+  'jurisdiction_not_allowed',
   // Group overage (§7): the token carried no `groups` claim because the user
   // is in too many groups for one to fit. An admin fixes it; signing in again
   // cannot, and nothing in Settings can. So it classifies here and NOT as a
@@ -979,7 +1010,7 @@ export type { ModelClient } from './model/client.ts';
 - [ ] **Step 6: Run the test**
 
 Run: `npx vitest run --project core packages/core/src/model/protocol.test.ts`
-Expected: PASS, 14 tests.
+Expected: PASS, 15 tests.
 
 - [ ] **Step 7: Mutation test the classifier split**
 
@@ -1029,7 +1060,7 @@ never route to Settings, because there is nothing there to change.
   - `type Frame = { type: 'delta'; text: string } | { type: 'done'; usage: InferUsage; callId: string } | { type: 'error'; code: ModelErrorCode; status: number; message: string; callId: string }`
   - `encodeFrame(frame: Frame): string`
   - `decodeFrame(rawEvent: string): Frame | null`
-  - `readFrames(stream: AsyncIterable<Uint8Array>, onDelta: (text: string) => void): Promise<{ usage: InferUsage; callId: string }>` — resolves only on a `done` frame; throws `ModelError` on an `error` frame or on a stream that ends with neither (D2).
+  - `readFrames(stream: AsyncIterable<Uint8Array>, onDelta: (text: string) => void): Promise<{ usage: InferUsage; callId: string }>` — resolves only on a `done` frame; throws `ModelError` on an `error` frame or on a stream that ends with neither (P2).
 
 **`Frame` is the gateway's outward format and is provider-independent by construction.** Nothing downstream of the gateway can tell which of the five answered except by reading `InferResponse.provider`, which is a field rather than a shape.
 
@@ -1050,7 +1081,7 @@ async function* streamOf(...chunks: string[]): AsyncIterable<Uint8Array> {
   for (const c of chunks) yield enc.encode(c);
 }
 
-describe('createSseEventReader — the one parser (D1)', () => {
+describe('createSseEventReader — the one parser (P1)', () => {
   it('splits complete LF events and keeps a partial one buffered', () => {
     const r = createSseEventReader();
     expect(r.push('data: a\n\ndata: b\n\ndata: par')).toEqual(['data: a', 'data: b']);
@@ -1149,7 +1180,7 @@ describe('the canonical frame codec', () => {
   });
 });
 
-describe('readFrames — a stream is complete or it is an error (D2)', () => {
+describe('readFrames — a stream is complete or it is an error (P2)', () => {
   it('emits deltas in order and resolves with usage and call id', async () => {
     const seen: string[] = [];
     const result = await readFrames(
@@ -1246,7 +1277,7 @@ Expected: FAIL — `Failed to resolve import "./sse.ts"`.
 import { ModelError, type ModelErrorCode, type InferUsage } from './protocol.ts';
 
 /**
- * The ONE SSE event splitter in this system (D1).
+ * The ONE SSE event splitter in this system (P1).
  *
  * Five providers means five event framings, and the naive reading of that
  * is five parsers — five surfaces for a bug this project has already paid
@@ -1255,7 +1286,7 @@ import { ModelError, type ModelErrorCode, type InferUsage } from './protocol.ts'
  * here and is written once; everything PROVIDER-SPECIFIC is a pure
  * `decodeEvent(rawEvent) => AdapterEvent | null` inside that provider's
  * adapter, with no buffering and no knowledge of chunking, tested offline
- * against a recorded fixture (D5).
+ * against a recorded fixture (P5).
  *
  * It is `openrouter.ts`'s `chatStream` loop, lifted out and given a name,
  * because both of its hard-won behaviours were bugs this project shipped:
@@ -1349,7 +1380,7 @@ export function decodeFrame(rawEvent: string): Frame | null {
 /**
  * Reads a gateway stream to its end.
  *
- * D2: a stream is complete or it is an error. It resolves ONLY on a `done`
+ * P2: a stream is complete or it is an error. It resolves ONLY on a `done`
  * frame. A stream that stops — a dropped socket, a killed container, a
  * proxy timeout — throws `stream_truncated` rather than handing back the
  * fragment that did arrive, because a half-answer about a contract that
@@ -1415,7 +1446,7 @@ export type { Frame } from './model/sse.ts';
 
 1. **CRLF.** Delete `.replace(/\r\n/g, '\n')` from `push`. Run the suite. Expected: FAIL on *"parses CRLF-terminated events instead of silently returning nothing"*, *"handles a stream mixing LF and CRLF"*, *"emits a CRLF event as soon as it arrives"*, *"survives a chunk boundary in the middle of the separator"*. Restore.
 2. **Final flush.** Delete the `for (const raw of reader.flush()) handle(raw);` line from `readFrames`. Run. Expected: FAIL on *"does not drop the final delta when the done frame arrives without a trailing blank line"*. Restore.
-3. **The terminator rule (D2).** Replace the final `throw new ModelError(… 'stream_truncated' …)` with `return { usage: { promptTokens: 0, completionTokens: 0 }, callId: '' };`. Run. Expected: FAIL on *"throws stream_truncated when the stream ends with no done and no error frame"* and *"throws stream_truncated on a completely empty stream"*. Restore.
+3. **The terminator rule (P2).** Replace the final `throw new ModelError(… 'stream_truncated' …)` with `return { usage: { promptTokens: 0, completionTokens: 0 }, callId: '' };`. Run. Expected: FAIL on *"throws stream_truncated when the stream ends with no done and no error frame"* and *"throws stream_truncated on a completely empty stream"*. Restore.
 
 Record all three in the commit message so the next reader knows they were run.
 
@@ -1446,7 +1477,7 @@ difference are separated: one splitter here, tested once; a pure
 decodeEvent per adapter, tested offline against a recorded fixture.
 apps/api parses nothing at all.
 
-D2: readFrames resolves only on a done frame. A stream that stops throws
+P2: readFrames resolves only on a done frame. A stream that stops throws
 stream_truncated rather than handing back the fragment that arrived.
 
 Mutation-tested three ways: CRLF normalisation removed (4 tests fail),
@@ -1472,7 +1503,7 @@ success (2 fail). All restored.
   - `type CredentialConfig` — a discriminated union on `source`: `{ source: 'managed-identity'; scope: string }` | `{ source: 'key-vault'; vaultUrl: string; secretName: string }` | `{ source: 'env'; var: string }` | `{ source: 'file'; path: string }`
   - `interface ModelEntry extends AllowedModel { endpoint: string; apiVersion?: string; credential: CredentialConfig }` — the **gateway-internal** entry. `endpoint` and `credential` never leave the process.
   - `type CallerAuthConfig` — `{ mode: 'none' }` | `{ mode: 'mtls'; caFile; certFile; keyFile; allowedSubject }` | `{ mode: 'entra'; tenantId; audience; allowedObjectIds }`
-  - `interface GatewayConfig { port: number; models: ModelEntry[]; allowedJurisdictions: Bloc[]; maxPromptChars: number; requestTimeoutMs: number; defaultMaxTokens: number; caller: CallerAuthConfig }` — **no `environment`, no `upstream`, no `stubDir`.** S30 forbids a module branching on the environment, and a config field named `environment` is how one starts. Offline working is a provider on the allowlist (Task 13), not a mode.
+  - `interface GatewayConfig { port: number; models: ModelEntry[]; allowedJurisdictions: Bloc[]; maxPromptChars: number; requestTimeoutMs: number; defaultMaxTokens: number; publicOrigin: string; recordedDir: string; readEnv: (name: string) => string | undefined; caller: CallerAuthConfig }` — **no `environment`, no `upstream`, no `stubDir`.** S30 forbids a module branching on the environment, and a config field named `environment` is how one starts. Offline working is a provider on the allowlist (Task 13), not a mode.
   - `loadConfig(env: NodeJS.ProcessEnv, readFile: (p: string) => string): GatewayConfig` — pure over its two inputs, so it is testable without a filesystem. Throws `ConfigError` naming the field.
   - `describeConfig(cfg: GatewayConfig): string` — the boot banner.
   - `class ConfigError extends Error`
@@ -1524,12 +1555,25 @@ success (2 fail). All restored.
 }
 ```
 
-Add `"apps/gateway/src"` and `"apps/gateway/test"` to the root `tsconfig.json`'s `include`, and these to the root `package.json` scripts:
+**Do NOT add `apps/gateway` to the root `tsconfig.json`'s `include`.** The root config carries `"lib": ["ES2022","DOM","DOM.Iterable"]` and `"types": ["node","vite/client"]`; this workspace carries `"lib": ["ES2022"]` and `"types": ["node"]`. Adding it would type-check the same files twice under two different global type sets, so `fetch`, `Response` and `ReadableStream` would resolve differently in the two runs — and the task gate requires both clean. The root `include` stays `["src", "packages/core/src", "packages/core/test"]`, and each server workspace is gated on its own config.
+
+The gate therefore becomes three commands, and Task 1's Step 7 wording is updated to match:
+
+```bash
+npx tsc --noEmit                              # web + packages/core
+npx tsc --noEmit -p apps/gateway/tsconfig.json
+npx tsc --noEmit -p apps/api/tsconfig.json
+```
+
+Add these to the root `package.json` scripts:
 
 ```json
     "gateway:dev": "npm run dev -w @lexprompt/gateway",
     "api:dev": "npm run dev -w @lexprompt/api",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p apps/gateway/tsconfig.json && tsc --noEmit -p apps/api/tsconfig.json",
 ```
+
+Every task's gate reads `npm run typecheck` from here on, in place of a bare `npx tsc --noEmit`.
 
 - [ ] **Step 2: Write the failing config tests**
 
@@ -1587,7 +1631,7 @@ describe('loadConfig', () => {
     expect(cfg.models[0].endpoint).toBe('https://lexprompt-uks.services.ai.azure.com');
   });
 
-  // D4, and the owner's fifth decision. THERE IS NO DEFAULT: which
+  // P4, and the owner's fifth decision. THERE IS NO DEFAULT: which
   // jurisdictions a firm accepts is a judgement about contracts and data
   // provisions that this design has no standing to make on their behalf, and
   // a default value would make it silently.
@@ -1602,7 +1646,7 @@ describe('loadConfig', () => {
       .toThrow(/GATEWAY_ALLOWED_JURISDICTIONS/);
   });
 
-  // D4 — the jurisdiction gate itself.
+  // P4 — the jurisdiction gate itself.
   it('REFUSES TO START when a model is outside the permitted jurisdictions, naming it', () => {
     expect(() => loadConfig({ ...BASE }, read(file(US_MODEL))))
       .toThrow(/oai-gpt4o[\s\S]*openai[\s\S]*US[\s\S]*United States[\s\S]*GATEWAY_ALLOWED_JURISDICTIONS/);
@@ -1682,6 +1726,35 @@ describe('loadConfig', () => {
     expect(raised.requestTimeoutMs).toBe(30_000);
   });
 
+  it('carries an optional dataHandling note, and refuses a half-filled one (S26)', () => {
+    const withNote = { ...UK_MODEL, dataHandling: {
+      summary: 'UK South, no training on inputs, 30-day abuse retention.',
+      lastCheckedAt: '2026-08-28', reference: 'MSA-2026-014' } };
+    expect(loadConfig({ ...BASE }, read(file(withNote))).models[0].dataHandling)
+      .toEqual(withNote.dataHandling);
+
+    // Absent is fine — nothing renders it in Stage 1.
+    expect('dataHandling' in loadConfig({ ...BASE }, read(file(UK_MODEL))).models[0]).toBe(false);
+
+    // Present but undated is not: a record that cannot go stale is worse
+    // than no record.
+    expect(() => loadConfig({ ...BASE },
+      read(file({ ...UK_MODEL, dataHandling: { summary: 'x', lastCheckedAt: 'recently' } }))))
+      .toThrow(/lastCheckedAt[\s\S]*ISO date/);
+    expect(() => loadConfig({ ...BASE },
+      read(file({ ...UK_MODEL, dataHandling: { lastCheckedAt: '2026-08-28' } }))))
+      .toThrow(/dataHandling\.summary/);
+  });
+
+  it('carries publicOrigin, recordedDir and a readEnv accessor, so nothing else reads the environment', () => {
+    const cfg = loadConfig({ ...BASE, GATEWAY_PUBLIC_ORIGIN: 'https://lexprompt.firm.example' },
+      read(file(UK_MODEL)));
+    expect(cfg.publicOrigin).toBe('https://lexprompt.firm.example');
+    expect(cfg.recordedDir).toBe('apps/gateway/fixtures/recorded');
+    expect(cfg.readEnv('GATEWAY_PORT')).toBe('8081');
+    expect(cfg.readEnv('NOT_SET')).toBe(undefined);
+  });
+
   it('refuses a non-numeric limit rather than silently using the default', () => {
     expect(() => loadConfig({ ...BASE, GATEWAY_MAX_PROMPT_CHARS: 'lots' }, read(file(UK_MODEL))))
       .toThrow(/GATEWAY_MAX_PROMPT_CHARS/);
@@ -1744,6 +1817,30 @@ export interface ModelEntry extends AllowedModel {
   credential: CredentialConfig;
 }
 
+/**
+ * S26: every allowlist entry carries a dated note recording the terms the
+ * operator agreed with that provider. §12 Q5's subprocessor answer reads it.
+ *
+ * It is the OPERATOR's record of their own contract, not a judgement this
+ * software passes on a provider — which is why `lastCheckedAt` is a
+ * staleness marker prompting them to re-read their own agreement, and why
+ * Stage 2's admin screen renders it rather than scoring it.
+ *
+ * Optional in Stage 1 because nothing renders it yet; on `ModelEntry` from
+ * the start because Task 5's `toAllowedModel` enumerates the wire keys
+ * explicitly and a test asserts the exact key list — so adding it later is
+ * a schema change plus a wire-type change plus a test edit, and §12 Q5 is
+ * unanswerable until then.
+ */
+export interface DataHandling {
+  /** What the operator agreed: retention, training, sub-processing. */
+  summary: string;
+  /** ISO date the operator last checked the provider's terms. */
+  lastCheckedAt: string;
+  /** A link or document reference to the agreement itself. */
+  reference?: string;
+}
+
 export type CallerAuthConfig =
   | { mode: 'none' }
   | { mode: 'mtls'; caFile: string; certFile: string; keyFile: string; allowedSubject: string }
@@ -1756,6 +1853,19 @@ export interface GatewayConfig {
   maxPromptChars: number;
   requestTimeoutMs: number;
   defaultMaxTokens: number;
+  /** Sent as OpenRouter's `HTTP-Referer` attribution header. Read HERE and
+   *  passed into the adapter factory, never read inside an adapter: S25
+   *  says an adapter owns request shaping and nothing else, and reading
+   *  deployment configuration is exactly the class of thing the adapter
+   *  boundary test (Task 8) exists to catch. */
+  publicOrigin: string;
+  /** Where the `recorded` provider's fixtures live (Task 13). Same reason. */
+  recordedDir: string;
+  /** The environment reader itself, so `credentials/envOrFile.ts` takes it
+   *  as a dependency rather than reaching for `process.env` — which would
+   *  put a second env reader outside this module and break `configSurface`
+   *  (Task 26). `DefaultCredentialResolver` already accepts it. */
+  readEnv: (name: string) => string | undefined;
   caller: CallerAuthConfig;
 }
 // Deliberately absent: `environment`, `upstream`, `stubDir`. S30 forbids any
@@ -1801,6 +1911,26 @@ function parseJurisdiction(raw: unknown, entryId: string): Jurisdiction {
     bloc: j.bloc as Bloc,
     region: str(j.region, entryId, 'jurisdiction.region'),
     label: str(j.label, entryId, 'jurisdiction.label'),
+  };
+}
+
+/** S26's note. Optional — but if present it must be complete and dated,
+ *  because a half-filled record of an agreement is worse than none. */
+function parseDataHandling(raw: unknown, entryId: string): DataHandling | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const d = raw as Record<string, unknown>;
+  const lastCheckedAt = str(d.lastCheckedAt, entryId, 'dataHandling.lastCheckedAt');
+  if (!/^\d{4}-\d{2}-\d{2}/.test(lastCheckedAt)) {
+    throw new ConfigError(
+      `Model "${entryId}" has dataHandling.lastCheckedAt ${JSON.stringify(lastCheckedAt)}; `
+      + 'expected an ISO date. An undated record of an agreement cannot go stale, '
+      + 'which is the one thing it needs to be able to do.',
+    );
+  }
+  return {
+    summary: str(d.summary, entryId, 'dataHandling.summary'),
+    lastCheckedAt,
+    ...(typeof d.reference === 'string' && d.reference ? { reference: d.reference } : {}),
   };
 }
 
@@ -1907,6 +2037,7 @@ export function loadConfig(
       supportsImages: m.supportsImages === true,
       supportsStructuredOutput: m.supportsStructuredOutput === true,
       isDefault: m.isDefault === true,
+      dataHandling: parseDataHandling(m.dataHandling, id),
       endpoint: str(m.endpoint, id, 'endpoint'),
       apiVersion: typeof m.apiVersion === 'string' ? m.apiVersion : undefined,
       credential: parseCredential(m.credential, id),
@@ -1951,7 +2082,7 @@ export function loadConfig(
     }
   }
 
-  // D4. An operator routing privileged text outside the permitted blocs
+  // P4. An operator routing privileged text outside the permitted blocs
   // must have written that bloc down. There is no runtime warning to scroll
   // past and no documentation note to not read.
   for (const m of models) {
@@ -1974,6 +2105,12 @@ export function loadConfig(
     maxPromptChars: int(env, 'GATEWAY_MAX_PROMPT_CHARS', 400_000),
     requestTimeoutMs: int(env, 'GATEWAY_REQUEST_TIMEOUT_MS', 120_000),
     defaultMaxTokens: int(env, 'GATEWAY_DEFAULT_MAX_TOKENS', 4096),
+    publicOrigin: env.GATEWAY_PUBLIC_ORIGIN ?? 'https://lexprompt.local',
+    recordedDir: env.GATEWAY_RECORDED_DIR ?? 'apps/gateway/fixtures/recorded',
+    // The one `process.env` reader in this process is `main.ts`, which hands
+    // the whole object to `loadConfig`. Passing the accessor on from here
+    // keeps that true for the credential resolver too.
+    readEnv: (name: string) => env[name],
     caller: parseCaller(env),
   };
 }
@@ -2094,7 +2231,7 @@ test
 Run: `npx vitest run --project gateway`
 Expected: PASS, 18 tests.
 
-- [ ] **Step 8: Mutation test the jurisdiction gate, and the absence of its default (D4)**
+- [ ] **Step 8: Mutation test the jurisdiction gate, and the absence of its default (P4)**
 
 **Mutation 1 — the gate.** Comment out the whole `for (const m of models) { if (!allowedJurisdictions.includes(m.jurisdiction.bloc)) … }` block. Run `npx vitest run --project gateway`.
 Expected: FAIL on *"REFUSES TO START when a model is outside the permitted jurisdictions, naming it"*. Restore and re-run: PASS.
@@ -2148,7 +2285,7 @@ git commit -F .git/COMMIT_MSG_TASK4
 ```
 
 ```
-feat(gateway): the workspace, its configuration, and D4's jurisdiction gate
+feat(gateway): the workspace, its configuration, and P4's jurisdiction gate
 
 Configuration is validated at startup and the process refuses to start when
 it is wrong: an unstated jurisdiction, an unknown provider, a missing
@@ -2249,6 +2386,13 @@ describe('toAllowedModel — nothing internal crosses the wire', () => {
       'contextLength', 'id', 'isDefault', 'jurisdiction', 'label',
       'model', 'provider', 'supportsImages', 'supportsStructuredOutput',
     ]);
+    // …and with a dataHandling note, exactly one key more.
+    expect(Object.keys(toAllowedModel({ ...claude, dataHandling: {
+      summary: 's', lastCheckedAt: '2026-08-28' } })).sort())
+      .toEqual([
+        'contextLength', 'dataHandling', 'id', 'isDefault', 'jurisdiction', 'label',
+        'model', 'provider', 'supportsImages', 'supportsStructuredOutput',
+      ]);
   });
 
   it('drops endpoint, apiVersion and credential', () => {
@@ -2305,6 +2449,11 @@ export function toAllowedModel(entry: ModelEntry): AllowedModel {
     supportsImages: entry.supportsImages,
     supportsStructuredOutput: entry.supportsStructuredOutput,
     isDefault: entry.isDefault,
+    // S26. Carried to the wire because §12 Q5 is answered from it and
+    // Stage 2's admin screen renders it. It records the operator's own
+    // agreement — there is nothing confidential in it that the endpoint
+    // and credential fields above are being withheld for.
+    ...(entry.dataHandling ? { dataHandling: entry.dataHandling } : {}),
   };
 }
 
@@ -2532,7 +2681,7 @@ describe('the audit record (§10)', () => {
     expect('documentIds' in r).toBe(false);
   });
 
-  // D3 — the whole point of writing the record first.
+  // P3 — the whole point of writing the record first.
   it('REFUSES THE CALL when the started record cannot be written', async () => {
     const log = new AuditLogger(new Failing(), () => new Date(), () => 'c');
     await expect(log.start(START)).rejects.toMatchObject({
@@ -2643,7 +2792,7 @@ export interface AuditSink {
 /**
  * One JSON object per line, to a stream — stdout in a container, collected
  * by Azure Monitor or by `docker logs` locally. The write is AWAITED and a
- * stream error REJECTS, which is what makes D3's fail-closed behaviour real
+ * stream error REJECTS, which is what makes P3's fail-closed behaviour real
  * rather than aspirational: a fire-and-forget log write cannot fail closed.
  */
 export class JsonlAuditSink implements AuditSink {
@@ -2681,7 +2830,7 @@ export interface AuditFinishInput {
 }
 
 /**
- * D3: the started record is written BEFORE the upstream call and its
+ * P3: the started record is written BEFORE the upstream call and its
  * failure refuses the call.
  *
  * "It writes an audit record per call" cannot be satisfied by logging
@@ -2781,7 +2930,7 @@ export class AuditLogger {
 Run: `npx vitest run --project gateway apps/gateway/test/audit.test.ts`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 5: Mutation test D3 — three mutations**
+- [ ] **Step 5: Mutation test P3 — three mutations**
 
 1. **Fail-open on a log failure.** Wrap `await this.#sink.write(record)` in `try { … } catch { /* ignore */ }` and return the call id. Run. Expected: FAIL on *"REFUSES THE CALL when the started record cannot be written"* and *"says what went wrong"*. Restore.
 2. **Redaction.** Add `user: input.user` to the `AuditStart` record. Run. Expected: FAIL on *"NEVER contains prompt or completion content"*. Restore.
@@ -2797,7 +2946,7 @@ git commit -F .git/COMMIT_MSG_TASK6
 ```
 feat(gateway): the call log — written before the call, refusing it on failure
 
-D3: a started record is written and awaited before the upstream request is
+P3: a started record is written and awaited before the upstream request is
 issued, and a sink failure refuses the call with 503. "Writes a record per
 call" cannot be satisfied by logging afterwards — a process that dies
 mid-call would have made an unlogged egress, which is the one thing this
@@ -3133,8 +3282,30 @@ export function makeGetSecret(): (vaultUrl: string, name: string) => Promise<str
 ```ts
 import { readFileSync } from 'node:fs';
 
-export const readEnv = (name: string): string | undefined => process.env[name];
+/**
+ * Deliberately NO `readEnv` here.
+ *
+ * The obvious version of this file is
+ * `export const readEnv = (name) => process.env[name];` — and that would be
+ * a second environment reader outside `config.ts`, which `configSurface`
+ * (Task 26) fails the build on. `GatewayConfig.readEnv` carries the
+ * accessor from the one place that legitimately holds `process.env`, and
+ * `main.ts` passes it into `DefaultCredentialResolver`, which already takes
+ * it as a dependency for exactly this reason.
+ */
 export const readSecretFile = (path: string): string => readFileSync(path, 'utf8');
+```
+
+In `main.ts`, the resolver is constructed as:
+
+```ts
+const credentials = new DefaultCredentialResolver({
+  getToken: makeGetToken(),
+  getSecret: makeGetSecret(),
+  readEnv: config.readEnv,        // from config.ts, not from process.env
+  readFile: readSecretFile,
+  now: Date.now,
+});
 ```
 
 - [ ] **Step 6: Run the tests**
@@ -3199,7 +3370,7 @@ branch, one test fails; restored.
   - `type AdapterEvent = { kind: 'delta'; text: string } | { kind: 'usage'; usage: InferUsage } | { kind: 'end' } | { kind: 'error'; status: number; message: string }`
   - `interface AdapterCall { url: string; headers: Record<string, string>; body: unknown }`
   - `interface ProviderAdapter { readonly id: ProviderId; buildCall(req: AdapterRequest, credential: ResolvedCredential): AdapterCall; readResponse(body: unknown): { content: string; usage: InferUsage }; decodeEvent(rawEvent: string): AdapterEvent | null }`
-  - `getAdapter(id: ProviderId): ProviderAdapter` and `ALL_ADAPTERS: readonly ProviderAdapter[]` from `registry.ts`
+  - `buildRegistry(config: { publicOrigin: string; recordedDir: string; readFile?: (p: string) => string }): { all: readonly ProviderAdapter[]; get(id: ProviderId): ProviderAdapter }` and `PENDING: readonly ProviderId[]` from `registry.ts`
 
 **Why the adapter is three pure functions and no IO.** `buildCall` returns a description of a request rather than making one; `readResponse` and `decodeEvent` are pure. The single place that opens a socket, retries, times out and aborts is `callModel.ts` (Task 11). That is what keeps §10's retry policy enforced once rather than five times, and it is what makes every adapter testable offline.
 
@@ -3209,8 +3380,14 @@ branch, one test fails; restored.
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { getAdapter, ALL_ADAPTERS } from '../src/adapters/registry.ts';
+import { buildRegistry, PENDING } from '../src/adapters/registry.ts';
 import { PROVIDER_IDS } from '@lexprompt/core';
+
+// One built registry for the whole file. Two adapters take configuration,
+// so the registry is a factory rather than a constant (S25: an adapter is
+// given its values, it never reads them).
+const registry = buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' });
+const adapter = (id: Parameters<typeof registry.get>[0]) => registry.get(id);
 import type { ModelEntry } from '../src/config.ts';
 import type { AdapterRequest } from '../src/adapters/types.ts';
 
@@ -3233,18 +3410,27 @@ const req = (over: Partial<AdapterRequest> = {}): AdapterRequest => ({
 });
 
 describe('the registry', () => {
-  it('has an adapter for every provider id, so a new id cannot ship unimplemented', () => {
-    expect(ALL_ADAPTERS.map(a => a.id).sort()).toEqual([...PROVIDER_IDS].sort());
+  it('registers every provider id that is not on PENDING', () => {
+    const expected = PROVIDER_IDS.filter(id => !PENDING.includes(id));
+    expect(registry.all.map(a => a.id).sort()).toEqual([...expected].sort());
   });
 
-  it('throws for an id with no adapter rather than returning undefined', () => {
-    expect(() => getAdapter('bedrock' as never)).toThrow(/bedrock/);
+  // PENDING cannot outlive its purpose: Task 9 and Task 13 each remove one
+  // id in the commit that adds its adapter, and by Task 13 it is empty and
+  // this same file asserts full coverage with no edit.
+  it('PENDING names only real provider ids', () => {
+    expect(PENDING.every(id => (PROVIDER_IDS as readonly string[]).includes(id))).toBe(true);
+  });
+
+  it('throws for an unregistered id, naming what is pending, rather than returning undefined', () => {
+    expect(() => registry.get('anthropic')).toThrow(/Not yet implemented: anthropic, recorded/);
+    expect(() => registry.get('bedrock' as never)).toThrow(/bedrock/);
   });
 });
 
 describe('OpenAI-compatible adapters — one body builder, four endpoints', () => {
   it('OpenAI direct: /v1/chat/completions with a bearer key', () => {
-    const call = getAdapter('openai').buildCall(req(), { kind: 'api-key', key: 'sk-1' });
+    const call = adapter('openai').buildCall(req(), { kind: 'api-key', key: 'sk-1' });
     expect(call.url).toBe('https://api.openai.com/v1/chat/completions');
     expect(call.headers.Authorization).toBe('Bearer sk-1');
     expect(call.body).toMatchObject({
@@ -3259,7 +3445,7 @@ describe('OpenAI-compatible adapters — one body builder, four endpoints', () =
 
   it('OpenRouter: its own base, a bearer key, and the two identifying headers', () => {
     const e = entry({ provider: 'openrouter', endpoint: 'https://openrouter.ai/api', model: 'anthropic/claude-sonnet-4.5' });
-    const call = getAdapter('openrouter').buildCall(req({ entry: e }), { kind: 'api-key', key: 'or-1' });
+    const call = adapter('openrouter').buildCall(req({ entry: e }), { kind: 'api-key', key: 'or-1' });
     expect(call.url).toBe('https://openrouter.ai/api/v1/chat/completions');
     expect(call.headers.Authorization).toBe('Bearer or-1');
     expect(call.headers['X-Title']).toBe('LexPrompt');
@@ -3272,7 +3458,7 @@ describe('OpenAI-compatible adapters — one body builder, four endpoints', () =
       model: 'gpt4o-uks', apiVersion: '2024-10-21',
       jurisdiction: { bloc: 'UK', region: 'uksouth', label: 'UK South' },
     });
-    const call = getAdapter('azure-openai').buildCall(req({ entry: e }), { kind: 'api-key', key: 'az-1' });
+    const call = adapter('azure-openai').buildCall(req({ entry: e }), { kind: 'api-key', key: 'az-1' });
     expect(call.url).toBe('https://firm.openai.azure.com/openai/deployments/gpt4o-uks/chat/completions?api-version=2024-10-21');
     expect(call.headers['api-key']).toBe('az-1');
     expect('Authorization' in call.headers).toBe(false);
@@ -3280,7 +3466,7 @@ describe('OpenAI-compatible adapters — one body builder, four endpoints', () =
 
   it('Azure OpenAI with a managed identity uses a bearer token and NO api-key header', () => {
     const e = entry({ provider: 'azure-openai', endpoint: 'https://firm.openai.azure.com', model: 'd', apiVersion: '2024-10-21' });
-    const call = getAdapter('azure-openai').buildCall(req({ entry: e }), { kind: 'bearer', token: 'mi' });
+    const call = adapter('azure-openai').buildCall(req({ entry: e }), { kind: 'bearer', token: 'mi' });
     expect(call.headers.Authorization).toBe('Bearer mi');
     expect('api-key' in call.headers).toBe(false);
   });
@@ -3290,24 +3476,24 @@ describe('OpenAI-compatible adapters — one body builder, four endpoints', () =
       provider: 'azure-foundry', endpoint: 'https://firm.services.ai.azure.com',
       model: 'gpt-4o', apiVersion: '2024-05-01-preview',
     });
-    const call = getAdapter('azure-foundry').buildCall(req({ entry: e }), { kind: 'bearer', token: 'mi' });
+    const call = adapter('azure-foundry').buildCall(req({ entry: e }), { kind: 'bearer', token: 'mi' });
     expect(call.url).toBe('https://firm.services.ai.azure.com/models/chat/completions?api-version=2024-05-01-preview');
     expect(call.headers.Authorization).toBe('Bearer mi');
   });
 
   it('trims a trailing slash off the configured endpoint rather than producing a double slash', () => {
-    const call = getAdapter('openai').buildCall(
+    const call = adapter('openai').buildCall(
       req({ entry: entry({ endpoint: 'https://api.openai.com/' }) }), { kind: 'api-key', key: 'k' });
     expect(call.url).toBe('https://api.openai.com/v1/chat/completions');
   });
 
   it('omits the system message when there is none, rather than sending an empty one', () => {
-    const call = getAdapter('openai').buildCall(req({ system: undefined }), { kind: 'api-key', key: 'k' });
+    const call = adapter('openai').buildCall(req({ system: undefined }), { kind: 'api-key', key: 'k' });
     expect((call.body as { messages: unknown[] }).messages).toHaveLength(1);
   });
 
   it('attaches images as image_url content parts', () => {
-    const call = getAdapter('openai').buildCall(
+    const call = adapter('openai').buildCall(
       req({ images: [{ mime: 'image/png', data: 'AAA' }] }), { kind: 'api-key', key: 'k' });
     const messages = (call.body as { messages: { role: string; content: unknown }[] }).messages;
     expect(messages[1].content).toEqual([
@@ -3317,7 +3503,7 @@ describe('OpenAI-compatible adapters — one body builder, four endpoints', () =
   });
 
   it('sends a strict json_schema response format when a schema is supplied', () => {
-    const call = getAdapter('openai').buildCall(
+    const call = adapter('openai').buildCall(
       req({ jsonSchema: { type: 'object', properties: {} } }), { kind: 'api-key', key: 'k' });
     expect((call.body as { response_format: unknown }).response_format).toEqual({
       type: 'json_schema',
@@ -3326,18 +3512,18 @@ describe('OpenAI-compatible adapters — one body builder, four endpoints', () =
   });
 
   it('sets stream and stream_options so usage arrives on a streamed call', () => {
-    const call = getAdapter('openai').buildCall(req({ stream: true }), { kind: 'api-key', key: 'k' });
+    const call = adapter('openai').buildCall(req({ stream: true }), { kind: 'api-key', key: 'k' });
     expect(call.body).toMatchObject({ stream: true, stream_options: { include_usage: true } });
   });
 
   it('omits temperature when the caller did not set one', () => {
-    const body = getAdapter('openai').buildCall(req(), { kind: 'api-key', key: 'k' }).body as Record<string, unknown>;
+    const body = adapter('openai').buildCall(req(), { kind: 'api-key', key: 'k' }).body as Record<string, unknown>;
     expect('temperature' in body).toBe(false);
   });
 });
 
 describe('OpenAI-compatible readResponse', () => {
-  const a = getAdapter('openai');
+  const a = adapter('openai');
 
   it('reads content and usage', () => {
     expect(a.readResponse({
@@ -3358,7 +3544,7 @@ describe('OpenAI-compatible readResponse', () => {
 });
 
 describe('OpenAI-compatible decodeEvent (pure, no network)', () => {
-  const a = getAdapter('openai');
+  const a = adapter('openai');
 
   it('reads a content delta', () => {
     expect(a.decodeEvent('data: {"choices":[{"delta":{"content":"Hi"}}]}'))
@@ -3412,7 +3598,7 @@ export interface AdapterRequest {
 
 /** One decoded provider stream event. `end` means the provider said the
  *  stream is complete — the gateway emits its `done` frame only after
- *  seeing one, which is D2's rule at the upstream edge. */
+ *  seeing one, which is P2's rule at the upstream edge. */
 export type AdapterEvent =
   | { kind: 'delta'; text: string }
   | { kind: 'usage'; usage: InferUsage }
@@ -3432,10 +3618,25 @@ export interface AdapterCall {
  * and `decodeEvent` are pure. The one place that opens a socket, retries,
  * times out and aborts is `callModel.ts` — which is what keeps §10's retry
  * policy enforced once rather than five times, and what makes every
- * adapter testable with no network at all (D5).
+ * adapter testable with no network at all (P5).
  *
  * Adding a sixth provider: write one of these, add it to `registry.ts`, add
  * a stream fixture. Nothing else in the codebase changes.
+ *
+ * DELIBERATELY NARROWER THAN S25's five concerns, and the narrowing is
+ * recorded in Task 26 Step 5. Credential acquisition lives in
+ * `credentials/resolve.ts` (which of four sources a key comes from is a
+ * deployment property, not a wire-protocol one) and error classification
+ * lives in `isRetryableStatus` in `packages/core`, applied once in
+ * `callModel.ts` — §10's own instruction that the retry policy runs once.
+ *
+ * The residual risk, named so the remedy is not improvised: retryability is
+ * currently read off the HTTP status alone, which is right for every
+ * provider here and wrong for one that signals it in a response body. Such
+ * a provider adds an optional
+ *   `classifyError?(status: number, body: unknown): 'retry' | 'fail'`
+ * to THIS interface and implements it; `callModel` consults it when
+ * present. It never becomes an `if` on a provider id in the core.
  */
 export interface ProviderAdapter {
   readonly id: ProviderId;
@@ -3599,15 +3800,23 @@ import { openAiCompatible, trimSlash } from './openaiCompatible.ts';
  * referer is the gateway's own configured origin, never a browser's, since
  * no browser is anywhere near this call.
  */
-export const openrouterAdapter = openAiCompatible({
-  id: 'openrouter',
-  url: entry => `${trimSlash(entry.endpoint)}/v1/chat/completions`,
-  headers: (_entry, credential) => ({
-    Authorization: `Bearer ${credential.kind === 'bearer' ? credential.token : credential.key}`,
-    'HTTP-Referer': process.env.GATEWAY_PUBLIC_ORIGIN ?? 'https://lexprompt.local',
-    'X-Title': 'LexPrompt',
-  }),
-});
+export function makeOpenrouterAdapter(publicOrigin: string) {
+  return openAiCompatible({
+    id: 'openrouter',
+    url: entry => `${trimSlash(entry.endpoint)}/v1/chat/completions`,
+    headers: (_entry, credential) => ({
+      Authorization: `Bearer ${credential.kind === 'bearer' ? credential.token : credential.key}`,
+      // `publicOrigin` is a CONSTRUCTOR ARGUMENT, not a `process.env` read.
+      // An adapter that read deployment configuration would breach S25 and
+      // be caught by `adapterBoundary` (Step 7) — and it would also put a
+      // configuration key behind a silent default in a file no
+      // configuration surface lists, which is the shape P4 spent a whole
+      // revision removing.
+      'HTTP-Referer': publicOrigin,
+      'X-Title': 'LexPrompt',
+    }),
+  });
+}
 ```
 
 `apps/gateway/src/adapters/azureOpenai.ts`:
@@ -3651,7 +3860,11 @@ export const azureFoundryAdapter = openAiCompatible({
 });
 ```
 
-- [ ] **Step 6: Implement `adapters/registry.ts`**
+- [ ] **Step 6: Implement `adapters/registry.ts` — built incrementally, four providers now**
+
+**The registry is a factory, and it is filled in over three tasks, not one.** Task 8 registers the four OpenAI-shaped providers, Task 9 adds Anthropic, Task 13 adds `recorded`. That is truer to "adding a provider is one line in the registry" than writing all six now, and — decisively — it is the only version in which **each task's own gate is genuinely green**: `PROVIDER_IDS` already holds all six from Task 2, so a registry importing modules that do not exist yet fails `tsc --noEmit` *and* fails this task's own completeness test.
+
+So the completeness assertion is expressed against what is registered, and the **missing** ids are named explicitly and shrink to zero by Task 13:
 
 ```ts
 import { PROVIDER_IDS, type ProviderId } from '@lexprompt/core';
@@ -3659,61 +3872,214 @@ import type { ProviderAdapter } from './types.ts';
 import { azureFoundryAdapter } from './azureFoundry.ts';
 import { azureOpenaiAdapter } from './azureOpenai.ts';
 import { openaiAdapter } from './openai.ts';
-import { anthropicAdapter } from './anthropic.ts';
-import { openrouterAdapter } from './openrouter.ts';
-import { recordedAdapter } from './recorded.ts';
+import { makeOpenrouterAdapter } from './openrouter.ts';
 
 /**
- * THE registration point. Adding a sixth provider is: add its id to
+ * THE registration point. Adding a provider is: add its id to
  * `PROVIDER_IDS` in packages/core, write its adapter, add one line here,
  * add a stream fixture. No call site changes, because no call site names a
  * provider — `callModel` looks one up from the allowlist entry.
+ *
+ * A FACTORY rather than a module-level constant, because two adapters take
+ * configuration (`openrouter` its public origin, `recorded` its fixture
+ * directory) and an adapter must never read configuration itself (S25, and
+ * `adapterBoundary` in Step 7).
+ *
+ * PENDING is the honest record of what is not registered yet. Task 9 and
+ * Task 13 each remove one id in the same commit that adds its adapter, and
+ * the tests below fail if the list ever disagrees with reality in either
+ * direction — so it cannot be forgotten and cannot become a place to hide
+ * an unimplemented provider.
  */
-export const ALL_ADAPTERS: readonly ProviderAdapter[] = [
-  azureFoundryAdapter,
-  azureOpenaiAdapter,
-  openaiAdapter,
-  anthropicAdapter,
-  openrouterAdapter,
-  // Registered like any other, deliberately (§5.1). The offline stub being
-  // an adapter rather than a bypass is what puts it through the conformance
-  // suite, gives it a jurisdiction to declare, and lets a firm deployment
-  // refuse it through S27's existing mechanism rather than a new one.
-  recordedAdapter,
-];
+export const PENDING: readonly ProviderId[] = ['anthropic', 'recorded'];
 
-const BY_ID = new Map<ProviderId, ProviderAdapter>(ALL_ADAPTERS.map(a => [a.id, a]));
+export interface RegistryConfig {
+  publicOrigin: string;
+  recordedDir: string;
+  readFile?: (path: string) => string;
+}
 
-export function getAdapter(id: ProviderId): ProviderAdapter {
-  const adapter = BY_ID.get(id);
-  if (!adapter) {
-    throw new Error(
-      `No adapter is registered for provider ${JSON.stringify(id)}. `
-      + `Registered: ${[...BY_ID.keys()].join(', ')}. Known ids: ${PROVIDER_IDS.join(', ')}.`,
-    );
-  }
-  return adapter;
+export function buildRegistry(config: RegistryConfig): {
+  all: readonly ProviderAdapter[];
+  get(id: ProviderId): ProviderAdapter;
+} {
+  const all: readonly ProviderAdapter[] = [
+    azureFoundryAdapter,
+    azureOpenaiAdapter,
+    openaiAdapter,
+    makeOpenrouterAdapter(config.publicOrigin),
+    // Task 9 adds anthropicAdapter here; Task 13 adds
+    // makeRecordedAdapter(config.recordedDir, config.readFile).
+  ];
+  const byId = new Map<ProviderId, ProviderAdapter>(all.map(a => [a.id, a]));
+  return {
+    all,
+    get(id: ProviderId): ProviderAdapter {
+      const adapter = byId.get(id);
+      if (!adapter) {
+        throw new Error(
+          `No adapter is registered for provider ${JSON.stringify(id)}. `
+          + `Registered: ${[...byId.keys()].join(', ')}. `
+          + `Not yet implemented: ${PENDING.join(', ')}. `
+          + `Known ids: ${PROVIDER_IDS.join(', ')}.`,
+        );
+      }
+      return adapter;
+    },
+  };
 }
 ```
 
-`registry.ts` imports `anthropicAdapter` (Task 9) and `recordedAdapter` (Task 13). **Write Task 9's file before running this task's tests** — or, if you are executing tasks strictly in order, create `apps/gateway/src/adapters/anthropic.ts` now with `export const anthropicAdapter = openAiCompatible({ id: 'anthropic', url: e => e.endpoint, headers: () => ({}) });` as a placeholder and replace it wholesale in Task 9. **Prefer the first**: a placeholder that happens to type-check is exactly the kind of thing that survives.
+Task 4's `config.ts` gains a matching startup check, so a `models.json` naming a not-yet-implemented provider refuses to start rather than failing on the first call:
 
-- [ ] **Step 7: Run the tests**
+```ts
+  for (const m of models) {
+    if (PENDING.includes(m.provider)) {
+      throw new ConfigError(
+        `Model "${m.id}" names provider ${m.provider}, whose adapter is not implemented yet.`,
+      );
+    }
+  }
+```
+
+Replace Task 8's registry test with:
+
+```ts
+describe('the registry', () => {
+  const registry = () => buildRegistry({ publicOrigin: 'https://x', recordedDir: 'fixtures/recorded' });
+
+  it('registers every provider id that is not on PENDING', () => {
+    const expected = PROVIDER_IDS.filter(id => !PENDING.includes(id));
+    expect(registry().all.map(a => a.id).sort()).toEqual([...expected].sort());
+  });
+
+  // PENDING cannot outlive its purpose: by Task 13 it is empty and this same
+  // test asserts full coverage with no edit.
+  it('PENDING names only real provider ids', () => {
+    expect(PENDING.every(id => (PROVIDER_IDS as readonly string[]).includes(id))).toBe(true);
+  });
+
+  it('throws for an unregistered id, naming what is pending, rather than returning undefined', () => {
+    expect(() => registry().get('anthropic')).toThrow(/Not yet implemented: anthropic, recorded/);
+    expect(() => registry().get('bedrock' as never)).toThrow(/bedrock/);
+  });
+});
+```
+
+`callModel.ts` (Task 11) takes the built registry on its `CallContext` — `registry: ReturnType<typeof buildRegistry>` — and calls `ctx.registry.get(entry.provider)` where the draft called a module-level `getAdapter`. Task 11's `ctx()` helper builds one.
+
+- [ ] **Step 7: Write the `adapterBoundary` test (S25, §14, §18.2)**
+
+**This is a suite the spec names and no task owned.** §14 defines it precisely: *"no module under `apps/gateway/adapters/` imports the logger, the allowlist, the budget module, the jurisdiction check or the retry policy (S25) — the import-boundary shape of S14, one level down."* Without it, "one audit path, one allowlist check, one retry policy" is enforced by nothing, in the component whose entire purpose is to be the one describable egress.
+
+It is the **mirror** of Task 26's `stage1DoD` check, and neither implies the other: that one forbids a provider-specific branch **outside** `adapters/`; this one forbids a core concern reaching **inside**.
+
+`apps/gateway/test/adapterBoundary.test.ts`:
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+
+const ADAPTERS = path.resolve(__dirname, '../src/adapters');
+
+const files = (): string[] => readdirSync(ADAPTERS)
+  .map(e => path.join(ADAPTERS, e))
+  .filter(f => statSync(f).isFile() && f.endsWith('.ts'));
+
+/**
+ * S25: an adapter owns credential shaping, request shaping, response
+ * parsing, stream-frame decoding and error classification — and NOTHING
+ * else. The allowlist check, the jurisdiction check, the purpose check,
+ * budgets, the prompt cap, the timeout, the retry policy and the call log
+ * live in the gateway core and run once, around every adapter.
+ *
+ * An adapter that logs, or checks an allowlist, is not a working adapter
+ * with an extra feature; it is the defect.
+ */
+const FORBIDDEN = [
+  'audit', 'allowlist', 'rateLimit', 'callModel', 'config', 'callerAuth',
+];
+
+describe('adapterBoundary (S25)', () => {
+  it('no adapter imports a gateway-core concern', () => {
+    const offenders: string[] = [];
+    for (const file of files()) {
+      const text = readFileSync(file, 'utf8');
+      for (const mod of FORBIDDEN) {
+        if (text.includes("from '../" + mod)) {
+          offenders.push(path.basename(file) + ' imports ../' + mod);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('no adapter reads the environment — configuration arrives as an argument', () => {
+    const offenders: string[] = [];
+    for (const file of files()) {
+      if (/process\.env/.test(readFileSync(file, 'utf8'))) {
+        offenders.push(path.basename(file) + ' reads process.env');
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('no adapter implements a retry, a budget, a jurisdiction check or a log write', () => {
+    const checks: [RegExp, string][] = [
+      [/\bMAX_ATTEMPTS\b|for\s*\(\s*let attempt/, 'a retry loop'],
+      [/isRetryableStatus/, 'the retry policy'],
+      [/AuditLogger|kind: 'call\./, 'a log write'],
+      [/allowedJurisdictions/, 'a jurisdiction check'],
+      [/RateLimiter|budget_exhausted/, 'a budget check'],
+    ];
+    const offenders: string[] = [];
+    for (const file of files()) {
+      const text = readFileSync(file, 'utf8');
+      for (const [pattern, what] of checks) {
+        if (pattern.test(text)) offenders.push(path.basename(file) + ' contains ' + what);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('the interface still records exactly what an adapter owns', () => {
+    const types = readFileSync(path.join(ADAPTERS, 'types.ts'), 'utf8');
+    for (const member of ['buildCall', 'readResponse', 'decodeEvent', 'credential: ResolvedCredential']) {
+      expect(types).toContain(member);
+    }
+  });
+});
+```
+
+Run: `npx vitest run --project gateway apps/gateway/test/adapterBoundary.test.ts` — Expected: PASS, 4 tests.
+
+**Mutation-test it, three ways:**
+
+1. Add `import { getAdapter } from '../callModel.ts';` to `adapters/openai.ts`. Expected: FAIL on *"no adapter imports a gateway-core concern"*. Remove it.
+2. Add `const origin = process.env.GATEWAY_PUBLIC_ORIGIN;` to `adapters/openrouter.ts`. Expected: FAIL on *"no adapter reads the environment"*. Remove it.
+3. Add `for (let attempt = 0; attempt < 3; attempt++) {}` to `adapters/openai.ts`. Expected: FAIL on *"no adapter implements a retry, a budget, a jurisdiction check or a log write"*. Remove it.
+
+**Mutation 2 matters most: it is the exact code this plan itself contained until the pre-flight found it**, so the test is proved against a real defect rather than an invented one.
+
+- [ ] **Step 8: Run the tests**
 
 Run: `npx vitest run --project gateway apps/gateway/test/openaiCompatible.test.ts`
-Expected: PASS, 20 tests.
+Expected: PASS, 22 tests (20, plus the two new registry cases).
 
-- [ ] **Step 8: Mutation test the "no empty answer" rule**
+- [ ] **Step 9: Mutation test the "no empty answer" rule**
 
 In `readResponse`, replace the `throw` with `return { content: '', usage: { promptTokens: 0, completionTokens: 0 } };`. Run the test. Expected: FAIL on *"THROWS when there is no message content, rather than returning an empty answer"*. Restore.
 
 This is `CLAUDE.md`'s founding case at a new boundary: an empty completion recorded as a finding reads as "the agreement is silent on this point".
 
-- [ ] **Step 9: Mutation test the registry completeness guard**
+- [ ] **Step 10: Mutation test the registry completeness guard, both directions**
 
-Comment out `openrouterAdapter` in `ALL_ADAPTERS`. Run. Expected: FAIL on *"has an adapter for every provider id"*. Restore.
+Comment out `makeOpenrouterAdapter(config.publicOrigin)` in `buildRegistry`. Run. Expected: FAIL on *"registers every provider id that is not on PENDING"*. Restore.
 
-- [ ] **Step 10: Commit**
+Then add `'openrouter'` to `PENDING` **without** removing the adapter. Expected: FAIL on the same test. Restore. The list and reality must agree in both directions, which is what stops `PENDING` becoming a place to hide an unimplemented provider.
+
+- [ ] **Step 11: Commit**
 
 ```bash
 git add apps/gateway/src/adapters apps/gateway/test/openaiCompatible.test.ts
@@ -4041,19 +4407,25 @@ export const anthropicAdapter: ProviderAdapter = {
 
 **A note on `usage` accumulation:** Anthropic reports input tokens in `message_start` and output tokens in `message_delta`, so a stream produces two `usage` events with the other field zero. Task 12's stream route therefore **accumulates by taking the maximum of each field across every `usage` event** rather than replacing — the OpenAI-shaped providers emit one complete usage chunk, and max-merging is correct for both without a provider branch outside the adapter.
 
-- [ ] **Step 4: Run the tests**
+- [ ] **Step 4: Register it, and shrink `PENDING`**
 
-Run: `npx vitest run --project gateway apps/gateway/test/anthropic.test.ts`
-Expected: PASS, 17 tests.
+In `adapters/registry.ts`, add `anthropicAdapter` to `buildRegistry`'s `all` array and remove `'anthropic'` from `PENDING`, **in this commit**. Task 8's two registry tests then assert the new state with no edit: `registers every provider id that is not on PENDING` now expects five, and `throws for an unregistered id` expects `Not yet implemented: recorded`.
 
-- [ ] **Step 5: Mutation test the tool-call re-serialisation**
+Update that one expected string in `openaiCompatible.test.ts`. It is the only edit Task 8's suite needs, and having to make it is the point — the list and reality are checked against each other rather than kept in step by hand.
 
-In `readResponse`, change `const content = text || (tool ? JSON.stringify(tool.input) : '');` to `const content = text;`. Run. Expected: FAIL on *"re-serialises a tool-use answer to JSON"* and on *"THROWS when there is no text and no tool use"* is unaffected — but the schema path now returns nothing, which is precisely the failure this catches: every structured call to Anthropic (that is, every `chatJson` — nine call sites, including `extractClause`) would throw "no message content" and every clause would show as an error. Restore.
+- [ ] **Step 5: Run the tests**
 
-- [ ] **Step 6: Commit**
+Run: `npx vitest run --project gateway`
+Expected: PASS — `anthropic.test.ts` 17 tests, and Task 8's registry cases green against the new `PENDING`.
+
+- [ ] **Step 6: Mutation test the tool-call re-serialisation**
+
+In `readResponse`, change `const content = text || (tool ? JSON.stringify(tool.input) : '');` to `const content = text;`. Run. Expected: FAIL on *"re-serialises a tool-use answer to JSON"*. *"THROWS when there is no text and no tool use"* is unaffected — but the schema path now returns nothing, which is precisely the failure this catches: every structured call to Anthropic (that is, every `chatJson` — **seven** call sites, including `extractClause` and `extractCollectionClause`) would throw "no message content" and every clause would show as an error. Restore.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/gateway/src/adapters/anthropic.ts apps/gateway/test/anthropic.test.ts
+git add apps/gateway/src/adapters/anthropic.ts apps/gateway/src/adapters/registry.ts apps/gateway/test/anthropic.test.ts apps/gateway/test/openaiCompatible.test.ts
 git commit -F .git/COMMIT_MSG_TASK9
 ```
 
@@ -4070,13 +4442,13 @@ All four are confined to this file. The moment `if (provider ===
 is gone and the next difference gets handled twice.
 
 Mutation-tested: tool-use re-serialisation removed — every structured call
-(every chatJson, nine call sites) would throw "no message content".
+(every chatJson, seven call sites) would throw "no message content".
 Restored.
 ```
 
 ---
 
-## Task 10: The adapter stream-conformance suite (D5)
+## Task 10: The adapter stream-conformance suite (P5)
 
 **Type:** test
 
@@ -4086,7 +4458,7 @@ Restored.
 - Create: `apps/gateway/test/adapterConformance.test.ts`
 
 **Interfaces:**
-- Consumes: `ALL_ADAPTERS` (Task 8); `createSseEventReader` (Task 3).
+- Consumes: `buildRegistry`, `PENDING` (Task 8); `createSseEventReader` (Task 3).
 - Produces: nothing importable. It is the guard that makes "five providers, one class of streaming bug" survivable.
 
 **Why this is a task of its own.** Streaming across five providers is the hardest part of Stage 1, and the honest reason is that the failure is silent: an adapter that drops the last event yields a short answer, not an error. One shared battery over recorded fixtures is what turns that into a red test. **Write this task before Task 12**, so the stream route is built against decoders already proved.
@@ -4105,15 +4477,29 @@ curl -N https://api.openai.com/v1/chat/completions \
 
 - [ ] **Step 1: Write `expected.json`**
 
+Each entry gains a **`nonStreamedBody`** — the provider's own non-streamed response envelope for the *same* completion. It is what makes §14's decisive assertion possible.
+
 ```json
 {
-  "azure-foundry": { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true },
+  "azure-foundry": { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true,
+    "nonStreamedBody": { "choices": [{ "message": { "content": "one two three" } }],
+                         "usage": { "prompt_tokens": 14, "completion_tokens": 5 } } },
   "azure-openai":  { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true },
   "openai":        { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true },
   "anthropic":     { "text": "one two three", "promptTokens": 16, "completionTokens": 5, "synthetic": true },
   "openrouter":    { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true },
-  "recorded":      { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true }
+  "recorded":      { "text": "one two three", "promptTokens": 14, "completionTokens": 5, "synthetic": true,
+    "nonStreamedBody": { "choices": [{ "message": { "content": "one two three" } }],
+                         "usage": { "prompt_tokens": 14, "completion_tokens": 5 } } }
 }
+```
+
+`azure-openai`, `openai` and `openrouter` take the same OpenAI-shaped `nonStreamedBody` as `azure-foundry`. **Anthropic's is its own shape** — that is the point of including it:
+
+```json
+  "anthropic": { "text": "one two three", "promptTokens": 16, "completionTokens": 5, "synthetic": true,
+    "nonStreamedBody": { "content": [{ "type": "text", "text": "one two three" }],
+                         "usage": { "input_tokens": 16, "output_tokens": 5 } } }
 ```
 
 Set `"synthetic": false` for each provider whose fixture you actually recorded, and add the recording date to the fixture's first line as an SSE comment (`: recorded 2026-08-28 against gpt-4o`) — an SSE comment line, so the fixture stays a valid stream.
@@ -4179,7 +4565,31 @@ data: {"type":"message_stop"}
 
 `azure-foundry.txt`, `azure-openai.txt` and `openrouter.txt` use the same OpenAI-shaped body as `openai.txt` — copy it, change only the header comment. (They genuinely are the same wire format; that is why one adapter base serves four providers, and a conformance fixture that pretends otherwise would be testing a fiction.)
 
-- [ ] **Step 3: Write the conformance suite**
+- [ ] **Step 3: Write the request fixtures**
+
+One per provider, at `apps/gateway/test/fixtures/requests/<id>.json`, each holding the allowlist entry, the adapter request, the resolved credential and **the exact body that provider expects**:
+
+```json
+{
+  "entry": { "id": "e", "provider": "openai", "model": "gpt-4o", "label": "l",
+    "jurisdiction": { "bloc": "US", "region": "us", "label": "United States" },
+    "contextLength": 128000, "supportsImages": true, "supportsStructuredOutput": true,
+    "isDefault": true, "endpoint": "https://api.openai.com",
+    "credential": { "source": "env", "var": "K" } },
+  "request": { "system": "You are a contract reviewer.", "user": "Summarise clause 14.",
+    "maxTokens": 4096, "stream": false },
+  "credential": { "kind": "api-key", "key": "sk-1" },
+  "body": { "model": "gpt-4o", "max_tokens": 4096,
+    "messages": [{ "role": "system", "content": "You are a contract reviewer." },
+                 { "role": "user", "content": "Summarise clause 14." }] }
+}
+```
+
+Anthropic's is the one that differs and is therefore the one worth reading: `system` at the top level, no system message, `max_tokens` present.
+
+These are **recorded expectations, not assertions restated in JSON.** Where you can, capture the body from the smoke script (Task 11 Step 8) against a live provider and record that the call succeeded; where you cannot, build it from the provider's published shape and mark it in the file the way the stream fixtures are marked.
+
+- [ ] **Step 4: Write the conformance suite**
 
 `apps/gateway/test/adapterConformance.test.ts`:
 
@@ -4188,12 +4598,17 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { createSseEventReader } from '@lexprompt/core';
-import { ALL_ADAPTERS } from '../src/adapters/registry.ts';
+import { buildRegistry, PENDING } from '../src/adapters/registry.ts';
 import type { ProviderAdapter } from '../src/adapters/types.ts';
+
+const registry = buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' });
 
 const DIR = path.join(__dirname, 'fixtures/streams');
 const EXPECTED = JSON.parse(readFileSync(path.join(DIR, 'expected.json'), 'utf8')) as Record<
-  string, { text: string; promptTokens: number; completionTokens: number; synthetic: boolean }
+  string, {
+    text: string; promptTokens: number; completionTokens: number; synthetic: boolean;
+    nonStreamedBody: unknown;
+  }
 >;
 
 /** Drives one adapter over one delivery of one fixture, exactly as the
@@ -4225,13 +4640,20 @@ function drive(adapter: ProviderAdapter, chunks: string[]) {
 
 const byBytes = (s: string): string[] => [...s];
 
-describe('every provider has a conformance fixture (D5)', () => {
-  it('so a sixth provider cannot ship without one', () => {
-    expect(ALL_ADAPTERS.map(a => a.id).sort()).toEqual(Object.keys(EXPECTED).sort());
+describe('every provider has a conformance fixture (P5)', () => {
+  it('so a new provider cannot ship without one', () => {
+    expect(registry.all.map(a => a.id).sort()).toEqual(Object.keys(EXPECTED).sort());
+  });
+
+  // Until Task 13 this file runs over four or five adapters, not six. The
+  // fixture set must track the registry exactly — a fixture for an
+  // unregistered provider is as much a lie as an unfixtured one.
+  it('has no fixture for a provider that is not registered yet', () => {
+    expect(Object.keys(EXPECTED).filter(id => PENDING.includes(id as never))).toEqual([]);
   });
 });
 
-describe.each(ALL_ADAPTERS.map(a => [a.id, a] as const))('%s stream conformance', (id, adapter) => {
+describe.each(registry.all.map(a => [a.id, a] as const))('%s stream conformance', (id, adapter) => {
   const raw = readFileSync(path.join(DIR, `${id}.txt`), 'utf8');
   const want = EXPECTED[id];
 
@@ -4267,9 +4689,91 @@ describe.each(ALL_ADAPTERS.map(a => [a.id, a] as const))('%s stream conformance'
 
   it('reports that it ended, so the route never emits done on a truncated stream', () => {
     // Cut the fixture before its terminator: the decoder must NOT report an
-    // end, which is what makes D2 reachable at the route layer.
+    // end, which is what makes P2 reachable at the route layer.
     const truncated = raw.slice(0, Math.floor(raw.length * 0.6));
     expect(drive(adapter, [truncated]).ended).toBe(false);
+  });
+
+  // ==================================================================
+  // THE assertion. §14: "the concatenated stream deltas equal the
+  // non-streamed completion byte for byte." §10.4: "the assertion that
+  // matters most is the one the original defect failed." §19 warns it is
+  // also "the one most likely to be dropped as slow".
+  //
+  // Every other case in this file compares a stream to a stream, so all of
+  // them share one direction of one mechanism: a decoder that dropped the
+  // last delta consistently would pass every one. This is the only case
+  // that reaches outside that mechanism for its expected value, and it is
+  // the case that catches a dropped or duplicated token.
+  // ==================================================================
+  it('concatenated stream deltas equal the non-streamed completion, byte for byte', () => {
+    expect(drive(adapter, [raw]).text).toBe(adapter.readResponse(want.nonStreamedBody).content);
+  });
+
+  // §18.2 names the CRLF variant of this case specifically, because CRLF is
+  // where the original defect lived.
+  it('…and still does when every separator is CRLF', () => {
+    expect(drive(adapter, [raw.replace(/\n/g, '\r\n')]).text)
+      .toBe(adapter.readResponse(want.nonStreamedBody).content);
+  });
+
+  it('…and still does when delivered one byte at a time', () => {
+    expect(drive(adapter, byBytes(raw)).text)
+      .toBe(adapter.readResponse(want.nonStreamedBody).content);
+  });
+
+  it('reports the same usage from the stream as from the non-streamed body', () => {
+    const streamed = drive(adapter, [raw]);
+    const direct = adapter.readResponse(want.nonStreamedBody);
+    expect({ promptTokens: streamed.promptTokens, completionTokens: streamed.completionTokens })
+      .toEqual(direct.usage);
+  });
+
+  // §14's empty-completion case. A provider that streams no deltas at all
+  // must not look like a successful empty answer at either end.
+  it('an empty completion is empty in the stream and REFUSED in the non-streamed body', () => {
+    const empty = adapter.id === 'anthropic'
+      ? 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3,"output_tokens":0}}}\n\n'
+        + 'event: message_stop\ndata: {"type":"message_stop"}\n\n'
+      : 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n';
+    const got = drive(adapter, [empty]);
+    expect(got.text).toBe('');
+    expect(got.ended).toBe(true);
+    // And the non-streamed path refuses rather than returning '' — the
+    // founding defect, which reads back as "the agreement is silent on
+    // this point".
+    const emptyBody = adapter.id === 'anthropic'
+      ? { content: [] }
+      : { choices: [{ message: {} }] };
+    expect(() => adapter.readResponse(emptyBody)).toThrow(/no message content/i);
+  });
+
+  // §14's mid-stream-error case. `drive()` already collects it; nothing
+  // asserted on it until now, so a decoder that swallowed a provider error
+  // as an unknown event would have passed.
+  it('surfaces a mid-stream provider error rather than swallowing it', () => {
+    const errored = adapter.id === 'anthropic'
+      ? 'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"one"}}\n\n'
+        + 'event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}\n\n'
+      : 'data: {"choices":[{"delta":{"content":"one"}}]}\n\n'
+        + 'data: {"error":{"message":"upstream exploded","code":500}}\n\n';
+    const got = drive(adapter, [errored]);
+    expect(got.error).not.toBe(null);
+    expect(got.error?.status).toBeGreaterThanOrEqual(500);
+    expect(got.ended).toBe(false);       // an error is not a clean end
+  });
+
+  // §14's request round-trip. This is what `test/fixtures/requests/` in the
+  // File Structure is for; without it that directory was a promise.
+  it('builds the request body this provider actually expects', () => {
+    const expectedBody = JSON.parse(
+      readFileSync(path.join(__dirname, `fixtures/requests/${adapter.id}.json`), 'utf8'),
+    ) as { entry: never; request: never; credential: never; body: unknown };
+    const call = adapter.buildCall(
+      { ...expectedBody.request, entry: expectedBody.entry } as never,
+      expectedBody.credential as never,
+    );
+    expect(call.body).toEqual(expectedBody.body);
   });
 
   it('is recorded against a live provider, or is marked synthetic', () => {
@@ -4281,32 +4785,46 @@ describe.each(ALL_ADAPTERS.map(a => [a.id, a] as const))('%s stream conformance'
 });
 ```
 
-- [ ] **Step 4: Run it**
+- [ ] **Step 5: Run it**
 
 Run: `npx vitest run --project gateway apps/gateway/test/adapterConformance.test.ts`
-Expected: PASS — 1 registry test plus 6 tests × 6 providers = 37 tests. The `recorded` rows are not ceremony: they are what proves the offline stub's stream behaves exactly like a provider's, which is the property that stops a fixture-backed local run from being a different code path.
+Expected: PASS — 2 registry tests plus 13 tests × 6 providers = 80 tests, **once Task 13 has emptied `PENDING`**. Run at Task 10 as written it covers the five adapters registered by then and `expected.json` carries five entries; Task 13's commit adds `recorded.txt`, its `expected.json` entry and its `fixtures/requests/recorded.json` in the same change that registers the adapter, and this count becomes true. The `recorded` rows are not ceremony: they are what proves the offline stub's stream behaves exactly like a provider's, which is the property that stops a fixture-backed local run from being a different code path.
 
-- [ ] **Step 5: Mutation test — the two per-provider bugs, at the shared surface**
+- [ ] **Step 6: Mutation test — the three per-provider bugs, at the shared surface**
 
-1. Delete `for (const raw of reader.flush()) handle(raw);` from `drive`. Expected: FAIL on *"does not lose the last event when the stream ends without a trailing blank line"* for **all five** providers — which is the point: one splitter means one fix, and this suite proves the fix reaches every adapter.
-2. In `openaiCompatible.decodeEvent`, change `if (data === '[DONE]') return { kind: 'end' };` to `return null`. Expected: FAIL on *"decodes the recorded stream to the expected text, usage and end"* for the four OpenAI-shaped providers and for `recorded` (which reuses the same base), and **not** for Anthropic — which is also the point: a provider-specific regression is isolated to that provider's rows.
+1. Delete `for (const raw of reader.flush()) handle(raw);` from `drive`. Expected: FAIL on *"does not lose the last event when the stream ends without a trailing blank line"* for **all six** providers — which is the point: one splitter means one fix, and this suite proves the fix reaches every adapter.
+2. In `openaiCompatible.decodeEvent`, change `if (data === '[DONE]') return { kind: 'end' };` to `return null`. Expected: FAIL on *"decodes the recorded stream to the expected text, usage and end"* for every OpenAI-shaped provider registered at the time (the four from Task 8, plus `recorded` once Task 13 lands, since it reuses the same base), and **not** for Anthropic — which is also the point: a provider-specific regression is isolated to that provider's rows.
 
-Restore both.
+3. **The one the whole suite exists for.** In `createSseEventReader`'s `push`, drop the last complete event: `return parts.filter(p => p.trim().length > 0).slice(0, -1);`. Expected: FAIL on *"concatenated stream deltas equal the non-streamed completion, byte for byte"* for **all six** providers — and on very little else, because every stream-to-stream case loses the same token from both sides and still agrees with itself. That asymmetry is exactly why §14 calls this assertion the decisive one.
 
-- [ ] **Step 6: Commit**
+Restore all three.
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/gateway/test/adapterConformance.test.ts apps/gateway/test/fixtures/streams
+git add apps/gateway/test/adapterConformance.test.ts apps/gateway/test/fixtures
 git commit -F .git/COMMIT_MSG_TASK10
 ```
 
 ```
-test(gateway): one stream-conformance battery over every provider (D5)
+test(gateway): one stream-conformance battery over every provider (P5)
+
+The decisive assertion first, because §14 and §19 both name it as the one
+that matters and the one most likely to be dropped: the concatenated stream
+deltas equal the non-streamed completion BYTE FOR BYTE — as recorded, on the
+CRLF variant, and one byte at a time. Every other case here compares a
+stream to a stream, so a decoder that dropped the last delta consistently
+would pass all of them; this is the only case that reaches outside the
+mechanism for its expected value, and it is the one that catches a dropped
+or duplicated token. This codebase has already shipped that bug once.
 
 Four deliveries of each provider's recorded stream — as recorded, all-CRLF,
 one byte at a time, and with the trailing blank line removed — must yield
 identical text, usage and end. Plus: a truncated stream must NOT report an
-end, which is what makes D2 reachable at the route layer.
+end, which is what makes P2 reachable at the route layer; an empty
+completion is empty in the stream and REFUSED in the non-streamed body; a
+mid-stream provider error is surfaced rather than swallowed; and each
+provider's request body round-trips against a recorded fixture.
 
 A test asserts every registered adapter has a fixture, so a sixth provider
 cannot ship untested. Fixtures marked synthetic say so in the file: a
@@ -4331,12 +4849,12 @@ OpenAI-shaped and not Anthropic (a provider regression stays isolated).
 - Modify: `apps/gateway/src/server.ts`, `apps/gateway/src/main.ts`
 
 **Interfaces:**
-- Consumes: `Allowlist` (5), `AuditLogger` (6), `CredentialResolver` (7), `getAdapter` (8), `GatewayConfig` (4).
+- Consumes: `Allowlist` (5), `AuditLogger` (6), `CredentialResolver` (7), `buildRegistry` (8), `GatewayConfig` (4).
 - Produces:
   - `interface Transport { fetch(url: string, init: { method: string; headers: Record<string, string>; body: string; signal: AbortSignal }): Promise<TransportResponse> }`
   - `interface TransportResponse { status: number; ok: boolean; json(): Promise<unknown>; text(): Promise<string>; body: AsyncIterable<Uint8Array> | null }`
   - `callModel(ctx: CallContext, req: InferRequest, signal?: AbortSignal): Promise<InferResponse>`
-  - `interface CallContext { config: GatewayConfig; allowlist: Allowlist; audit: AuditLogger; credentials: CredentialResolver; transport: Transport; limiter: RateLimiter; workspaceId: string; actorIssuer: string; actorSubject: string }`
+  - `interface CallContext { config: GatewayConfig; allowlist: Allowlist; audit: AuditLogger; credentials: CredentialResolver; transport: Transport; limiter: RateLimiter; registry: ReturnType<typeof buildRegistry>; workspaceId: string; actorIssuer: string; actorSubject: string }`
   - `registerInfer(app, makeContext)`, `registerModels(app, allowlist)`
 
 - [ ] **Step 1: Write the failing tests**
@@ -4348,6 +4866,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { callModel } from '../src/callModel.ts';
 import { Allowlist } from '../src/allowlist.ts';
 import { AuditLogger, type AuditRecord, type AuditSink } from '../src/audit.ts';
+import { buildRegistry } from '../src/adapters/registry.ts';
 import type { ModelEntry } from '../src/config.ts';
 import type { Transport, TransportResponse } from '../src/callModel.ts';
 
@@ -4380,10 +4899,13 @@ function ctx(transport: Transport, sink = new Sink()) {
   return {
     config: {
       maxPromptChars: 100, requestTimeoutMs: 5000, defaultMaxTokens: 4096,
+      allowedJurisdictions: ['UK', 'EU'],
+      publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded',
     } as never,
     allowlist: new Allowlist([entry]),
     audit: new AuditLogger(sink, () => new Date(), (() => { let n = 0; return () => `call-${++n}`; })()),
     credentials: { resolve: async () => ({ kind: 'bearer' as const, token: 'mi' }) },
+    registry: buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' }),
     transport,
     limiter: { check: () => {}, record: () => {} } as never,
     workspaceId: 'ws-1',
@@ -4421,6 +4943,34 @@ describe('callModel — the one call path', () => {
     await expect(callModel(c as never, { ...REQ, modelChoiceId: 'gpt-5' }))
       .rejects.toMatchObject({ code: 'model_not_allowed', status: 400 });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // H4 / S27's per-call half, and §14's named mutation (c). The assertion
+  // that carries the weight is `fetchSpy` — NOT the 403.
+  it('refuses a model whose jurisdiction is outside the declared set, and sends NOTHING', async () => {
+    const fetchSpy = vi.fn(async () => ok('x'));
+    const c = ctx({ fetch: fetchSpy });
+    c.config.allowedJurisdictions = ['EU'];        // entry declares UK
+    await expect(callModel(c as never, REQ))
+      .rejects.toMatchObject({ code: 'jurisdiction_not_allowed', status: 403 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('names the provider, the jurisdiction and the declared set in the refusal', async () => {
+    const c = ctx({ fetch: async () => ok('x') });
+    c.config.allowedJurisdictions = ['EU'];
+    await expect(callModel(c as never, REQ))
+      .rejects.toThrow(/azure-foundry[\s\S]*UK[\s\S]*UK South[\s\S]*EU/);
+  });
+
+  it('records the refused attempt, because a refusal is still an attempt', async () => {
+    const sink = new Sink();
+    const c = ctx({ fetch: async () => ok('x') }, sink);
+    c.config.allowedJurisdictions = ['EU'];
+    await expect(callModel(c as never, REQ)).rejects.toThrow();
+    expect(sink.records[0]).toMatchObject({ kind: 'call.started', provider: 'azure-foundry' });
+    expect(sink.records[1]).toMatchObject({ kind: 'call.finished', ok: false,
+      errorCode: 'jurisdiction_not_allowed' });
   });
 
   it('refuses a prompt over the configured maximum, with prompt_too_large', async () => {
@@ -4498,7 +5048,7 @@ describe('callModel — the one call path', () => {
     expect((sink.records[1] as { retries: number }).retries).toBe(1);
   });
 
-  // D3, at the route level.
+  // P3, at the route level.
   it('makes NO upstream call when the audit sink fails', async () => {
     const fetchSpy = vi.fn(async () => ok('x'));
     const failing = { write: async () => { throw new Error('pipe'); } };
@@ -4537,7 +5087,7 @@ import type { Allowlist } from './allowlist.ts';
 import type { AuditLogger } from './audit.ts';
 import type { CredentialResolver } from './credentials/types.ts';
 import { redactCredential } from './credentials/resolve.ts';
-import { getAdapter } from './adapters/registry.ts';
+import type { buildRegistry } from './adapters/registry.ts';
 import type { RateLimiter } from './rateLimit.ts';
 
 const MAX_ATTEMPTS = 3;
@@ -4566,6 +5116,10 @@ export interface CallContext {
   credentials: CredentialResolver;
   transport: Transport;
   limiter: RateLimiter;
+  /** Built once in `main.ts` from the loaded config, so an adapter needing
+   *  configuration takes it as a constructor argument rather than reading
+   *  it (S25, Task 8 Step 7). */
+  registry: ReturnType<typeof buildRegistry>;
   workspaceId: string;
   actorIssuer: string;
   actorSubject: string;
@@ -4598,7 +5152,7 @@ export async function prepare(ctx: CallContext, req: InferRequest, streaming: bo
   // Order matters and is load-bearing: the credential is resolved BEFORE
   // the audit record is written, so a credential failure never produces a
   // started record with no call; and the audit record is written before the
-  // socket opens (D3), so a call never happens unlogged.
+  // socket opens (P3), so a call never happens unlogged.
   const credential = await ctx.credentials.resolve(entry.credential);
 
   const callId = await ctx.audit.start({
@@ -4614,7 +5168,31 @@ export async function prepare(ctx: CallContext, req: InferRequest, streaming: bo
     streaming,
   });
 
-  const adapter = getAdapter(entry.provider);
+  // ------------------------------------------------------------------
+  // S27's per-call half. The startup gate (Task 4) makes an out-of-set
+  // entry unloadable; this makes the refusal a RUNTIME fact with a subject,
+  // which is what §18.2's "without the request reaching the provider" is
+  // about and what §14's mutation (c) is written against. Without it that
+  // DoD line is vacuously true — no loadable entry could ever violate it —
+  // and a "cannot fail" assertion is how the startup gate gets relaxed
+  // later with nothing going red.
+  //
+  // AFTER `audit.start`, deliberately: a refused call is still an attempt,
+  // and the record of it is the thing a Risk reviewer asks for. BEFORE
+  // `buildCall`, so nothing is shaped and nothing is sent.
+  // ------------------------------------------------------------------
+  if (!ctx.config.allowedJurisdictions.includes(entry.jurisdiction.bloc)) {
+    throw new ModelError(
+      `This model (${entry.provider}, ${entry.model}) is processed in `
+      + `${entry.jurisdiction.bloc} · ${entry.jurisdiction.label}, which this deployment `
+      + `does not permit (${ctx.config.allowedJurisdictions.join(', ')}). No request was sent.`,
+      'jurisdiction_not_allowed',
+      403,
+      callId,
+    );
+  }
+
+  const adapter = ctx.registry.get(entry.provider);
   const call = adapter.buildCall({
     entry,
     system: req.system,
@@ -4849,15 +5427,27 @@ Run it when you have a credential:
 GATEWAY_MODELS_FILE=./models.json GATEWAY_CALLER_AUTH=mtls npm run smoke -w @lexprompt/gateway
 ```
 
-**This is the only step in Stage 1 that cannot be proved offline** (D5). If you cannot run it, say so plainly in the task's completion note rather than implying you did — `CLAUDE.md`'s rule, and the fixtures stay marked `synthetic`.
+**This is the only step in Stage 1 that cannot be proved offline** (P5). If you cannot run it, say so plainly in the task's completion note rather than implying you did — `CLAUDE.md`'s rule, and the fixtures stay marked `synthetic`.
 
-- [ ] **Step 9: Mutation test the retry policy**
+- [ ] **Step 9: Mutation test the per-call jurisdiction gate — §14's mutation (c)**
+
+Replace the `throw new ModelError(… 'jurisdiction_not_allowed' …)` with a warning and let the call proceed:
+
+```ts
+  if (!ctx.config.allowedJurisdictions.includes(entry.jurisdiction.bloc)) {
+    process.stderr.write(`WARN: ${entry.jurisdiction.bloc} not in allowed set\n`);
+  }
+```
+
+Run `callModel.test.ts`. Expected: FAIL on *"refuses a model whose jurisdiction is outside the declared set, and sends NOTHING"* — and **read which assertion failed.** It must be `expect(fetchSpy).not.toHaveBeenCalled()`, not the status. The spec names this mutation precisely because a warn-and-proceed implementation passes every happy-path test and every status assertion; the only thing that catches it is asserting that no request reached the provider. Restore.
+
+- [ ] **Step 10: Mutation test the retry policy**
 
 Change `if (!isRetryableStatus(response.status))` to `if (response.status < 400)`. Run `callModel.test.ts`. Expected: FAIL on *"fails immediately on 401, 402, 403 and 400 without retrying"* (three retries each). Restore.
 
 Then delete the `redactCredential` call in `toModelError`. Expected: FAIL on *"never lets a provider error body carry a credential outwards"*. Restore.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add apps/gateway/src/callModel.ts apps/gateway/src/routes apps/gateway/src/server.ts apps/gateway/src/main.ts apps/gateway/src/smoke.ts apps/gateway/test/callModel.test.ts apps/gateway/test/infer.route.test.ts
@@ -4868,8 +5458,16 @@ git commit -F .git/COMMIT_MSG_TASK11
 feat(gateway): one call path — retry, timeout, abort, audit, redaction
 
 §10's retry rule (429 and 5xx only, fail fast on 400/401/402/403) is
-enforced here, once, for all five providers rather than five times. So are
-the timeout, the abort passthrough, the prompt cap and D3's ordering:
+enforced here, once, for every provider rather than once each.
+
+S27's per-call jurisdiction gate lives here too, after the audit record and
+before anything is shaped or sent. The startup gate makes an out-of-set entry
+unloadable; this makes the refusal a runtime fact with a subject, so §18.2's
+"without the request reaching the provider" has something it can fail on.
+Mutation-tested with §14's own mutation (c) — warn and proceed — where the
+assertion that catches it is that the transport was never called, not the
+403. So are
+the timeout, the abort passthrough, the prompt cap and P3's ordering:
 credential, then audit record, then socket — so a credential failure never
 leaves a started record with no call, and no call ever happens unlogged.
 
@@ -4896,10 +5494,10 @@ The live smoke script is the one thing here that cannot be proved offline.
 - Modify: `apps/gateway/src/server.ts`
 
 **Interfaces:**
-- Consumes: `prepare` (Task 11), `createSseEventReader`, `encodeFrame` (Task 3), `getAdapter`/`decodeEvent` (Tasks 8–9).
+- Consumes: `prepare` and `CallContext.registry` (Task 11), `createSseEventReader`, `encodeFrame` (Task 3), the adapters' `decodeEvent` (Tasks 8–9).
 - Produces: `registerInferStream(app, makeContext)` — responds `text/event-stream` carrying `Frame`s and nothing else.
 
-**Four rules this route enforces, all of them D2 at the upstream edge:**
+**Four rules this route enforces, all of them P2 at the upstream edge:**
 1. A `done` frame is emitted **only** after the adapter reported `end`. Never in a `finally`.
 2. A stream that ends without `end` emits an **`error` frame** with `stream_truncated` — and the browser's `readFrames` then throws, so a half-answer never renders as a whole one.
 3. An `error` event from the adapter, or a non-2xx before the stream opens, emits an `error` frame and stops.
@@ -4944,7 +5542,7 @@ describe('POST /v1/infer/stream', () => {
     ]);
   });
 
-  // D2 at the upstream edge. THE rule of this task.
+  // P2 at the upstream edge. THE rule of this task.
   it('emits an ERROR frame, not a done frame, when the provider stream stops early', async () => {
     const app = buildTestServer({
       stream: fakeStream(200, 'data: {"choices":[{"delta":{"content":"half an ans"}}]}\n\n'),
@@ -5180,7 +5778,7 @@ Export `toModelError` from `callModel.ts` rather than dynamically importing it �
 Run: `npx vitest run --project gateway apps/gateway/test/inferStream.route.test.ts`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 5: Mutation test D2 at this boundary — two mutations**
+- [ ] **Step 5: Mutation test P2 at this boundary — two mutations**
 
 1. **`done` in a `finally`.** Replace the three-way `if (failure) … else if (ended) … else …` with an unconditional `reply.raw.write(encodeFrame({ type: 'done', usage, callId }));`. Run. Expected: FAIL on *"emits an ERROR frame, not a done frame, when the provider stream stops early"*, *"emits an error frame when the provider errors mid-stream"* and *"records call.finished with ok:false and stream_truncated"*. Restore.
 2. **Usage replace instead of max-merge.** Change both `Math.max(...)` to plain assignment. Run. Expected: FAIL on *"max-merges usage across events"* — Anthropic's `message_delta` would zero the input tokens, and every Anthropic call would be logged as having sent nothing. Restore.
@@ -5219,18 +5817,20 @@ replaced rather than max-merged (1). Restored.
 **Files:**
 - Create: `apps/gateway/src/adapters/recorded.ts`, `apps/gateway/fixtures/recorded/*.json`, `apps/gateway/fixtures/recorded/streams/*.txt`
 - Create: `apps/gateway/test/recorded.test.ts`
-- Modify: `apps/gateway/src/adapters/registry.ts` (Task 8 already imports it), `apps/gateway/src/routes/infer.ts` and `inferStream.ts` (the `X-LexPrompt-Provider` header)
+- Modify: `apps/gateway/src/adapters/registry.ts` (register it and empty `PENDING`), `apps/gateway/src/routes/infer.ts` and `inferStream.ts` (the `X-LexPrompt-Provider` header)
 - Modify: `models.local-recorded.example.json` (Task 24 ships it)
 
 **Interfaces:**
 - Consumes: `ProviderAdapter`, `AdapterRequest`, `AdapterEvent` (Task 8); `sseFields` (Task 3).
 - Produces: `recordedAdapter: ProviderAdapter` with `id: 'recorded'`; `makeRecordedAdapter(dir, readFile)` for tests.
 
-**This task changed with spec Revision 2 (§5.1), and the change is the point of it.** The stub was a *transport* selected by an environment flag — which is a second code path, chosen by a branch on the environment, and §5.1 and S30 forbid exactly that. It is now a **registered provider adapter**: it appears in `ALL_ADAPTERS`, an operator selects it by putting it in `models.json` like any other, it passes `adapterConformance` like any other, and it declares a jurisdiction like any other — so a firm deployment refuses it through **S27's existing mechanism** rather than through a new guard.
+**This task changed with spec Revision 2 (§5.1), and the change is the point of it.** The stub was a *transport* selected by an environment flag — which is a second code path, chosen by a branch on the environment, and §5.1 and S30 forbid exactly that. It is now a **registered provider adapter**: `buildRegistry` constructs it, an operator selects it by putting it in `models.json` like any other, it passes `adapterConformance` like any other, and it declares a jurisdiction like any other — so a firm deployment refuses it through **S27's existing mechanism** rather than through a new guard.
 
 That is strictly stronger than the flag-and-guard version this task previously described. The guard was a check somebody had to remember to write; the jurisdiction refusal is a check that already exists and that every provider passes through.
 
-**Its declared jurisdiction is the honest one.** `{ bloc: 'other', region: 'local', label: 'this machine — recorded responses, not a model' }`. Any deployment whose declared set does not include `other` therefore refuses it at startup, naming it, with no new code — and since `GATEWAY_ALLOWED_JURISDICTIONS` has no default (D4), that is every deployment whose operator has not written `other` themselves. Which is a thing they cannot type by accident.
+**It registers itself and empties `PENDING`.** In `adapters/registry.ts`, add `makeRecordedAdapter(config.recordedDir, config.readFile ?? (p => readFileSync(p, 'utf8')))` to `buildRegistry`'s `all` array and remove `'recorded'` from `PENDING` — which now becomes `[]`, and Task 8's *"registers every provider id that is not on PENDING"* test thereby asserts **full** coverage of `PROVIDER_IDS` with no edit. Add its stream fixture, its `expected.json` entry and its request fixture in this same commit, so Task 10's *"so a new provider cannot ship without one"* stays green.
+
+**Its declared jurisdiction is the honest one.** `{ bloc: 'other', region: 'local', label: 'this machine — recorded responses, not a model' }`. Any deployment whose declared set does not include `other` therefore refuses it at startup, naming it, with no new code — and since `GATEWAY_ALLOWED_JURISDICTIONS` has no default (P4), that is every deployment whose operator has not written `other` themselves. Which is a thing they cannot type by accident.
 
 **And every response it produces is marked, in four places.** It is the one component of the local stack capable of producing a *confident wrong answer* — fluent, plausible, and about no document anybody uploaded — so it says loudest what it is:
 
@@ -5335,7 +5935,7 @@ describe('S27 refuses it in a firm deployment, through the mechanism that alread
   };
   const read1 = (body: string) => () => body;
 
-  // No new guard. The jurisdiction gate D4 already built does the whole job.
+  // No new guard. The jurisdiction gate P4 already built does the whole job.
   it('a deployment that has not declared `other` refuses to start with it, naming it', () => {
     expect(() => loadConfig({ ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU' },
       read1(modelsFile(RECORDED_JURISDICTION))))
@@ -5440,10 +6040,12 @@ export function makeRecordedAdapter(
   };
 }
 
-export const recordedAdapter = makeRecordedAdapter(
-  process.env.GATEWAY_RECORDED_DIR ?? 'apps/gateway/fixtures/recorded',
-  p => readFileSync(p, 'utf8'),
-);
+// NOTE: no module-level instance and no `process.env` read. `buildRegistry`
+// (Task 8) constructs this from `config.recordedDir`, because an adapter
+// that read its own configuration would breach S25 and be caught by
+// `adapterBoundary` — and it would put a configuration key behind a silent
+// default in a file no configuration surface lists, which is the shape P4
+// spent a whole revision removing.
 ```
 
 **`callModel`'s transport reads a `file:` URL for this adapter and nothing else changes.** Extend `main.ts`'s `undici` transport with one branch on the URL *scheme* — not on the provider id, which would be the provider branch outside `adapters/` that Task 26's sweep forbids:
@@ -5494,9 +6096,9 @@ This is a check on the `provider` field's *value*, in the configuration validato
 
 In `routes/infer.ts` and `routes/inferStream.ts`, add `reply.header('X-LexPrompt-Provider', entry.provider)` — for every provider, not only this one. A header present only for `recorded` would make its *absence* carry meaning, which is the blank-CSV-cell defect S27's own reasoning names.
 
-In `src/features/settings/ModelPicker.tsx` and the app shell (Task 22), render a **non-dismissible** banner whenever the selected model's `provider === 'recorded'`:
+Points 1–3 above are this task's: the returned `provider`, the audit record, and the header. **Point 4 — the non-dismissible banner — is Task 22's**, because `ModelPicker.tsx` and the app shell do not exist until then, and a task that edits a file nine tasks ahead of its creation cannot have a green gate.
 
-> **These answers are recorded fixtures, not a model.** LexPrompt is configured with the offline `recorded` provider. Nothing here has been read by an AI, and nothing here is about your documents.
+The requirement, its exact copy and its test are written into Task 22's Step 1 and Step 4 so it cannot fall between the two. **Do not add it here**; do not leave it implied.
 
 - [ ] **Step 7: Run the tests**
 
@@ -5983,7 +6585,7 @@ Mutation-tested: an Entra fallback added to the mTLS branch, one test fails.
 
 `apps/api/package.json` — same shape as the gateway's, with dependencies `@lexprompt/core`, `fastify`, `undici`, `jose`. **No `@azure/identity`** unless Task 25's gateway-bound workload-identity token needs it, and no MSAL anywhere.
 
-`apps/api/tsconfig.json` — copy the gateway's, changing only the `include`. Add `"apps/api/src"`, `"apps/api/test"` to the root `tsconfig.json`. `apps/api/Dockerfile` — copy the gateway's, substituting `@lexprompt/api`, port 8080 and `apps/api/src/main.ts`.
+`apps/api/tsconfig.json` — copy the gateway's, changing only the `include`. **Do not add it to the root `tsconfig.json`**, for the reason Task 4 gives: two global type sets over one file. `npm run typecheck` already gates it. `apps/api/Dockerfile` — copy the gateway's, substituting `@lexprompt/api`, port 8080 and `apps/api/src/main.ts`.
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -6770,7 +7372,7 @@ Mutation-tested: the spread moved after the overwrite, one test fails.
 - Consumes: `GatewayClient.stream` (Task 17); `Principal` (Task 16).
 - Produces: `registerInferStream(app, gateway, workspaceId)`.
 
-**This is D1's middle hop, and its whole specification is: parse nothing.** `apps/api` must not import `createSseEventReader`, `decodeFrame`, `encodeFrame` or `sseFields`. It copies bytes. The test proves it by comparing the bytes out with the bytes in, over deliveries designed to break a re-framer.
+**This is P1's middle hop, and its whole specification is: parse nothing.** `apps/api` must not import `createSseEventReader`, `decodeFrame`, `encodeFrame` or `sseFields`. It copies bytes. The test proves it by comparing the bytes out with the bytes in, over deliveries designed to break a re-framer.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -6792,7 +7394,7 @@ const post = (app: ReturnType<typeof buildTestApi>['app']) => app.inject({
   payload: { modelChoiceId: 'm', purpose: 'assistant.chat', user: 'hi' },
 });
 
-describe('POST /v1/infer/stream — a byte pipe (D1)', () => {
+describe('POST /v1/infer/stream — a byte pipe (P1)', () => {
   it('returns exactly the bytes the gateway sent', async () => {
     const { app } = buildTestApi({ principal: { issuer: 'iss', subject: 'o', groups: [] }, streamChunks: [BODY] });
     expect((await post(app)).body).toBe(BODY);
@@ -6854,7 +7456,7 @@ describe('POST /v1/infer/stream — a byte pipe (D1)', () => {
   });
 });
 
-// The structural half of D1: no parser may exist in this service at all.
+// The structural half of P1: no parser may exist in this service at all.
 describe('apps/api parses nothing', () => {
   const SRC = path.resolve(__dirname, '../src');
   const walk = (dir: string, out: string[] = []): string[] => {
@@ -6891,7 +7493,7 @@ import type { GatewayClient } from '../gatewayClient.ts';
 import type { Principal } from '../entra.ts';
 
 /**
- * D1's middle hop, and its entire specification is: parse nothing.
+ * P1's middle hop, and its entire specification is: parse nothing.
  *
  * This project has already shipped an SSE parser that dropped the last
  * token of every answer and returned nothing on CRLF servers. Three hops
@@ -6979,7 +7581,7 @@ git commit -F .git/COMMIT_MSG_TASK18
 ```
 feat(api): the stream route is a byte pipe, and cannot be anything else
 
-D1's middle hop parses nothing. Bytes in, bytes out — proved by comparing
+P1's middle hop parses nothing. Bytes in, bytes out — proved by comparing
 the response body with the gateway's, delivered whole, in three uneven
 chunks, one byte at a time, all-CRLF, with no trailing blank line, and
 truncated. A structural test asserts this service imports no SSE parser or
@@ -6999,7 +7601,7 @@ a frame-codec import added (1). Restored.
 
 **Files:**
 - Create: `src/lib/config.ts`, `src/lib/auth/oidc.ts`, `src/lib/auth/useAuth.ts`, `src/lib/auth/useAuth.test.tsx`, `src/features/auth/SignInScreen.tsx`
-- Modify: `src/App.tsx` (the sign-in gate), `package.json` (`oidc-client-ts`)
+- Modify: `src/App.tsx` (the sign-in gate), `src/lib/debug.ts` (take `DEBUG` from `config.ts`), `package.json` (`oidc-client-ts`)
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
@@ -7079,7 +7681,33 @@ export const config: WebConfig = {
   oidcClientId: required('VITE_OIDC_CLIENT_ID', import.meta.env.VITE_OIDC_CLIENT_ID),
   oidcScope: required('VITE_OIDC_SCOPE', import.meta.env.VITE_OIDC_SCOPE),
 };
+
+/**
+ * Whether `debug()` prints. The one build-mode flag the web app reads, and
+ * it is read HERE for the same reason as everything else in this file.
+ *
+ * It is NOT an environment branch in the S30 sense — nothing behaves
+ * differently, a `console.log` is merely silent in a build — but it is an
+ * `import.meta.env` read, and `configSurface` (Task 26) makes no exception
+ * for a benign one. That is deliberate: an exception for "it's only a log"
+ * is how the second one arrives.
+ */
+export const DEBUG: boolean = import.meta.env.DEV;
 ```
+
+Then rewrite `src/lib/debug.ts`, which reads `import.meta.env.DEV` today and is imported by `PdfCanvas.tsx`, `db/open.ts`, `db/reviews.ts` and `db/documents.ts`:
+
+```ts
+import { DEBUG } from './config.ts';
+
+export function debug(...args: unknown[]): void {
+  if (DEBUG) {
+    console.log('[lexprompt]', ...args);
+  }
+}
+```
+
+**This file is why the change is one line rather than an exemption.** `configSurface` would flag it under both of its assertions, and the cheapest repair in front of an executor who meets it at Task 26 is to add `debug.ts` to `CONFIG_MODULES` — which legalises `isLocal`-style branching in a module four files import. Fixing it here, in the task that creates `config.ts`, costs two lines and leaves the boundary un-widened.
 
 - [ ] **Step 4: Implement `auth/oidc.ts`**
 
@@ -7329,7 +7957,7 @@ export function makeGatewayModelClient(deps: GatewayClientDeps): ModelClient {
         throw new ModelError('The server returned no response body to stream.', 'upstream_failed', 502);
       }
       // readFrames throws stream_truncated if the stream ends with no done
-      // frame (D2), so a half-answer cannot be returned as a whole one.
+      // frame (P2), so a half-answer cannot be returned as a whole one.
       const { usage, callId } = await readFrames(
         response.body as unknown as AsyncIterable<Uint8Array>, onDelta,
       );
@@ -7374,7 +8002,7 @@ export const gatewayModelClient = makeGatewayModelClient({
 git rm src/lib/openrouter.ts src/lib/openrouter.test.ts
 ```
 
-The 24 files that referenced it (`grep -rln openrouter src/`) are updated in this task for the *imports* and in Task 21 for the *purposes*. `isAuthError` call sites become `isSignInError`/`isServiceConfigError` per Task 23; until then, import both and route to the existing handler so the suite stays green between tasks.
+`grep -rln openrouter src/` returns **42 files; 24 of them are tests** (which is spec §14's figure — it counts test files, not all files). The non-test files are updated in this task for the *imports* and in Task 21 for the *purposes*; the test files are re-pointed alongside them. `isAuthError` call sites become `isSignInError`/`isServiceConfigError` per Task 23; until then, import both and route to the existing handler so the suite stays green between tasks.
 
 Move the retry-policy and SSE tests that were in `openrouter.test.ts` — do **not** delete them: §14 says they move to the gateway's suite, and Tasks 3, 10, 11 and 12 are where they now live. Confirm each of the 52 cases in the deleted file has a successor, and list any that do not in the commit message.
 
@@ -7424,7 +8052,7 @@ truncation rejection swallowed into a return (1). Restored.
 
 ---
 
-## Task 21: The nine call sites carry a purpose and a context
+## Task 21: The ten call sites carry a purpose and a context
 
 **Type:** application code
 
@@ -7463,20 +8091,29 @@ Where a call site does not currently receive the ids its `context` needs, **thre
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { PURPOSES } from '@lexprompt/core';
+import { PURPOSES, type Purpose } from '@lexprompt/core';
 
 const ROOT = path.resolve(__dirname, '../../..');
 
-const SITES: Record<string, string> = {
-  'review.clause': 'src/features/review/extractClause.ts',
-  'review.collection_clause': 'src/features/review/extractCollectionClause.ts',
-  'assistant.chat': 'src/features/assistant/chatContext.ts',
-  'playbook.draft': 'src/features/authoring/generateDraft.ts',
-  'playbook.suggest': 'src/features/templates/suggestField.ts',
-  'redlines.infer': 'src/lib/inferPositions.ts',
-  'changeset.build': 'src/lib/buildChangeset.ts',
-  'export.email': 'src/features/assistant/draftEmail.ts',
-  'export.suggest_fix': 'src/features/assistant/suggestRevision.ts',
+/**
+ * Nine purposes, TEN call sites: `playbook.suggest` serves two files, so the
+ * map is purpose -> files. A one-file-per-purpose map would let
+ * `suggestMissingClauses.ts` lose its purpose with only `tsc` to catch it,
+ * and `tsconfig.json` sets neither `strict` nor `noUnusedLocals`.
+ */
+const SITES: Record<Purpose, string[]> = {
+  'review.clause': ['src/features/review/extractClause.ts'],
+  'review.collection_clause': ['src/features/review/extractCollectionClause.ts'],
+  'assistant.chat': ['src/features/assistant/chatContext.ts'],
+  'playbook.draft': ['src/features/authoring/generateDraft.ts'],
+  'playbook.suggest': [
+    'src/features/templates/suggestField.ts',
+    'src/features/templates/suggestMissingClauses.ts',
+  ],
+  'redlines.infer': ['src/lib/inferPositions.ts'],
+  'changeset.build': ['src/lib/buildChangeset.ts'],
+  'export.email': ['src/features/assistant/draftEmail.ts'],
+  'export.suggest_fix': ['src/features/assistant/suggestRevision.ts'],
 };
 
 describe('every purpose has a call site, and every call site names one', () => {
@@ -7484,13 +8121,18 @@ describe('every purpose has a call site, and every call site names one', () => {
     expect(Object.keys(SITES).sort()).toEqual([...PURPOSES].sort());
   });
 
-  it.each(Object.entries(SITES))('%s is named in %s', (purpose, file) => {
-    expect(readFileSync(path.join(ROOT, file), 'utf8')).toContain(`'${purpose}'`);
+  it('covers all ten call sites', () => {
+    expect(Object.values(SITES).flat()).toHaveLength(10);
   });
+
+  it.each(Object.entries(SITES).flatMap(([p, fs]) => fs.map(f => [p, f] as const)))(
+    '%s is named in %s', (purpose, file) => {
+      expect(readFileSync(path.join(ROOT, file), 'utf8')).toContain(`'${purpose}'`);
+    });
 
   it('no call site still passes an apiKey or a modelId', () => {
     const offenders: string[] = [];
-    for (const file of Object.values(SITES)) {
+    for (const file of Object.values(SITES).flat()) {
       const text = readFileSync(path.join(ROOT, file), 'utf8');
       if (/\bapiKey\b/.test(text)) offenders.push(`${file} still passes apiKey`);
       if (/\bmodelId\b/.test(text)) offenders.push(`${file} still passes modelId`);
@@ -7503,7 +8145,7 @@ describe('every purpose has a call site, and every call site names one', () => {
 - [ ] **Step 2: Run and watch it fail**
 
 Run: `npx vitest run --project web src/lib/model/purposes.test.ts`
-Expected: FAIL on eight of the nine `is named in` cases and on *"no call site still passes an apiKey or a modelId"*.
+Expected: FAIL on nine of the ten `is named in` cases and on *"no call site still passes an apiKey or a modelId"*.
 
 - [ ] **Step 3: Edit the ten files**
 
@@ -7543,7 +8185,7 @@ npx tsc --noEmit
 npm test
 ```
 
-Expected: `tsc` clean; `purposes.test.ts` PASS, 11 tests; every existing `extractClause`, `extractCollectionClause`, `chatContext`, `generateDraft`, `suggestField`, `suggestMissingClauses`, `inferPositions`, `buildChangeset` and `draftEmail` test passing with its mock re-pointed from `../../lib/openrouter` to `../../lib/model/gatewayModelClient`.
+Expected: `tsc` clean; `purposes.test.ts` PASS, 13 tests; every existing `extractClause`, `extractCollectionClause`, `chatContext`, `generateDraft`, `suggestField`, `suggestMissingClauses`, `inferPositions`, `buildChangeset` and `draftEmail` test passing with its mock re-pointed from `../../lib/openrouter` to `../../lib/model/gatewayModelClient`.
 
 - [ ] **Step 5: Mutation test the coverage guard**
 
@@ -7561,7 +8203,7 @@ git commit -F .git/COMMIT_MSG_TASK21
 ```
 feat(web): every call site names its purpose and what it served
 
-Nine purposes, ten call sites, each carrying the matter, review, clause and
+Nine purposes, ten call sites (`playbook.suggest` serves two), each carrying the matter, review, clause and
 document ids the call is about — which is what makes the gateway's log able
 to answer "which document or review did this call serve", half of what
 Stage 1 is for. A context quietly left {} would look fine and answer
@@ -7571,8 +8213,9 @@ Finding.authError keeps its name and persisted meaning — a failure Retry
 cannot fix — and now covers both halves of openrouter's isAuthError.
 Renaming a persisted field would need a schema migration for no gain.
 
-A coverage test asserts all nine purposes appear at a call site and that no
-call site still passes an apiKey or a modelId.
+A coverage test asserts all nine purposes appear at a call site, that all ten
+sites are covered (playbook.suggest serves two, so the map is
+purpose -> files), and that no call site still passes an apiKey or a modelId.
 ```
 
 ---
@@ -7584,7 +8227,7 @@ call site still passes an apiKey or a modelId.
 **Files:**
 - Create: `src/features/settings/ModelPicker.tsx`, `src/features/settings/ModelPicker.test.tsx`
 - Modify: `src/types.ts` (`Settings`), `src/lib/storage.ts` (purge a stored key), `src/lib/privacyCopy.ts`, `src/features/settings/SettingsPanel.tsx`, `src/App.tsx` (`isConfigured`)
-- Modify: `src/lib/storage.test.ts` (or create it)
+- Modify: `src/lib/storage.test.ts`
 
 **Interfaces:**
 - Consumes: `gatewayModelClient.listModels`, `AllowedModel`, `jurisdictionLabel` (Tasks 2, 20).
@@ -7609,7 +8252,12 @@ call site still passes an apiKey or a modelId.
 4. On a populated list it renders one option per model.
 5. **Every option names its jurisdiction** — `expect(option.textContent).toContain('UK · UK South')` for each. (Owner decision 3: visible where the choice is made.)
 6. **Every** option states where processing occurs in words, not only the non-UK ones — `expect(ukOption.textContent).toContain('Processed in UK South')` and `expect(usOption.textContent).toContain('Processed in the United States')`. Labelling only some would make the **absence** of a label carry meaning, which is the blank-CSV-cell defect exactly (S27's own reasoning).
-7. **The label is factual and never evaluative.** It says where processing occurs and nothing about whether that is good — no "warning", no colour that reads as risk, no "outside the UK/EU". Whether a jurisdiction is acceptable is settled by the operator's contracts and their `GATEWAY_ALLOWED_JURISDICTIONS`, and every option on this list has already passed that gate. Asserted: `expect(container.textContent).not.toMatch(/warning|caution|risk|unsafe|outside/i)`.
+7. **The `recorded` banner** (§5.1, Task 13 point 4). When the selected model's `provider === 'recorded'`, a **non-dismissible** banner renders with exactly this copy:
+
+   > **These answers are recorded fixtures, not a model.** LexPrompt is configured with the offline `recorded` provider. Nothing here has been read by an AI, and nothing here is about your documents.
+
+   Asserted: it renders for a `recorded` model; it renders for **no other** provider; it has no dismiss control (`expect(buttonNamed(container, /dismiss|close|hide/i)).toBeUndefined()`); and it is not conditional on any environment value — only on the provider the gateway reported.
+8. **The label is factual and never evaluative.** It says where processing occurs and nothing about whether that is good — no "warning", no colour that reads as risk, no "outside the UK/EU". Whether a jurisdiction is acceptable is settled by the operator's contracts and their `GATEWAY_ALLOWED_JURISDICTIONS`, and every option on this list has already passed that gate. Asserted: `expect(container.textContent).not.toMatch(/warning|caution|risk|unsafe|outside/i)`.
 7. Selecting a model calls `onChange` with `modelChoiceId` and the three capability fields from that model.
 8. It preselects the model marked `isDefault` when `settings.modelChoiceId` is empty.
 9. It **does not** preselect, and shows the "choose a model" prompt, when a stored `modelChoiceId` is no longer on the list — a stale choice must not silently resolve to a different model.
@@ -7675,6 +8323,8 @@ export function loadSettings(): { settings: Settings; purgedApiKey: boolean } {
 Every caller of `loadSettings` changes shape. Update them in this task; `App.tsx` uses `purgedApiKey` to raise the one-time notice.
 
 - [ ] **Step 4: Implement `ModelPicker.tsx` and rewrite `SettingsPanel.tsx`**
+
+`ModelPicker` renders the `recorded` banner above the select, from the same copy string, exported once so Task 26's sweep can assert it. It is the one component of the local stack that can produce a fluent, plausible, wrong answer, so the banner says so loudest and cannot be dismissed.
 
 `ModelPicker` owns the three-state load over `listModels()` and renders **every** option as ``${m.label} — Processed in ${m.jurisdiction.label}`` — unconditionally, for every entry, in the same neutral style. The wording is **factual, never evaluative**: it states where processing occurs and passes no judgement, because every model on this list has already passed the operator's own jurisdiction gate and whether that jurisdiction is acceptable was settled by their contracts, not by this screen. No warning icon, no risk colour, no "outside the UK/EU".
 
@@ -7775,6 +8425,7 @@ fails); the apiKey purge removed (2). Restored.
 | *(did not exist)* | `group_overage` — the token carried **no** `groups` claim because the account is in too many groups (§7) | *"Your account is in too many groups for LexPrompt to read them from your sign-in. This is not something signing in again will fix — ask your IT team to grant LexPrompt directory read access, or to reduce your group memberships."* | **In place**, with no Retry. **Never the `not_permitted` message**, which would tell a partner in forty groups they have no access to their own firm's tool |
 | *(did not exist)* | `service_misconfigured` — the firm's gateway cannot reach a provider, or its credential was rejected | *"LexPrompt can't reach your firm's AI service. This is a configuration problem in the deployment, not something you can fix here. Tell your IT team, and quote reference `{callId}`."* | **In place**, with a Retry and the reference id. **Never Settings** |
 | *(did not exist)* | `model_not_allowed` / `purpose_not_allowed` | *"The model this review was set up with is no longer available. Choose another in Settings."* | Settings — this one genuinely is |
+| *(did not exist)* | `jurisdiction_not_allowed` — the model is allowlisted, but this deployment does not permit the jurisdiction it processes in (S27, Task 11) | *"This model is processed in {jurisdiction}, which your firm's deployment does not permit. Nothing was sent. Choose another model, or ask your IT team to reconcile the model list with the permitted jurisdictions."* | **Settings**, because choosing another model is a real repair the user can make — and the sentence says **nothing was sent**, which is the fact a lawyer needs first |
 
 **`AUTH_ERROR_MESSAGE` is retired.** Sending a lawyer to Settings to fix the firm's Foundry role assignment is a wrong instruction delivered with authority, which is the failure mode this project is organised against.
 
@@ -7793,6 +8444,7 @@ In `src/App.authRedirect.test.tsx`, keep all three existing cases (they cover th
 6. A live `sign_in_required` during a run shows the sign-in message and does **not** navigate to Settings.
 7. A live `service_misconfigured` during a run shows the configuration message **in place**, does **not** navigate to Settings, and shows the `callId`.
 8. A live `model_not_allowed` **does** navigate to Settings.
+8a. A live `jurisdiction_not_allowed` navigates to Settings, shows the jurisdiction, and shows that nothing was sent — `expect(container.textContent).toContain('Nothing was sent')`.
 8b. A live `group_overage` shows the overage message, does **not** navigate to Settings, does **not** offer sign-in, and does **not** show the `not_permitted` wording — `expect(container.textContent).not.toContain('does not have access')`.
 9. Reopening a review whose only finding already has `authError` still does not redirect anywhere and still renders its findings — the existing behaviour, re-asserted against the new routing.
 
@@ -7847,6 +8499,15 @@ const handleModelError = (error: unknown): void => {
     if (e.code === 'group_overage') {
       notify(GROUP_OVERAGE_MESSAGE, 'error');
       return;   // not Settings, not sign-in: neither can fix it
+    }
+    if (e.code === 'jurisdiction_not_allowed') {
+      // The message carries the jurisdiction and the reassurance, and both
+      // come from the gateway rather than being reassembled here — a second
+      // wording of "nothing was sent" is the drift privacyCopy.ts exists to
+      // prevent, and this is the sentence a lawyer reads first.
+      notify(e.message, 'error');
+      setView('settings');
+      return;
     }
     if (e.code === 'model_not_allowed' || e.code === 'purpose_not_allowed') {
       notify(MODEL_UNAVAILABLE_MESSAGE, 'error');
@@ -7938,7 +8599,7 @@ fails.
 - `models.local-openai.example.json` — OpenAI direct, US, `credential.source: env`, plus an Anthropic entry so the picker has two options and the jurisdiction display has something to show.
 - `models.local-recorded.example.json` — the `recorded` provider (Task 13), for work with no network and no credential of any kind.
 
-**`GATEWAY_ALLOWED_JURISDICTIONS` has no default and appears in `.env.example` only as a commented example.** Whoever runs this — a firm or one person on a laptop — types their own value, for the same reason the gateway refuses to start without one (D4): which jurisdictions are acceptable follows from the contracts and data provisions they hold with their provider, and neither this compose file nor this plan is entitled to guess.
+**`GATEWAY_ALLOWED_JURISDICTIONS` has no default and appears in `.env.example` only as a commented example.** Whoever runs this — a firm or one person on a laptop — types their own value, for the same reason the gateway refuses to start without one (P4): which jurisdictions are acceptable follows from the contracts and data provisions they hold with their provider, and neither this compose file nor this plan is entitled to guess.
 
 **§5.1 rows 4, 5 and 6 — Postgres, Azurite, Redis — must NOT appear in this compose file.** They are Stage 2 and later, and §18 item 10(b) fails a divergence row with no configuration key behind it just as it fails a key with no row.
 
@@ -8017,7 +8678,7 @@ services:
     environment:
       GATEWAY_PORT: "8081"
       GATEWAY_MODELS_FILE: /config/models.json
-      # NO DEFAULT (D4, owner decision 5). Unset means the gateway refuses to
+      # NO DEFAULT (P4, owner decision 5). Unset means the gateway refuses to
       # start, which is what we want: which jurisdictions are permitted
       # follows from the operator's own contracts with their provider, and a
       # compose file has no standing to guess. There is also no
@@ -8076,7 +8737,9 @@ OIDC_REQUIRED_CLAIMS={}
 # view of its own about which jurisdictions are acceptable, and a default
 # value would be exactly such a view, applied silently on your behalf.
 #
-# Valid values: UK, EU, US, other (comma-separated).
+# Valid values: UK, EU, US, other (comma-separated). These are processing
+# BLOCS, not ISO country codes — a German deployment declares EU, and there
+# is no DE. It is UK, never GB.
 #   OpenAI direct, Anthropic direct and OpenRouter process in the US.
 #   The `recorded` provider (offline fixtures) declares `other`.
 #
@@ -8109,7 +8772,7 @@ OPENROUTER_API_KEY=
 | `trainee` | `trainee` | `reviewers` | the ordinary case |
 | `partner` | `partner` | `partners` | Stage 2's role gate; Stage 4's override |
 | `admin` | `admin` | `admins` | Stage 2's admin routes |
-| `nogroups` | `nogroups` | *(none)* | **a Stage 1 behaviour**: being told plainly you have no access (§7) |
+| `nogroups` | `nogroups` | *(none)* | Stage 2's no-role refusal (§7). **It has no Stage 1 behaviour** — see below |
 
 Print all four from `docker compose up` — add an `echo` step to `compose:up` in `package.json` rather than expecting anyone to open the realm file:
 
@@ -8120,6 +8783,8 @@ LexPrompt local accounts (Keycloak realm 'lexprompt'):
   admin   / admin      admins
   nogroups / nogroups  (no group — expect to be refused, on purpose)
 ```
+
+**`nogroups` exists so Stage 2 needs no realm edit; it does not test anything in Stage 1.** Task 16 is explicit that Stage 1 derives a `Principal` and enforces no roles, and §13 says the same — so nothing in this stage refuses a principal with an empty group list, and `nogroups` will sign in and see the app like anyone else. An earlier draft of this plan claimed the refusal as a Stage 1 behaviour and asked for it in browser verification; that verification could not have passed. **§7's no-role refusal is recorded as Stage 2 work in this plan's "Requirements I could not assign to a task"** — deferring it is fine, losing it is not.
 
 **These are development credentials in version control, deliberately.** They reach a realm that only exists inside `docker compose`, on an issuer the API refuses unless it is loopback — and the alternative, generating them per developer, would mean the seeded set differs per machine, which is the local/deployed divergence problem one level down.
 
@@ -8225,7 +8890,7 @@ npm run test:compose
 
 Expected: the gateway's boot banner listing the permitted jurisdictions and the model table; Keycloak reporting the realm imported; then 4 tests PASS.
 
-Then open `http://localhost:3005`, sign in as `trainee` / `trainee`, and run a review end to end. **Sign in as `nogroups` too** and confirm you are told plainly that you have no access rather than shown an empty app (§7) — that is a Stage 1 behaviour and this is the account that tests it.
+Then open `http://localhost:3005`, sign in as `trainee` / `trainee`, and run a review end to end. Signing in as `nogroups` succeeds and shows the app, because Stage 1 enforces no roles. That is expected; the account exists for Stage 2.
 
 **No Entra tenant is needed for any of this**, which is the point of S31: the deployed authentication path runs on the laptop. What it does not prove is in §5.1's list and in Task 26's README — managed identity, Entra's group-claim shape and overage, consent, conditional access, Azure networking. **If you skip any step, say so plainly** rather than implying you ran it; `models.local-recorded.example.json` gets you everything but a real model answer.
 
@@ -8304,7 +8969,7 @@ makes every seeded account look like the no-access one.
 **What the Bicep must express, and each is a requirement rather than a preference:**
 
 1. **The gateway has `ingress.external: false`** and is reachable only from inside the Container Apps environment. Its `GATEWAY_CALLER_AUTH` is `entra`, its audience is its own app registration, and its allowed subject is `api`'s user-assigned managed identity principal id.
-1b. **`GATEWAY_ALLOWED_JURISDICTIONS` is a required parameter with NO default value in the Bicep** (D4, owner decision 5). `@description` states what it is for and that it must match the operator's own contracts and data provisions; there is no `= 'UK,EU'`. `azd up` therefore prompts for it, which is the right moment to be asked. A Bicep default would reintroduce, in infrastructure, exactly the assumption the config loader refuses to make in code.
+1b. **`GATEWAY_ALLOWED_JURISDICTIONS` is a required parameter with NO default value in the Bicep** (P4, owner decision 5). `@description` states what it is for and that it must match the operator's own contracts and data provisions; there is no `= 'UK,EU'`. `azd up` therefore prompts for it, which is the right moment to be asked. A Bicep default would reintroduce, in infrastructure, exactly the assumption the config loader refuses to make in code.
 1c. **The three OIDC values are parameters too** — `oidcIssuer`, `oidcAudience`, `oidcSubjectClaim` (`oid` for Entra), `oidcGroupsClaim`, `oidcRequiredClaims` (`{"tid":"<tenant>"}`). They are the same five keys the compose file sets to Keycloak's values (§5.1 row 1), passed to the same code. **Nothing in the Bicep is read by an Entra-specific code path**, because there is not one.
 2. **`api` has no outbound access to the public internet.** Express it, and **record honestly in the file's own comment whether that is enforced at this layer or awaits Spike 2** (§15): Container Apps' egress controls depend on the environment's VNet integration and a route table or NAT configuration, and the plan does not pretend to have proved which. Task 24's compose test is what holds in the meantime, and §18.7's "asserted by a test" is not satisfied for Azure until Spike 2 lands. **Say so in the README rather than implying the deployment is proven.**
 3. **The gateway has a user-assigned managed identity** with `Cognitive Services OpenAI User` on the Foundry/Azure OpenAI resource, and `Key Vault Secrets User` on the vault. **No key is a parameter, an output, or an app setting** — vaulted keys are referenced by `credential.source: 'key-vault'` in `models.json` and fetched at runtime.
@@ -8456,15 +9121,20 @@ Do not merge them into one sentence and do not put the second one in a footnote.
 
 - [ ] **Step 1: Write the `configSurface` suite (§18 item 10)**
 
-`apps/api/test/divergence.json` — §5.1's table, as data, listing only the rows Stage 1 touches. **A row here with no configuration key behind it fails, exactly as a key with no row does**, which is what stops the table decaying into a list of good intentions:
+`apps/api/test/divergence.json` — §5.1's table, as data, listing only the rows Stage 1 touches.
+
+**The keys are the names the applications actually read** — the environment variables inside the containers — and **not** `.env.example`'s host-side names. That distinction is the whole of H6: `.env.example` says `OIDC_ISSUER_API` and the compose file says `API_OIDC_ISSUER: ${OIDC_ISSUER_API}`, so the two files use different names for one value. The host names are compose *interpolation inputs*; they are not application configuration, and comparing them against Azure would need a permanent alias table between two naming schemes — a list that rots, which is the failure §19 warns about.
+
+**A row here with no key behind it fails, exactly as a key with no row does**, which is what stops the table decaying into a list of good intentions:
 
 ```json
 {
   "rows": [
     { "n": 1, "what": "Identity issuer", "keys": [
-      "OIDC_ISSUER_API", "OIDC_ISSUER_BROWSER", "OIDC_AUDIENCE",
-      "OIDC_CLIENT_ID", "OIDC_SCOPE", "OIDC_SUBJECT_CLAIM",
-      "OIDC_GROUPS_CLAIM", "OIDC_REQUIRED_CLAIMS"
+      "API_OIDC_ISSUER", "API_OIDC_AUDIENCE", "API_OIDC_SUBJECT_CLAIM",
+      "API_OIDC_GROUPS_CLAIM", "API_OIDC_REQUIRED_CLAIMS",
+      "VITE_OIDC_ISSUER", "VITE_OIDC_CLIENT_ID", "VITE_OIDC_SCOPE",
+      "KC_BOOTSTRAP_ADMIN_USERNAME", "KC_BOOTSTRAP_ADMIN_PASSWORD", "KC_HEALTH_ENABLED"
     ] },
     { "n": 2, "what": "Inference provider and credential", "keys": ["GATEWAY_MODELS_FILE"] },
     { "n": 3, "what": "Provider secret source", "keys": [
@@ -8480,21 +9150,26 @@ Do not merge them into one sentence and do not put the second one in a footnote.
     ] }
   ],
   "rowsWithNoKeys": {
-    "7": "Infrastructure, not application code: compose networks versus Container Apps egress rules. Asserted by apps/api/test/egress.compose.test.ts (Task 24) and by Spike 2 in Azure.",
-    "8": "The gateway writes the same JSON lines to stdout in both environments (§10.5). What differs is the collector, which reads them; no application key varies."
+    "7": "Infrastructure, not application code: compose networks versus Container Apps egress rules. Asserted by apps/api/test/egress.compose.test.ts (Task 24) and, in Azure, by Spike 2.",
+    "8": "The gateway writes the same JSON lines to stdout in both environments (§10.5). What differs is the collector that reads them; no application key varies."
   },
   "sameEverywhere": [
     "GATEWAY_ALLOWED_JURISDICTIONS",
     "GATEWAY_PORT", "API_PORT", "API_WORKSPACE_ID",
     "GATEWAY_MAX_PROMPT_CHARS", "GATEWAY_REQUEST_TIMEOUT_MS",
-    "GATEWAY_DEFAULT_MAX_TOKENS", "GATEWAY_RPM_PER_ACTOR",
-    "GATEWAY_RPM_PER_WORKSPACE", "GATEWAY_TOKENS_PER_HOUR_PER_ACTOR",
-    "GATEWAY_TOKENS_PER_HOUR_PER_WORKSPACE"
-  ]
+    "GATEWAY_DEFAULT_MAX_TOKENS", "GATEWAY_PUBLIC_ORIGIN", "GATEWAY_RECORDED_DIR",
+    "GATEWAY_RPM_PER_ACTOR", "GATEWAY_RPM_PER_WORKSPACE",
+    "GATEWAY_TOKENS_PER_HOUR_PER_ACTOR", "GATEWAY_TOKENS_PER_HOUR_PER_WORKSPACE"
+  ],
+  "localOnlyServices": ["keycloak"]
 }
 ```
 
-**`GATEWAY_ALLOWED_JURISDICTIONS` is in `sameEverywhere`, not in a divergence row**, and that is a deliberate and load-bearing placement. It is not a value that differs *because* one environment is local; it is a value the operator supplies in **both**, from the same source — their own contracts and data provisions — and neither has a default (D4). Filing it as a divergence would say the two environments are entitled to different policies, which is the opposite of what the owner decided.
+Row 1 carries the three `KC_*` keys because Keycloak's own bootstrap is part of §5.1 row 1's local half — the issuer differs, and locally the issuer is a container this stack runs.
+
+**`GATEWAY_ALLOWED_JURISDICTIONS` is in `sameEverywhere`, not in a divergence row**, and that is deliberate and load-bearing. It is not a value that differs *because* one environment is local; it is a value the operator supplies in **both**, from the same source — their own contracts and data provisions — and neither has a default (P4). Filing it as a divergence would say the two environments are entitled to different policies, which is the opposite of what the owner decided. §5.1's own nine-row table does not list it either.
+
+`GATEWAY_PUBLIC_ORIGIN` and `GATEWAY_RECORDED_DIR` join it there: both are real deployment-varying values introduced by Task 4, and before this pre-flight they existed in code behind silent defaults and in no configuration surface at all — invisible to this very check.
 
 `apps/api/test/configSurface.test.ts`:
 
@@ -8502,29 +9177,43 @@ Do not merge them into one sentence and do not put the second one in a footnote.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
+import { walk } from './walk.ts';
+import { jurisdictionDefaultOffenders } from './jurisdictionDefault.ts';
 
 const ROOT = path.resolve(__dirname, '../../..');
 const DIVERGENCE = JSON.parse(readFileSync(path.join(__dirname, 'divergence.json'), 'utf8')) as {
   rows: { n: number; what: string; keys: string[] }[];
   rowsWithNoKeys: Record<string, string>;
   sameEverywhere: string[];
+  localOnlyServices: string[];
 };
 
-const walk = (dir: string, out: string[] = []): string[] => {
-  if (!existsSync(dir)) return out;
-  for (const e of readdirSync(dir)) {
-    if (e === 'node_modules' || e === 'dist') continue;
-    const full = path.join(dir, e);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.tsx?$/.test(full) && !/\.test\.tsx?$/.test(full)) out.push(full);
-  }
-  return out;
-};
-
+/**
+ * The three typed configuration modules. Everything else is forbidden from
+ * reading the environment (S30, §18 item 10(a)).
+ */
 const CONFIG_MODULES = [
   'src/lib/config.ts',
   'apps/api/src/config.ts',
   'apps/gateway/src/config.ts',
+].map(f => path.join(ROOT, f));
+
+/**
+ * The composition roots, and the ONLY other files permitted to touch
+ * `process.env`.
+ *
+ * Each does exactly one thing with it: hands the whole object to
+ * `loadConfig` and reads nothing itself. They cannot be config modules —
+ * `loadConfig` is pure over its inputs precisely so it is testable without
+ * an environment — and they cannot be forbidden either, because something
+ * has to read the environment once.
+ *
+ * The list is asserted to be EXACTLY these two files, so it cannot grow
+ * quietly. A third composition root is a design change, not a convenience.
+ */
+const COMPOSITION_ROOTS = [
+  'apps/api/src/main.ts',
+  'apps/gateway/src/main.ts',
 ].map(f => path.join(ROOT, f));
 
 const APP_SOURCES = [
@@ -8535,22 +9224,23 @@ const APP_SOURCES = [
 
 // ---- §18 item 10(a): no module branches on the environment ----
 describe('no module branches on the environment (S30)', () => {
-  it('nothing reads NODE_ENV, isLocal, or if (dev)', () => {
+  it('nothing reads NODE_ENV, isLocal, or a build-mode flag', () => {
     const offenders: string[] = [];
     for (const file of APP_SOURCES) {
       const text = readFileSync(file, 'utf8');
       const rel = path.relative(ROOT, file);
       if (/\bNODE_ENV\b/.test(text)) offenders.push(`${rel} reads NODE_ENV`);
       if (/\bisLocal\b|\bisDev\b|\bisProduction\b/.test(text)) offenders.push(`${rel} branches on the environment`);
-      if (/\bimport\.meta\.env\.DEV\b|\bimport\.meta\.env\.PROD\b/.test(text)) offenders.push(`${rel} reads a Vite mode flag`);
+      if (/import\.meta\.env\.(DEV|PROD|MODE)\b/.test(text)) offenders.push(`${rel} reads a build-mode flag`);
     }
     expect(offenders).toEqual([]);
   });
 
-  it('nothing outside the three config modules reads process.env or import.meta.env', () => {
+  it('nothing outside the config modules and the two composition roots reads the environment', () => {
+    const allowed = new Set([...CONFIG_MODULES, ...COMPOSITION_ROOTS]);
     const offenders: string[] = [];
     for (const file of APP_SOURCES) {
-      if (CONFIG_MODULES.includes(file)) continue;
+      if (allowed.has(file)) continue;
       const text = readFileSync(file, 'utf8');
       const rel = path.relative(ROOT, file);
       if (/process\.env/.test(text)) offenders.push(`${rel} reads process.env`);
@@ -8558,24 +9248,88 @@ describe('no module branches on the environment (S30)', () => {
     }
     expect(offenders).toEqual([]);
   });
+
+  // The exemption cannot grow silently.
+  it('the composition-root exemption is exactly the two main.ts files', () => {
+    expect(COMPOSITION_ROOTS.map(f => path.relative(ROOT, f).replace(/\\/g, '/')).sort())
+      .toEqual(['apps/api/src/main.ts', 'apps/gateway/src/main.ts']);
+    for (const file of COMPOSITION_ROOTS) expect(existsSync(file)).toBe(true);
+  });
+
+  // …and each root must genuinely be a pass-through, not a reader.
+  it('each composition root passes process.env to loadConfig and reads no key itself', () => {
+    for (const file of COMPOSITION_ROOTS) {
+      const text = readFileSync(file, 'utf8');
+      expect(text).toMatch(/loadConfig\(\s*process\.env/);
+      expect(text).not.toMatch(/process\.env\s*[.[]/);
+    }
+  });
 });
 
 // ---- §18 item 10(b): the configuration diff IS the divergence list ----
 describe('the configuration diff is exactly §5.1s divergence list (S30)', () => {
-  const envKeys = (file: string): Set<string> => {
-    const text = readFileSync(path.join(ROOT, file), 'utf8');
-    return new Set([...text.matchAll(/^\s*([A-Z][A-Z0-9_]+)\s*[:=]/gm)].map(m => m[1]));
+  /**
+   * Container environment variable names, read from both sides.
+   *
+   * Both sides are read from the CONTAINER DEFINITIONS — the compose file's
+   * `environment:` blocks and the Bicep's container `env:` arrays — because
+   * those are the names the applications actually read, which is what §5.1
+   * is about. Reading `.env.example` instead would compare host-side
+   * interpolation inputs against Azure parameter names, which are two
+   * different vocabularies for one value.
+   */
+  const composeEnv = (): Map<string, Set<string>> => {
+    const text = readFileSync(path.join(ROOT, 'docker-compose.yml'), 'utf8');
+    const byService = new Map<string, Set<string>>();
+    let service = '';
+    let inEnv = false;
+    for (const line of text.split('\n')) {
+      const svc = /^ {2}([a-z][\w-]*):\s*$/.exec(line);
+      if (svc) { service = svc[1]; inEnv = false; byService.set(service, byService.get(service) ?? new Set()); continue; }
+      if (/^ {4}environment:\s*$/.test(line)) { inEnv = true; continue; }
+      if (inEnv && /^ {4}\S/.test(line)) { inEnv = false; }
+      const kv = /^ {6}([A-Z][A-Z0-9_]*):/.exec(line);
+      if (inEnv && kv) byService.get(service)?.add(kv[1]);
+    }
+    return byService;
   };
 
-  const local = new Set([...envKeys('.env.example'), ...envKeys('docker-compose.yml')]);
-  const deployed = envKeys('infra/main.parameters.json');
+  const bicepEnv = (): Set<string> => {
+    const text = readFileSync(path.join(ROOT, 'infra/modules/containerApps.bicep'), 'utf8');
+    // Container Apps env entries are `{ name: 'API_OIDC_ISSUER', value: … }`
+    // or `{ name: 'X', secretRef: … }`.
+    return new Set([...text.matchAll(/name:\s*'([A-Z][A-Z0-9_]*)'/g)].map(m => m[1]));
+  };
+
+  const local = composeEnv();
+  const localAll = new Set<string>();
+  for (const [service, keys] of local) {
+    if (DIVERGENCE.localOnlyServices.includes(service)) { for (const k of keys) localAll.add(k); continue; }
+    for (const k of keys) localAll.add(k);
+  }
+  const deployed = bicepEnv();
   const tabled = new Set(DIVERGENCE.rows.flatMap(r => r.keys));
   const same = new Set(DIVERGENCE.sameEverywhere);
 
+  it('reads a non-empty key set from BOTH sides', () => {
+    // The check that would have caught the previous version of this file,
+    // whose deployed set was always empty and which therefore reported
+    // success while asserting half of what it claimed.
+    expect(localAll.size).toBeGreaterThan(10);
+    expect(deployed.size).toBeGreaterThan(10);
+  });
+
   it('every key that differs between the environments is named by a table row', () => {
-    const differing = [...local].filter(k => !deployed.has(k) && !same.has(k))
-      .concat([...deployed].filter(k => !local.has(k) && !same.has(k)));
-    expect(differing.filter(k => !tabled.has(k))).toEqual([]);
+    const differing = [
+      ...[...localAll].filter(k => !deployed.has(k)),
+      ...[...deployed].filter(k => !localAll.has(k)),
+    ].filter(k => !same.has(k));
+    expect(differing.filter(k => !tabled.has(k)).sort()).toEqual([]);
+  });
+
+  it('every key present in BOTH environments is a sameEverywhere key, not a tabled one', () => {
+    const inBoth = [...localAll].filter(k => deployed.has(k));
+    expect(inBoth.filter(k => tabled.has(k)).sort()).toEqual([]);
   });
 
   // The half that stops the table rotting into optimism.
@@ -8587,34 +9341,81 @@ describe('the configuration diff is exactly §5.1s divergence list (S30)', () =>
   });
 
   it('every tabled key actually appears in at least one environment', () => {
-    const ghosts = [...tabled].filter(k => !local.has(k) && !deployed.has(k));
-    expect(ghosts).toEqual([]);
+    const ghosts = [...tabled].filter(k => !localAll.has(k) && !deployed.has(k));
+    expect(ghosts.sort()).toEqual([]);
   });
 
-  // Owner decision 5: this is a value the operator supplies in BOTH
-  // environments, from the same source, so it is not a divergence — and it
-  // must have no default in either.
-  it('GATEWAY_ALLOWED_JURISDICTIONS is the same-everywhere kind, and has no default', () => {
+  it('every sameEverywhere key appears in at least one environment too', () => {
+    const ghosts = [...same].filter(k => !localAll.has(k) && !deployed.has(k));
+    expect(ghosts.sort()).toEqual([]);
+  });
+
+  // P4 / owner decision 5, asserted here as well as in `stage1DoD`, both
+  // through ONE shared predicate.
+  it('GATEWAY_ALLOWED_JURISDICTIONS is the same-everywhere kind, and is defaulted nowhere', () => {
     expect(same.has('GATEWAY_ALLOWED_JURISDICTIONS')).toBe(true);
     expect(tabled.has('GATEWAY_ALLOWED_JURISDICTIONS')).toBe(false);
-
-    const gatewayConfig = readFileSync(path.join(ROOT, 'apps/gateway/src/config.ts'), 'utf8');
-    expect(gatewayConfig).not.toMatch(/GATEWAY_ALLOWED_JURISDICTIONS\s*\?\?/);
-
-    const compose = readFileSync(path.join(ROOT, 'docker-compose.yml'), 'utf8');
-    expect(compose).not.toMatch(/GATEWAY_ALLOWED_JURISDICTIONS[^\n]*:-/);
-
-    // In .env.example it may appear ONLY as a comment.
-    for (const line of readFileSync(path.join(ROOT, '.env.example'), 'utf8').split('\n')) {
-      if (line.includes('GATEWAY_ALLOWED_JURISDICTIONS')) {
-        expect(line.trimStart().startsWith('#')).toBe(true);
-      }
-    }
-
-    const bicep = readFileSync(path.join(ROOT, 'infra/main.bicep'), 'utf8');
-    expect(bicep).not.toMatch(/param allowedJurisdictions[^\n]*=/);
+    expect(jurisdictionDefaultOffenders(ROOT)).toEqual([]);
   });
 });
+
+export { CONFIG_MODULES, COMPOSITION_ROOTS };
+```
+
+`apps/api/test/jurisdictionDefault.ts` — the shared predicate, so `configSurface` and `stage1DoD` both assert P4's absence without two copies of four regexes drifting apart:
+
+```ts
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
+/**
+ * Every home GATEWAY_ALLOWED_JURISDICTIONS could acquire a default in.
+ *
+ * P4 asks for redundancy on this absence — it is invisible to every
+ * happy-path test, so with a default restored every other test still
+ * passes and nothing looks wrong. Two suites therefore assert it. ONE
+ * shared predicate is what makes that redundancy rather than duplication.
+ */
+export function jurisdictionDefaultOffenders(root: string): string[] {
+  const offenders: string[] = [];
+
+  const gw = readFileSync(path.join(root, 'apps/gateway/src/config.ts'), 'utf8');
+  if (/GATEWAY_ALLOWED_JURISDICTIONS\s*\?\?\s*['"`]/.test(gw)) offenders.push('config.ts defaults it');
+  if (!/no default/i.test(gw)) offenders.push('config.ts does not refuse it when unset');
+
+  const compose = readFileSync(path.join(root, 'docker-compose.yml'), 'utf8');
+  if (/GATEWAY_ALLOWED_JURISDICTIONS[^\n]*:-/.test(compose)) offenders.push('docker-compose.yml defaults it');
+
+  for (const line of readFileSync(path.join(root, '.env.example'), 'utf8').split('\n')) {
+    if (line.includes('GATEWAY_ALLOWED_JURISDICTIONS') && !line.trimStart().startsWith('#')) {
+      offenders.push('.env.example sets it uncommented');
+    }
+  }
+
+  const bicep = readFileSync(path.join(root, 'infra/main.bicep'), 'utf8');
+  if (/param allowedJurisdictions[^\n]*=/.test(bicep)) offenders.push('main.bicep defaults it');
+
+  return offenders;
+}
+```
+
+`apps/api/test/walk.ts` — extracted rather than written twice, because `stage1DoD.test.ts` needs the same function and the plan's own rule is "when you find yourself writing a second copy, extract it then":
+
+```ts
+import { readdirSync, statSync, existsSync } from 'node:fs';
+import path from 'node:path';
+
+/** Every `.ts`/`.tsx` source file under `dir`, excluding tests and build output. */
+export function walk(dir: string, out: string[] = []): string[] {
+  if (!existsSync(dir)) return out;
+  for (const entry of readdirSync(dir)) {
+    if (['node_modules', 'dist', '.git', 'test_docs', 'fixtures'].includes(entry)) continue;
+    const full = path.join(dir, entry);
+    if (statSync(full).isDirectory()) walk(full, out);
+    else if (/\.tsx?$/.test(full) && !/\.test\.tsx?$/.test(full)) out.push(full);
+  }
+  return out;
+}
 ```
 
 - [ ] **Step 2: Write the sweep test**
@@ -8623,21 +9424,15 @@ describe('the configuration diff is exactly §5.1s divergence list (S30)', () =>
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
+// Both extracted rather than written a second time — the plan's own rule is
+// "when you find yourself writing a second copy, extract it then", and
+// `configSurface` needs the same two.
+import { walk } from '../../../apps/api/test/walk.ts';
+import { jurisdictionDefaultOffenders } from '../../../apps/api/test/jurisdictionDefault.ts';
 
 const ROOT = path.resolve(__dirname, '../../..');
-const walk = (dir: string, out: string[] = []): string[] => {
-  if (!existsSync(dir)) return out;
-  for (const e of readdirSync(dir)) {
-    if (['node_modules', 'dist', '.git', 'test_docs', 'fixtures'].includes(e)) continue;
-    const full = path.join(dir, e);
-    if (statSync(full).isDirectory()) walk(full, out);
-    else if (/\.(ts|tsx)$/.test(full)) out.push(full);
-  }
-  return out;
-};
-
 const CLIENT_FILES = walk(path.join(ROOT, 'src'));
 
 describe('Stage 1 definition of done (§18.2)', () => {
@@ -8651,6 +9446,16 @@ describe('Stage 1 definition of done (§18.2)', () => {
       }
       if (text.includes('openrouter.ai')) {
         offenders.push(`${path.relative(ROOT, file)} still names openrouter.ai`);
+      }
+      // Stale COMMENTS too, not just code. §11.1's rule is written for the
+      // precedent copy but its reasoning is general: "a stale comment is
+      // how a true statement gets restored by a well-meaning refactor."
+      // Five files carry doc comments naming `openrouter.ts` today —
+      // strength.ts, DraftForm.tsx, generateDraft.ts, suggestField.ts and
+      // TemplateEditor.tsx — and a sweep that greps only the host leaves
+      // every one of them pointing at a deleted module.
+      if (/openrouter\.ts/.test(text)) {
+        offenders.push(`${path.relative(ROOT, file)} still names openrouter.ts`);
       }
     }
     expect(offenders).toEqual([]);
@@ -8669,6 +9474,38 @@ describe('Stage 1 definition of done (§18.2)', () => {
       // path the gateway does not see.
       const m = text.match(/fetch\(\s*['"`]https?:\/\/[^'"`]+/g);
       if (m) offenders.push(`${path.relative(ROOT, file)}: ${m.join(', ')}`);
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // S26's log-sink clause, held as a ruling rather than a startup check
+  // (Task 26 Step 5). The sink is unconditional stdout; the moment a
+  // configuration key selects or disables it, this test fails and the
+  // §10.5 startup refusal has to be written for real.
+  it('the audit sink has no configuration surface', () => {
+    const gw = readFileSync(path.join(ROOT, 'apps/gateway/src/config.ts'), 'utf8');
+    const offenders = [...gw.matchAll(/\b(GATEWAY_[A-Z0-9_]*(LOG|SINK)[A-Z0-9_]*)\b/g)]
+      .map(m => m[1]);
+    expect(offenders).toEqual([]);
+    const audit = readFileSync(path.join(ROOT, 'apps/gateway/src/audit.ts'), 'utf8');
+    expect(audit).not.toMatch(/process\.env/);
+  });
+
+  // §18.2: "no credential of any kind exists outside the gateway process,
+  // asserted by a test over apps/web AND apps/api". The client half is
+  // below; this is the half that was missing.
+  it('no credential of any kind exists in apps/api', () => {
+    const offenders: string[] = [];
+    for (const file of walk(path.join(ROOT, 'apps/api/src'))) {
+      const text = readFileSync(file, 'utf8');
+      const rel = path.relative(ROOT, file);
+      for (const pattern of [
+        /\bapiKey\b/, /\bAPI_KEY\b/, /sk-[a-zA-Z0-9]/, /\bx-api-key\b/,
+        /OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY/,
+        /KeyVault|SecretClient/,
+      ]) {
+        if (pattern.test(text)) offenders.push(`${rel} matches ${pattern}`);
+      }
     }
     expect(offenders).toEqual([]);
   });
@@ -8697,28 +9534,16 @@ describe('Stage 1 definition of done (§18.2)', () => {
     expect(offenders).toEqual([]);
   });
 
-  // Owner decision 5, checked at rest and in five places at once. The
+  // Owner decision 5 / P4, checked at rest in four places at once. The
   // absence of a default is invisible to every happy-path test, which is
-  // exactly why it needs a test of its own.
+  // exactly why it needs a test of its own — and why P4 asks for it twice.
+  //
+  // The PREDICATE is shared with `configSurface` rather than restated here:
+  // two copies of four regexes drifting apart is the failure mode that
+  // redundancy would otherwise create, and one function removes it while
+  // keeping both call sites.
   it('GATEWAY_ALLOWED_JURISDICTIONS has no default value ANYWHERE', () => {
-    const offenders: string[] = [];
-    const gw = readFileSync(path.join(ROOT, 'apps/gateway/src/config.ts'), 'utf8');
-    if (/GATEWAY_ALLOWED_JURISDICTIONS\s*\?\?\s*['"`]/.test(gw)) offenders.push('config.ts defaults it');
-    if (!/no default/i.test(gw)) offenders.push('config.ts does not refuse it when unset');
-
-    const compose = readFileSync(path.join(ROOT, 'docker-compose.yml'), 'utf8');
-    if (/GATEWAY_ALLOWED_JURISDICTIONS[^\n]*:-/.test(compose)) offenders.push('docker-compose.yml defaults it');
-
-    for (const line of readFileSync(path.join(ROOT, '.env.example'), 'utf8').split('\n')) {
-      if (line.includes('GATEWAY_ALLOWED_JURISDICTIONS') && !line.trimStart().startsWith('#')) {
-        offenders.push('.env.example sets it uncommented');
-      }
-    }
-
-    const bicep = readFileSync(path.join(ROOT, 'infra/main.bicep'), 'utf8');
-    if (/param allowedJurisdictions[^\n]*=/.test(bicep)) offenders.push('main.bicep defaults it');
-
-    expect(offenders).toEqual([]);
+    expect(jurisdictionDefaultOffenders(ROOT)).toEqual([]);
   });
 
   it('the gateway never logs prompt or completion content', () => {
@@ -8780,6 +9605,8 @@ Expected: FAIL on the two README cases (the README is not yet rewritten). Every 
 
 - [ ] **Step 4: Rewrite the README rows**
 
+Also correct the five doc comments that name `openrouter.ts` — `src/lib/strength.ts:12`, `src/features/authoring/DraftForm.tsx:53`, `src/features/authoring/generateDraft.ts:121`, `src/features/templates/suggestField.ts:51` and `src/features/templates/TemplateEditor.tsx:75` — to name `gatewayModelClient.ts` and `isSignInError`/`isServiceConfigError`. The sweep test above fails until they are.
+
 Apply the table above. Keep every sentence that is still true — the citation guarantees, the scan detection, the page-image rule, the palette guards, the fonts decision (its reasoning strengthens: the app should not contact a third-party host on a page view, and now the sentence is about the firm's own API).
 
 - [ ] **Step 5: Record the rulings**
@@ -8788,14 +9615,16 @@ Append to `docs/superpowers/redesign/rulings.md`, in its established format, wit
 
 - **S2 (revised 2026-08-28, owner decision).** The gateway is multi-provider. No credential ever leaves the gateway, and every call is logged with its provider and jurisdiction, whichever backend is configured. An Azure-only deployment using managed identity retains the stronger property — no provider keys exist at all — and that is the recommended posture. *Cost if wrong: the two sentences get conflated in a README or a Risk answer, and a firm running against OpenAI believes a claim that is true only of the Azure posture.*
 - **S15 (revised).** The allowlist is provider+model pairs, each declaring its processing jurisdiction. A user still cannot name a model. *Cost if wrong: one more field per entry and a startup check.*
-- **D1.** One SSE event splitter in `packages/core`; each adapter contributes only a pure `decodeEvent`; `apps/api` parses nothing. *Cost if wrong: five copies of a parser this project has already fixed twice, at a boundary where the failure is a short answer rather than an error.*
-- **D2.** A stream that ends without a terminator frame is an error, not a short answer. *Cost if wrong: a truncated answer about a contract, indistinguishable from a complete one.*
-- **D3.** The audit record is written before the upstream call and a sink failure refuses the call. *Cost if wrong: an unlogged egress, which is the one thing the gateway exists to prevent — and "what of ours went where" stops being answerable.*
-- **D4 (revised, owner decision 5).** The jurisdiction gate is startup configuration with **no default anywhere**; the gateway refuses to start with `GATEWAY_ALLOWED_JURISDICTIONS` unset, and a model outside the declared set stops the process. It enforces the **operator's** declared policy — which jurisdictions their contracts and data provisions cover — and passes no judgement of its own; the model picker's jurisdiction label is factual for the same reason. *Cost if wrong: an operator must type one variable before the gateway starts. Against that, two failures a default would cause. A default encodes an assumption about one firm's contracts as though it were a property of the software, and the system then enforces a policy nobody chose — while a firm whose provisions genuinely cover a US provider is told, wrongly, that their configuration is unacceptable. And the absence of a default is invisible to every happy-path test, which is why its removal is mutation-tested rather than trusted.*
-- **D5.** Every provider's stream decoding is proved by one conformance battery over recorded fixtures; a provider with no fixture fails the build; a synthetic fixture says so in the file. *Cost if wrong: a provider changes its event shape and the suite stays green.*
+- **P1.** One SSE event splitter in `packages/core`; each adapter contributes only a pure `decodeEvent`; `apps/api` parses nothing. *Cost if wrong: five copies of a parser this project has already fixed twice, at a boundary where the failure is a short answer rather than an error.*
+- **P2.** A stream that ends without a terminator frame is an error, not a short answer. *Cost if wrong: a truncated answer about a contract, indistinguishable from a complete one.*
+- **P3.** The audit record is written before the upstream call and a sink failure refuses the call. *Cost if wrong: an unlogged egress, which is the one thing the gateway exists to prevent — and "what of ours went where" stops being answerable.*
+- **P4 (revised, owner decision 5).** The jurisdiction gate is startup configuration with **no default anywhere**; the gateway refuses to start with `GATEWAY_ALLOWED_JURISDICTIONS` unset, and a model outside the declared set stops the process. It enforces the **operator's** declared policy — which jurisdictions their contracts and data provisions cover — and passes no judgement of its own; the model picker's jurisdiction label is factual for the same reason. *Cost if wrong: an operator must type one variable before the gateway starts. Against that, two failures a default would cause. A default encodes an assumption about one firm's contracts as though it were a property of the software, and the system then enforces a policy nobody chose — while a firm whose provisions genuinely cover a US provider is told, wrongly, that their configuration is unacceptable. And the absence of a default is invisible to every happy-path test, which is why its removal is mutation-tested rather than trusted.*
+- **P5.** Every provider's stream decoding is proved by one conformance battery over recorded fixtures; a provider with no fixture fails the build; a synthetic fixture says so in the file. *Cost if wrong: a provider changes its event shape and the suite stays green.*
 - **S28 (as executed).** One OIDC path, two issuers, no Entra branch: the tenant check is a configured required claim, the identity is `(issuer, subject)` with the subject claim named in configuration, and the browser uses `oidc-client-ts` rather than MSAL. *Cost if wrong: an OIDC library instead of the vendor's, and MSAL's Entra-specific conveniences given up. Against that, two sign-in paths — this project's most repeated defect at the front door, where the divergence would be between the authentication a developer tests and the one a firm runs.*
 - **S29 (as executed).** No development bypass and no configuration that disables authentication; the API refuses to start with no issuer, or a non-HTTPS issuer that is not loopback; the gateway has no caller-auth value that turns its check off. **The absence is mutation-tested** (Task 16 Step 7). *Cost if wrong: a developer runs one more container. Against it: a bypass reaches production enabled, and it tests a different code path from the one that ships — a green local run under one would prove nothing, which removes the only reason to have a faithful local stack.*
 - **S31 (as executed).** Keycloak, from a version-controlled realm seeding four accounts across the three roles plus one in no group. *Cost if wrong: ~450 MB of image and ~20 seconds of cold start per boot. If it ever becomes the bottleneck the swap is one compose service and one realm file, because §7 is issuer-agnostic — which is the point.*
+- **S25, narrowed deliberately, and the narrowing recorded.** §10.2's interface has six members and S25 lists five adapter-owned concerns; this plan's `ProviderAdapter` has three functions. Two moved: **credential acquisition** to `credentials/resolve.ts`, because which of four sources a credential comes from is a property of the deployment and not of the provider's wire protocol; and **error classification** to `isRetryableStatus` in `packages/core`, applied once in `callModel.ts`, because §10 itself says the retry policy runs once in the core. *Cost if wrong: §10 says the policy runs "over the adapter's normalised error class", and without `classifyError` retryability is read off the HTTP status alone. That is correct for all six current providers — Anthropic's 529 falls under `>= 500` — and wrong for any provider that signals retryability in a response body. **The remedy is named in `adapters/types.ts` so it is not improvised: such a provider adds an optional `classifyError?(status, body): 'retry' | 'fail'` to the interface and implements it, and `callModel` consults it when present. It never becomes an `if` on a provider id in the core**, which `stage1DoD` forbids and which would be the duplication S25 exists to prevent, inverted.* Requiring `classifyError` now would give six adapters a near-identical `status => class` function for a capability none of them needs.
+- **S26's log-sink clause, as executed.** §10.5 and §18.2 require that *"the gateway refuses to start with no log sink configured"*. **This deployment satisfies it by having no log-sink configuration at all**: `JsonlAuditSink` writes JSON lines to stdout unconditionally, in every environment (§10.5's own words — "the gateway writes the same JSON lines to stdout in both"), and P3 makes a *runtime* write failure refuse the call. There is therefore no configuration in which the sink is absent, missing or disabled, and nothing for a startup check to check. *Cost if wrong: if a later stage adds a configurable sink — a collector endpoint, a second destination — this ruling is void and the startup refusal must actually be written. Recorded here rather than left implicit, because otherwise §18.2's line is satisfied vacuously and nobody would notice it had stopped being true.* A `stage1DoD` assertion holds it: no `GATEWAY_*LOG*` or `*SINK*` key may appear in `config.ts`.
 - **S30 (as executed).** One typed configuration module per app; no module branches on the environment; the configuration diff **is** §5.1's divergence list, checked in both directions by `configSurface` (Task 26). *Cost if wrong: one boundary test and one diff test to keep green. Without them §5.1 is the one guarantee in this design with nothing enforcing it at rest, and its symptom is a green `docker compose up` that says nothing about the tenant.*
 
 - [ ] **Step 6: Run everything, in full**
@@ -8821,7 +9650,13 @@ Then, **the four mutations this task exists for**:
 
    **Do the same for the other three homes, one at a time** — `${GATEWAY_ALLOWED_JURISDICTIONS:-UK,EU}` in `docker-compose.yml`, an uncommented line in `.env.example`, and `param allowedJurisdictions string = 'UK,EU'` in `main.bicep`. Each must fail on its own. **This is the mutation that matters most in the whole plan and it is the least obvious.** With a default in place, every happy-path test passes, the gateway starts, the gate still refuses an undeclared model, and the boot banner still prints a table — *nothing looks wrong*. Without these four checks a later, entirely well-meant "sensible default" slips in green and the system then enforces, as though it were a property of the software, an assumption about one particular firm's contracts.
 
-4. **Read an env var outside a config module.** Add `const x = process.env.FOO;` to `apps/gateway/src/callModel.ts`. Expected: FAIL on *"nothing outside the three config modules reads process.env or import.meta.env"*. Remove it.
+4. **Read an env var outside a config module.** Add `const x = process.env.FOO;` to `apps/gateway/src/callModel.ts`. Expected: FAIL on *"nothing outside the config modules and the two composition roots reads the environment"*. Remove it.
+
+4b. **Grow the composition-root exemption.** Add `'apps/gateway/src/server.ts'` to `COMPOSITION_ROOTS`. Expected: FAIL on *"the composition-root exemption is exactly the two main.ts files"*. Remove it.
+   The exemption is the one part of this guard that can be widened to make a failure go away, so it is the part that most needs its own test — widening it was the cheapest repair available to an executor who met this suite red at the last task of the stage.
+
+4c. **Make a composition root read a key.** Add `const port = process.env.GATEWAY_PORT;` to `apps/gateway/src/main.ts`. Expected: FAIL on *"each composition root passes process.env to loadConfig and reads no key itself"*. Remove it.
+   An exemption for "hands the environment to `loadConfig`" must not quietly become an exemption for "reads the environment".
 
 5. **Branch on the environment.** Add `const isLocal = true;` to `apps/api/src/routes/infer.ts`. Expected: FAIL on *"nothing reads NODE_ENV, isLocal, or if (dev)"*. Remove it.
 
@@ -8926,7 +9761,7 @@ Every Stage 1 requirement, with the task that implements it.
 | The recorded stub is a registered adapter, refused by S27, marked everywhere | §5.1, §10.2 | 2, 8, 10, 13 |
 | One typed config module per app; no module branches on the environment | §5.1, S30 | 4, 16, 19, 26 |
 | The configuration diff **is** §5.1's divergence list, both directions | §18 item 10 | 26 |
-| `GATEWAY_ALLOWED_JURISDICTIONS` has no default, in any of its five homes | D4, owner decision 5 | 4, 24, 25, 26 |
+| `GATEWAY_ALLOWED_JURISDICTIONS` has no default, in any of its five homes | P4, owner decision 5 | 4, 24, 25, 26 |
 | The model picker's jurisdiction label is factual, never evaluative | S27, owner decision 5 | 22 |
 | The README carries "what running locally does not prove" | §5.1 | 26 |
 | `openrouter.ts` becomes a `ModelClient` | §13 | 2 (interface), 20 (implementation) |
@@ -8940,6 +9775,14 @@ Every Stage 1 requirement, with the task that implements it.
 | No OpenRouter key in the codebase or any browser | §18.2 | 22 (purge), 26 (sweep) |
 | Empty / broken / in-flight render distinctly | §3 | 19 (sign-in), 22 (model picker), 17/20 (empty list at the wire) |
 | An auth failure routes correctly, per audience | §3, brief | 23 |
+| Jurisdiction refused **per call**, no request reaching the provider | S27, §10.3, §14, §18.2 | 2 (code), 11 (gate + §14's mutation (c)), 23 (copy) |
+| The `adapterBoundary` suite — no core concern reaches into an adapter | S25, §14, §18.2 | 8 (Step 7) |
+| Every entry carries a dated `dataHandling` note | S26, §10.1, §12 Q5 | 4 (parsed), 5 (on the wire) |
+| The gateway refuses to start with no log sink | §10.5, S26, §18.2 | 26 (ruling: the sink has no configuration surface) + assertion |
+| Streamed deltas equal the non-streamed completion, byte for byte | §10.4, §14, §18.2, §19 | 10 |
+| Empty completion, mid-stream error, request-body round-trip | §14 | 10 |
+| No credential of any kind outside the gateway, over `apps/web` **and** `apps/api` | §18.2 | 5, 7, 11, 26 |
+| One config module per app **plus two named composition roots** | S30, §18 item 10(a) | 4, 16, 19, 26 |
 | Mutation tests on everything load-bearing | §14 | 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,26 |
 | Browser verification, said plainly if not done | `CLAUDE.md` | 19, 22, 24, 25 |
 | `tsc` clean, tests pass, build clean | §18.1 | Global constraint; every task's gate |
@@ -8949,6 +9792,10 @@ Every Stage 1 requirement, with the task that implements it.
 - **§10.1 / §17 Q4 — Foundry abuse-monitoring retention.** An owner decision, not an implementation step. It is now **wider** than the spec states: OpenAI, Anthropic and OpenRouter each have their own retention and training terms, and a firm choosing one is choosing those terms. **This needs a §12 Q4 answer per configured provider before go-live, and the spec's own warning applies — the terms have a shelf life and must be re-confirmed against each provider's current documentation at implementation time.** No task can settle it; Task 26's README should carry a "check your provider's retention terms" line, and the owner should be asked.
 - **§15 Spike 2 — the Azure-side egress assertion.** Task 24 satisfies §18.7 under compose; the Azure half depends on the spike's outcome. Task 25 expresses it in Bicep and Task 26's README says plainly that it is not yet proven there.
 - **§17 Q10 — whether the assistant is in scope.** This plan assumes **yes**, per the spec's own recommendation and because `chatStream` exists and dropping a working feature by omission is the wrong reading of silence. If the owner defers it, Tasks 3, 12, 18 and 20's streaming halves are still needed — every provider's streaming path is exercised by the conformance suite regardless — but `assistant.chat` leaves the purpose list.
+- **§7's no-role refusal — a user in no mapped group is told plainly they have no access.** Stage 1 derives a `Principal` and enforces no roles (§13, Task 16), so there is nothing here that could refuse one. Building it now would mean a role gate in a stage the spec says has none, written against a `Principal` that carries groups but no role mapping — so it would refuse on "groups is empty", which is **not** the predicate Stage 2 will use, and Entra's group-overage case (which Stage 1 *does* detect, Task 16) would have to be excluded from it by hand. **Stage 2 work.** Task 24 seeds the `nogroups` account now so Stage 2 needs no realm edit; an earlier draft of this plan claimed the refusal as a Stage 1 behaviour and asked for it in browser verification, and that verification could not have passed.
+- **§14's `credential` suite, second half — "the admin endpoint reports only whether a credential is configured and when it was rotated".** There is no admin endpoint in Stage 1; provider configuration is an admin surface and Stage 2 builds it. The first half — a credential failure is a loud `503`, never an unauthenticated call, a different source or a different provider — is Task 7 and is mutation-tested against a *working* alternative it must not take. **Stage 2 work**, recorded so the deferral is a decision rather than an omission.
+- **S26's `dataHandling` surfacing** — the admin provider screen, the staleness marker past a review interval, and its place in the audit export. The **field itself lands in Stage 1** (Tasks 4, 5, and it reaches the wire) because `toAllowedModel` enumerates the wire keys explicitly and a test asserts the exact list, so adding it later would be a `models.json` schema change plus a wire-type change plus a test edit — and §12 Q5 would be unanswerable until then. Nothing renders it before Stage 2.
+- **§18 item 10(c) — "the same suites run against both environments".** Task 24 runs the compose suite and Task 25 verifies a deployed environment by hand, but wiring the integration suite to run against an ephemeral deployed environment before release is CI work this stage does not build. 10(a) and 10(b) are Task 26 and are mechanical; 10(c) needs a pipeline. **Named here rather than left to be discovered when someone reads §18 and finds two of three.**
 
 ### 2. Placeholder scan
 
@@ -8980,4 +9827,9 @@ Checked across all 26 tasks:
 - `actorIssuer` / `actorSubject` — the pair, spelled identically in Tasks 6 (`AuditStart`, `AuditStartInput`), 11 (`CallContext`, `InferBody`), 12 and 17. **`actorUserId` survives nowhere in Stage 1** — it appears only in the Stage 2 interface note above, as the field Stage 2 adds *beside* the pair rather than in place of it.
 - `getAccessToken` (Task 19) lives in `src/lib/auth/oidc.ts`, not `msal.ts`, and Task 20 imports it from there.
 - `recorded` — the provider id in Task 2's `PROVIDER_IDS`, the adapter file `adapters/recorded.ts` and its export `recordedAdapter` (Tasks 8, 13), the conformance fixture `recorded.txt` (Task 10), and the fixture directory `fixtures/recorded/` (Tasks 4, 13). **`stub` survives only as an English word describing a test double, never as an identifier**; `selectTransport`, `GATEWAY_UPSTREAM`, `stubDir` and `InferResponse.stubbed` are all gone.
-- `config` — `src/lib/config.ts` (Task 19), `apps/api/src/config.ts` (Task 16), `apps/gateway/src/config.ts` (Task 4). Exactly three, and `configSurface` (Task 26) names exactly those three.
+- `config` — `src/lib/config.ts` (Task 19), `apps/api/src/config.ts` (Task 16), `apps/gateway/src/config.ts` (Task 4). Exactly three, and `configSurface` (Task 26) names exactly those three — plus exactly two composition roots, `apps/{api,gateway}/src/main.ts`, asserted to be exactly those two.
+- **Decision labels.** This plan's five are **P1–P5**; `rulings.md`'s owner decisions are **D1–D5**. The only `D<n>` in this document is the one reference to owner-D3 in the §5.1 row-2 note, and it is written `D3/S2` so it reads unambiguously.
+- `Bloc` — `'UK' | 'EU' | 'US' | 'other'`, **`UK` never `GB`**, and the type's doc comment says why (Task 2). The spec's §6.5 and §10.3 were amended to match in the same commit as this reconciliation, so the two documents now agree on the value that reaches configuration, every audit record and a picker label.
+- `buildRegistry` / `PENDING` (Task 8) — the registry is a factory taking `{ publicOrigin, recordedDir }`, filled over Tasks 8, 9 and 13. `getAdapter` and `ALL_ADAPTERS` survive only as the name of a forbidden import in Task 8's `adapterBoundary` mutation; `CallContext.registry` is how `callModel` reaches an adapter.
+- `jurisdiction_not_allowed` (Task 2) — S27's per-call refusal, classified `isServiceConfigError`, routed to Settings by Task 23, and raised in `prepare()` (Task 11) after the audit record and before `buildCall`.
+- `walk` and `jurisdictionDefaultOffenders` — extracted to `apps/api/test/` and imported by both `configSurface` and `stage1DoD`, rather than written twice in each.
