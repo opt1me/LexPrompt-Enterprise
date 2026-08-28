@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Settings as SettingsIcon, ClipboardList, Briefcase } from 'lucide-react';
-import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition, Changeset, ChangesetItem } from './types';
+import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import { loadSettings, saveSettings } from './lib/storage';
 import { applyVerification, findingKey, makeNote, resetVerification, unchecked } from './lib/verification';
 import type { VerificationChange } from './lib/verification';
@@ -65,17 +65,23 @@ import { parseFiles, parseFile, toDocumentRecord, documentFileForViewing, docume
 // of these library functions are modified here; App.tsx only calls them in
 // sequence, exactly as it already does for D's publish path and E's
 // authoring flow.
+//
+// Task 10A-fix: `buildChangeset`/`publishChangeset` and `ChangesetReview`
+// are deliberately NOT imported here. Spec §4.8 routes adopted positions
+// into E's draft review and D's publish path; the changeset mechanism is
+// for the OTHER entry point — a new deal read against a playbook version
+// that really exists — and this app has no screen for that yet. Those three
+// stay built, tested and unreached rather than being reached through a
+// fabricated empty v1. See `features/redlines/positionsToDraft.ts`.
 import { proposeRole, proposeChains, type PrecedentDocument, type PrecedentRole } from './lib/chains';
 import { parseDocxRedlines, type ParsedEdit } from './lib/docxRedlines';
 import { diffExtractedText } from './lib/pdfRedlineDiff';
 import { inferPositions, type InferredPosition, type OpenQuestion } from './lib/inferPositions';
-import { buildChangeset } from './lib/buildChangeset';
-import { saveChangeset, recordDecision, publishChangeset, getChangeset } from './lib/db/changesets';
 import { PrecedentUploadPanel } from './features/redlines/PrecedentUploadPanel';
 import { PrecedentIntake, type UnreadableDocument } from './features/redlines/PrecedentIntake';
 import { WhatWeLearned } from './features/redlines/WhatWeLearned';
 import { TheWorkings } from './features/redlines/TheWorkings';
-import { ChangesetReview } from './features/redlines/ChangesetReview';
+import { positionsToDraft, includedPositions } from './features/redlines/positionsToDraft';
 import { Button } from './components/Button';
 
 /** `authoring-form` and `authoring-review` are sub-project E's two
@@ -86,7 +92,7 @@ import { Button } from './components/Button';
 type View =
   | 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter' | 'not-found'
   | 'authoring-form' | 'authoring-review'
-  | 'redlines-intake' | 'redlines-learned' | 'redlines-workings' | 'redlines-changeset';
+  | 'redlines-intake' | 'redlines-learned' | 'redlines-workings';
 
 /** The two views that hold a session-only `AuthoringDraft`. Leaving either
  *  of them, by any path, destroys it (see the effect that clears the
@@ -97,17 +103,17 @@ function isAuthoringView(view: View): boolean {
   return AUTHORING_VIEWS.includes(view);
 }
 
-/** Sub-project F's four session-only screens, mirroring `AUTHORING_VIEWS`
+/** Sub-project F's three session-only screens, mirroring `AUTHORING_VIEWS`
  *  above — same reasoning (R-F6: "a learning session is session-only,
  *  exactly as E's `AuthoringDraft` is"), same absence of a `Route`: a deep
- *  link cannot restore a set of in-memory `File`s, so none of the four gets
- *  one. `redlines-changeset` is the exception in spirit, not in mechanism —
- *  once a `Changeset` is built it IS durable (`saveChangeset`), but this app
- *  has no reopen-an-existing-changeset screen yet, so leaving still drops
- *  the session's precedent documents and positions exactly like the other
- *  three. */
+ *  link cannot restore a set of in-memory `File`s, so none of the three
+ *  gets one.
+ *
+ *  The session hands off to `authoring-review` — E's screen, holding E's
+ *  `AuthoringDraft` — rather than ending here, so nothing durable is
+ *  written on this side of the handoff at all. */
 const REDLINES_VIEWS: readonly View[] = [
-  'redlines-intake', 'redlines-learned', 'redlines-workings', 'redlines-changeset',
+  'redlines-intake', 'redlines-learned', 'redlines-workings',
 ];
 
 function isRedlinesView(view: View): boolean {
@@ -121,8 +127,25 @@ const AUTHORING_DRAFT_DIRTY_MESSAGE =
   'This drafted playbook has not been saved. It exists only in this tab, ' +
   'so leaving loses every clause you have reviewed. Leave anyway?';
 const REDLINES_DIRTY_MESSAGE =
-  'This learning session has not been turned into a published changeset. It exists only in this tab, ' +
+  'This learning session has not been turned into a playbook. It exists only in this tab, ' +
   'so leaving loses the documents you brought in and the positions found in them. Leave anyway?';
+
+/** Why "What we learned" shows no open questions on THIS entry point, and
+ *  why that is not the same as having found none.
+ *
+ *  An `OpenQuestion` is derived (in `inferPositions`) from a clause a
+ *  playbook already has that none of these documents amended — spec §2's
+ *  "never guess a position from silence", turned into a question. A session
+ *  building a brand-new playbook out of these documents has no such clause
+ *  list, so `unamendedClauses` is genuinely `[]` and no search happens.
+ *  Saying so is the point: without it, the screen's empty state reads
+ *  "nothing the redlines raised without also settling it", which asserts a
+ *  search that never ran. Read against an existing playbook — F's other
+ *  entry point, not yet built — this block would fill in. */
+const REDLINES_NO_QUESTIONS_REASON =
+  'No open questions were looked for here. An open question comes from a clause your playbook already ' +
+  'has that none of these documents amended — and this session is building the playbook out of these ' +
+  'documents, so there is no clause list yet to check them against.';
 
 /** Builds the persisted `Review` shape from an in-session `ReviewRun`, for
  *  a run scoped to a matter (`matterId` — see `activeMatterId`). Shared by
@@ -542,8 +565,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
 
   // --- Sub-project F: learning from redlines (Task 10A wiring) -----------
   //
-  // Everything here is session-only until `redlinesChangeset` is actually
-  // built, per R-F6 (mirrors E's `AuthoringDraft`): a precedent document's
+  // Everything here is session-only, full stop, per R-F6 (mirrors E's
+  // `AuthoringDraft`, which this session hands off to): a precedent document's
   // `File` and its parsed edits live only in `redlinesFilesRef` below and
   // die with the tab, never reaching `addDocument`/blob storage — spec §4 /
   // §11's "read once, never stored" promise. `redlinesDocs` is the thin,
@@ -569,16 +592,15 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const [redlinesPositions, setRedlinesPositions] = useState<InferredPosition[]>([]);
   const [redlinesQuestions, setRedlinesQuestions] = useState<OpenQuestion[]>([]);
   const [redlinesWorkingsPosition, setRedlinesWorkingsPosition] = useState<InferredPosition | null>(null);
-  // The playbook this session mints (`handleBuildRedlinesChangeset`) so there
-  // is a LIVE version to build and publish a changeset against — spec §9's
-  // changeset mechanism, not E's draft-review surface, is what turns adopted
-  // positions into something publishable here (see that handler's doc
-  // comment for why).
-  const [redlinesVersion, setRedlinesVersion] = useState<PlaybookVersion | null>(null);
-  const [redlinesChangeset, setRedlinesChangeset] = useState<Changeset | null>(null);
-  const [redlinesPublishing, setRedlinesPublishing] = useState(false);
-  const [redlinesPublishError, setRedlinesPublishError] = useState<string | undefined>(undefined);
-  const [redlinesPublishedVersion, setRedlinesPublishedVersion] = useState<PlaybookVersion | undefined>(undefined);
+  // No playbook, no version and no changeset state here on purpose. This
+  // session mints NOTHING: `handleRedlinesToDraftReview` converts the
+  // adopted positions into E's `AuthoringDraft` and hands over, and the
+  // first and only durable write in the whole flow is `saveDraftAsV1`'s
+  // single `publishAndPoint` transaction after a person has cleared E's
+  // save gate. (Task 10A minted a playbook and published an empty v1 here
+  // so there was a live version for `buildChangeset` to read — a version
+  // recording a state the playbook was never in, and an orphaned playbook
+  // whenever the flow was abandoned. See `positionsToDraft.ts`.)
 
   // Important 3: running a playbook from the Library now goes through this
   // picker instead of straight into the run panel, since every review is
@@ -1210,7 +1232,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // Sub-project F: the learning session dies with its screen, exactly like
   // the authoring draft above and for the same reason (R-F6). This is the
   // ONLY place `redlinesFilesRef` is cleared, and it is what actually keeps
-  // spec §4/§11's promise: once the last of the four `REDLINES_VIEWS` is
+  // spec §4/§11's promise: once the last of the three `REDLINES_VIEWS` is
   // left, every `File` this session ever read is dropped from memory, never
   // having reached `addDocument`/blob storage on any path.
   useEffect(() => {
@@ -1223,11 +1245,6 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setRedlinesPositions([]);
     setRedlinesQuestions([]);
     setRedlinesWorkingsPosition(null);
-    setRedlinesVersion(null);
-    setRedlinesChangeset(null);
-    setRedlinesPublishing(false);
-    setRedlinesPublishError(undefined);
-    setRedlinesPublishedVersion(undefined);
   }, [view]);
 
   // Best-effort: keeps `settings.model*` capability fields in step with the
@@ -1443,14 +1460,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   /** Sub-project F's own unsaved-work flag, reusing E's guard rather than
    *  writing a second one (spec §11's rule, restated for F in the task
    *  brief). Real work exists in this session once at least one precedent
-   *  document has been brought in, OR a `Changeset` has been built — and
-   *  stops mattering the moment that changeset is actually published: past
-   *  that point every decision on it is already durable (`recordDecision`
-   *  persists immediately) and the published version itself cannot be lost
-   *  by closing a tab. */
-  const redlinesSessionDirty = isRedlinesView(view)
-    && !redlinesChangeset?.publishedVersionId
-    && (redlinesDocs.length > 0 || redlinesChangeset !== null);
+   *  document has been brought in, and NOTHING in this session is ever
+   *  durable — the handoff to `authoring-review` passes the warning to E's
+   *  own guard (`confirmLeaveAuthoringDraft`), and the first durable write
+   *  in the whole flow is the publish at the end of E's draft review. */
+  const redlinesSessionDirty = isRedlinesView(view) && redlinesDocs.length > 0;
   const confirmLeaveRedlinesSession = useUnsavedDraftGuard(redlinesSessionDirty, REDLINES_DIRTY_MESSAGE);
 
   /** The single question every exit from the current screen asks — a nav
@@ -2711,19 +2725,25 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   // two authoring screens — see `handleDraftWithAI`/`handleBuildByHand`
   // above for the model this follows.
   //
-  // Where this differs from E on purpose: E's adopted draft becomes durable
-  // through `saveDraftAsV1` (D's publish path applied directly to a fresh
-  // playbook). F instead runs every adopted/reworded position through the
-  // SAME changeset mechanism spec §9 built for testing a new deal against a
-  // live playbook (`buildChangeset` → `ChangesetReview` →
-  // `publishChangeset`) — `handleBuildRedlinesChangeset` below mints a
-  // brand-new, empty playbook (an empty v1, exactly like `handleBuildByHand`
-  // seeds a blank draft) purely so there is a live version for that existing
-  // mechanism to build a changeset against, then reuses it unmodified. This
-  // is the reading the task brief's own ordering makes unavoidable —
-  // "adopt/reword/decline → changeset → changeset review → publish" is one
-  // continuous path, not two — and it means F never needs a second,
-  // parallel "positions become a draft" pipeline alongside E's.
+  // Where this MEETS E, rather than differing from it (Task 10A-fix, spec
+  // §4.8: adopt/reword/not-a-house-rule "feeding into E's draft-review
+  // surface and D's publish path"). The adopted and reworded positions
+  // become an ordinary `AuthoringDraft` — `positionsToDraft` is the whole
+  // conversion — and from `authoring-review` onwards this flow IS E's:
+  // the same `DraftReview`, the same `canSaveDraft` gate, the same
+  // `saveDraftAsV1` publishing a genuine v1 through one atomic
+  // `publishAndPoint`. There is no second "positions become a playbook"
+  // pipeline, and no version is written before a person has been through
+  // that review.
+  //
+  // Spec §9's changeset mechanism (`buildChangeset` → `ChangesetReview` →
+  // `publishChangeset`) is F's OTHER entry point: a new deal read against a
+  // playbook version that already exists, where `confirm`/`drift`/
+  // `new_clause` are meaningful because there is a real prior version to be
+  // meaningful against. It is built, tested and currently unreached — this
+  // app has no "test a deal against a playbook" screen yet — and it stays
+  // that way rather than being reached from here through a fabricated empty
+  // v1, which is what Task 10A did.
 
   const handleLearnFromRedlines = () => {
     setChooserOpen(false);
@@ -2887,6 +2907,11 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * that as "nothing to ask an open question about" and returns
    * `questions: []`, which is the honest answer given there is no clause
    * list this wiring can derive one from, not a guessed one.
+   *
+   * The screen is told WHY (`REDLINES_NO_QUESTIONS_REASON`) rather than
+   * left to render its "nothing the redlines raised without also settling
+   * it" empty state, which would claim a search that never ran. The fix for
+   * an empty open-questions block is never to invent questions to fill it.
    */
   const handleRedlinesContinueToLearning = async () => {
     setRedlinesBusy(true);
@@ -2921,101 +2946,49 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
     setRedlinesWorkingsPosition(prev => (prev ? apply(prev) : prev));
   };
 
-  const summariseRedlinesSources = (docs: PrecedentDocument[]): string => {
-    const chainCount = new Set(docs.filter(d => d.chainId).map(d => d.chainId)).size;
-    return `Learned from ${docs.length} document${docs.length === 1 ? '' : 's'} across ` +
-      `${chainCount} chain${chainCount === 1 ? '' : 's'}`;
-  };
-
   /**
-   * "What we learned" → the changeset (spec §7, §9). Mints a brand-new,
-   * empty playbook and immediately publishes an empty v1 for it — exactly
-   * D's ordinary publish path, `publishAndPoint`, applied to a blank draft
-   * (see `handleBuildByHand`'s blank draft for the same shape one level
-   * up) — purely so there is a LIVE version for `buildChangeset` to read
-   * and `publishChangeset` to publish against; `buildChangeset` classifies
-   * every item `new_clause` against it, since an empty version matches
-   * nothing.
+   * "What we learned" → E's draft review (spec §4.8, §7). The hand-off, and
+   * the only thing standing between an adopted position and a playbook.
    *
-   * Only the edits behind ADOPTED or REWORDED positions' SUPPORTING basis
-   * entries are sent to `buildChangeset` — a rejected position (or one still
-   * `undecided`) contributes nothing, so "not a house rule" actually keeps
-   * that evidence out of the changeset rather than merely hiding a button.
+   * Synchronous, and it writes NOTHING: no playbook, no version, no
+   * changeset, no model call. It converts the adopted and reworded
+   * positions into an `AuthoringDraft` (`positionsToDraft`) and moves to
+   * `authoring-review`, from which point this is E's flow unchanged —
+   * `DraftReview`, `canSaveDraft`'s gate, and `saveDraftAsV1` publishing a
+   * genuine v1 in one atomic `publishAndPoint`. Abandon the flow here and
+   * nothing has been created, which is the property Task 10A's mint-an-
+   * empty-v1-first ordering could not have.
+   *
+   * Only ADOPTED and REWORDED positions travel (`includedPositions`) — a
+   * rejected position ("not a house rule") and an undecided one contribute
+   * no clause at all, so the control actually keeps them out of the
+   * playbook rather than merely hiding a button.
+   *
+   * Refuses rather than proceeding when nothing was adopted: E's save gate
+   * (`canSaveDraft`) requires at least one KEPT clause, so a zero-clause
+   * draft is one that could never be saved — sending someone to a review
+   * screen they cannot leave by the front door is the "unfinishable state"
+   * shape CLAUDE.md lists among this project's own defects.
    */
-  const handleBuildRedlinesChangeset = async () => {
-    const included = redlinesPositions.filter(p => p.disposition === 'adopted' || p.disposition === 'reworded');
-    if (included.length === 0 && !window.confirm(
-      'Nothing was adopted or reworded. Build an empty changeset to review anyway?',
-    )) {
+  const handleRedlinesToDraftReview = () => {
+    const included = includedPositions(redlinesPositions);
+    if (included.length === 0) {
+      setRedlinesError(
+        'Nothing has been adopted yet. Adopt or reword at least one position — a playbook needs at ' +
+        'least one clause a person stood behind.',
+      );
       return;
     }
-    setRedlinesBusy(true);
     setRedlinesError(undefined);
-    try {
-      const profile = await getProfile();
-      const draft = newPlaybookDraft('Learned from redlines');
-      const identity = newTemplate(draft.name);
-      const { version } = await publishAndPoint(identity, draft, profile.id);
-      setRedlinesVersion(version);
-
-      const editEntries = included.flatMap((position) => {
-        const source: 'tracked' | 'diff' = position.diffDerivedOnly ? 'diff' : 'tracked';
-        return position.basis
-          .filter(b => b.supports)
-          .flatMap(b => b.edits.map(edit => ({ documentId: b.documentId, edit, source })));
-      });
-
-      const changeset = await buildChangeset(version, editEntries, summariseRedlinesSources(redlinesDocs), settings);
-      const saved = await saveChangeset({ ...changeset, createdByUserId: profile.id });
-      setRedlinesChangeset(saved);
-      setView('redlines-changeset');
-      await refreshTemplates();
-    } catch (e) {
-      if (isAuthError(e)) handleAuthError();
-      else setRedlinesError(e instanceof Error ? e.message : 'The changeset could not be built.');
-    } finally {
-      setRedlinesBusy(false);
-    }
-  };
-
-  /** Await-then-apply, per CLAUDE.md: the screen must not show a decision as
-   *  recorded until `recordDecision` (which persists it) has actually
-   *  returned. */
-  const handleRedlinesDecide = async (
-    item: ChangesetItem, decision: 'accepted' | 'reworded' | 'declined', rewordedText?: string,
-  ) => {
-    if (!redlinesChangeset) return;
-    try {
-      const updated = await recordDecision(redlinesChangeset, item.id, decision, rewordedText);
-      setRedlinesChangeset(updated);
-    } catch (e) {
-      notify(e instanceof Error ? e.message : 'This decision could not be saved.', 'error');
-    }
-  };
-
-  /** Spec §8: "a publish that fails leaves the changeset intact with its
-   *  decisions recorded" — `publishChangeset` itself guarantees this
-   *  (nothing is written to `changesets` before `publishAndPoint` returns),
-   *  so this handler only needs to report the failure, never roll anything
-   *  back. */
-  const handleRedlinesPublish = async () => {
-    if (!redlinesChangeset) return;
-    setRedlinesPublishing(true);
-    setRedlinesPublishError(undefined);
-    try {
-      const profile = await getProfile();
-      const version = await publishChangeset(redlinesChangeset, profile.id);
-      setRedlinesPublishedVersion(version);
-      const reloaded = await getChangeset(redlinesChangeset.id);
-      if (reloaded) setRedlinesChangeset(reloaded);
-      await refreshTemplates();
-      notify(`Published v${version.version}.`);
-    } catch (e) {
-      if (isAuthError(e)) handleAuthError();
-      else setRedlinesPublishError(e instanceof Error ? e.message : 'This changeset could not be published.');
-    } finally {
-      setRedlinesPublishing(false);
-    }
+    // Set the draft and the view in one batch, exactly as
+    // `handleGenerateDraft` does: the authoring reset effect is keyed on
+    // the view and sees `authoring-review` here, so it returns rather than
+    // clearing the draft that was just set (CLAUDE.md's effect-ordering
+    // hazard). Leaving the redlines views does clear this session's
+    // documents and positions, which is correct — they have been read into
+    // the draft, and the `File`s were never to be kept.
+    updateAuthoringDraft(positionsToDraft(included, redlinesDocumentNames, settings.modelId));
+    setView('authoring-review');
   };
 
   const handleExportTemplate = (t: PlaybookDraft) => {
@@ -3276,9 +3249,10 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             <div className="p-8 text-gray-500">No draft in progress.</div>
           )
         )}
-        {/* Sub-project F's four session-only screens (Task 10A). None has a
+        {/* Sub-project F's three session-only screens (Task 10A). None has a
             URL, for the same reason the two authoring screens above do
-            not — see `REDLINES_VIEWS`. */}
+            not — see `REDLINES_VIEWS`. The flow ends by handing an
+            `AuthoringDraft` to `authoring-review` above. */}
         {view === 'redlines-intake' && (
           <div className="pb-6">
             <PrecedentUploadPanel onFilesSelected={handleAddRedlinesFiles} busy={redlinesBusy} />
@@ -3316,6 +3290,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               onSkipQuestion={(q) => setRedlinesQuestions(prev => prev.map(
                 x => (x.id === q.id ? { ...x, answer: 'Left open.' } : x),
               ))}
+              questionsUnavailableReason={REDLINES_NO_QUESTIONS_REASON}
             />
             {redlinesError && (
               <p className="max-w-4xl mx-auto px-6 text-sm text-red-400">{redlinesError}</p>
@@ -3327,8 +3302,8 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
               >
                 &larr; Back to documents
               </button>
-              <Button onClick={handleBuildRedlinesChangeset} loading={redlinesBusy}>
-                Build changeset
+              <Button onClick={handleRedlinesToDraftReview}>
+                Review and save as a playbook
               </Button>
             </div>
           </div>
@@ -3345,33 +3320,6 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
             />
           ) : (
             <div className="p-8 text-gray-500">No position selected.</div>
-          )
-        )}
-        {view === 'redlines-changeset' && (
-          redlinesChangeset && redlinesVersion ? (
-            <>
-              <ChangesetReview
-                changeset={redlinesChangeset}
-                fromVersion={redlinesVersion}
-                publishedVersion={redlinesPublishedVersion}
-                onDecide={handleRedlinesDecide}
-                onPublish={handleRedlinesPublish}
-                publishing={redlinesPublishing}
-                publishError={redlinesPublishError}
-              />
-              {redlinesChangeset.publishedVersionId && (
-                <div className="max-w-4xl mx-auto px-6 pb-6">
-                  <Button
-                    variant="ghost"
-                    onClick={() => navigate({ name: 'playbook', playbookId: redlinesChangeset.playbookId })}
-                  >
-                    Open the playbook
-                  </Button>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="p-8 text-gray-500">No changeset in progress.</div>
           )
         )}
         {view === 'matter' && (

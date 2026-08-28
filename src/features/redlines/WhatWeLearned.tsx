@@ -42,6 +42,22 @@ export interface WhatWeLearnedProps {
   onBulkAccept: (positions: InferredPosition[]) => void;
   onAnswerQuestion: (question: OpenQuestion, answer: string) => void;
   onSkipQuestion: (question: OpenQuestion) => void;
+  /**
+   * Why no open questions could be looked for at all, when that is the
+   * case. Supplied ONLY when the caller genuinely had nothing to check the
+   * redlines against — `inferPositions` derives an `OpenQuestion` from a
+   * clause a playbook already has and no document ever amended, so a
+   * session building a brand-new playbook has no clause list and therefore
+   * no search to report on.
+   *
+   * Without this, an empty list renders as "nothing the redlines raised
+   * without also settling it" — a claim that a search happened and came
+   * back clean. On that path the search never happened, and saying it did
+   * is exactly the quietly-wrong answer this app puts above everything
+   * else. Ignored when there ARE questions: the questions themselves are
+   * then the honest answer.
+   */
+  questionsUnavailableReason?: string;
 }
 
 const STRENGTH_ORDER: Record<PositionStrength, number> = {
@@ -78,6 +94,7 @@ export function WhatWeLearned({
   onBulkAccept,
   onAnswerQuestion,
   onSkipQuestion,
+  questionsUnavailableReason,
 }: WhatWeLearnedProps) {
   const sorted = [...positions].sort((a, b) => STRENGTH_ORDER[a.strength] - STRENGTH_ORDER[b.strength]);
   const bulkable = consistentPositions(positions);
@@ -128,7 +145,11 @@ export function WhatWeLearned({
           Things your redlines raised but never settled — never shown as a position (spec §11).
         </p>
         {questions.length === 0 ? (
-          <p className="text-sm text-gray-500 italic">Nothing the redlines raised without also settling it.</p>
+          questionsUnavailableReason ? (
+            <p className="text-sm text-amber-300/90 italic">{questionsUnavailableReason}</p>
+          ) : (
+            <p className="text-sm text-gray-500 italic">Nothing the redlines raised without also settling it.</p>
+          )
         ) : (
           <div className="space-y-3">
             {questions.map((question) => (
