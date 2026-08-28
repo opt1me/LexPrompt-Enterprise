@@ -3,7 +3,7 @@ import { act } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, buttons, click, type } from '../../test/mount';
 import { TemplateEditor } from './TemplateEditor';
-import type { PlaybookClause, PlaybookDraft, PlaybookVersion } from '../../types';
+import type { PlaybookClause, PlaybookDraft, PlaybookVersion, Settings } from '../../types';
 import { getDb, closeDb } from '../../lib/db/open';
 import { STORES } from '../../lib/db/schema';
 import {
@@ -62,6 +62,7 @@ function editedDraftOf(v: PlaybookVersion): PlaybookDraft {
 }
 
 const noop = () => {};
+const testSettings: Settings = { apiKey: 'k', modelId: 'test/model', concurrency: 5 };
 const wiring = {
   onPersistDraft: noop,
   onShowVersionHistory: noop,
@@ -69,6 +70,7 @@ const wiring = {
   onExport: noop,
   onShowMegaPrompt: noop,
   onClose: noop,
+  settings: testSettings,
 };
 
 describe('TemplateEditor — a published version is never edited in place', () => {

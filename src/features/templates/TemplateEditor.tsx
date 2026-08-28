@@ -1,15 +1,20 @@
 import React, { useMemo, useState } from 'react';
 import {
   Cpu, FileOutput, ShieldAlert, Plus, ChevronUp, ChevronDown, X, UploadCloud, Download, Copy,
-  Settings, GripVertical, Save, History,
+  Settings as SettingsIcon, GripVertical, Save, History, Sparkles,
 } from 'lucide-react';
-import type { PlaybookClause, PlaybookDraft, PlaybookVersion, StandardPosition } from '../../types';
+import type {
+  PlaybookClause, PlaybookDraft, PlaybookVersion, Settings, StandardPosition,
+} from '../../types';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
 import { draftFromVersion, newPlaybookDraft } from '../../lib/db/playbooks';
 import { positionHealthLabel, type PositionHealth } from '../../lib/positionHealth';
 import { StandardPositionField } from './StandardPositionField';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { uid } from '../../lib/uid';
+import { suggestField, FIELD_LABEL, type SuggestableField } from './suggestField';
+import { FieldSuggestion } from './FieldSuggestion';
+import { suggestMissingClauses } from './suggestMissingClauses';
 
 export interface TemplateEditorProps {
   /** The current published version, or `undefined` for a playbook that has
@@ -56,6 +61,26 @@ export interface TemplateEditorProps {
    *  "empty" from "broken" applies to a section of a screen too. */
   healthError?: string;
   onRetryHealth?: () => void;
+  /** Powers per-field "Draft this for me" suggestions and "Suggest what I'm
+   *  missing" (spec §6, Task 8). Required rather than optional for the same
+   *  reason `onPersistDraft` and `onShowVersionHistory` are: an optional
+   *  dependency is how `suggestField`/`suggestMissingClauses` shipped tested
+   *  and wired to nothing for an entire merge. */
+  settings: Settings;
+}
+
+/** One in-flight or completed "draft this for me" for one field of one
+ *  clause. `text` is the suggestion, never written into the clause by
+ *  anything but an explicit Accept (`FieldSuggestion`'s own rule) — saving
+ *  the form reads only `working`, which this state never touches. */
+interface FieldSuggestionState {
+  text?: string;
+  busy: boolean;
+  error?: string;
+}
+
+function suggestionKey(clauseId: string, field: SuggestableField): string {
+  return `${clauseId}:${field}`;
 }
 
 /**
@@ -98,6 +123,7 @@ export function TemplateEditor({
   version, draft, onDraftChange, onPersistDraft, onShowVersionHistory,
   unsavedChanges = false, savingDraft = false,
   onPublish, onExport, onShowMegaPrompt, onClose, health, healthError, onRetryHealth,
+  settings,
 }: TemplateEditorProps) {
   // Memoised: without it this re-CLONES the published version on every
   // render for as long as there is no draft, and the editor's copy drifts
@@ -105,6 +131,91 @@ export function TemplateEditor({
   const working = useMemo(() => workingContent(version, draft), [version, draft]);
   const hasUnpublishedChanges = hasUnpublishedContent(version, draft);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  // Part A — per-field suggestions. Keyed by `${clauseId}:${field}` so
+  // accepting, regenerating or dismissing one field's suggestion can never
+  // disturb another's, whether that's a different field on the same clause
+  // or the same field on a different one.
+  const [fieldSuggestions, setFieldSuggestions] = useState<Record<string, FieldSuggestionState>>({});
+
+  const requestFieldSuggestion = (clause: PlaybookClause, field: SuggestableField) => {
+    const key = suggestionKey(clause.id, field);
+    setFieldSuggestions((prev) => ({ ...prev, [key]: { text: prev[key]?.text, busy: true, error: undefined } }));
+    suggestField(field, clause, working.contractType, settings)
+      .then((text) => {
+        setFieldSuggestions((prev) => ({ ...prev, [key]: { text, busy: false } }));
+      })
+      .catch((err: unknown) => {
+        // A failure leaves whatever was already displayed (nothing, on a
+        // first attempt; the prior suggestion, on a failed regenerate) and
+        // says so — it never touches the clause's actual field.
+        setFieldSuggestions((prev) => ({
+          ...prev,
+          [key]: {
+            text: prev[key]?.text,
+            busy: false,
+            error: err instanceof Error ? err.message : 'Could not draft a suggestion. Try again.',
+          },
+        }));
+      });
+  };
+
+  const dismissFieldSuggestion = (clauseId: string, field: SuggestableField) => {
+    setFieldSuggestions((prev) => {
+      const next = { ...prev };
+      delete next[suggestionKey(clauseId, field)];
+      return next;
+    });
+  };
+
+  /**
+   * THE only place a suggestion is written into a clause (mirrors
+   * `FieldSuggestion`'s own doc comment). `updateClause`/`setPosition` below
+   * are the same funnels a hand-typed edit uses — there is no second write
+   * path for AI-suggested text.
+   */
+  const acceptFieldSuggestion = (index: number, field: SuggestableField) => {
+    const clause = working.clauses[index];
+    if (!clause) return;
+    const key = suggestionKey(clause.id, field);
+    const text = fieldSuggestions[key]?.text;
+    if (text === undefined) return;
+    if (field === 'extractPrompt') updateClause(index, { extractPrompt: text });
+    else if (field === 'riskCriteria') updateClause(index, { riskCriteria: text });
+    else setPosition(index, { text, origin: 'ai-drafted', reviewedByHuman: true });
+    dismissFieldSuggestion(clause.id, field);
+  };
+
+  // Part B — "Suggest what I'm missing" (Task 8). Proposals are titles only,
+  // each added or dismissed on its own — there is deliberately no "add all".
+  const [missingSuggestions, setMissingSuggestions] = useState<string[]>([]);
+  const [missingBusy, setMissingBusy] = useState(false);
+  const [missingError, setMissingError] = useState<string | undefined>();
+
+  const requestMissingClauses = () => {
+    setMissingBusy(true);
+    setMissingError(undefined);
+    suggestMissingClauses(working.clauses.map((c) => c.title), working.contractType, settings)
+      .then((titles) => {
+        setMissingSuggestions(titles);
+        setMissingBusy(false);
+      })
+      .catch((err: unknown) => {
+        setMissingBusy(false);
+        setMissingError(err instanceof Error ? err.message : 'Could not check for missing clauses. Try again.');
+      });
+  };
+
+  const addMissingClause = (title: string) => {
+    updateDraft({
+      clauses: [...working.clauses, { id: uid(), title, extractPrompt: 'Instruction...', riskCriteria: '' }],
+    });
+    setMissingSuggestions((prev) => prev.filter((t) => t !== title));
+  };
+
+  const dismissMissingClause = (title: string) => {
+    setMissingSuggestions((prev) => prev.filter((t) => t !== title));
+  };
 
   /**
    * THE single funnel for every edit in this editor.
@@ -190,6 +301,47 @@ export function TemplateEditor({
         return next;
       }),
     });
+  };
+
+  /** The "Draft this for me" trigger for one field of one clause. Rendered
+   *  next to that field's own label, never a shared control for the whole
+   *  clause — spec §5's "per field, a 'draft this for me'". */
+  const fieldSuggestButton = (idx: number, clause: PlaybookClause, field: SuggestableField) => {
+    const state = fieldSuggestions[suggestionKey(clause.id, field)];
+    return (
+      <button
+        type="button"
+        onClick={() => requestFieldSuggestion(clause, field)}
+        disabled={state?.busy}
+        aria-label={`Draft the ${FIELD_LABEL[field]} for ${clause.title}`}
+        title={`Draft the ${FIELD_LABEL[field]} with AI`}
+        className="text-[10px] flex items-center gap-1 text-violet-300 hover:text-violet-200 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+      >
+        <Sparkles className="h-3 w-3" aria-hidden="true" /> {state?.busy ? 'Drafting…' : 'Draft this for me'}
+      </button>
+    );
+  };
+
+  /** The suggestion itself, rendered visibly unaccepted via `FieldSuggestion`
+   *  — nothing here writes into the clause; only `acceptFieldSuggestion`
+   *  (wired to `onAccept`) does. */
+  const fieldSuggestBox = (idx: number, clause: PlaybookClause, field: SuggestableField) => {
+    const state = fieldSuggestions[suggestionKey(clause.id, field)];
+    if (!state) return null;
+    return (
+      <div className="mt-1">
+        {state.error && <p className="text-[11px] text-red-400 mb-1">{state.error}</p>}
+        {state.text !== undefined && (
+          <FieldSuggestion
+            text={state.text}
+            busy={state.busy}
+            onAccept={() => acceptFieldSuggestion(idx, field)}
+            onRegenerate={() => requestFieldSuggestion(clause, field)}
+            onDismiss={() => dismissFieldSuggestion(clause.id, field)}
+          />
+        )}
+      </div>
+    );
   };
 
   return (
@@ -313,7 +465,7 @@ export function TemplateEditor({
         {/* Right Column: Clauses (Spans 2 cols on large screens) */}
         <div className="lg:col-span-2 flex flex-col h-full bg-[#111] border border-white/10 rounded-xl overflow-hidden shadow-lg">
           <div className="p-4 border-b border-white/10 bg-[#161616] flex justify-between items-center shrink-0">
-            <h3 className="text-lg font-semibold text-white flex items-center gap-2"><Settings className="h-4 w-4 text-violet-500" /> Extraction Clauses ({working.clauses.length})</h3>
+            <h3 className="text-lg font-semibold text-white flex items-center gap-2"><SettingsIcon className="h-4 w-4 text-violet-500" /> Extraction Clauses ({working.clauses.length})</h3>
             <button onClick={addClause} className="text-xs flex items-center gap-1 bg-violet-600 px-3 py-1.5 rounded hover:bg-violet-500 text-white transition-colors font-medium"><Plus className="h-3 w-3" /> Add Clause</button>
           </div>
 
@@ -389,18 +541,28 @@ export function TemplateEditor({
                         <button onClick={() => deleteClause(idx)} aria-label={`Delete ${clause.title}`} className="text-gray-600 hover:text-red-400 transition-colors p-1 opacity-0 group-hover:opacity-100"><X className="h-4 w-4" /></button>
                       </div>
                       <div>
-                        <label className="text-[10px] text-gray-500 uppercase tracking-wider font-bold mb-1 block">Extraction Instruction</label>
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <label className="text-[10px] text-gray-500 uppercase tracking-wider font-bold block">Extraction Instruction</label>
+                          {fieldSuggestButton(idx, clause, 'extractPrompt')}
+                        </div>
                         <AutoResizeTextarea
                           value={clause.extractPrompt}
                           onChange={(e) => updateClause(idx, { extractPrompt: e.target.value })}
                           className="w-full bg-white/5 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:ring-1 focus:ring-violet-500/50 border border-transparent focus:border-violet-500/30"
                           placeholder="What to extract..."
                         />
+                        {fieldSuggestBox(idx, clause, 'extractPrompt')}
                       </div>
-                      <StandardPositionField
-                        position={clause.standardPosition}
-                        onChange={(position) => setPosition(idx, position)}
-                      />
+                      <div>
+                        <div className="flex items-center justify-end mb-1">
+                          {fieldSuggestButton(idx, clause, 'standardPosition')}
+                        </div>
+                        <StandardPositionField
+                          position={clause.standardPosition}
+                          onChange={(position) => setPosition(idx, position)}
+                        />
+                        {fieldSuggestBox(idx, clause, 'standardPosition')}
+                      </div>
                       {/* Nothing at all when the caller supplied no map,
                          and nothing when the scan failed — the panel above
                          says why. A defaulted `UNTESTED` here would be the
@@ -412,13 +574,17 @@ export function TemplateEditor({
                         </p>
                       )}
                       <div>
-                        <label className="text-[10px] text-red-400 uppercase tracking-wider flex items-center gap-1 font-bold mb-1"><ShieldAlert className="h-3 w-3" /> Risk Scorer</label>
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <label className="text-[10px] text-red-400 uppercase tracking-wider flex items-center gap-1 font-bold"><ShieldAlert className="h-3 w-3" /> Risk Scorer</label>
+                          {fieldSuggestButton(idx, clause, 'riskCriteria')}
+                        </div>
                         <AutoResizeTextarea
                           value={clause.riskCriteria || ''}
                           onChange={(e) => updateClause(idx, { riskCriteria: e.target.value })}
                           className="w-full bg-red-900/10 border border-red-500/10 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:border-red-500/50"
                           placeholder="Specific criteria (e.g., 'Must be mutual'). Leave blank to use Global Risk."
                         />
+                        {fieldSuggestBox(idx, clause, 'riskCriteria')}
                       </div>
                     </div>
                   </div>
@@ -426,6 +592,51 @@ export function TemplateEditor({
               );
             })}
             {working.clauses.length === 0 && <div className="text-center text-gray-500 py-10 border border-dashed border-white/10 rounded-xl">No clauses defined. Add one to get started.</div>}
+
+            {/* "Suggest what I'm missing" (spec §6, Task 8). Titles only —
+               each proposal is added or dismissed on its own; there is no
+               "add all", because every clause entering a playbook is meant
+               to be a decision, not a batch import. */}
+            <div className="pt-3 mt-2 border-t border-white/10 space-y-2">
+              <button
+                type="button"
+                onClick={requestMissingClauses}
+                disabled={missingBusy}
+                className="text-xs flex items-center gap-1.5 text-violet-300 hover:text-violet-200 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+              >
+                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                {missingBusy ? 'Checking for gaps…' : "Suggest what I'm missing"}
+              </button>
+              {missingError && <p className="text-xs text-red-400">{missingError}</p>}
+              {missingSuggestions.length > 0 && (
+                <ul className="space-y-2">
+                  {missingSuggestions.map((title) => (
+                    <li
+                      key={title}
+                      className="flex items-center justify-between gap-2 bg-violet-500/5 border border-dashed border-violet-500/40 rounded-lg p-2"
+                    >
+                      <span className="text-xs text-gray-200">{title}</span>
+                      <span className="flex gap-3 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => dismissMissingClause(title)}
+                          className="text-[10px] font-semibold text-gray-400 hover:text-gray-200"
+                        >
+                          Dismiss
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addMissingClause(title)}
+                          className="text-[10px] font-semibold text-violet-300 hover:text-violet-200 flex items-center gap-1"
+                        >
+                          <Plus className="h-3 w-3" aria-hidden="true" /> Add clause
+                        </button>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
           </div>
         </div>
       </div>

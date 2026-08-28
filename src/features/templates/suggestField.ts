@@ -8,7 +8,10 @@ import type { PlaybookClause, Settings } from '../../types';
  *  later needs no change here. */
 export type SuggestableField = 'extractPrompt' | 'riskCriteria' | 'standardPosition';
 
-const FIELD_LABEL: Record<SuggestableField, string> = {
+/** Exported so callers (`TemplateEditor`'s "Draft this for me" buttons) name
+ *  the field the same way the prompt built below does — a second, drifted
+ *  copy of these labels is exactly the sibling drift CLAUDE.md warns about. */
+export const FIELD_LABEL: Record<SuggestableField, string> = {
   extractPrompt: 'extraction instruction',
   riskCriteria: 'risk criteria',
   standardPosition: 'standard position',
