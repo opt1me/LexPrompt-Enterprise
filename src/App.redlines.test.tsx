@@ -340,6 +340,25 @@ afterEach(() => {
 // from the running app — the chooser's third card still read "Not built
 // yet". These tests exercise that path, not the pieces behind it (each of
 // which has its own suite already).
+describe('the intake screen says each thing once (found by driving the real app)', () => {
+  it('renders one heading and states the storage promise once, in the strong form', async () => {
+    // `PrecedentUploadPanel` and `PrecedentIntake` are siblings on this
+    // route, and both used to render "Bring in what you negotiated" plus
+    // their own wording of the storage promise — "never stored" against
+    // "Not stored with the playbook". Two headings looked like a bug; two
+    // wordings were the real problem, because the narrower one reads as
+    // leaving room for storage somewhere else, and a privacy promise must
+    // never drift in the direction of understating itself.
+    await openRedlinesIntake();
+    const text = container.textContent ?? '';
+    const occurrences = (needle: string) => text.split(needle).length - 1;
+
+    expect(occurrences('Bring in what you negotiated')).toBe(1);
+    expect(occurrences('Never stored')).toBe(1);
+    expect(text).not.toContain('Not stored with the playbook');
+  });
+});
+
 describe('the redlines route is reachable from the chooser (Task 10A)', () => {
   it('offers "Learn from redlines" enabled, and clicking it opens precedent intake', async () => {
     act(() => { root.render(<App />); });

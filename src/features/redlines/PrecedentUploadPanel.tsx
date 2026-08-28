@@ -38,10 +38,19 @@ export function PrecedentUploadPanel({ onFilesSelected, busy = false }: Preceden
     <div className="max-w-5xl mx-auto px-6 pt-6">
       <div className="border border-dashed border-white/20 rounded-xl p-4 flex flex-wrap items-center justify-between gap-3 bg-white/5">
         <div>
-          <p className="text-sm text-gray-200 font-semibold">Bring in what you negotiated</p>
-          <p className="text-xs text-gray-500 mt-0.5">
-            Read once to learn from, never stored. Marked-up .docx files are read for tracked changes; anything
-            else, including PDFs, can be compared against another version instead.
+          {/* No heading and no storage promise here. `PrecedentIntake`, which
+              renders directly below this panel, already states both — and it
+              stated the promise in DIFFERENT words ("Not stored with the
+              playbook" against this panel's "never stored"). Two wordings of
+              the same guarantee is how a promise quietly weakens: a reader
+              cannot tell whether the difference is careless or deliberate,
+              and the narrower phrasing reads as leaving room for storage
+              somewhere else. The guarantee is that a precedent document is
+              never persisted anywhere, so it is said once, in the strong
+              form, by the screen that owns the header. */}
+          <p className="text-xs text-gray-500">
+            Marked-up .docx files are read for tracked changes; anything else, including PDFs, can be
+            compared against another version instead.
           </p>
         </div>
         <label

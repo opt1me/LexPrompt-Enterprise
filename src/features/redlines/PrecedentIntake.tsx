@@ -129,7 +129,13 @@ export function PrecedentIntake({
           )}
         </p>
         <p className="text-xs text-gray-600 mt-1">
-          Read once to learn from. Not stored with the playbook.
+          {/* "Never stored", not "not stored with the playbook". The
+              guarantee this flow makes and its tests enforce is that a
+              precedent document is never persisted ANYWHERE — not in
+              IndexedDB, not in localStorage, not in the URL. The narrower
+              phrasing understates that, and understating a privacy promise
+              is the one direction it must never drift. */}
+          Read once to learn from. Never stored.
         </p>
       </header>
 
