@@ -21,6 +21,41 @@ const ANTHROPIC_VERSION = '2023-06-01';
  *     and `parseJsonLoose` is the caller's fallback — is unchanged and
  *     nothing downstream can tell which provider answered.
  */
+
+/**
+ * Anthropic's mid-stream error `type` mapped to the HTTP status it means.
+ *
+ * This exists because the status is what decides whether the call is
+ * retried: `isRetryableStatus` is `429 || >= 500`, so flattening the whole
+ * taxonomy to 502 — as this adapter first did — made an
+ * `authentication_error` and an `invalid_request_error` retryable. Retrying
+ * a call that can never succeed burns the caller's time and quota, and
+ * turns a permanent misconfiguration into what reads as a transient
+ * provider blip: the loud, specific failure this project prefers arrives
+ * late and wearing the wrong name.
+ *
+ * It also matches `openaiCompatible`'s rule rather than diverging from it.
+ * That adapter already uses the provider's own status when it has one and
+ * falls back to 502 only when it does not; Anthropic sends a well-defined
+ * string taxonomy instead of a numeric code, so the lookup is how the same
+ * rule is expressed for it. An unrecognised type still falls back to 502 —
+ * a genuinely unknown provider failure is a bad gateway.
+ */
+const ANTHROPIC_ERROR_STATUS: Readonly<Record<string, number>> = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  permission_error: 403,
+  not_found_error: 404,
+  request_too_large: 413,
+  rate_limit_error: 429,
+  api_error: 500,
+  overloaded_error: 529,
+};
+
+function anthropicErrorStatus(type: string | undefined): number {
+  return (type !== undefined && ANTHROPIC_ERROR_STATUS[type]) || 502;
+}
+
 export const anthropicAdapter: ProviderAdapter = {
   id: 'anthropic',
 
@@ -144,10 +179,7 @@ export const anthropicAdapter: ProviderAdapter = {
       case 'error':
         return {
           kind: 'error',
-          // `overloaded_error` is Anthropic's 529; everything else that
-          // arrives mid-stream is treated as a bad gateway, which is what
-          // it is from the caller's point of view.
-          status: parsed.error?.type === 'overloaded_error' ? 529 : 502,
+          status: anthropicErrorStatus(parsed.error?.type),
           message: parsed.error?.message ?? 'The provider reported an error mid-stream.',
         };
       default:

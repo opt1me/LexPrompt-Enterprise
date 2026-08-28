@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { anthropicAdapter as a } from '../src/adapters/anthropic.ts';
 import type { ModelEntry } from '../src/config.ts';
 import type { AdapterRequest } from '../src/adapters/types.ts';
+import { isRetryableStatus } from '@lexprompt/core';
 
 const entry: ModelEntry = {
   id: 'claude', provider: 'anthropic', model: 'claude-sonnet-4-5', label: 'Claude',
@@ -125,6 +126,44 @@ describe('anthropic decodeEvent (pure, no network)', () => {
   it('reads an error event as an error, not as content', () => {
     expect(a.decodeEvent('event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'))
       .toEqual({ kind: 'error', status: 529, message: 'Overloaded' });
+  });
+
+  // The status is what `isRetryableStatus` (429 || >= 500) reads, so a
+  // permanent failure flattened to 502 would be retried and then reported
+  // as a transient provider problem rather than the misconfiguration it
+  // is. These assert the retry CONSEQUENCE, not just the number, because
+  // the number is only interesting for what it causes.
+  it('maps a permanent Anthropic error to a status that is NOT retried', () => {
+    const permanent = [
+      ['invalid_request_error', 400],
+      ['authentication_error', 401],
+      ['permission_error', 403],
+      ['not_found_error', 404],
+      ['request_too_large', 413],
+    ] as const;
+    for (const [type, status] of permanent) {
+      const raw = `event: error\ndata: {"type":"error","error":{"type":"${type}","message":"m"}}`;
+      expect(a.decodeEvent(raw)).toEqual({ kind: 'error', status, message: 'm' });
+      expect(isRetryableStatus(status)).toBe(false);
+    }
+  });
+
+  it('maps a transient Anthropic error to a status that IS retried', () => {
+    const transient = [
+      ['rate_limit_error', 429],
+      ['api_error', 500],
+      ['overloaded_error', 529],
+    ] as const;
+    for (const [type, status] of transient) {
+      const raw = `event: error\ndata: {"type":"error","error":{"type":"${type}","message":"m"}}`;
+      expect(a.decodeEvent(raw)).toEqual({ kind: 'error', status, message: 'm' });
+      expect(isRetryableStatus(status)).toBe(true);
+    }
+  });
+
+  it('falls back to 502 for an error type it does not recognise', () => {
+    const raw = 'event: error\ndata: {"type":"error","error":{"type":"a_new_error","message":"m"}}';
+    expect(a.decodeEvent(raw)).toEqual({ kind: 'error', status: 502, message: 'm' });
   });
 
   it('returns null for ping, for content_block_start and for malformed JSON', () => {
