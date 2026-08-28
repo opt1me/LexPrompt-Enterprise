@@ -404,7 +404,7 @@ describe('the redlines route is reachable from the chooser (Task 10A)', () => {
     // clause editor's own fields.
     expect(container.textContent).toMatch(/unsaved draft/i);
     expect(container.textContent).toContain('Confidentiality period');
-    expect(container.querySelector('[aria-label="Standard position"]')).toBeTruthy();
+    expect(container.querySelector('[aria-label="Our standard position"]')).toBeTruthy();
 
     // F's changeset mechanism is not on this path at all — it belongs to
     // reading a new deal against a version that really exists.

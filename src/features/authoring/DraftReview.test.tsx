@@ -119,6 +119,21 @@ describe('DraftReview', () => {
     el.unmount();
   });
 
+  // The owner singled this pairing out by name: "Risky When" and "Our
+  // Standard Position" are the two judgement fields and must read together
+  // for whichever clause is active, not be split across a tab or a scroll
+  // that could show one without the other.
+  it('renders Risky when and Our standard position together for the active clause', () => {
+    const el = mount(<DraftReview draft={withAiPosition} onChange={noop} onSave={noop} onDiscard={noop} />);
+    const riskyWhen = fieldMatching(el, /^risky when$/i);
+    const standardPosition = fieldMatching(el, /^our standard position$/i);
+    expect(riskyWhen).toBeTruthy();
+    expect(standardPosition).toBeTruthy();
+    // Both present in the same document at once — no navigation between them.
+    expect(el.contains(riskyWhen!)).toBe(true);
+    expect(el.contains(standardPosition!)).toBe(true);
+  });
+
   it('shows an AI-proposed position as not yet reviewed', () => {
     const el = mount(<DraftReview draft={withAiPosition} onChange={noop} onSave={noop} onDiscard={noop} />);
     expect(el.textContent).toMatch(/drafted by AI/i);
@@ -128,7 +143,7 @@ describe('DraftReview', () => {
   it('marks a clause edited when a field was changed before keeping', () => {
     const onChange = vi.fn();
     const el = mount(<DraftReview draft={oneUnreviewed} onChange={onChange} onSave={noop} onDiscard={noop} />);
-    type(fieldMatching(el, /extraction/i) ?? null, 'A different instruction.');
+    type(fieldMatching(el, /^extract$/i) ?? null, 'A different instruction.');
     click(buttonNamed(el, /^keep$/i));
     expect(onChange.mock.calls.at(-1)![0].clauses[0].edited).toBe(true);
   });
@@ -214,7 +229,7 @@ describe('DraftReview', () => {
     it('carries a typed edit into the draft when the rail moves to another clause', () => {
       const onChange = vi.fn();
       const el = mount(<DraftReview draft={twoKept} onChange={onChange} onSave={noop} onDiscard={noop} />);
-      type(fieldMatching(el, /extraction/i) ?? null, 'The corrected wording.');
+      type(fieldMatching(el, /^extract$/i) ?? null, 'The corrected wording.');
       click(buttonNamed(el, /Clause b/));
 
       const next = onChange.mock.calls.at(-1)![0];
@@ -234,7 +249,7 @@ describe('DraftReview', () => {
       const el = mount(
         <DraftReview draft={withUnreviewed} onChange={onChange} onSave={noop} onDiscard={noop} />,
       );
-      type(fieldMatching(el, /extraction/i) ?? null, 'The corrected wording.');
+      type(fieldMatching(el, /^extract$/i) ?? null, 'The corrected wording.');
       keyDown({ key: 'j' });
       expect(onChange.mock.calls.at(-1)![0].clauses[0].extractPrompt).toBe('The corrected wording.');
     });
@@ -243,7 +258,7 @@ describe('DraftReview', () => {
       const onChange = vi.fn();
       const onSave = vi.fn();
       const el = mount(<DraftReview draft={twoKept} onChange={onChange} onSave={onSave} onDiscard={noop} />);
-      type(fieldMatching(el, /extraction/i) ?? null, 'The corrected wording.');
+      type(fieldMatching(el, /^extract$/i) ?? null, 'The corrected wording.');
       click(buttonNamed(el, /save as v1/i));
 
       expect(onSave).toHaveBeenCalledTimes(1);

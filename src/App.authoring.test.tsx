@@ -176,7 +176,7 @@ function typeInto(el: HTMLInputElement | HTMLTextAreaElement | null, value: stri
 }
 
 function extractionField(): HTMLTextAreaElement {
-  const field = container.querySelector('textarea[aria-label="Extraction instructions"]');
+  const field = container.querySelector('textarea[aria-label="Extract"]');
   if (!field) throw new Error('The clause editor is not on screen.');
   return field as HTMLTextAreaElement;
 }

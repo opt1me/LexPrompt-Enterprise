@@ -351,10 +351,10 @@ function ClauseEditor({
 
       <div>
         <label className="block font-mono text-label text-ink-4 uppercase mb-1">
-          Extraction instructions
+          Extract
         </label>
         <AutoResizeTextarea
-          aria-label="Extraction instructions"
+          aria-label="Extract"
           disabled={saving}
           value={extractPrompt}
           onChange={(e) => setExtractPrompt(e.target.value)}
@@ -362,39 +362,44 @@ function ClauseEditor({
         />
       </div>
 
-      <div>
-        <label className="block font-mono text-label text-risk-high uppercase mb-1 flex items-center gap-1">
-          <ShieldAlert className="h-3 w-3" aria-hidden="true" /> Risk criteria
-        </label>
-        <AutoResizeTextarea
-          aria-label="Risk criteria"
-          disabled={saving}
-          value={riskCriteria}
-          onChange={(e) => setRiskCriteria(e.target.value)}
-          placeholder="Leave blank to use the playbook's global risk tolerance."
-          className="w-full bg-risk-high-tint border border-risk-high-edge rounded-control p-3 text-sm text-ink-2 outline-none focus:border-risk-high min-h-[60px]"
-        />
-      </div>
-
-      {clause.standardPosition && (
-        <div className="bg-chip-fill border border-rule rounded-inset p-3 space-y-2">
-          <div className="flex items-center gap-1 font-mono text-label text-ink-4 uppercase">
-            <Scale className="w-3 h-3" aria-hidden="true" /> Standard position
-          </div>
-          {!clause.standardPosition.reviewedByHuman && (
-            <p className="font-mono text-label uppercase text-risk-med">
-              Drafted by AI &mdash; not yet reviewed by a person.
-            </p>
-          )}
+      {/* The owner's callout, verbatim: RISKY WHEN and OUR STANDARD POSITION
+       *  read together as the pair of judgement fields, side by side once
+       *  there is room and stacked below `lg` rather than squeezed narrow. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div>
+          <label className="flex items-center gap-1 font-mono text-label text-risk-high uppercase mb-1">
+            <ShieldAlert className="h-3 w-3" aria-hidden="true" /> Risky when
+          </label>
           <AutoResizeTextarea
-            aria-label="Standard position"
-          disabled={saving}
-            value={positionText}
-            onChange={(e) => setPositionText(e.target.value)}
-            className="w-full bg-paper border border-rule rounded-control p-2 text-xs text-ink-2 outline-none focus:border-accent min-h-[50px]"
+            aria-label="Risky when"
+            disabled={saving}
+            value={riskCriteria}
+            onChange={(e) => setRiskCriteria(e.target.value)}
+            placeholder="Leave blank to use the playbook's global risk tolerance."
+            className="w-full bg-risk-high-tint border border-risk-high-edge rounded-control p-3 text-sm text-ink-2 outline-none focus:border-risk-high min-h-[60px]"
           />
         </div>
-      )}
+
+        {clause.standardPosition && (
+          <div className="bg-chip-fill border border-rule rounded-inset p-3 space-y-2">
+            <div className="flex items-center gap-1 font-mono text-label text-ink-4 uppercase">
+              <Scale className="w-3 h-3" aria-hidden="true" /> Our standard position
+            </div>
+            {!clause.standardPosition.reviewedByHuman && (
+              <p className="font-mono text-label uppercase text-risk-med">
+                Drafted by AI &mdash; not yet reviewed by a person.
+              </p>
+            )}
+            <AutoResizeTextarea
+              aria-label="Our standard position"
+              disabled={saving}
+              value={positionText}
+              onChange={(e) => setPositionText(e.target.value)}
+              className="w-full bg-paper border border-rule rounded-control p-2 text-xs text-ink-2 outline-none focus:border-accent min-h-[50px]"
+            />
+          </div>
+        )}
+      </div>
 
       {clause.suggestions.length > 0 && (
         <div className="space-y-2">
