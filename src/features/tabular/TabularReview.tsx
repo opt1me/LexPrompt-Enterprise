@@ -385,7 +385,10 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = fa
             {/* A readable sentence, not a truncated blob: wrapped shows the
                summary in full, and the default (unwrapped) view clamps to
                three lines rather than cutting a single line off mid-word. */}
-            <div className={`${wrapText ? 'whitespace-normal' : 'line-clamp-3'} text-gray-300 min-w-0`}>
+            <div
+              data-testid="cell-summary"
+              className={`${wrapText ? 'whitespace-normal' : 'line-clamp-3'} text-gray-300 min-w-0`}
+            >
               {finding?.summary || <span className="text-gray-600 italic">Empty</span>}
             </div>
           </div>

@@ -129,7 +129,7 @@ describe('TemplateEditor — a published version is never edited in place', () =
     );
 
     const handles = [...c.querySelectorAll('[draggable="true"]')];
-    const rows = [...c.querySelectorAll('[draggable="true"]')].map(h => h.closest('.group')!);
+    const rows = [...c.querySelectorAll('[draggable="true"]')].map(h => h.closest('[data-clause-row]')!);
     expect(handles).toHaveLength(3);
 
     // Drag the first clause onto the third — a move no chevron press can

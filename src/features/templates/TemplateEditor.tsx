@@ -510,6 +510,7 @@ export function TemplateEditor({
               return (
                 <div
                   key={clause.id}
+                  data-clause-row
                   onDragOver={(e) => { if (dragIndex !== null) e.preventDefault(); }}
                   onDrop={(e) => {
                     if (dragIndex === null) return;

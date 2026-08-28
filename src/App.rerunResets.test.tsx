@@ -995,7 +995,20 @@ describe('App — a retry on a reopened review re-hydrates its documents for rev
     // ...and yet c1's card already reads as busy: the old answer is gone, a
     // spinner is up, and c1 no longer offers Retry (only c2 does).
     expect(container.textContent).not.toContain('Governed by NY law.');
-    expect(container.querySelectorAll('.animate-spin').length).toBeGreaterThan(0);
+    // The busy contract, not a styling class: `data-busy` survives the
+    // reskin, and the word survives `prefers-reduced-motion` (R-G20/R-GP2).
+    //
+    // The WORD is the load-bearing half. From Task 4 onward a loading
+    // `Button` also carries `data-busy="true"`, so a bare
+    // `querySelectorAll('[data-busy]').length > 0` could be satisfied by an
+    // unrelated element and would stop proving anything about this card —
+    // the "green suite is not evidence" failure, arriving four commits after
+    // the mutation test that certified it (F11). So the attribute is
+    // asserted INSIDE the card region, not across the container.
+    const busyCard = Array.from(container.querySelectorAll('[data-busy="true"]'))
+      .find(el => /Extracting…/.test(el.textContent || ''));
+    expect(busyCard, 'the retried clause card must expose the busy contract').toBeTruthy();
+    expect(container.textContent).toContain('Extracting…');
     const retryButtons = Array.from(container.querySelectorAll('button'))
       .filter(b => /^Retry$/i.test((b.textContent || '').trim()));
     expect(retryButtons.length).toBe(1);

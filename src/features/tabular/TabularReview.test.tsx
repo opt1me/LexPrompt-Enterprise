@@ -94,8 +94,12 @@ describe('TabularReview — a cell renders a readable sentence, not a truncated 
     const container = mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />);
     expect(container.textContent).toContain(summary);
     const cell = Array.from(container.querySelectorAll('td')).find(td => td.textContent?.includes(summary));
-    const summaryEl = cell?.querySelector('.truncate');
-    expect(summaryEl).toBeFalsy();
+    // The claim is about the cell's CONTENT, not its class: the whole
+    // sentence is in the DOM, in the cell, in one element — a grid that
+    // cuts a finding off mid-word is a grid that hides the finding.
+    const summaryEl = cell?.querySelector('[data-testid="cell-summary"]');
+    expect(summaryEl).toBeTruthy();
+    expect(summaryEl?.textContent).toBe(summary);
   });
 });
 

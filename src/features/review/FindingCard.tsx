@@ -123,9 +123,21 @@ export function FindingCard({
   if (status === 'running') {
     return (
       <div className={`${CARD_SHELL} border-white/5`}>
-        <div className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl">
+        <div
+          className="p-3 border-b border-white/5 flex justify-between items-center bg-white/5 rounded-t-xl"
+          data-busy="true"
+          aria-live="polite"
+        >
           <span className="font-semibold text-sm text-white">{clause.title}</span>
-          <Loader className="w-3.5 h-3.5 text-violet-400 animate-spin" />
+          {/* R-G20: a busy state whose only signal is an animation is
+              invisible to a reader who turned animation off, and a stalled
+              cell that looks blank rather than busy is the "cell spinning
+              forever, unfinishable" defect in a different disguise. The word
+              is the part that survives `prefers-reduced-motion`. */}
+          <span className="text-[11px] text-gray-400 flex items-center gap-1.5">
+            <Loader className="w-3.5 h-3.5 text-violet-400 animate-spin" aria-hidden="true" />
+            Extracting…
+          </span>
         </div>
         <div className="p-4 space-y-2">
           <div className="h-2.5 bg-white/10 rounded w-full animate-pulse" />
