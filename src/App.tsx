@@ -40,7 +40,7 @@ import { MattersList, type MattersListItem, type CreateMatterParams } from './fe
 import { MatterHome } from './features/matters/MatterHome';
 import { MatterPickerModal } from './features/matters/MatterPickerModal';
 import { TemplateLibrary } from './features/templates/TemplateLibrary';
-import { TemplateEditor, workingContent } from './features/templates/TemplateEditor';
+import { TemplateEditor, workingContent, hasUnpublishedContent } from './features/templates/TemplateEditor';
 import { MegaPromptModal } from './features/templates/MegaPromptModal';
 import { PublishDialog } from './features/templates/PublishDialog';
 import { VersionHistory } from './features/templates/VersionHistory';
@@ -1208,11 +1208,38 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
    * off-route — which then makes reopening the same card skip its own
    * fetch and render "No template selected". `handlePersistDraft` applies
    * the state on top, where there is still an editor to apply it to.
+   *
+   * Integrity re-review, Minor 6 (second route): a draft whose content
+   * equals the published version is not an unpublished change, wherever
+   * that question is asked — including here. `isTemplateDirty` answers a
+   * DELIBERATELY different question ("is there something new since the
+   * last save this session", per `TemplateEditor`'s own docstring on
+   * `unsavedChanges`), so an edit-then-revert can leave it true even though
+   * `hasUnpublishedContent` is false. Persisting anyway in that state wrote
+   * a `Playbook.draft` content-identical to the version — `t.draft`
+   * presence stayed true forever after, with `discardDraft` unreachable
+   * because THIS save had just made `isTemplateDirty` false again — so the
+   * library card (keyed on that presence, `TemplateLibrary.tsx:62`)
+   * disagreed with the editor's own `hasUnpublishedContent`-gated banner
+   * and Publish button, permanently. Checking `hasUnpublishedContent` here,
+   * the same function the editor's banner and Publish button already use,
+   * and discarding instead of saving when it says false, keeps draft
+   * PRESENCE a reliable proxy for draft CONTENT differing from the
+   * version — the one thing every reader of that presence, the library
+   * card included, actually means to ask. No second special case needed at
+   * the read site.
    */
   const saveDraftOrReport = async (
-    playbook: Playbook, draft: PlaybookDraft,
+    playbook: Playbook, draft: PlaybookDraft, version?: PlaybookVersion,
   ): Promise<Playbook | null> => {
     try {
+      if (!hasUnpublishedContent(version, draft)) {
+        await discardDraft(playbook.id);
+        await refreshTemplates().catch(() => {});
+        const cleared: Playbook = { ...playbook };
+        delete cleared.draft;
+        return cleared;
+      }
       const saved = await saveDraft(playbook, draft);
       // The save succeeded; a library row that is briefly stale is not that
       // failure and must not be reported as it.
@@ -1234,7 +1261,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
   const handlePersistDraft = async () => {
     if (!activePlaybook || !activeDraft) return;
     setSavingDraft(true);
-    const saved = await saveDraftOrReport(activePlaybook, activeDraft);
+    const saved = await saveDraftOrReport(activePlaybook, activeDraft, activeVersion ?? undefined);
     setSavingDraft(false);
     if (!saved) return;
     setActivePlaybook(saved);
@@ -1272,7 +1299,7 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
       'Keep your unpublished changes?\n\n'
       + 'OK saves them as a draft you can come back to. Cancel offers to discard them.',
     )) {
-      if (playbook && draft) void saveDraftOrReport(playbook, draft);
+      if (playbook && draft) void saveDraftOrReport(playbook, draft, activeVersion ?? undefined);
       return true;
     }
     if (window.confirm(

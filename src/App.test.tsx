@@ -783,6 +783,85 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
     expect(saveDraftMock).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe('/playbooks');
   });
+
+  // Integrity re-review, Item 1 (Minor 6, second route). The route above
+  // fixed the DANGLING-BASELINE mechanism, but an edit-SAVE-revert-save
+  // cycle reaches the same unclearable badge a different way:
+  // `isTemplateDirty` answers "is there something new since the last save
+  // THIS SESSION" (deliberately different from `hasUnpublishedContent` —
+  // see `TemplateEditor`'s own docstring on `unsavedChanges`), so once a
+  // real edit has been saved once, `savedTemplateSnapshot` is the EDITED
+  // content, and reverting the field makes `isTemplateDirty` true again
+  // even though `hasUnpublishedContent` is now false. Saving AGAIN in that
+  // state used to persist a `Playbook.draft` content-identical to the
+  // published version — undetectable by `isTemplateDirty` from then on, so
+  // Close/Back never runs `discardDraft`, and the library card (keyed on
+  // the draft's bare presence) shows "Unpublished changes" forever with no
+  // control left able to clear it, disagreeing with the editor's own
+  // `hasUnpublishedContent`-gated Publish button and banner. The fix routes
+  // every draft-persisting write through `hasUnpublishedContent` and
+  // discards instead of saving when it says false.
+  it('a Save-draft that reverts to the published content clears the stored draft rather than leaving a stale one (Item 1 / Minor 6)', async () => {
+    let stored: typeof playbook & { draft?: unknown } = { ...playbook };
+    listPlaybooksMock.mockReset().mockImplementation(async () => [stored]);
+    getPlaybookMock.mockReset().mockImplementation(async () => stored);
+    saveDraftMock.mockReset().mockImplementation(async (pb: typeof playbook, draft: unknown) => {
+      stored = { ...pb, draft };
+      return stored;
+    });
+    discardDraftMock.mockReset().mockImplementation(async () => {
+      const { draft: _draft, ...rest } = stored;
+      stored = rest as typeof playbook;
+    });
+
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+
+    const nameInput = container.querySelector('input') as HTMLInputElement;
+    const original = nameInput.value;
+    const saveDraftButton = () => Array.from(container.querySelectorAll('button'))
+      .find(b => /save draft/i.test(b.textContent || '')) as HTMLButtonElement;
+    const publishButton = () => Array.from(container.querySelectorAll('button'))
+      .find(b => /^publish$/i.test((b.textContent || '').trim())) as HTMLButtonElement;
+
+    // A real edit, saved for real — `savedTemplateSnapshot` becomes the
+    // EDITED content, and the stored draft genuinely differs from v1.
+    act(() => { setInputValue(nameInput, `${original} EDITED`); });
+    await flush();
+    act(() => { saveDraftButton().click(); });
+    await flush();
+    expect(saveDraftMock).toHaveBeenCalledTimes(1);
+    expect(publishButton().disabled).toBe(false);
+
+    // Revert the field back to the published text. The editor correctly
+    // says there is nothing to publish...
+    act(() => { setInputValue(container.querySelector('input') as HTMLInputElement, original); });
+    await flush();
+    expect(publishButton().disabled).toBe(true);
+    // ...but Save draft re-enables, because `isTemplateDirty` compares
+    // against the EDITED snapshot from the save above, not the published
+    // version.
+    expect(saveDraftButton().disabled).toBe(false);
+
+    // Saving now must NOT persist a content-identical draft.
+    act(() => { saveDraftButton().click(); });
+    await flush();
+    expect(discardDraftMock).toHaveBeenCalledTimes(1);
+    expect(saveDraftMock).toHaveBeenCalledTimes(1); // not called a second time
+    expect('draft' in stored).toBe(false);
+
+    // Close: nothing left unsaved, so no prompt, and the library card must
+    // agree with the editor that there is nothing unpublished.
+    const closeButton = Array.from(container.querySelectorAll('button'))
+      .find(b => /^close$/i.test(b.textContent || '')) as HTMLButtonElement;
+    act(() => { closeButton.click(); });
+    await flush();
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(window.location.pathname).toBe('/playbooks');
+    expect(container.textContent).not.toMatch(/unpublished changes/i);
+  });
 });
 
 // Task 9. The editor no longer mutates a playbook: it edits a draft, and
@@ -1128,5 +1207,179 @@ describe('App — position health in the playbook editor (Task 9A)', () => {
     await flush();
 
     expect(container.textContent).toMatch(/not used|no reviews/i);
+  });
+
+  // Re-review N3 (test-coverage gap on Minor 4's fix): `versionHistoryRequestRef`
+  // and `positionHealthRequestRef` are the two other "latest request wins"
+  // guards named alongside `playbookForEditRequestRef` above, and neither had
+  // a test. `positionHealthRequestRef`'s own doc comment calls its unguarded
+  // failure the worst of the three: it does not just show stale TEXT, it can
+  // report a false "HELD n of n" for a clause the open playbook shares an id
+  // and standard-position wording with (e.g. a freshly re-imported copy) —
+  // reproduced exactly below, with pb2 sharing pb1's clause id and wording.
+  it('a stale position-health scan for one playbook does not produce a false HELD for another after navigating away (N3)', async () => {
+    // pb2: a fresh import of the same playbook shape as pb1 — same clause id
+    // and standard-position wording, never itself run.
+    const v2 = { ...v1, id: 'v2', playbookId: 'pb2' };
+    const identity2 = {
+      id: 'pb2', name: 'Fresh Import', createdAt: 1, updatedAt: 2,
+      currentVersionId: 'v2', schemaVersion: 6,
+    };
+
+    getPlaybookMock.mockReset().mockImplementation(async (id: string) =>
+      (id === 'pb1' ? identity : id === 'pb2' ? identity2 : null));
+    getPlaybookContentMock.mockImplementation(async (id: string) =>
+      (id === 'pb1' ? v1 : id === 'pb2' ? v2 : null));
+
+    let resolveVersionsA!: (value: unknown) => void;
+    const pendingVersionsA = new Promise((resolve) => { resolveVersionsA = resolve; });
+    listVersionsMock.mockReset().mockImplementation(async (playbookId: string) => {
+      if (playbookId === 'pb1') return pendingVersionsA; // held open
+      if (playbookId === 'pb2') return [v2];
+      return [];
+    });
+    // Every matter has a verified `meets` against pb1's v1 — pb2 has never
+    // been run, but shares matters (reviews are matter-scoped, not
+    // playbook-scoped, so both scans see the same rows).
+    listReviewsMock.mockReset().mockImplementation(async (matterId: string) => [reviewAgainst('v1', matterId)]);
+
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+    // pb1's automatic position-health scan is now stuck awaiting
+    // `listVersions('pb1')`.
+
+    window.history.pushState(null, '', '/playbooks/pb2');
+    act(() => { window.dispatchEvent(new PopStateEvent('popstate')); });
+    await flush();
+    await flush();
+
+    // pb2's own scan resolved immediately and correctly: it has never been
+    // run, so its shared clause/position is UNTESTED.
+    expect(container.textContent).toContain('UNTESTED');
+    expect(container.textContent).not.toMatch(/HELD/);
+
+    // Now let pb1's stale scan resolve. Unguarded, this overwrites the
+    // health map — built from pb2's clauses but pb1's versions/reviews —
+    // with a false "HELD 2 of 2" for a position pb2 was never tested
+    // against.
+    await act(async () => { resolveVersionsA([v1]); });
+    await flush();
+
+    expect(container.textContent).toContain('UNTESTED');
+    expect(container.textContent).not.toMatch(/HELD/);
+    expect(window.location.pathname).toBe('/playbooks/pb2');
+  });
+
+  // The other half of `positionHealthRequestRef`'s guard: the catch branch
+  // has its own copy of the check (`App.tsx`'s `loadPositionHealth`). A
+  // stale REJECTION landing after navigating away must not stamp the
+  // screen now showing a different, healthy playbook with an error that
+  // belongs to the one just left.
+  it('a stale position-health rejection for one playbook does not clobber a healthy scan for another after navigating away (N3, catch branch)', async () => {
+    const v2 = { ...v1, id: 'v2', playbookId: 'pb2' };
+    const identity2 = {
+      id: 'pb2', name: 'Fresh Import', createdAt: 1, updatedAt: 2,
+      currentVersionId: 'v2', schemaVersion: 6,
+    };
+
+    getPlaybookMock.mockReset().mockImplementation(async (id: string) =>
+      (id === 'pb1' ? identity : id === 'pb2' ? identity2 : null));
+    getPlaybookContentMock.mockImplementation(async (id: string) =>
+      (id === 'pb1' ? v1 : id === 'pb2' ? v2 : null));
+
+    let rejectVersionsA!: (reason: unknown) => void;
+    const pendingVersionsA = new Promise((_resolve, reject) => { rejectVersionsA = reject; });
+    // Swallow the "unhandled rejection" Node would otherwise report before
+    // the app's own `.catch()` has a chance to attach — mirrors the
+    // resolve-based version above, just for the rejecting case.
+    pendingVersionsA.catch(() => {});
+    listVersionsMock.mockReset().mockImplementation(async (playbookId: string) => {
+      if (playbookId === 'pb1') return pendingVersionsA; // held open, will reject
+      if (playbookId === 'pb2') return [v2];
+      return [];
+    });
+    listReviewsMock.mockReset().mockResolvedValue([]);
+
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+    // pb1's automatic position-health scan is now stuck awaiting
+    // `listVersions('pb1')`.
+
+    window.history.pushState(null, '', '/playbooks/pb2');
+    act(() => { window.dispatchEvent(new PopStateEvent('popstate')); });
+    await flush();
+    await flush();
+
+    // pb2's own scan resolved cleanly.
+    expect(container.textContent).toContain('UNTESTED');
+    expect(container.textContent).not.toMatch(/could not be read/i);
+
+    // Now let pb1's stale scan REJECT. Unguarded, the catch branch would
+    // stamp pb2's screen — the one actually on view — with an error that
+    // belongs to the playbook the reader already left.
+    await act(async () => { rejectVersionsA(new Error('disk')); });
+    await flush();
+
+    expect(container.textContent).toContain('UNTESTED');
+    expect(container.textContent).not.toMatch(/could not be read/i);
+    expect(window.location.pathname).toBe('/playbooks/pb2');
+  });
+
+  it('a stale version-history scan for one playbook does not overwrite another playbook\'s history after navigating away (N3)', async () => {
+    const v2 = { ...v1, id: 'v2', playbookId: 'pb2' };
+    const identity2 = {
+      id: 'pb2', name: 'Fresh Import', createdAt: 1, updatedAt: 2,
+      currentVersionId: 'v2', schemaVersion: 6,
+    };
+
+    getPlaybookMock.mockReset().mockImplementation(async (id: string) =>
+      (id === 'pb1' ? identity : id === 'pb2' ? identity2 : null));
+    getPlaybookContentMock.mockImplementation(async (id: string) =>
+      (id === 'pb1' ? v1 : id === 'pb2' ? v2 : null));
+    listReviewsMock.mockReset().mockResolvedValue([]);
+
+    let resolveVersionsA!: (value: unknown) => void;
+    const pendingVersionsA = new Promise((resolve) => { resolveVersionsA = resolve; });
+    const alphaHistory = [{ ...v1, changeSummary: 'Alpha history marker' }];
+    const betaHistory = [{ ...v2, changeSummary: 'Beta history marker' }];
+    listVersionsMock.mockReset().mockImplementation(async (playbookId: string) => {
+      if (playbookId === 'pb1') return pendingVersionsA; // held open
+      if (playbookId === 'pb2') return betaHistory;
+      return [];
+    });
+
+    window.history.replaceState(null, '', '/playbooks/pb1');
+    act(() => { root.render(<App />); });
+    await flush();
+    await flush();
+
+    let link = Array.from(container.querySelectorAll('button'))
+      .find(b => /version history/i.test(b.textContent || '')) as HTMLButtonElement;
+    act(() => { link.click(); });
+    await flush();
+    // pb1's version-history scan is now stuck awaiting `listVersions('pb1')`.
+
+    window.history.pushState(null, '', '/playbooks/pb2');
+    act(() => { window.dispatchEvent(new PopStateEvent('popstate')); });
+    await flush();
+    await flush();
+
+    link = Array.from(container.querySelectorAll('button'))
+      .find(b => /version history/i.test(b.textContent || '')) as HTMLButtonElement;
+    act(() => { link.click(); });
+    await flush();
+
+    expect(container.textContent).toContain('Beta history marker');
+    expect(container.textContent).not.toContain('Alpha history marker');
+
+    // Now let pb1's stale scan resolve. Unguarded, this overwrites the modal
+    // — now showing pb2's history — with pb1's.
+    await act(async () => { resolveVersionsA(alphaHistory); });
+    await flush();
+
+    expect(container.textContent).toContain('Beta history marker');
+    expect(container.textContent).not.toContain('Alpha history marker');
   });
 });
