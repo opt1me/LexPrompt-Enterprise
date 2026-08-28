@@ -42,6 +42,25 @@ describe('PositionComparison', () => {
     expect(out).toContain('Nine months, not six.');
   });
 
+  // The copy defect a browser check found: the editor's own placeholder for
+  // this field used to model a complete sentence ("e.g. We ask for a
+  // 6-month break notice…"), which taught an author to type the label's own
+  // words into the field. The card then stuttered: "We ask for We ask for
+  // a 6-month break notice, no conditions." `pos` above is already the
+  // noun-phrase shape the (now-fixed) placeholder suggests — this pins that
+  // the label is never duplicated even when a position starts with a
+  // capitalised word, the shape a noun-phrase placeholder produces.
+  it('does not stutter the label for a noun-phrase position, the shape the placeholder now suggests', () => {
+    const nounPhrase: StandardPosition = {
+      text: 'A 6-month break notice, no conditions.',
+      origin: 'authored',
+      reviewedByHuman: true,
+    };
+    const out = text(<PositionComparison position={nounPhrase} finding={deviatingFinding} />);
+    expect(out).toContain('We ask for A 6-month break notice, no conditions.');
+    expect(out).not.toMatch(/we ask for we ask for/i);
+  });
+
   it('says a position is only a suggestion when no human has reviewed it', () => {
     const unreviewed: StandardPosition = { ...pos, origin: 'ai-drafted', reviewedByHuman: false };
     const out = text(<PositionComparison position={unreviewed} finding={deviatingFinding} />);

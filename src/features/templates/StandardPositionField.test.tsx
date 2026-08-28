@@ -61,6 +61,21 @@ describe('StandardPositionField — provenance (spec §8)', () => {
   });
 });
 
+describe('StandardPositionField — placeholder shape agrees with the card\'s label', () => {
+  // `PositionComparison` (the finding card) prepends its own "We ask for "
+  // label to whatever text is typed here. A placeholder that itself started
+  // with "We ask for" — modelling a complete sentence — taught an author to
+  // type the label's own words into the field, and the card then stuttered:
+  // "We ask for We ask for a 6-month break notice, no conditions." The
+  // placeholder's example must be a noun phrase the label can be prepended
+  // to, never a sentence that already carries the label.
+  it('suggests a noun phrase, not a sentence starting with the card\'s own "We ask for" label', () => {
+    const c = mount(<StandardPositionField position={undefined} onChange={() => {}} />);
+    const placeholder = area(c).placeholder;
+    expect(placeholder.toLowerCase()).not.toMatch(/we ask for/);
+  });
+});
+
 describe('StandardPositionField — editing', () => {
   it('creates an authored position when text is typed into an empty field', () => {
     const onChange = vi.fn();

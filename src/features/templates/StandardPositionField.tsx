@@ -75,7 +75,15 @@ export function StandardPositionField({ position, onChange, disabled }: Standard
         disabled={disabled}
         aria-label="Standard position"
         className="w-full bg-violet-500/5 border border-violet-500/20 rounded-md p-2 text-xs text-gray-300 outline-none min-h-[50px] focus:border-violet-500/60 disabled:opacity-50"
-        placeholder="e.g. We ask for a 6-month break notice, no conditions."
+        // A noun phrase, not a full sentence — `PositionComparison` (the
+        // card) prepends its own "We ask for " label to whatever is typed
+        // here. An earlier placeholder modelled a complete sentence
+        // ("We ask for a 6-month break notice…"), which taught an author to
+        // type the label's own words into the field: the card then read
+        // "We ask for We ask for a 6-month break notice…" — the label and
+        // the placeholder must describe the SAME shape of text, not two
+        // different ones that happen to look fine in isolation.
+        placeholder="e.g. A 6-month break notice, no conditions."
       />
       {position === undefined ? (
         <p className="mt-1 text-[11px] text-gray-500">
