@@ -156,6 +156,25 @@ export function TemplateEditor({
     });
   };
 
+  /**
+   * Minor 5 (integrity review). `''` and an omitted `riskTolerance` are the
+   * same fact to every reader — `riskBlock.ts` treats them identically, and
+   * `migrateDraft` reads a stored `''` back as absent — but
+   * `hasUnpublishedContent`'s JSON-string comparison cannot tell them apart
+   * from a genuine edit: typing into this box and deleting it again left
+   * Publish enabled over a draft that reviews identically to what is already
+   * published, and minted a byte-identical version. `updateDraft`'s merge
+   * can only ASSIGN a key, never delete one, so an empty value is built
+   * here directly and the key is deleted — the same rule `setPosition`
+   * below applies to `standardPosition`, for the same reason.
+   */
+  const setRiskTolerance = (value: string) => {
+    const next: PlaybookDraft = { ...working };
+    if (value === '') delete next.riskTolerance;
+    else next.riskTolerance = value;
+    onDraftChange(next);
+  };
+
   /** Separate from `updateClause` because clearing a position must DELETE
    *  the key, not set it to `undefined`: `structuredClone` — how IndexedDB
    *  writes every record — preserves an `undefined`-valued key, and
@@ -279,7 +298,7 @@ export function TemplateEditor({
             <label className="block text-sm font-medium text-red-300 mb-2 flex items-center gap-2"><ShieldAlert className="h-4 w-4" /> Global Risk Tolerance</label>
             <AutoResizeTextarea
               value={working.riskTolerance || ''}
-              onChange={(e) => updateDraft({ riskTolerance: e.target.value })}
+              onChange={(e) => setRiskTolerance(e.target.value)}
               placeholder="e.g. We are risk-averse regarding uncapped liability..."
               className="w-full bg-black/50 border border-red-500/20 rounded-lg p-3 text-sm text-gray-300 focus:border-red-500 outline-none min-h-[100px]"
             />

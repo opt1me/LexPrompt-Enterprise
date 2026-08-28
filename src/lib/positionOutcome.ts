@@ -3,7 +3,13 @@ import type { PositionOutcome, StandardPosition } from '../types';
 export const NO_RATIONALE_NOTE =
   'The model reported a deviation but gave no reason, so this is recorded as unclear.';
 
-const OUTCOMES: PositionOutcome[] = ['meets', 'deviates', 'unclear'];
+// Drift review, D1. The definition of what a `PositionOutcome` can be — not
+// just this module's own classification of one — so `reviewMigration.ts`'s
+// validation of a STORED value imports this rather than keeping its own
+// byte-identical copy. A fourth outcome added here and not there would
+// otherwise make the migration silently reject a value this module happily
+// produces, or vice versa.
+export const OUTCOMES: readonly PositionOutcome[] = ['meets', 'deviates', 'unclear'];
 
 export interface PositionOutcomeFields {
   positionOutcome?: PositionOutcome;

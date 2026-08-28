@@ -282,6 +282,64 @@ describe('TemplateEditor — publish state', () => {
   });
 });
 
+// Minor 5 (integrity review). The editor used to write `riskTolerance: ''`
+// on an emptied field rather than deleting the key, so `hasUnpublishedContent`
+// — which compares against `draftFromVersion`'s omitted key for an unset
+// tolerance — saw a real diff. A published playbook with no Global Risk
+// Tolerance, typed into and cleared again, kept reporting "unpublished
+// changes" and left Publish enabled over a draft that reviews identically to
+// what is already published.
+describe('TemplateEditor — Global Risk Tolerance ("" vs absent, Minor 5)', () => {
+  it('deletes the key, rather than writing "", when the field is emptied', async () => {
+    const published = version();
+    let latest: PlaybookDraft | undefined;
+    function Harness() {
+      const [draft, setDraft] = React.useState<PlaybookDraft | undefined>(undefined);
+      return (
+        <TemplateEditor
+          version={published}
+          draft={draft}
+          onDraftChange={(d) => { latest = d; setDraft(d); }}
+          {...wiring}
+        />
+      );
+    }
+    const c = mount(<Harness />);
+
+    type(fieldFor(c, /global risk tolerance/i)!, 'Risk-averse on liability.');
+    await flush();
+    type(fieldFor(c, /global risk tolerance/i)!, '');
+    await flush();
+
+    expect('riskTolerance' in latest!).toBe(false);
+    // And the editor agrees there is nothing left to publish.
+    expect(buttonNamed(c, /publish/i)?.disabled).toBe(true);
+    expect(c.textContent).not.toMatch(/unpublished changes/i);
+  });
+
+  it('keeps a real value when the field is left non-empty', async () => {
+    const published = version();
+    let latest: PlaybookDraft | undefined;
+    function Harness() {
+      const [draft, setDraft] = React.useState<PlaybookDraft | undefined>(undefined);
+      return (
+        <TemplateEditor
+          version={published}
+          draft={draft}
+          onDraftChange={(d) => { latest = d; setDraft(d); }}
+          {...wiring}
+        />
+      );
+    }
+    const c = mount(<Harness />);
+
+    type(fieldFor(c, /global risk tolerance/i)!, 'Risk-averse on liability.');
+    await flush();
+
+    expect(latest!.riskTolerance).toBe('Risk-averse on liability.');
+  });
+});
+
 // m3. `Date.now().toString()` gave two clauses added inside one
 // millisecond the SAME id — and `run.findings[key][clauseId]` and the
 // health map are both keyed by it, so one finding would answer for two
