@@ -41,6 +41,12 @@ export function registerInfer(
     const body = request.body as InferBody;
     try {
       const result = await callModel(makeContext(request), body as never);
+      // For EVERY provider, not only `recorded` — a header present only for
+      // one provider would make its absence carry meaning, which is the
+      // blank-CSV-cell defect S27's own reasoning names. This is one of the
+      // four places §5.1 requires a recorded answer to be marked; it is the
+      // one that survives a caller reading only headers, never the body.
+      void reply.header('X-LexPrompt-Provider', result.provider);
       return await reply.send(result);
     } catch (err) {
       return sendModelError(reply, err);

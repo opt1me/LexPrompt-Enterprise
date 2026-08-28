@@ -1,0 +1,13 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "{\"groups\":[{\"clause_title\":\"RECORDED — placeholder clause\",\"statement\":\"RECORDED — this is a stored development response, not a review of any document. No model was called. No redline evidence was actually read.\",\"edit_ids\":[],\"opposing_edit_ids\":[]}]}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 14,
+    "completion_tokens": 36
+  }
+}

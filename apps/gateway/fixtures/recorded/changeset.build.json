@@ -1,0 +1,13 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "{\"items\":[{\"clause_title\":\"RECORDED — placeholder clause\",\"proposed_text\":\"RECORDED — this is a stored development response, not a review of any document. No model was called. This is not proposed wording from any real edits.\",\"rationale\":\"RECORDED — this is a stored development response, not a review of any document. No model was called.\",\"edit_ids\":[]}]}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 16,
+    "completion_tokens": 44
+  }
+}

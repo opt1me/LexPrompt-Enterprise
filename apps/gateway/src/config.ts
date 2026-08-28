@@ -313,6 +313,23 @@ export function loadConfig(
     }
   }
 
+  // A recorded model must declare that it is recorded. Everything else in
+  // this design lets an operator declare a jurisdiction and be trusted; here
+  // the value is a fact about the software rather than about a deployment,
+  // and an entry claiming `UK South` for stored fixtures would defeat every
+  // one of the four markings at once (Task 13, §5.1). Checked here, on the
+  // provider field's VALUE, in the configuration validator — not as a
+  // provider-specific branch in the call path.
+  for (const m of models) {
+    if (m.provider === 'recorded' && m.jurisdiction.bloc !== 'other') {
+      throw new ConfigError(
+        `Model "${m.id}" uses the recorded provider and must declare `
+        + `jurisdiction.bloc "other" — recorded responses come from this machine, `
+        + `not from ${m.jurisdiction.label}.`,
+      );
+    }
+  }
+
   // P4. An operator routing privileged text outside the permitted blocs
   // must have written that bloc down. There is no runtime warning to scroll
   // past and no documentation note to not read.

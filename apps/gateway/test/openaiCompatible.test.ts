@@ -42,9 +42,23 @@ describe('the registry', () => {
     expect(PENDING.every(id => (PROVIDER_IDS as readonly string[]).includes(id))).toBe(true);
   });
 
+  // `recorded` used to be this test's live example of a PENDING id; Task 13
+  // registered it and emptied PENDING to `[]`, so the only kind of
+  // "unregistered id" left to prove a helpful throw for is one that is not
+  // a real ProviderId at all — `config.ts`'s own `isProviderId` guard is
+  // what actually keeps a PENDING id from reaching `registry.get` in
+  // production, so this id is `never`-cast the same way `config.ts` would
+  // never let a real one through unvalidated.
   it('throws for an unregistered id, naming what is pending, rather than returning undefined', () => {
-    expect(() => registry.get('recorded')).toThrow(/Not yet implemented: recorded/);
     expect(() => registry.get('bedrock' as never)).toThrow(/bedrock/);
+  });
+
+  // `recorded` is registered like every other provider (Task 13) — the
+  // regression this guards is the registry silently going back to treating
+  // it as pending.
+  it('registers `recorded`, not merely lists it in PROVIDER_IDS', () => {
+    expect(() => registry.get('recorded')).not.toThrow();
+    expect(registry.get('recorded').id).toBe('recorded');
   });
 });
 

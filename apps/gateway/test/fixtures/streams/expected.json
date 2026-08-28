@@ -48,5 +48,15 @@
       "content": [{ "type": "text", "text": "one two three" }],
       "usage": { "input_tokens": 16, "output_tokens": 5 }
     }
+  },
+  "recorded": {
+    "text": "one two three",
+    "promptTokens": 14,
+    "completionTokens": 5,
+    "synthetic": true,
+    "nonStreamedBody": {
+      "choices": [{ "message": { "content": "one two three" } }],
+      "usage": { "prompt_tokens": 14, "completion_tokens": 5 }
+    }
   }
 }

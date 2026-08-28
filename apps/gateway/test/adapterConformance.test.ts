@@ -16,7 +16,15 @@ import type { ProviderAdapter } from '../src/adapters/types.ts';
  * `expected.json`'s `synthetic: true` on every entry keeps that distinction
  * visible rather than assumed — see the last test in this file.
  */
-const registry = buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' });
+// A real path, not the short 'fixtures/recorded' other test files in this
+// suite use as filler for a param nothing used to read (PENDING excluded
+// 'recorded' until this task). Vitest's cwd is the repo root regardless of
+// which test file is running, so this must match where the fixtures
+// actually live (apps/gateway/fixtures/recorded) or `recorded`'s buildCall
+// throws "no recorded fixture" the moment this suite exercises it for real.
+const registry = buildRegistry({
+  publicOrigin: 'https://lexprompt.local', recordedDir: 'apps/gateway/fixtures/recorded',
+});
 
 const DIR = path.join(__dirname, 'fixtures/streams');
 const EXPECTED = JSON.parse(readFileSync(path.join(DIR, 'expected.json'), 'utf8')) as Record<

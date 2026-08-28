@@ -213,6 +213,10 @@ export async function prepare(
     const adapter = ctx.registry.get(entry.provider);
     const call = adapter.buildCall({
       entry,
+      // Threaded through so the `recorded` adapter (Task 13) can route to
+      // the fixture matching this call site; every other adapter ignores
+      // it. `req.purpose` is already validated by `isPurpose` above.
+      purpose: req.purpose,
       ...(req.system ? { system: req.system } : {}),
       user: req.user,
       ...(req.images ? { images: req.images } : {}),

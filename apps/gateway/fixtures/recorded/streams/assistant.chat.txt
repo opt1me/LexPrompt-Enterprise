@@ -1,0 +1,16 @@
+: hand-authored, OpenAI-shaped SSE for the offline `recorded` provider — served from a file, never a live model (synthetic)
+
+data: {"choices":[{"delta":{"role":"assistant","content":""}}]}
+
+data: {"choices":[{"delta":{"content":"RECORDED"}}]}
+
+data: {"choices":[{"delta":{"content":" — this is a stored development response, not an answer from a model."}}]}
+
+data: {"choices":[{"delta":{"content":" Choose a different model in Settings to ask a real one."}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":26}}
+
+data: [DONE]
+

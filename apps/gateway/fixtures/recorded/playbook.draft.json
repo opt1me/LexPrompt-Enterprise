@@ -1,0 +1,13 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "{\"clauses\":[{\"title\":\"RECORDED — placeholder clause\",\"extract_prompt\":\"RECORDED — this is a stored development response, not a review of any document. No model was called. This prompt was not written by a model.\",\"risk_criteria\":\"\",\"standard_position\":\"\",\"suggestions\":[]}]}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 30
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "RECORDED — this is a stored development response, not a review of any document. No model was called. Ask a real model by choosing a different entry in Settings."
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 1,
+    "completion_tokens": 24
+  }
+}

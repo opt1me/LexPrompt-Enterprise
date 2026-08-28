@@ -1,0 +1,12 @@
+: hand-authored, OpenAI-shaped SSE fallback for a streamed purpose with no dedicated recorded stream fixture (synthetic)
+
+data: {"choices":[{"delta":{"role":"assistant","content":""}}]}
+
+data: {"choices":[{"delta":{"content":"RECORDED — this is a stored development response, not an answer from a model."}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+data: {"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":15}}
+
+data: [DONE]
+

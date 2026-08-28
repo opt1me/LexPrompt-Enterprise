@@ -1,0 +1,13 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "{\"summary\":\"RECORDED — this is a stored development response, not a review of any document. No model was called. This is not a review of the document you selected.\",\"citations\":[],\"risk_level\":\"Info\",\"risk_analysis\":\"RECORDED — this is a stored development response, not a review of any document. No model was called. No risk assessment was performed.\"}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 12,
+    "completion_tokens": 40
+  }
+}

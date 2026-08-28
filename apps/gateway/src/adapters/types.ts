@@ -1,9 +1,18 @@
-import type { InferUsage, ProviderId } from '@lexprompt/core';
+import type { InferUsage, ProviderId, Purpose } from '@lexprompt/core';
 import type { ModelEntry } from '../config.ts';
 import type { ResolvedCredential } from '../credentials/types.ts';
 
 export interface AdapterRequest {
   entry: ModelEntry;
+  /**
+   * What the call is for, in the app's own terms (§10's purpose allowlist).
+   * Every OpenAI-shaped adapter ignores this — it exists so an adapter that
+   * DOES need it (today, only `recorded`, Task 13, to route to the fixture
+   * that matches the call site) can see it without every other adapter
+   * having to. `callModel.ts`'s `prepare()` is the only place this is filled
+   * in, from the already-validated `InferRequest.purpose`.
+   */
+  purpose?: Purpose;
   system?: string;
   user: string;
   images?: { mime: string; data: string }[];

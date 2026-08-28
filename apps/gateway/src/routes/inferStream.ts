@@ -47,7 +47,7 @@ export function registerInferStream(
       // indistinguishable from a mid-stream fault to any proxy in between.
       return sendModelError(reply, err);
     }
-    const { adapter, call, credential, callId, startedAt } = prepared;
+    const { entry, adapter, call, credential, callId, startedAt } = prepared;
 
     const timeout = AbortSignal.timeout(ctx.config.requestTimeoutMs);
     let response;
@@ -83,6 +83,10 @@ export function registerInferStream(
       Connection: 'keep-alive',
       // no-transform matters: a proxy that rebuffers or recompresses an SSE
       // body is how a stream stops arriving event by event.
+      //
+      // Sent for EVERY provider, not only `recorded` — see infer.ts's
+      // identical header for why an absence must never be the signal.
+      'X-LexPrompt-Provider': entry.provider,
     });
 
     const reader = createSseEventReader();

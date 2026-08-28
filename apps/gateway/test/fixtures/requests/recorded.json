@@ -1,0 +1,24 @@
+{
+  "entry": {
+    "id": "offline",
+    "provider": "recorded",
+    "model": "recorded",
+    "label": "Recorded responses (offline)",
+    "jurisdiction": { "bloc": "other", "region": "local", "label": "this machine — recorded responses, not a model" },
+    "contextLength": 128000,
+    "supportsImages": true,
+    "supportsStructuredOutput": true,
+    "isDefault": true,
+    "endpoint": "file:///fixtures/recorded",
+    "credential": { "source": "env", "var": "UNUSED" }
+  },
+  "request": {
+    "purpose": "review.clause",
+    "system": "You are a contract reviewer.",
+    "user": "Summarise clause 14.",
+    "maxTokens": 4096,
+    "stream": false
+  },
+  "credential": { "kind": "api-key", "key": "unused" },
+  "body": {}
+}

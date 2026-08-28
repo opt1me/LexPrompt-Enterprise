@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { PROVIDER_IDS, type ProviderId } from '@lexprompt/core';
 import type { ProviderAdapter } from './types.ts';
 import { anthropicAdapter } from './anthropic.ts';
@@ -5,6 +6,7 @@ import { azureFoundryAdapter } from './azureFoundry.ts';
 import { azureOpenaiAdapter } from './azureOpenai.ts';
 import { openaiAdapter } from './openai.ts';
 import { makeOpenrouterAdapter } from './openrouter.ts';
+import { makeRecordedAdapter } from './recorded.ts';
 
 /**
  * THE registration point. Adding a provider is: add its id to
@@ -22,8 +24,13 @@ import { makeOpenrouterAdapter } from './openrouter.ts';
  * the tests below fail if the list ever disagrees with reality in either
  * direction — so it cannot be forgotten and cannot become a place to hide
  * an unimplemented provider.
+ *
+ * Empty as of Task 13: every id in `PROVIDER_IDS` now has a registered
+ * adapter. Left as a typed empty array, not deleted, so the next provider
+ * this project adds has somewhere honest to be listed while its adapter is
+ * still being written.
  */
-export const PENDING: readonly ProviderId[] = ['recorded'];
+export const PENDING: readonly ProviderId[] = [];
 
 export interface RegistryConfig {
   publicOrigin: string;
@@ -41,7 +48,7 @@ export function buildRegistry(config: RegistryConfig): {
     openaiAdapter,
     makeOpenrouterAdapter(config.publicOrigin),
     anthropicAdapter,
-    // Task 13 adds makeRecordedAdapter(config.recordedDir, config.readFile).
+    makeRecordedAdapter(config.recordedDir, config.readFile ?? (p => readFileSync(p, 'utf8'))),
   ];
   const byId = new Map<ProviderId, ProviderAdapter>(all.map(a => [a.id, a]));
   return {

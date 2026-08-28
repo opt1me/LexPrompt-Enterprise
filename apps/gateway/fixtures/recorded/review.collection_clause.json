@@ -1,0 +1,13 @@
+{
+  "choices": [
+    {
+      "message": {
+        "content": "{\"trail\":[{\"document\":1,\"effect\":\"RECORDED — this is a stored development response, not a review of any document. No model was called. No document was actually read.\",\"citations\":[]}],\"net_position\":\"RECORDED — this is a stored development response, not a review of any document. No model was called. This is not a synthesis of any document set.\"}"
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 15,
+    "completion_tokens": 48
+  }
+}

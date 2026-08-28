@@ -92,14 +92,26 @@ describe('loadConfig', () => {
       .toThrow(/bedrock/);
   });
 
-  // Task 9 registered `anthropic`'s adapter and removed it from PENDING, so
-  // this now exercises `recorded` — the provider Task 13 still has to add.
-  // PENDING names real provider ids that pass `isProviderId` but have no
-  // registered adapter yet. A model naming one must fail at startup, not on
-  // its first call.
-  it('refuses a model naming a provider whose adapter is not implemented yet', () => {
-    expect(() => loadConfig({ ...BASE }, read(file({ ...UK_MODEL, provider: 'recorded' }))))
-      .toThrow(/uks-gpt4o[\s\S]*recorded[\s\S]*not implemented yet/);
+  // This test exercised `recorded` — the last id PENDING ever named — from
+  // Task 9 (which registered `anthropic` and left `recorded` as the sole
+  // remaining example) until Task 13 registered `recorded` too and emptied
+  // PENDING to `[]`. There is now no real `ProviderId` left that is
+  // "known but not yet implemented" to name here; the `PENDING.includes(...)`
+  // branch in `loadConfig` is still live code (the next provider this
+  // project adds will need it again), it simply has no example to exercise
+  // it against right now. `openaiCompatible.test.ts`'s registry test carries
+  // the equivalent coverage for an id `isProviderId` rejects outright
+  // ('bedrock'), and Task 13's own `recorded.test.ts` proves `recorded`
+  // loads — with the honest jurisdiction below — rather than being refused.
+  it('a recorded entry with the honest jurisdiction is no longer refused as unimplemented', () => {
+    const cfg = loadConfig(
+      { ...BASE, GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU,other' },
+      read(file({
+        ...UK_MODEL, provider: 'recorded',
+        jurisdiction: { bloc: 'other', region: 'local', label: 'this machine — recorded responses, not a model' },
+      })),
+    );
+    expect(cfg.models[0].provider).toBe('recorded');
   });
 
   it('refuses an entry with no jurisdiction rather than assuming one', () => {
