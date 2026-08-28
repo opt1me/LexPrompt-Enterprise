@@ -379,12 +379,21 @@ export function MatterHome({
           </div>
         </div>
 
+        {/* `draft`/`draft-tint`, not `accent`: this is an unaccepted proposal
+            from the `collectionSuggest` heuristic (R-C4 — it proposes and
+            never creates), and teal is reserved for "a person did something"
+            (R-G4). Every other unaccepted suggestion in the app —
+            `FieldSuggestion`, `RevisionModal`'s "AI Suggestion", `DraftReview`,
+            `ChangesetReview`'s `new_clause`, `WhatWeLearned`, `TheWorkings`,
+            `PrecedentIntake` — already uses `draft`; this card was the one
+            outlier still wearing the colour of a confirmed act (final
+            honesty review, Minor 6). */}
         {!documentsError && suggestions.map(s => (
           <div
             key={suggestionKey(s)}
-            className="mb-3 flex items-start gap-3 bg-accent-tint border border-accent-edge rounded-card px-4 py-3"
+            className="mb-3 flex items-start gap-3 bg-draft-tint border border-dashed border-draft rounded-card px-4 py-3"
           >
-            <Lightbulb className="w-4 h-4 text-accent shrink-0 mt-0.5" />
+            <Lightbulb className="w-4 h-4 text-draft shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
               <p className="text-sm text-ink-1">Group "{s.name}"?</p>
               <p className="text-xs text-ink-3 mt-0.5">{s.reason}</p>

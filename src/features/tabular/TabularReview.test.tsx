@@ -130,6 +130,45 @@ describe('TabularReview — a cell renders a readable sentence, not a truncated 
   });
 });
 
+// Minor 7 (final honesty review): `Pending` and `Empty` sat at `ink-5`,
+// which R-G19 forbids for disclosure text (the paper palette's lower ink
+// steps are decorative-grade contrast — a warning in `ink-5` is one the
+// reader's eye skips). Not a regression, but G re-authored both lines onto
+// tokens, so R-G19 binds them now.
+describe('TabularReview — disclosure text stays above the legibility floor (Minor 7)', () => {
+  it('"Pending" is not rendered at ink-4 or below', () => {
+    const run = makeRun({ d1: {} });
+    const container = mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />);
+    const pending = Array.from(container.querySelectorAll('span')).find(s => s.textContent === 'Pending');
+    expect(pending).toBeTruthy();
+    expect(pending!.className).not.toMatch(/text-ink-[4-9]/);
+  });
+
+  it('"Empty" (a schema-valid but empty answer) is not rendered at ink-4 or below', () => {
+    const run = makeRun({ d1: { c1: doneFinding({ summary: '' }) } });
+    const container = mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />);
+    const empty = Array.from(container.querySelectorAll('span')).find(s => s.textContent === 'Empty');
+    expect(empty).toBeTruthy();
+    expect(empty!.className).not.toMatch(/text-ink-[4-9]/);
+  });
+});
+
+// sr-only sweep (final behaviour review's leftover): a grid can have many
+// rows × many cells, exactly the shape that turned one instance of an
+// unpositioned `sr-only` label into a whole-window scrollbar over blank
+// space elsewhere in this screen. This pins that a done cell's icon-only
+// Retry button is its own containing block for its sr-only label.
+describe('TabularReview — a done cell\'s Retry button is a positioned ancestor for its sr-only label', () => {
+  it('carries a relative class directly on the button that wraps the sr-only span', () => {
+    const run = makeRun({ d1: { c1: doneFinding() } });
+    const container = mount(<TabularReview run={run} documents={[makeDoc('d1')]} onRetryCell={() => {}} />);
+    const label = Array.from(container.querySelectorAll('span')).find(s => s.className === 'sr-only' && s.textContent === 'Retry');
+    expect(label, 'expected an sr-only "Retry" label on the done cell').toBeTruthy();
+    expect(label!.parentElement!.tagName).toBe('BUTTON');
+    expect(label!.parentElement!.className).toMatch(/(?:^|\s)relative(?:\s|$)/);
+  });
+});
+
 describe('TabularReview — column header risk mini-bar (Task 10)', () => {
   it('summarises the risk distribution for that clause across all rows', () => {
     const run = makeRun({

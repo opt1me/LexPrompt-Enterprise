@@ -39,6 +39,21 @@ describe('ClauseIndex', () => {
     expect(c.textContent).toContain('2 unchecked');
   });
 
+  // Minor 5 (final honesty review): this chip's count is the active
+  // document's only, while the header and the export banner elsewhere on
+  // the review screen count the whole run under the same word ("unchecked").
+  // The chip has to say which scope it is so the two numbers do not read as
+  // a disagreement.
+  it('labels its "unchecked" count as document-scoped, not the run-wide count shown elsewhere', () => {
+    const c = mount(<ClauseIndex
+      clauses={clauses}
+      findings={{ c1: finding(), c2: finding(), c3: finding() }}
+      activeClauseId={null}
+      onSelect={() => {}}
+    />);
+    expect(c.textContent).toMatch(/3 unchecked here/i);
+  });
+
   // The whole point of a navigation rail over an existing map is that it
   // cannot disagree with the cards reading the same map. A findings object
   // can carry keys the rail's own `clauses` array does not — a stale entry

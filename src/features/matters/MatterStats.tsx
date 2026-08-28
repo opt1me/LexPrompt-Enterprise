@@ -1,6 +1,7 @@
 import React from 'react';
 import type { Review, RiskLevel } from '../../types';
 import { summariseMatter } from '../../lib/matterStats';
+import { NO_RISK_DATA_LABEL } from '../../lib/findingOutcome';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 
 export interface MatterStatsProps {
@@ -52,6 +53,12 @@ const CARD = 'bg-card border border-rule rounded-card p-5';
  *    deviating" — that reads as "compared, none deviated," which nothing
  *    compared. Found by driving the app: a matter with no standard
  *    positions rendered exactly that zero.
+ *  - The risk-profile card renders `NO_RISK_DATA_LABEL`, not three empty
+ *    bars, when `riskTotal` is 0 — a completed run in which every clause
+ *    errored has `completedReviews > 0` but rates nothing, and three zeroes
+ *    there read as "assessed, found no risk." Same idea `ColumnRiskBar`
+ *    (`TabularReview.tsx`) already carries for the grid; both import the
+ *    one label from `findingOutcome.ts` so the two renderers can't drift.
  */
 export function MatterStats({ reviews, reviewsError, onRetryReviews }: MatterStatsProps) {
   if (reviewsError) {
@@ -113,18 +120,22 @@ export function MatterStats({ reviews, reviewsError, onRetryReviews }: MatterSta
 
       <section className={CARD}>
         <h3 className="font-mono text-label uppercase text-ink-4">Risk profile</h3>
-        {RISK_ORDER.map(level => (
-          <p key={level} className="mt-2 flex items-center gap-2">
-            <span className={`w-14 font-mono text-chip uppercase ${RISK_INK[level]}`}>{level}</span>
-            <span className="flex-1 h-1.5 rounded-meter bg-chip-fill overflow-hidden">
-              <span
-                className={`block h-full ${RISK_FILL[level]}`}
-                style={{ width: `${riskTotal > 0 ? (s.risk[level] / riskTotal) * 100 : 0}%` }}
-              />
-            </span>
-            <span className="font-mono text-pin text-ink-4">{s.risk[level]}</span>
-          </p>
-        ))}
+        {riskTotal === 0 ? (
+          <p className="mt-3 font-ui text-ui-sm text-ink-3">{NO_RISK_DATA_LABEL}</p>
+        ) : (
+          RISK_ORDER.map(level => (
+            <p key={level} className="mt-2 flex items-center gap-2">
+              <span className={`w-14 font-mono text-chip uppercase ${RISK_INK[level]}`}>{level}</span>
+              <span className="flex-1 h-1.5 rounded-meter bg-chip-fill overflow-hidden">
+                <span
+                  className={`block h-full ${RISK_FILL[level]}`}
+                  style={{ width: `${(s.risk[level] / riskTotal) * 100}%` }}
+                />
+              </span>
+              <span className="font-mono text-pin text-ink-4">{s.risk[level]}</span>
+            </p>
+          ))
+        )}
       </section>
     </div>
   );

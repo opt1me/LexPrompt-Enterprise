@@ -491,6 +491,17 @@ export function positionOutcomeCounts(findings: Review['findings']): PositionOut
   return { deviating, hasPosition };
 }
 
+/**
+ * The one wording for "a risk total of zero means nothing was rated, not
+ * that nothing is risky." `TabularReview.tsx`'s `ColumnRiskBar` had this
+ * branch; `MatterStats.tsx`'s risk-profile card did not, and rendered
+ * `HIGH 0 · MEDIUM 0 · LOW 0` on a completed run where every clause errored
+ * — three zeroes reading as "assessed, found nothing," the exact shape
+ * R-G10 exists to forbid. Both now import this string rather than each
+ * carrying its own copy that could drift (CLAUDE.md's sibling-drift rule).
+ */
+export const NO_RISK_DATA_LABEL = 'No risk data yet';
+
 export function truncationLabel(finding: Finding | undefined): string | null {
   if (!isVerifiable(finding) || !finding.truncated) return null;
 

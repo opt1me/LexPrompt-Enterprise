@@ -4,7 +4,7 @@ import type { DocumentFile, Finding, Review, ReviewRun, RiskLevel } from '../../
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
-import { verificationCounts, isVerifiable, positionOutcomeCounts } from '../../lib/findingOutcome';
+import { verificationCounts, isVerifiable, positionOutcomeCounts, NO_RISK_DATA_LABEL } from '../../lib/findingOutcome';
 import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';
 import { Button } from '../../components/Button';
@@ -247,7 +247,7 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = fa
         className={`p-3 border-b border-r border-rule font-ui text-ui-sm cursor-pointer ${interrupted ? '' : 'opacity-40'} ${selectedRing}`}
       >
         <div className="flex items-center justify-between gap-2">
-          <span className="text-ink-5 italic">Pending</span>
+          <span className="text-ink-3 italic">Pending</span>
           {interrupted && (
             <button
               onClick={(e) => { e.stopPropagation(); onRetry(); }}
@@ -371,16 +371,23 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = fa
               data-testid="cell-summary"
               className={`${wrapText ? 'whitespace-normal' : 'line-clamp-3'} font-prose text-finding text-ink-prose min-w-0`}
             >
-              {finding?.summary || <span className="font-ui text-ink-5 italic">Empty</span>}
+              {finding?.summary || <span className="font-ui text-ink-3 italic">Empty</span>}
             </div>
           </div>
           {/* Mirrors FindingCard's done-state Retry control: a Verification
              only ever exists on a `done` finding, so re-running one — the
              spec's rule that a re-run resets its verification — needs a
              trigger reachable from a done cell, not just error/cancelled ones. */}
+          {/* `relative`: containing block for the sr-only label, so its
+             static position resolves against this button rather than the
+             document root — the sr-only-escapes-its-scroller pattern the
+             final behaviour review found once and asked to be swept
+             repo-wide. This grid can have many rows × many cells, exactly
+             the shape that turned one instance of this into a whole-window
+             scrollbar over blank space. */}
           <button
             onClick={(e) => { e.stopPropagation(); onRetry(); }}
-            className="p-1 rounded-control text-ink-4 hover:text-ink-1 hover:bg-chip-fill shrink-0"
+            className="relative p-1 rounded-control text-ink-4 hover:text-ink-1 hover:bg-chip-fill shrink-0"
             title="Re-run this clause"
           >
             <RotateCcw className="w-3 h-3" aria-hidden="true" />
@@ -467,7 +474,7 @@ function ColumnRiskBar({ run, clauseId }: { run: ReviewRun; clauseId: string }) 
   }
   const riskTotal = RISK_BAR_ORDER.reduce((sum, level) => sum + riskCounts[level], 0);
   const riskLabel = riskTotal === 0
-    ? 'No risk data yet'
+    ? NO_RISK_DATA_LABEL
     : `Risk distribution: ${RISK_BAR_ORDER.map(level => `${riskCounts[level]} ${level}`).join(', ')}`;
 
   return (

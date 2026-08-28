@@ -239,11 +239,20 @@ export function FindingCard({
              definition-of-done #3) — needs a way to re-run a `done` finding
              to mean anything. Without this, that reset is unreachable dead
              code: nowhere in the UI could ever produce the case it guards. */}
+          {/* `relative`: this button is the sr-only label's containing
+             block. Without a positioned ancestor, an absolutely-positioned
+             `sr-only` span's static position is computed against the
+             document root, not this button — which is exactly how one
+             instance of this same pattern extended the review screen's
+             scrolled finding column to 14,570px and produced a whole-window
+             scrollbar over blank space (final behaviour review). Do not
+             remove this without checking every ancestor up to the nearest
+             positioned one still clips it. */}
           <button
             type="button"
             onClick={() => onRetry(clause.id)}
             title="Re-run this clause"
-            className="p-1 rounded-control text-ink-4 hover:text-ink-1 hover:bg-chip-fill transition-colors"
+            className="relative p-1 rounded-control text-ink-4 hover:text-ink-1 hover:bg-chip-fill transition-colors"
           >
             <RotateCcw className="w-3.5 h-3.5" aria-hidden="true" />
             <span className="sr-only">Retry</span>

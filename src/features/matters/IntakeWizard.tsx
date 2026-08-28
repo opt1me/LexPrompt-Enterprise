@@ -60,7 +60,11 @@ export function IntakeWizard({
 
       <section className="bg-card border border-rule rounded-card p-5 space-y-4">
         <h3 className="font-prose text-section text-ink-1">Documents</h3>
-        <label className="block border border-dashed border-rule-strong rounded-panel p-8 text-center cursor-pointer hover:border-accent-edge">
+        {/* `relative`: containing block for the input's `sr-only` styling —
+           see the note on `ResultsView`'s finding scroller for why an
+           absolutely-positioned sr-only element needs a positioned
+           ancestor of its own rather than relying on whatever wraps it. */}
+        <label className="relative block border border-dashed border-rule-strong rounded-panel p-8 text-center cursor-pointer hover:border-accent-edge">
           <input
             type="file"
             multiple

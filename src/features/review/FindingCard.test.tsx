@@ -136,6 +136,27 @@ describe('FindingCard — interrupted prop (Important 1)', () => {
     );
     expect(hasRetryButton(container)).toBe(true);
   });
+
+  // sr-only sweep (final behaviour review's leftover): Tailwind's `sr-only`
+  // is `position: absolute`. With no positioned ancestor its containing
+  // block is the document root, not the button it sits in — which is
+  // exactly how one instance of this pattern extended the review screen to
+  // 14,570px and produced a whole-window scrollbar over blank space. This
+  // pins that the icon-only Retry button on a `done` card is its own
+  // containing block, so the label can never escape it again.
+  it('the icon-only Retry button on a done card is a positioned ancestor for its sr-only label', () => {
+    const finding: Finding = {
+      clauseId: 'c1', status: 'done', citations: [], summary: 'ok',
+      verification: { state: 'unchecked' }, notes: [],
+    };
+    const container = mount(
+      <FindingCard clause={CLAUSE} finding={finding} onCiteClick={() => {}} onRetry={() => {}} />,
+    );
+    const label = Array.from(container.querySelectorAll('span')).find(s => s.className === 'sr-only' && s.textContent === 'Retry');
+    expect(label, 'expected an sr-only "Retry" label').toBeTruthy();
+    expect(label!.parentElement!.tagName).toBe('BUTTON');
+    expect(label!.parentElement!.className).toMatch(/(?:^|\s)relative(?:\s|$)/);
+  });
 });
 
 describe('FindingCard verification and evidence', () => {

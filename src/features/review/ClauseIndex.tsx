@@ -51,6 +51,18 @@ export function firstUncheckedClauseId(
  * and a clause a human has not checked yet are different facts, and a rail
  * that drew both as the same grey circle would send a reader off to verify
  * an answer that was never produced.
+ *
+ * Minor 5 (final honesty review): this rail's counts are the ACTIVE
+ * DOCUMENT's only — `findings` is the caller's map for one document, already
+ * resolved through `findingsKeyFor` — while `ResultsView`'s header
+ * (`progressLabel`) and `ExportGateBanner` both count the WHOLE RUN. Kept
+ * that way rather than made to agree: the rail's job is to tell you which
+ * clause of the document ON SCREEN still needs a look, so a run-wide number
+ * here would answer a question this component was never asked. The
+ * "unchecked" chip — the one word that also appears in the run-scoped
+ * banner — says "unchecked here" rather than a bare number, so two
+ * different-but-correct counts on one screen no longer look like a
+ * disagreement.
  */
 export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: ClauseIndexProps) {
   let high = 0, flagged = 0, unchecked = 0, failed = 0, cancelled = 0;
@@ -76,7 +88,7 @@ export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: Cla
       <div className="p-3 border-b border-rule flex flex-wrap gap-2">
         <span className="font-mono text-chip uppercase text-risk-high">{high} high</span>
         <span className="font-mono text-chip uppercase text-risk-med">{flagged} flagged</span>
-        <span className="font-mono text-chip uppercase text-ink-4">{unchecked} unchecked</span>
+        <span className="font-mono text-chip uppercase text-ink-4" title="Unchecked clauses in this document only">{unchecked} unchecked here</span>
         {/* Rendered only when non-zero: the three above between them account
             for every clause that produced an answer, so "0 failed" is a
             reassurance nobody asked for. When they ARE non-zero they have to

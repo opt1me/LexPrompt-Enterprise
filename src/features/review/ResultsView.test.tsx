@@ -299,6 +299,42 @@ describe('ResultsView — reading a collection review\'s findings (Task 8A)', ()
   });
 });
 
+// Minor 5 (final honesty review): the header's verified/total count and the
+// rail's "unchecked" chip are two different scopes (whole run vs. active
+// document) rendered next to each other with no word saying so. Fixed by
+// labelling rather than by making the numbers agree — the rail's job is the
+// active document, the header's and the export banner's is the whole run.
+describe('ResultsView — the header count says which scope it counts (Minor 5)', () => {
+  it('labels the header progress as whole-run when the run has more than one document', () => {
+    const run = makeRun();
+    run.documentIds = ['d1', 'd2'];
+    run.findings.d2 = { c1: makeFinding('c1', 'pending') };
+    const container = mount(
+      <ResultsView run={run} documents={documents} settings={settings} onRetryCell={() => {}} />,
+    );
+    expect(container.textContent).toMatch(/whole run/i);
+  });
+
+  it('adds no scope label for a single-document run, where the two scopes coincide', () => {
+    const container = renderResultsView(vi.fn());
+    expect(container.textContent).not.toMatch(/whole run/i);
+  });
+});
+
+// sr-only sweep (final behaviour review's leftover): the same
+// unpositioned-sr-only pattern found on the finding scroller's Retry labels
+// applies to any other sr-only element on this screen. This pins the mobile
+// "Open in document" toggle, which carries one too.
+describe('ResultsView — the mobile document toggle is a positioned ancestor for its sr-only label', () => {
+  it('carries a relative class directly on the button that wraps the sr-only span', () => {
+    const container = renderResultsView(vi.fn());
+    const label = Array.from(container.querySelectorAll('span')).find(s => s.className === 'sr-only' && s.textContent === 'Open in document');
+    expect(label, 'expected an sr-only "Open in document" label').toBeTruthy();
+    expect(label!.parentElement!.tagName).toBe('BUTTON');
+    expect(label!.parentElement!.className).toMatch(/(?:^|\s)relative(?:\s|$)/);
+  });
+});
+
 // Found by driving the real app during sub-project C's browser
 // verification, and the seventh instance of this sub-project's recurring
 // shape: a `documentId` sits on the record and the consumer ignores it.

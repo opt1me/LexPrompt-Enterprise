@@ -75,4 +75,31 @@ describe('MatterStats', () => {
     expect(c.textContent).toContain('Flagged for follow-up');
     expect(c.textContent).not.toMatch(/deviat/i);
   });
+
+  it('renders "No risk data yet" rather than three zeroes when a completed run rated nothing', () => {
+    // Minor 4 (final honesty review): a completed run in which every clause
+    // errored has completedReviews > 0 but no finding carries a riskLevel.
+    // HIGH 0 / MEDIUM 0 / LOW 0 there reads as "assessed, found no risk" —
+    // the same false-reassurance shape R-G10 forbids elsewhere on this card.
+    const c = mount(<MatterStats
+      reviews={[review({ findings: { d1: { c1: finding({ status: 'error' }), c2: finding({ status: 'error' }) } } })]}
+      reviewsError={null}
+      onRetryReviews={() => {}}
+    />);
+    expect(c.textContent).toContain('No risk data yet');
+    expect(c.textContent).not.toMatch(/HIGH.*0.*MEDIUM.*0.*LOW.*0/is);
+    expect(c.textContent).not.toContain('High');
+    expect(c.textContent).not.toContain('Medium');
+    expect(c.textContent).not.toContain('Low');
+  });
+
+  it('still shows the risk bars when at least one finding carries a riskLevel', () => {
+    const c = mount(<MatterStats
+      reviews={[review({ findings: { d1: { c1: finding({ riskLevel: 'High' }), c2: finding() } } })]}
+      reviewsError={null}
+      onRetryReviews={() => {}}
+    />);
+    expect(c.textContent).not.toContain('No risk data yet');
+    expect(c.textContent).toContain('High');
+  });
 });

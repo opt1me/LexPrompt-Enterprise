@@ -56,6 +56,21 @@ describe('IntakeWizard — step 2 offers the only thing it can', () => {
     expect(buttonNamed(c, /^Remove/)).toBeUndefined();
   });
 
+  // sr-only sweep (final behaviour review's leftover): this file input is
+  // `sr-only` (Tailwind: `position: absolute`) so the dashed drop-zone
+  // `<label>` around it stays the clickable/visible surface. Without a
+  // positioned ancestor its containing block is the document root rather
+  // than the label — the same pattern that, on the review screen's finding
+  // scroller, extended the document to 14,570px and produced a whole-window
+  // scrollbar over blank space.
+  it('the drop-zone label is a positioned ancestor for its sr-only file input', () => {
+    const c = mount(<IntakeWizard matter={matter} {...wiring} />);
+    const input = c.querySelector('input[type="file"]') as HTMLInputElement;
+    expect(input.className).toMatch(/(?:^|\s)sr-only(?:\s|$)/);
+    expect(input.parentElement!.tagName).toBe('LABEL');
+    expect(input.parentElement!.className).toMatch(/(?:^|\s)relative(?:\s|$)/);
+  });
+
   it('does not draw a progress bar for OCR the app does not perform', () => {
     // R-G13. The app does not OCR; a progress bar for work it never does is
     // the exact failure the state-preservation rule forbids. Its honest

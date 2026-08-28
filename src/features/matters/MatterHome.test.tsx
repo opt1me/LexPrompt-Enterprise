@@ -265,6 +265,23 @@ describe('MatterHome — collections (Task 7)', () => {
     expect(onCreateCollection).not.toHaveBeenCalled();
   });
 
+  it('renders the collection suggestion in the draft (blue) role, never the accent teal reserved for a human act (Minor 6)', () => {
+    // R-G4: teal means a person did something. This card is an unaccepted
+    // proposal from `collectionSuggest` (R-C4: proposes, never creates), so
+    // it must wear the same `draft` role every other unaccepted suggestion
+    // in the app uses (`FieldSuggestion`, `RevisionModal`, `DraftReview`, …).
+    const base = makeDoc({ id: 'lease', name: 'Lease.pdf' });
+    const amendment = makeDoc({ id: 'dov', name: 'Lease Deed of Variation.pdf' });
+    const container = mount(
+      <MatterHome {...baseProps} documents={[base, amendment]} onCreateCollection={vi.fn()} />,
+    );
+    const card = container.querySelector('button[aria-label="Dismiss suggestion"]')!.closest('div.mb-3') as HTMLElement;
+    expect(card).toBeTruthy();
+    expect(card.className).toMatch(/\bbg-draft-tint\b/);
+    expect(card.className).toMatch(/\bborder-draft\b/);
+    expect(card.className).not.toMatch(/accent/);
+  });
+
   it('the matter-wide "Run a review" still passes no target — the standalone path is unchanged', async () => {
     const onRunReview = vi.fn().mockResolvedValue(undefined);
     const playbook = { id: 'p1', name: 'NDA Review' } as unknown as Parameters<typeof onRunReview>[0];

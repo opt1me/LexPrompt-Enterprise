@@ -449,18 +449,24 @@ export function ResultsView({
             <span className="font-ui text-ui font-medium text-ink-1 truncate">{activeDoc?.name ?? 'Document'}</span>
           )}
 
-          <span className="shrink-0 font-mono text-pin text-ink-4" title="Findings a human has verified">
-            {progressLabel(run.findings)}
+          <span
+            className="shrink-0 font-mono text-pin text-ink-4"
+            title={run.documentIds.length > 1 ? 'Findings a human has verified, across every document in this run' : 'Findings a human has verified'}
+          >
+            {progressLabel(run.findings)}{run.documentIds.length > 1 ? ' · whole run' : ''}
           </span>
 
           {/* Below `lg` the document pane lives behind this toggle instead
              of its own column (§11's collapse order — the document pane
              collapses first). */}
+          {/* `relative`: containing block for the sr-only label (see the
+             note on the finding scroller below — same pattern, swept here
+             too). */}
           <button
             type="button"
             onClick={() => setMobileDocOpen(true)}
             title="Open in document"
-            className="lg:hidden shrink-0 p-2 bg-chip-fill rounded-control hover:bg-paper transition-colors text-ink-2"
+            className="relative lg:hidden shrink-0 p-2 bg-chip-fill rounded-control hover:bg-paper transition-colors text-ink-2"
           >
             <FileText className="w-4 h-4" aria-hidden="true" />
             <span className="sr-only">Open in document</span>
