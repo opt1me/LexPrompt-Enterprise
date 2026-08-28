@@ -1,4 +1,4 @@
-import { DbBlockedError } from './db/open';
+import { DbBlockedError, DbOpenTimeoutError } from './db/open';
 import { UnconvertedPlaybookError } from './db/playbookMigration';
 
 /** The classification half of every "load X, show an honest error instead
@@ -19,8 +19,20 @@ import { UnconvertedPlaybookError } from './db/playbookMigration';
  *  side for the same reason: it names a specific, recoverable situation
  *  ("reload the page to finish the upgrade") that the generic message
  *  cannot, and it is raised precisely where a generic message would leave
- *  the user retrying something that will keep failing. */
+ *  the user retrying something that will keep failing.
+ *
+ *  `DbOpenTimeoutError` joins them on the same test: it names the one
+ *  situation where nothing failed and nothing succeeded — the database
+ *  simply never answered — and its message exists to say the thing the
+ *  generic fallback cannot, that the data has not been lost. Without this
+ *  line the backstop still fails loudly and still offers a Retry, but the
+ *  wording that makes a 30-second silence intelligible never reaches the
+ *  screen. */
 export function describeLoadError(e: unknown, fallback: string): string {
-  if (e instanceof DbBlockedError || e instanceof UnconvertedPlaybookError) return e.message;
+  if (
+    e instanceof DbBlockedError
+    || e instanceof UnconvertedPlaybookError
+    || e instanceof DbOpenTimeoutError
+  ) return e.message;
   return fallback;
 }

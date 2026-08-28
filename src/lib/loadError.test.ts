@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { UnconvertedPlaybookError } from './db/playbookMigration';
 import { describeLoadError } from './loadError';
-import { DbBlockedError } from './db/open';
+import { DbBlockedError, DbOpenTimeoutError } from './db/open';
 
 describe('describeLoadError (Important 4)', () => {
   it('surfaces a DbBlockedError\'s own message verbatim, ignoring the fallback', () => {
@@ -28,6 +28,16 @@ describe('describeLoadError (Important 4)', () => {
   it('passes an UnconvertedPlaybookError through, like DbBlockedError', () => {
     const e = new UnconvertedPlaybookError();
     expect(describeLoadError(e, 'fallback')).toBe(e.message);
+  });
+
+  it('passes a DbOpenTimeoutError through, so a silent database says so', () => {
+    // The backstop exists because an open that never settles would leave
+    // every screen spinning with no error. Reaching the UI as the generic
+    // fallback would keep the loudness but lose the only sentence that
+    // makes a 30-second silence intelligible — that the data is still there.
+    const e = new DbOpenTimeoutError();
+    expect(describeLoadError(e, 'fallback')).toBe(e.message);
+    expect(e.message).toMatch(/not been lost/i);
   });
 
   it('still falls back for an ordinary Error, so the pass-through list stays a list', () => {
