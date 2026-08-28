@@ -87,6 +87,8 @@ import { TheWorkings } from './features/redlines/TheWorkings';
 import { positionsToDraft, includedPositions } from './features/redlines/positionsToDraft';
 import { Button } from './components/Button';
 import { StandardPositionsView } from './features/positions/StandardPositionsView';
+import { useAuth } from './lib/auth/useAuth';
+import { SignInScreen } from './features/auth/SignInScreen';
 
 /** `authoring-form` and `authoring-review` are sub-project E's two
  *  session-only screens. They deliberately have **no `Route`**: a draft
@@ -3751,6 +3753,12 @@ function AppShell({ migratedCount }: { migratedCount: number | null }) {
  * does.
  */
 export default function App() {
+  // Task 19: the sign-in gate. `useAuth`'s own effect and the migration
+  // effect just below both fire from this same first render, so the two
+  // async checks run CONCURRENTLY rather than one blocking the other —
+  // deliberately, so adding sign-in here does not double the wait a cold
+  // load already had for the migration check alone.
+  const { state: authState, signIn, retry: retryAuth } = useAuth();
   const [migration, setMigration] = useState<MigrationState>({ kind: 'pending' });
 
   const runMigration = () => {
@@ -3779,6 +3787,15 @@ export default function App() {
     runMigration();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Rendered INSTEAD OF the app for every status but `signed-in` — never
+  // behind a modal, and checked BEFORE the migration gate below, so a
+  // failed or absent sign-in never lets a screen hint at whether this
+  // browser has any existing playbooks. R-G1 still binds: this authenticates
+  // a caller, it introduces no colleagues, and no other screen changes.
+  if (authState.status !== 'signed-in') {
+    return <SignInScreen state={authState} onSignIn={signIn} onRetry={retryAuth} />;
+  }
 
   if (migration.kind === 'pending') {
     // Deliberately blank rather than a spinner: this resolves in a single

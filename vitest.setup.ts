@@ -1,4 +1,41 @@
+import { vi } from 'vitest';
 import 'fake-indexeddb/auto';
+
+// Task 19's sign-in gate wraps every screen App.tsx renders. Without this,
+// each of the ~14 existing `App.tsx`-mounting test files would need its own
+// `vi.mock('../lib/auth/oidc', ...)` — a real "wave of test edits" purely to
+// keep an unrelated flow signed in, not because any of those tests care
+// about authentication. This default double is exactly the seam the task
+// asked for instead: every test in this project mounts `<App/>` as an
+// already-signed-in user unless it says otherwise.
+//
+// `useAuth.test.tsx` — the one file that actually tests sign-in — overrides
+// this with its own `vi.mock('oidc-client-ts', ...)` per case; a `vi.mock`
+// declared in a test file always wins over one declared here for that file,
+// so this default never leaks into the tests that are supposed to control
+// it directly.
+//
+// Only `UserManager` is replaced — `ErrorResponse`, `WebStorageStateStore`
+// and everything else come from the real package via `importOriginal`, so
+// `oidc.ts`'s own `instanceof ErrorResponse` check keeps working against
+// real error instances a test constructs.
+vi.mock('oidc-client-ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('oidc-client-ts')>();
+  const FAKE_USER = {
+    profile: { sub: 'test-user-oid', name: 'Test User', email: 'test.user@example.com' },
+    expired: false,
+    access_token: 'test-access-token',
+  };
+  class DefaultSignedInUserManager {
+    constructor(_settings: unknown) { /* the real settings shape is irrelevant to this double */ }
+    getUser() { return Promise.resolve(FAKE_USER); }
+    signinSilent() { return Promise.resolve(FAKE_USER); }
+    signinRedirect() { return Promise.resolve(); }
+    signinRedirectCallback() { return Promise.resolve(FAKE_USER); }
+    signoutRedirect() { return Promise.resolve(); }
+  }
+  return { ...actual, UserManager: DefaultSignedInUserManager };
+});
 
 // jsdom implements no layout engine, so `Element.prototype.scrollIntoView`
 // simply does not exist — calling it throws "is not a function" rather than

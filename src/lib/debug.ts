@@ -1,5 +1,7 @@
+import { DEBUG } from './config';
+
 export function debug(...args: unknown[]): void {
-  if (import.meta.env.DEV) {
+  if (DEBUG) {
     console.log('[lexprompt]', ...args);
   }
 }
