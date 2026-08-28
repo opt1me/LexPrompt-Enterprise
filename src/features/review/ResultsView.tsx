@@ -2,7 +2,7 @@ import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'rea
 import { Table, Mail, FileDown, Loader, FileText, X } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun, Settings } from '../../types';
 import { isAuthFailure } from '../../lib/model/authFailure';
-import { ModelError } from '@lexprompt/core';
+import { ModelError, SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
@@ -45,7 +45,7 @@ const EmailModal = lazy(() => import('../assistant/EmailModal').then(m => ({ def
  * ordinary error card exactly as it always has.
  */
 function namesConfigurationFault(errorText: string | undefined): boolean {
-  return !!errorText && /not something you can fix here/i.test(errorText);
+  return !!errorText && errorText.toLowerCase().includes(SERVICE_CONFIG_HINT);
 }
 
 export interface ResultsViewProps {

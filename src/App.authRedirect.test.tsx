@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { PlaybookVersion, Review, DocumentRecord } from './types';
-import { ModelError } from '@lexprompt/core';
+import { ModelError, SERVICE_CONFIG_HINT } from '@lexprompt/core';
 
 // No @testing-library/react in this project — see Toast.test.tsx /
 // App.test.tsx for the precedent this follows: drive a real react-dom root
@@ -199,7 +199,7 @@ const STALE_FINDING_ERROR = 'Your OpenRouter API key was rejected: User not foun
 // `<ServiceConfigError>` rather than a plain card.
 const STALE_CONFIG_FINDING_ERROR =
   "The AI provider rejected LexPrompt's credentials. This is a configuration problem in the "
-  + "firm's deployment, not something you can fix here.";
+  + `firm's deployment, ${SERVICE_CONFIG_HINT}.`;
 
 // The exact sentences `handleModelError` shows for each code (Task 23's
 // copy table) — mirrored here, not imported, so a change to App.tsx's own
@@ -396,7 +396,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     extractClauseMock.mockRejectedValue(
       new ModelError(
         "The AI provider rejected LexPrompt's credentials. This is a configuration problem in "
-        + "the firm's deployment, not something you can fix here.",
+        + `the firm's deployment, ${SERVICE_CONFIG_HINT}.`,
         'service_misconfigured', 503, 'call-svc-9',
       ),
     );
@@ -409,7 +409,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     await flush();
 
     expect(container.textContent).not.toContain(ON_SETTINGS);
-    expect(container.textContent).toContain('not something you can fix here');
+    expect(container.textContent).toContain(SERVICE_CONFIG_HINT);
     expect(container.textContent).toContain('call-svc-9');
   });
 
@@ -505,6 +505,6 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     // Rendered as `<ServiceConfigError>`, not a plain error card carrying
     // the raw finding text verbatim.
     expect(container.querySelector('[data-service-config-error]')).toBeTruthy();
-    expect(container.textContent).toContain('not something you can fix here');
+    expect(container.textContent).toContain(SERVICE_CONFIG_HINT);
   });
 });

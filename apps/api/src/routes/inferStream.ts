@@ -1,3 +1,4 @@
+import { SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import type { FastifyInstance } from 'fastify';
 import type { GatewayClient } from '../gatewayClient.ts';
 import type { Principal } from '../oidc.ts';
@@ -41,7 +42,7 @@ export function registerInferStream(
     } catch (err) {
       return reply.code(503).send({ error: { code: 'service_misconfigured',
         message: 'LexPrompt could not reach the firm\'s AI service. This is a configuration '
-          + 'problem in the deployment, not something you can fix here. '
+          + `problem in the deployment, ${SERVICE_CONFIG_HINT}. `
           + `(${(err as Error).message})` } });
     }
 

@@ -2,6 +2,7 @@ export { parseJsonLoose } from './json/parseJsonLoose.ts';
 export {
   PURPOSES, isPurpose, PROVIDER_IDS, isProviderId, jurisdictionLabel,
   ModelError, isSignInError, isServiceConfigError, isRetryableStatus,
+  SERVICE_CONFIG_HINT,
 } from './model/protocol.ts';
 export type {
   Purpose, ProviderId, Bloc, Jurisdiction, DataHandling, AllowedModel,

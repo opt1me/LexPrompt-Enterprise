@@ -35,6 +35,7 @@ describe('import boundary (S14)', () => {
   const exported = [
     'parseJsonLoose', 'isPurpose', 'isProviderId', 'jurisdictionLabel',
     'isRetryableStatus', 'isSignInError', 'isServiceConfigError',
+    'SERVICE_CONFIG_HINT',
   ];
 
   it('nothing outside packages/core defines an export of packages/core', () => {

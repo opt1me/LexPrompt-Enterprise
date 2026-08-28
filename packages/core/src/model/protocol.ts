@@ -194,6 +194,27 @@ export type ModelErrorCode =
 /** Retries only 429 and 5xx, exactly as `openrouter.ts` did. Retrying a
  *  rejected credential or a refused deployment wastes the user's time
  *  before telling them the same thing. */
+/**
+ * The sentence a `service_misconfigured` message ends with, shared by the
+ * gateway that WRITES it and the browser that READS it back.
+ *
+ * It exists as one exported constant because it was three copies across a
+ * network boundary: `callModel.ts` and `credentials/resolve.ts` composed it,
+ * and `ResultsView.tsx` matched on it with a regex to decide whether a
+ * finding's failure was the firm's problem or the user's. Nothing made the
+ * three agree. Reword any one of them and the browser silently stops
+ * classifying — no error, no failing test, just a firm-configuration fault
+ * presented to a lawyer as an ordinary one they might fix.
+ *
+ * That is sibling drift with a network in the middle, which is the version
+ * of it nothing catches by accident. A finding carries only free text on
+ * this path (its `code` is not preserved), so matching on wording is the
+ * mechanism available — this makes the wording a contract the compiler
+ * holds instead of a coincidence two files have to keep.
+ */
+export const SERVICE_CONFIG_HINT
+  = 'not something you can fix here';
+
 export function isRetryableStatus(status: number): boolean {
   return status === 429 || status >= 500;
 }

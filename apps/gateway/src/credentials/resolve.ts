@@ -1,4 +1,4 @@
-import { ModelError } from '@lexprompt/core';
+import { ModelError, SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import type { CredentialConfig } from '../config.ts';
 import type { CredentialResolver, ResolvedCredential } from './types.ts';
 
@@ -19,7 +19,7 @@ const EXPIRY_MARGIN_MS = 120_000;
 function fail(source: string, detail: string, err: unknown): never {
   throw new ModelError(
     `LexPrompt could not obtain the credential for this model (${source}: ${detail}). `
-    + 'This is a configuration problem in the firm\'s deployment, not something you can fix here. '
+    + `This is a configuration problem in the firm's deployment, ${SERVICE_CONFIG_HINT}. `
     + `(${err instanceof Error ? err.message : String(err)})`,
     'service_misconfigured',
     503,

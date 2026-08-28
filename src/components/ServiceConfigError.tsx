@@ -1,3 +1,4 @@
+import { SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import React from 'react';
 import { AlertTriangle } from 'lucide-react';
 import type { ModelError } from '@lexprompt/core';
@@ -38,7 +39,7 @@ export function ServiceConfigError({ error, onRetry }: ServiceConfigErrorProps) 
         <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
         <span>
           LexPrompt can&rsquo;t reach your firm&rsquo;s AI service. This is a configuration
-          problem in the deployment, not something you can fix here. Tell your IT team
+          problem in the deployment, {SERVICE_CONFIG_HINT}. Tell your IT team
           {error.callId ? (
             <>
               , and quote reference <span className="font-mono">{error.callId}</span>

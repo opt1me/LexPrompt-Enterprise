@@ -1,7 +1,6 @@
 import {
   ModelError, isPurpose, isRetryableStatus,
-  type InferRequest, type InferResponse,
-} from '@lexprompt/core';
+  type InferRequest, type InferResponse, SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import type { GatewayConfig, ModelEntry } from './config.ts';
 import type { Allowlist } from './allowlist.ts';
 import type { AuditLogger } from './audit.ts';
@@ -256,7 +255,7 @@ export async function toModelError(
   if (response.status === 401 || response.status === 403 || response.status === 402) {
     return new ModelError(
       `The AI provider rejected LexPrompt's credentials (${message}). This is a `
-      + 'configuration problem in the firm\'s deployment, not something you can fix here.',
+      + `configuration problem in the firm's deployment, ${SERVICE_CONFIG_HINT}.`,
       'service_misconfigured', 503, callId,
     );
   }
