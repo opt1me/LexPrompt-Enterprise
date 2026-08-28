@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": { "value": "${AZURE_ENV_NAME}" },
+    "location": { "value": "${AZURE_LOCATION}" },
+
+    "allowedJurisdictions": { "value": "${GATEWAY_ALLOWED_JURISDICTIONS}" },
+
+    "oidcIssuer": { "value": "${OIDC_ISSUER}" },
+    "oidcAudience": { "value": "${OIDC_AUDIENCE}" },
+    "oidcSubjectClaim": { "value": "${OIDC_SUBJECT_CLAIM=oid}" },
+    "oidcGroupsClaim": { "value": "${OIDC_GROUPS_CLAIM=groups}" },
+    "oidcRequiredClaims": { "value": "${OIDC_REQUIRED_CLAIMS}" },
+    "oidcClientId": { "value": "${OIDC_CLIENT_ID}" },
+    "oidcScope": { "value": "${OIDC_SCOPE}" },
+
+    "gatewayEntraTenantId": { "value": "${GATEWAY_ENTRA_TENANT_ID}" },
+    "gatewayEntraAudience": { "value": "${GATEWAY_ENTRA_AUDIENCE}" },
+
+    "openAiResourceId": { "value": "${OPENAI_RESOURCE_ID=}" },
+
+    "modelsJsonContent": { "value": "${MODELS_JSON_CONTENT}" }
+  }
+}

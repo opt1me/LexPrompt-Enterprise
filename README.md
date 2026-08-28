@@ -240,6 +240,41 @@ npm run compose:down   # stop and remove the stack (including the Keycloak volum
 
 **What running this locally does not prove.** Keycloak implements the same OIDC protocol Entra implements — it is not an Entra emulator, in the way Azurite genuinely emulates Blob Storage. Untested by this stack: Entra's group-claim shape and its overage behaviour, consent, conditional access, MFA, and tenant token lifetimes. A green run here is evidence about the authentication *path*, not about Entra specifically.
 
+## Deploying to Azure (`azd`)
+
+`azure.yaml` and `infra/` provision the **same system** described above — three services, one gateway holding every provider credential, one auth path with two issuers — in Azure Container Apps. §5.1's argument is that local and Azure differ in *deployment*, not in code: `docker-compose.yml`'s `mtls` caller-auth mode becomes `entra`, Keycloak becomes Entra, and the compose network isolation (`api` not on `egress`) becomes an internal-only Container App for the gateway. Nothing in `apps/api` or `apps/gateway` branches on being in Azure; only the environment variables in `infra/modules/containerApps.bicep` differ from `docker-compose.yml`'s.
+
+**This has not been deployed.** There is no Azure subscription and no `az`/`azd`/`bicep` CLI available in the environment this template was written in. What was checked instead: every file parses (`azure.yaml` as YAML, `infra/main.parameters.json` as JSON), and every environment variable the template sets was cross-referenced by name against `apps/api/src/config.ts` and `apps/gateway/src/config.ts` — the two files that actually read them. See `.superpowers/sdd/2026-08-28-lexprompt-server-stage-1-gateway/task-25-report.md` for the exact diff. **Do not treat this template as proven until someone runs it against a real subscription and works through the verification steps below.**
+
+**Prerequisites `azd up` does not create for you:**
+1. Two Entra **App Registrations**: one for the API (its `oidcAudience`; the browser signs in against `oidcClientId`, a public client on the same or a paired registration) and one for the **gateway itself** (`gatewayEntraAudience`) — a service-to-service audience with exactly one caller, `api`'s managed identity. Creating an App Registration is not expressed in this Bicep: it needs either the Microsoft Graph Bicep extension (still preview) or `az ad app create`/the portal, and adding an experimental Graph dependency for this alone was judged out of scope for a Stage 1 template that provisions no database either. Create both by hand first (the same category of manual step as `az keyvault secret set` below), and record their ids for the parameters below.
+2. If any configured model uses `credential.source: "managed-identity"` against Azure OpenAI / Foundry, that resource must already exist; pass its resource id as `openAiResourceId` so `identity.bicep` can grant the gateway's identity `Cognitive Services OpenAI User` on it. Leave it empty for a deployment using only `key-vault`/third-party providers.
+3. After the first `azd provision`, add every provider key `models.json` needs via `az keyvault secret set --vault-name <name> --name <secretName> --value <key>` — never as a parameter, an azd env value, or a committed file. `keyVault.bicep` deliberately defines no secrets.
+4. Author `models.json` yourself (same file shape as the compose stack's, `models.example.json` for the Azure-native shape) and pass its content as the `MODELS_JSON_CONTENT` azd environment value — it is mounted as a Container Apps secret volume (`GATEWAY_MODELS_FILE=/config/models.json`), never an environment variable, so it is absent from the portal's app-settings blade and from `azd env get-values`.
+
+```bash
+azd auth login
+azd up      # prompts for GATEWAY_ALLOWED_JURISDICTIONS — there is no default in the template;
+            # answer only from your own provider contracts and data provisions, exactly as
+            # .env.example requires locally. It also prompts for OIDC_ISSUER, OIDC_AUDIENCE,
+            # OIDC_REQUIRED_CLAIMS, OIDC_CLIENT_ID, OIDC_SCOPE, GATEWAY_ENTRA_TENANT_ID,
+            # GATEWAY_ENTRA_AUDIENCE and MODELS_JSON_CONTENT — none of these have defaults either.
+azd env get-values | grep -i -E 'key|secret|password' ; echo "exit=$?  <-- expect no matches"
+azd env get-values | grep -i 'allowedJurisdictions'   # <-- expect the value YOU supplied
+```
+
+Then, against the deployed environment (**not verified here — this is what Step 3 of the task brief asks for, and it cannot be simulated**):
+1. Open the web app, sign in with a firm account, and confirm the model picker lists the configured models with their jurisdictions.
+2. Run a one-clause review and confirm a finding comes back.
+3. `az containerapp logs show --name <namePrefix>-gateway --tail 20` and confirm one `call.started` and one `call.finished` per call, carrying no prompt text.
+4. Confirm the gateway's FQDN is `*.internal.*` and that `curl` from outside the environment cannot reach it.
+
+**Known gap this template surfaced but does not fix (out of this task's file list):** `apps/api/src/gatewayClient.ts`'s `makeGatewayClient` already accepts an optional `getGatewayToken()` callback and attaches it as a Bearer token — but `apps/api/src/main.ts` calls `makeGatewayClient(config)` with no second argument, so nothing in `apps/api` today acquires a managed-identity token for the gateway's audience. Deployed as this template stands, `api` would call the internal gateway with no `Authorization` header at all, and `GATEWAY_CALLER_AUTH=entra` would refuse every request. Verification step 2 above would fail until `apps/api/src/main.ts` is wired to acquire a token (mirroring `apps/gateway/src/credentials/managedIdentity.ts`'s `DefaultAzureCredential` pattern, requesting `gatewayEntraAudience` as the resource) and pass it through. This is an application-code change, not an infrastructure one, so it is reported here rather than made inside `infra/`.
+
+**What this template does NOT enforce, and says so rather than implying otherwise (Task 25 point 2):** `api`'s Container App has no VNet integration, route table, or NAT configuration in this Bicep, so it has ordinary outbound internet access by default — the Azure counterpart of compose's network isolation (`api` not on the `egress` network) is **not yet a fact about this deployment**, only a fact about the local stack. Enforcing it needs a VNet-integrated Container Apps environment with an egress lockdown (a firewall or a route table forcing all outbound traffic through one), which is Spike 2's work, not this task's. `npm run test:compose`'s assertion is what actually holds today; nothing equivalent runs against Azure yet.
+
+**No Postgres, no Blob Storage, no private endpoints for either** (Task 25 point 6) — Stage 2's concern. Provisioning them now would be infrastructure this stage never touches and a bill nobody expected.
+
 ## Testing
 
 ```bash

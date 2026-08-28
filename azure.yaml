@@ -1,0 +1,42 @@
+# azd's service map. Paths and contexts here must mirror the Dockerfiles'
+# own COPY layout, not the other way round — each Dockerfile COPYs
+# `package.json`, `packages/core` and its own `apps/<name>` directory from
+# the repository root (apps/api/Dockerfile, apps/gateway/Dockerfile,
+# Dockerfile.web), so every `context` below is the repo root even though
+# `project` points at the service's own subdirectory. Getting `context`
+# wrong here is a silent build failure the moment `npm ci` looks for
+# `packages/core/package.json` and it is not there.
+name: lexprompt
+metadata:
+  template: lexprompt-stage1
+services:
+  web:
+    project: .
+    language: js
+    host: containerapp
+    # These four map straight onto Dockerfile.web's ARGs, which is the ONLY
+    # way they reach the built bundle (Vite inlines VITE_* at build time —
+    # see Dockerfile.web's own comment). azd substitutes each `${VAR}` from
+    # the azd environment's .env, which main.bicep's own outputs populate
+    # after `azd provision` — API_BASE_URL in particular cannot be known
+    # until api's Container App exists and has an FQDN, which is exactly
+    # why this is a build arg sourced from a provisioning OUTPUT rather
+    # than a value typed into this file.
+    docker:
+      path: ./Dockerfile.web
+      context: .
+      buildArgs:
+        VITE_API_BASE_URL: ${API_BASE_URL}
+        VITE_OIDC_ISSUER: ${OIDC_ISSUER_BROWSER}
+        VITE_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+        VITE_OIDC_SCOPE: ${OIDC_SCOPE}
+  api:
+    project: ./apps/api
+    language: js
+    host: containerapp
+    docker: { path: ./Dockerfile, context: ../.. }
+  gateway:
+    project: ./apps/gateway
+    language: js
+    host: containerapp
+    docker: { path: ./Dockerfile, context: ../.. }
