@@ -627,3 +627,14 @@ something incomplete presented as though it were complete.
   read time exactly as `rewordedText`'s absence already is. *Cost if wrong: one optional field
   nothing yet requires, and a fallback branch in two readers that stays live indefinitely for
   pre-existing changesets.*
+
+- **R-G11a. Two additive labels on the review screen are declared copy, extending R-G6.**
+  Task 8 introduced `Show in document` on each citation and a `Disposition` row label. Neither
+  existed in the app before; both come from the handoff's own review screen (`1b`), and Task 8's
+  brief styled `Show in document` as though it were already there. They are **additions**, not
+  edits to the frozen disclosure and failure copy R-G6 protects, and no existing assertion
+  changed — the suite stayed green with no test edited. Recording them anyway, because R-G6's
+  list is meant to be exhaustive and an undeclared string is how the "a restyle edits no copy"
+  gate goes soft. Any test asserting on them is a new test, never an edited one.
+  *Cost if wrong: two labels a later reviewer must either keep or remove deliberately, rather
+  than discovering them in a diff and wondering whether they were intended.*
