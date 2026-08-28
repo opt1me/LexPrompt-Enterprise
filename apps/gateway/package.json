@@ -1,0 +1,18 @@
+{
+  "name": "@lexprompt/gateway",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node --experimental-strip-types src/main.ts",
+    "smoke": "tsx src/smoke.ts"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/keyvault-secrets": "^4.9.0",
+    "@lexprompt/core": "*",
+    "fastify": "^5.2.0",
+    "undici": "^7.2.0"
+  }
+}
