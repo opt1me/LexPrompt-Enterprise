@@ -1,3 +1,4 @@
+import type { FastifyInstance } from 'fastify';
 import { ModelError, type ModelErrorCode } from '@lexprompt/core';
 import { buildServer } from '../../src/server.ts';
 import { DEFAULT_MAX_BODY_BYTES } from '../../src/config.ts';
@@ -183,4 +184,22 @@ export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof bui
   });
 
   return { app, calls };
+}
+
+/**
+ * Every route the server ACTUALLY registered, read from Fastify's own
+ * `onRoute` event rather than from a list somebody maintains.
+ *
+ * `registerRoleGate` records them (see its own comment); this is the reader.
+ * Fastify 5 has no public `app.routes`, and `printRoutes()` returns a
+ * formatted tree that is a poor thing to parse — but the reason this is not
+ * a source-scanning regex is stronger than convenience: Stage 1 shipped
+ * exactly such a regex, and a change to how ONE route was registered
+ * silently removed it from the sweep that was supposed to cover it.
+ *
+ * Its own failure mode is finding nothing, which would pass every coverage
+ * check vacuously, so `authz.route.test.ts` asserts a realistic count first.
+ */
+export function collectRoutes(app: FastifyInstance): { method: string; url: string }[] {
+  return app.lexpromptRoutes;
 }

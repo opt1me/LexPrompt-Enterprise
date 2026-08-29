@@ -6,6 +6,7 @@ import type { Principal } from './oidc.ts';
 import type { GatewayClient } from './gatewayClient.ts';
 import type { Actor } from './auth/actor.ts';
 import type { Db } from './db/pool.ts';
+import { registerRoleGate } from './auth/requireRole.ts';
 import { registerInfer } from './routes/infer.ts';
 import { registerInferStream } from './routes/inferStream.ts';
 import { registerMe } from './routes/me.ts';
@@ -92,9 +93,15 @@ export interface ServerDeps {
  *
  * A `ModelError` thrown out of a handler keeps its own status and code, for
  * the same reason `requireUser` answers one verbatim: `group_overage` is a
- * 403 that must not become a 401.
+ * 403 that must not become a 401 — and, since Task 5, `not_permitted` is a
+ * 403 that must not become a 500.
+ *
+ * EXPORTED so `authz.route.test.ts` can stand a server up with a
+ * partner-only route (none exists in this stage) and assert the refusal in
+ * THIS envelope rather than in one the test wrote for itself. A test that
+ * builds its own error shape proves its own error shape.
  */
-function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number): void {
+export function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number): void {
   app.setNotFoundHandler(async (request, reply) => reply.code(404).send({
     error: {
       code: 'unknown',
@@ -139,9 +146,13 @@ function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number): void
  * hook (Task 2's just-in-time provisioning), answers `/healthz`, forwards
  * `/v1/infer`, `/v1/infer/stream` and `/v1/models` to the gateway with the
  * actor overwritten from the token (Task 17, reused by Task 18 for the
- * streaming route), and answers `/v1/me`. There is still no role gate —
- * `role` is provisioned from whatever `resolveActor` was handed, and reading
- * a group claim into one is Task 4's.
+ * streaming route), and answers `/v1/me`.
+ *
+ * `registerRoleGate` then holds every route to `ROUTE_POLICY`'s minimum role
+ * — refused HERE, by the API, whatever the browser chose to render (§18
+ * item 3). The role itself comes from the token's group claim, resolved by
+ * `main.ts`'s `resolveActor`; this function only sees the `Actor` that
+ * produced.
  */
 export function buildServer(deps: ServerDeps): FastifyInstance {
   const app: FastifyInstance = Fastify({ logger: false, bodyLimit: deps.maxBodyBytes });
@@ -159,6 +170,18 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
     if (reply.sent) return;
     req.actor = await deps.resolveActor(req.principal!);
   });
+
+  // AFTER the hook above and BEFORE any route, and both halves matter.
+  //
+  // Fastify runs `preHandler` hooks in registration order, so the role gate
+  // must be added after the hook that sets `req.actor` — the value it reads.
+  // Its `onRoute` hook, meanwhile, only fires for routes registered after it,
+  // so it must be added before every `app.get`/`app.post` below or a route
+  // would escape the registration-time check entirely. Move this call below
+  // the routes and `authz.route.test.ts`'s "finds a realistic number of
+  // routes" assertion fails, rather than the coverage check passing over an
+  // empty list.
+  registerRoleGate(app);
 
   app.get('/healthz', async () => ({ ok: true }));
   registerInfer(app, deps.gateway, deps.workspaceId);
