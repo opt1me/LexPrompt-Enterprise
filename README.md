@@ -1,6 +1,6 @@
 # LexPrompt
 
-LexPrompt is a browser-based tool for reviewing contracts against a checklist of clauses you define, using a language model you choose via [OpenRouter](https://openrouter.ai/). There is no backend, no database, and no user accounts — it is a static site that runs entirely in your browser and talks directly to OpenRouter.
+LexPrompt is a tool for reviewing contracts against a checklist of clauses you define. It is a static web app, an HTTP API and an inference gateway you deploy into your own cloud. Your matters and documents still live in your browser (that changes in a later release); model calls go through the gateway.
 
 ## What it does
 
@@ -93,24 +93,51 @@ LexPrompt's screens use a paper-and-ink palette meant to read like a document ra
 
 - **Colour lives in two layers, and only the top one is usable from a component.** Raw values are plain CSS custom properties outside Tailwind's theme layer, so they never become classes anyone can type; only a small vocabulary of semantic roles — `accent`, `risk-high`, `ink-4`, `state-verified`, and the like — is exposed as a Tailwind utility. A component asks for what a colour *means* ("this is a risk", "this is a human confirmation"), never for a raw value. Teal is reserved for something a person did; a separate green is used for the model's own low-risk rating, so the two are never visually confused for one another even though they sit close in hue.
 - **Two automated guards make the system a rule, not a guideline.** A palette scanner runs over every source file and fails the build on a raw hex or `rgb()` literal, a Tailwind arbitrary colour value, a reference to the raw token layer, or a generic Tailwind palette class — with no exemption list, so no file is invisible to it. A contrast test checks every declared colour pairing (foreground role on background role) against the WCAG threshold its use case calls for — body text, chip text, or decorative metadata — so a future palette edit that quietly pushes a colour below legible contrast fails the suite instead of shipping.
-- **Fonts are vendored, not fetched.** `public/fonts/` holds six latin-subset `.woff2` files (a serif for document prose, a sans for interface chrome, a mono for labels and chips) under a combined budget of 350 KiB, checked by a test that also confirms nothing in the app links to a third-party font host. This is a privacy decision as much as a performance one: the app's own disclosure says nothing leaves the browser except calls to OpenRouter, and a Google Fonts `<link>` would make that false on every page view. Updating a font version is consequently a manual step — there is no font package as a dependency.
+- **Fonts are vendored, not fetched.** `public/fonts/` holds six latin-subset `.woff2` files (a serif for document prose, a sans for interface chrome, a mono for labels and chips) under a combined budget of 350 KiB, checked by a test that also confirms nothing in the app links to a third-party font host. This is a privacy decision as much as a performance one: the app's own disclosure says nothing leaves the browser except calls to your firm's own API, and a Google Fonts `<link>` would make that false on every page view — before a user has done anything at all. Updating a font version is consequently a manual step — there is no font package as a dependency.
 - **The chrome is honest about being single-user.** The header avatar shows the initials from your own local profile, not an invented colleague's; there is no assignee chip, no "assigned to me" counter, and no firm-wide search box, because none of those can mean anything in an app with no accounts and no server. The matter activity feed is derived from your own verifications, notes, and confirmations at the moment you view it — it is not a stored event log, so it can never show an entry claiming a second person did something.
 - **A matter's status board and its `Standard positions` tab both refuse to overstate.** The status board shows an empty form — not a row of zeroes — for a matter with no completed review yet, because "0 of 0 verified" reads as a fact about safety it hasn't earned. `Standard positions` lists every clause carrying a house position across your playbooks and marks each `HELD`, `CONCEDED`, or `UNTESTED` from verified findings only, built entirely from data the app already derives elsewhere — no new model calls, no new stored state.
 - **The app is usable from 768px upward.** Phone-width layouts are a separate, later piece of work — this pass covers tablet and desktop widths of the existing screens, not a phone-specific redesign.
 
-## No backend, no accounts
+## No database yet
 
-LexPrompt is a static bundle of HTML, CSS, and JavaScript. There is no server component, no database, and nothing to sign up for. Everything the app knows about — your matters, your documents, your templates, your settings — lives only in the browser you're using, for as long as that browser's storage isn't cleared. See [Privacy](#privacy) for exactly what's stored and where.
+There are three services, and none of them is a database.
 
-## You need an OpenRouter API key
+- **`web`** — the static bundle of HTML, CSS and JavaScript this repository builds. It is the same single-page app as before; what changed is where it sends a model request.
+- **`api`** — validates the signed-in user's token on every request and forwards the validated call onward. It holds no credential of its own, and it is deliberately unable to reach the internet.
+- **`gateway`** — the only process permitted to call a model provider. It holds the provider credentials, enforces an allowlist of provider+model pairs, and writes one call record per request.
 
-LexPrompt doesn't call any model provider directly. Instead, every request goes through [OpenRouter](https://openrouter.ai/), which gives you a single API key and a choice of models from many providers (Anthropic, OpenAI, Google, and others) at their published per-token prices.
+**Your matters, documents, reviews and playbooks are still in your browser's IndexedDB.** Nothing about that changed in this release, and nothing on a server holds a copy. A real database (and with it, sharing a matter with a colleague) is a later stage. See [Privacy](#privacy) for exactly what is stored and where.
 
-1. Create an account at [openrouter.ai](https://openrouter.ai/) and generate an API key.
-2. Add credit to your OpenRouter account (LexPrompt does not mark up or intermediate billing in any way — you pay OpenRouter directly for what you use).
-3. Paste the key into LexPrompt's Settings panel and pick a model.
+There are still no user accounts *in LexPrompt* — it has no user table. It does require you to sign in, against an identity provider your firm already runs, and there is no way to run it without doing so.
 
-**Where the key lives:** your API key is stored only in your browser's local storage, on the device and browser you entered it in. It is sent to exactly one place — `openrouter.ai` — as an `Authorization` header on each request you make. It is never sent anywhere else, and there is no server for LexPrompt to leak it to, because LexPrompt has no server.
+## Choosing a model provider
+
+You do not need an API key, and there is nowhere to type one. Which model answers a review is your administrator's decision, recorded in one file: the gateway's **allowlist** of provider+model pairs. A user picks from that list and cannot name a model that is not on it.
+
+Six providers have adapters:
+
+| Provider | What it is |
+|---|---|
+| `azure-foundry` | Azure AI Foundry, in a region you choose |
+| `azure-openai` | Azure OpenAI Service, in a region you choose |
+| `openai` | OpenAI's own API |
+| `anthropic` | Anthropic's own API |
+| `openrouter` | OpenRouter, as a front end to many providers |
+| `recorded` | Replays fixtures from disk. Makes no network call at all, and every allowlist entry using it must declare its jurisdiction as `other`, because a recorded response comes from the machine it is running on |
+
+A credential reaches the gateway from one of four sources, named per entry: an Azure **managed identity**, an Azure **Key Vault** secret, an **environment variable**, or a **file** on disk.
+
+> **No credential ever leaves the gateway, and every call is logged with its provider and jurisdiction, whichever backend you configure.**
+>
+> **If you deploy against Azure with managed identity, the stronger property holds: no provider keys exist at all — not in a browser, not in an environment variable, not in Key Vault, not in a git history. That is the recommended posture for a firm with Azure.**
+
+Both of those are true and they are two sentences on purpose. The second is a claim about one deployment shape; stated as though it covered all of them, it would tell a firm running against OpenAI something that is not true of their deployment.
+
+**`GATEWAY_ALLOWED_JURISDICTIONS` has no default, and the gateway refuses to start without it.** It lists the processing blocs this deployment permits — `UK`, `EU`, `US`, `other`, comma-separated. A model whose declared jurisdiction is outside the set stops the process at startup, and a call that would reach one is refused before any request leaves.
+
+Which jurisdictions you permit follows from the contracts and data provisions you hold with your provider. LexPrompt enforces the policy you declare; it has no view of its own, and a default would be exactly such a view applied silently on your behalf.
+
+**The per-provider retention note is your record of terms you agreed.** Each allowlist entry can carry a `dataHandling` note — what the provider's terms say about retention, training and sub-processing — with the date you last checked them. The date is a staleness marker: it prompts you to re-read your own contract when it ages. It passes no judgement on the provider, and nothing in the code grades or scores it. Check each configured provider's current retention terms before you go live; they have a shelf life, and this file cannot know when they changed.
 
 ## Matters
 
@@ -125,11 +152,11 @@ Matters, reviews, and templates are addressable by URL: `/matters/:id` opens a m
 This matters if you're evaluating LexPrompt for real contract work, so it's stated plainly:
 
 - **Matters, documents, and reviews are stored in this browser's IndexedDB** — on the device and in the browser you're using, and nowhere else. This includes the original file bytes of every document you add to a matter, not just its extracted text, so a document can still be viewed and re-reviewed after a reload.
-- **Nothing is uploaded anywhere except to the model you chose, via OpenRouter**, at the moment you run a review, exactly as OpenRouter's own privacy and data-retention policies describe. Read your chosen model provider's policy on OpenRouter if that matters for your use case — LexPrompt does not add any retention of its own on top of it.
+- **Nothing is uploaded anywhere except to your firm's own LexPrompt gateway, which forwards it to the model provider your administrator configured.** Which provider that is, and where it processes your text, is shown on every model in Settings. LexPrompt adds no retention of its own on top of whatever terms your firm holds with that provider; see [Choosing a model provider](#choosing-a-model-provider) for where those terms are recorded.
 - **Deleting a matter deletes its documents and their stored bytes**, not just the matter's entry in a list. This cascade is real and covered by tests, not just a UI-level hide.
 - **Data is per-browser**, with no sync and no backup. Clearing this browser's site data (or switching browsers or devices) removes your matters, documents, reviews, and templates permanently. Export a template first (the Library's Export button) if you want to move it or keep an external copy — there is no equivalent export for matters or documents yet.
 - **Page images generated for scanned PDFs are never stored.** When a scanned page needs an image (because it has no usable text layer), it's rendered on demand from the document's stored original bytes and kept only in memory for that session — never written to IndexedDB.
-- Templates now live in IndexedDB alongside everything else above (an existing browser's `localStorage` templates are migrated in automatically, once, the first time you open this version). Migration deliberately never deletes that original `localStorage` copy — it's kept in place, indefinitely, as a safety net in case the new storage ever turns out not to be readable. So if you're upgrading from an earlier version, your original templates remain in `localStorage` in addition to their new copy in IndexedDB, alongside your OpenRouter key and a couple of small settings. All of it is still per-browser, and clearing this browser's site data removes every copy — the `localStorage` one included — along with everything else.
+- Templates now live in IndexedDB alongside everything else above (an existing browser's `localStorage` templates are migrated in automatically, once, the first time you open this version). Migration deliberately never deletes that original `localStorage` copy — it's kept in place, indefinitely, as a safety net in case the new storage ever turns out not to be readable. So if you're upgrading from an earlier version, your original templates remain in `localStorage` in addition to their new copy in IndexedDB, alongside a couple of small settings. (An OpenRouter key stored by an earlier version is deleted from this browser the first time you open this one, and the app says so once — deleting a key is not revoking it, so revoke it at the provider too if you no longer need it.) All of it is still per-browser, and clearing this browser's site data removes every copy — the `localStorage` one included — along with everything else.
 
 This is a deliberate reversal of an earlier, stricter position (contract text was never persisted at all). It was made because a matter that can't be returned to isn't a matter — but the reversal is bounded to your own browser, and it's stated here because you shouldn't have to find out otherwise.
 
@@ -143,7 +170,8 @@ src/
     db/           IndexedDB via `idb`; one repository per store
                   (matters, documents, blobs, reviews, playbooks,
                    collections, playbookVersions, changesets, profile)
-    openrouter.ts the ONLY route to a model provider
+    model/        the ONLY route to a model: the gateway client, and the
+                  closed set of purposes every call must name
     citations.ts  matches a verbatim quote to page coordinates
     strength.ts   how strongly a house position is supported — arithmetic,
                   never a model's opinion
@@ -163,7 +191,7 @@ src/
 Some deliberate shapes worth knowing before changing things:
 
 - **`src/lib/` holds no React.** Persistence, parsing, citation matching and every derived summary are plain functions over data, so they can be tested without mounting anything and the IO stays in the container components.
-- **One route to a model.** Every request goes through `openrouter.ts`. It retries only on 429 and 5xx and fails fast on 4xx, because retrying a rejected key just burns time before telling you the same thing.
+- **One route to a model.** Every request from the browser goes through `src/lib/model/gatewayModelClient.ts`, to your firm's own `api`, and onward to the gateway. The retry policy now lives in the gateway, where the provider's status code actually arrives: it retries only on 429 and 5xx and fails fast on 4xx. A failure a Retry button cannot fix is classified as one (`authFailure.ts`) so the screen offers the right thing rather than a button that will fail again.
 - **The card view, the comparison grid and the clause index are three renderers over one findings map.** None of them derives its own counts. The moment two of them compute "how many are verified" separately, they can disagree, and a reader has no way to know which to believe.
 - **Derived state is derived, not stored.** Position health, matter statistics and the activity feed are computed at read time from what already exists. A stored summary is a second source of truth that can drift from the thing it summarises.
 
@@ -186,11 +214,11 @@ npm install
 npm run dev
 ```
 
-This starts a Vite dev server (default `http://127.0.0.1:3005`). Open Settings in the running app and enter your own OpenRouter key to use it — nothing works without one, since every review, template generation, chat message, and suggestion goes through OpenRouter.
+This starts a Vite dev server (default `http://127.0.0.1:3005`) for the web app alone. It needs an `api` to call and an identity provider to sign in against, so on its own it renders the sign-in gate and goes no further. To run the whole thing, use the compose stack below.
 
 ## Running the server stack locally (Stage 1)
 
-The section above is the original browser-only app. LexPrompt is being rebuilt around a real server: a `gateway` that is the only process allowed to call a model provider, an `api` that authenticates every request against a real identity provider and proxies validated calls to the gateway, and a `web` static build in front of both. There is no local bypass for any of this — Stage 1 requires a signed-in user with no mode that skips it — so a local Keycloak realm ships alongside the services so the whole path can be exercised on a laptop.
+The section above is the original browser-only app. LexPrompt is being rebuilt around a real server: a `gateway` that is the only process allowed to call a model provider, an `api` that authenticates every request against a real identity provider and proxies validated calls to the gateway, and a `web` static build in front of both. **There is no way to run LexPrompt without signing in.** No `SKIP_AUTH`, no anonymous mode, no trusted header, no development issuer that skips validation — a bypass would test a different code path from the one that ships, which would make a green local run evidence about something nobody deploys. A local Keycloak realm ships alongside the services instead, so the whole sign-in path runs on a laptop exactly as it runs in a tenant. The cost of that decision is one more container and about twenty seconds of cold start; the cost of the alternative is a flag that reaches production enabled.
 
 **Run the certificate script first.** The gateway and `api` talk to each other over mTLS; `api` presents a client certificate the gateway's identity check requires. Nothing else in this section works until this has been run:
 
@@ -229,16 +257,40 @@ admin    / admin      admins
 nogroups / nogroups   (no group - expect to be refused, on purpose)
 ```
 
-Stage 1 enforces no roles, so all four sign in and see the same app — `partner`, `admin` and `nogroups` exist for Stage 2 onward, not because anything in this stage treats them differently yet. Open `http://localhost:3005` and sign in as `trainee` / `trainee` to run a review end to end.
+Stage 1 enforces no roles, so all four sign in and see the same app — `partner`, `admin` and `nogroups` exist for Stage 2 onward, not because anything in this stage treats them differently yet. Four accounts ship now rather than later because every collaborative behaviour this design adds is unobservable with one user, and the realm file is version-controlled: one edit now is cheaper than four later. Open `http://localhost:3005` and sign in as `trainee` / `trainee` to run a review end to end.
 
 ```bash
 npm run test:compose   # proves the network claim below against the running stack
 npm run compose:down   # stop and remove the stack (including the Keycloak volume)
 ```
 
-**The one architectural claim this whole arrangement exists to make checkable:** `api` sits on the `frontend` and `internal` Docker networks; `gateway` sits on `internal` and `egress`. `api` is deliberately **not** on `egress`, and `internal` is marked `internal: true`, so Docker adds no default route to anywhere outside the stack. "The API cannot reach a model provider directly" is therefore a fact about the network, checkable by anyone with `docker network inspect`, not only a property of `apps/api/src/gatewayClient.ts` being the only file in that service that ever calls `fetch`. `npm run test:compose` (`apps/api/test/egress.compose.test.ts`) asserts it against the live stack: `api` cannot reach a model provider, `api` cannot reach the internet at all, `api` *can* reach the gateway, and the gateway *can* reach the internet — the last two rule out a false pass from a stack that is simply unplugged.
+**The one architectural claim this whole arrangement exists to make checkable:** `api` sits on the `internal` network **only**, with no published port of its own — a browser reaches it through `web`'s nginx proxy. `gateway` sits on `internal` and `egress`. Being off `egress` was never sufficient on its own: a container's outbound access in Docker comes from being attached to **any** non-internal network, so an `api` also attached to a routable network had a default route and full internet access while the file still read as "api is not on egress". `internal` is marked `internal: true`, so Docker adds no default route to anywhere outside the stack. "The API cannot reach a model provider directly" is therefore a fact about the network, checkable by anyone with `docker network inspect`, not only a property of `apps/api/src/gatewayClient.ts` being the only file in that service that ever calls `fetch`. `npm run test:compose` (`apps/api/test/egress.compose.test.ts`) asserts it against the live stack: `api` cannot reach a model provider, `api` cannot reach the internet at all, `api` *can* reach the gateway, and the gateway *can* reach the internet — the last two rule out a false pass from a stack that is simply unplugged.
 
-**What running this locally does not prove.** Keycloak implements the same OIDC protocol Entra implements — it is not an Entra emulator, in the way Azurite genuinely emulates Blob Storage. Untested by this stack: Entra's group-claim shape and its overage behaviour, consent, conditional access, MFA, and tenant token lifetimes. A green run here is evidence about the authentication *path*, not about Entra specifically.
+### What has actually been run, and what has not
+
+Stated plainly, because a reader of this file has no other way to tell.
+
+**Driven in a real browser against a running compose stack:** the sign-in gate renders; **Sign in** redirects to Keycloak with `response_type=code` and `code_challenge_method=S256` (PKCE, no MSAL); Keycloak serves its login page; an error-shaped redirect back renders "LexPrompt couldn't sign you in" with the reason and a Retry; `npm run test:compose` passes all four of its network assertions.
+
+**Not done. No credentials were entered.** So the token exchange, `api` validating a real token, and an end-to-end review are all untested — nothing here has ever produced a finding from a signed-in session. The stream fixtures are synthetic, hand-authored from published wire formats rather than captured; `apps/gateway/src/smoke.ts` **has never been run against a live provider**; and nothing has been deployed to Azure.
+
+## What running locally does not prove
+
+§5.1 of the design puts this list in the README as well as in the spec, on the grounds that the reader who needs it is a developer who has just had a green local run — and they are not reading a design document at that moment.
+
+**Keycloak is not an Entra emulator. Azurite *emulates* Blob Storage; Keycloak *implements the same protocol* Entra implements.** That is a weaker claim, and the gap is exactly where the list below says it is.
+
+A green local run says nothing about:
+
+- **Managed-identity acquisition.** Whether a workload identity actually gets a token for the audience it asks for, in a real tenant.
+- **Entra's group-claim shape, consent, and group overage.** Overage — the claim being replaced by a Graph pointer once a user is in enough groups — is the case most likely to be met in a real tenant and impossible to meet locally.
+- **Admin consent, conditional access, MFA and tenant token lifetimes.** None of these has a local analogue.
+- **Azure networking, and the real egress denial.** The compose stack proves it with Docker networks; Azure would prove it with a VNet-integrated environment and a route table, which this template does not yet create. That is Spike 2.
+- **Postgres Flexible Server's behaviour**, and **Azurite's gaps** as a stand-in for Blob Storage. Neither is provisioned in this stage; both matter from the next one.
+- **Real provider latency, rate limits and stream behaviour.** Every fixture in this repository is hand-authored.
+- **Container Apps scale-to-zero, and multi-replica WebSockets.** A second replica changes the rate limiter's assumptions now, and the realtime channel's later.
+
+A green run here is evidence about the authentication *path* and about the *shape* of the system. It is not evidence about a tenant.
 
 ## Deploying to Azure (`azd`)
 
@@ -269,7 +321,7 @@ Then, against the deployed environment (**not verified here — this is what Ste
 3. `az containerapp logs show --name <namePrefix>-gateway --tail 20` and confirm one `call.started` and one `call.finished` per call, carrying no prompt text.
 4. Confirm the gateway's FQDN is `*.internal.*` and that `curl` from outside the environment cannot reach it.
 
-**Known gap this template surfaced but does not fix (out of this task's file list):** `apps/api/src/gatewayClient.ts`'s `makeGatewayClient` already accepts an optional `getGatewayToken()` callback and attaches it as a Bearer token — but `apps/api/src/main.ts` calls `makeGatewayClient(config)` with no second argument, so nothing in `apps/api` today acquires a managed-identity token for the gateway's audience. Deployed as this template stands, `api` would call the internal gateway with no `Authorization` header at all, and `GATEWAY_CALLER_AUTH=entra` would refuse every request. Verification step 2 above would fail until `apps/api/src/main.ts` is wired to acquire a token (mirroring `apps/gateway/src/credentials/managedIdentity.ts`'s `DefaultAzureCredential` pattern, requesting `gatewayEntraAudience` as the resource) and pass it through. This is an application-code change, not an infrastructure one, so it is reported here rather than made inside `infra/`.
+**`api` cannot yet authenticate to the gateway with a managed identity, and it now refuses to start rather than pretending otherwise.** `makeGatewayClient` accepts an optional `getGatewayToken()` callback and attaches it as a Bearer token, but nothing supplies one: acquiring a managed-identity token for the gateway's audience needs `@azure/identity` in `apps/api`, an audience value this service is not yet given, and a real tenant to test against. Rather than deploy an `api` that starts cleanly, reports itself healthy and has every single request refused by `GATEWAY_CALLER_AUTH=entra`, `apps/api` **refuses to start** when it has neither a client certificate nor a token source — naming both modes and the missing wiring in the message. So this template will provision successfully and the `api` container will fail its startup, loudly, until that wiring lands. That is deliberate: a crash-looping container with an explanatory log line is a far cheaper failure than a healthy-looking service whose model calls silently never succeed. Verification step 2 above cannot pass until then.
 
 **What this template does NOT enforce, and says so rather than implying otherwise (Task 25 point 2):** `api`'s Container App has no VNet integration, route table, or NAT configuration in this Bicep, so it has ordinary outbound internet access by default — the Azure counterpart of compose's network isolation (`api` not on the `egress` network) is **not yet a fact about this deployment**, only a fact about the local stack. Enforcing it needs a VNet-integrated Container Apps environment with an egress lockdown (a firewall or a route table forcing all outbound traffic through one), which is Spike 2's work, not this task's. `npm run test:compose`'s assertion is what actually holds today; nothing equivalent runs against Azure yet.
 
@@ -282,7 +334,7 @@ npm test          # runs the full suite once
 npm run test:watch  # watch mode
 ```
 
-The suite is unit and integration tests (Vitest) covering the IndexedDB storage layer (matters, documents, blobs, reviews, playbooks, and the cascade-delete and localStorage-to-IndexedDB migration paths, run against `fake-indexeddb`), the OpenRouter client, PDF/DOCX parsing, citation matching, the review engine, and CSV/DOCX export. It does not include end-to-end browser tests or make real network calls — everything that talks to OpenRouter is mocked.
+The suite is unit and integration tests (Vitest) covering the IndexedDB storage layer (matters, documents, blobs, reviews, playbooks, and the cascade-delete and localStorage-to-IndexedDB migration paths, run against `fake-indexeddb`), the gateway client and the gateway's own provider adapters, PDF/DOCX parsing, citation matching, the review engine, and CSV/DOCX export. It does not include end-to-end browser tests or make real network calls: every provider is faked at the transport, and the stream fixtures the adapter conformance suite runs against are hand-authored from each provider's published wire format rather than captured from a live response. Each fixture says so in its own header, and nothing here has been run against a live provider.
 
 At the time of writing that is **1,742 tests across 130 files**, and two of them are guards rather than tests of behaviour: a palette scanner that fails the build if a raw colour is used anywhere instead of a semantic design token, and a contrast test that checks every colour pair in the design system against its assigned legibility floor — so a warning or a disclosure cannot quietly become too faint to read.
 
@@ -290,11 +342,20 @@ One convention worth adopting if you contribute: **anything load-bearing gets mu
 
 ## Building and deploying
 
+For the whole stack, rather than the web bundle alone:
+
+```bash
+docker compose up      # locally — see Running the server stack locally, above
+azd up                 # into your own Azure subscription — see Deploying to Azure
+```
+
+For the web app on its own:
+
 ```bash
 npm run build
 ```
 
-This runs `tsc` for a type check and then produces a static `dist/` folder with Vite. The result is a set of plain HTML/CSS/JS files — deploy it to any static host: Netlify, Vercel, GitHub Pages, S3 + CloudFront, nginx, or similar. There is nothing to configure server-side; the only runtime configuration is the OpenRouter key each user enters themselves.
+This runs `tsc` for a type check and then produces a static `dist/` folder with Vite. The result is a set of plain HTML/CSS/JS files — deploy it to any static host: Netlify, Vercel, GitHub Pages, S3 + CloudFront, nginx, or similar. This builds the `web` service only; `api` and `gateway` are separate images (see [Running the server stack locally](#running-the-server-stack-locally-stage-1) and [Deploying to Azure](#deploying-to-azure-azd)). The web bundle's own configuration — the API base URL and the three OIDC values — is inlined at **build** time by Vite, so a bundle built with the wrong ones cannot be corrected with an environment variable afterwards; it has to be rebuilt.
 
 To preview the production build locally before deploying:
 
@@ -331,4 +392,5 @@ The app targets browsers from roughly **2024 onward**: Chrome 122+, Firefox 131+
 - **A collection review isn't shown in the comparison grid.** The grid is built for comparing genuinely separate documents row by row; a collection produces one net position per clause, however many documents fed it, so there is nothing to compare — the grid refuses to open for a collection's review and points you back to the card view instead.
 - **A document's effective date can't be entered yet.** A document record carries an optional effective date, and everything that would use one is built: the collection prompt labels each document with its date, and each step of a variation trail shows one. Nothing in the app can set it, though, so no date is ever known — a trail step shows its document by name alone, and the model is told the reading order of a collection but not when each amendment took effect. Nothing displays a blank or an empty "dated" where a date would go; the date is simply omitted. Reading order is unaffected either way: it is the order you set when you built the collection, and is deliberately never derived from a date. Entering a date is later work.
 - **A collection whose base document is missing can't be run.** Every amendment acts on the base, so without it there's no starting position for any of them to vary; the collection's card says so and offers to choose a new base or ungroup, and starting a review is blocked until you do one or the other.
+- **`api`'s inability to reach the internet is enforced and tested under `docker compose`; in Azure it is expressed in the Bicep but is not yet asserted by an automated test — that is Spike 2.** They are not the same claim, and only the local one has a test behind it today.
 - **Phone-width layouts aren't built.** Every screen is responsive from 768px upward, but a dedicated phone layout is separate, later work rather than something this pass silently attempted and got wrong.

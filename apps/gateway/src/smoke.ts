@@ -43,7 +43,13 @@ async function main(): Promise<number> {
     ...deps,
     workspaceId: 'smoke',
     actorIssuer: 'smoke',
-    actorSubject: process.env.USER ?? process.env.USERNAME ?? 'smoke',
+    // Through `config.readEnv`, not `process.env` directly. This file is a
+    // composition root — it has its own `main()`, its own `loadConfig` call
+    // and its own npm script — and a composition root's exemption is for
+    // handing the whole environment to `loadConfig`, never for reading a key
+    // out of it. `configSurface` (Task 26) holds all three roots to that
+    // rule, and caught this line doing the second thing.
+    actorSubject: config.readEnv('USER') ?? config.readEnv('USERNAME') ?? 'smoke',
   };
 
   process.stdout.write(`${describeConfig(config)}\n\n`);

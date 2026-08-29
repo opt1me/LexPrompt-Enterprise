@@ -1,0 +1,136 @@
+{
+  "_": [
+    "§5.1's divergence table, as data, listing only the rows Stage 1 touches.",
+    "",
+    "The keys are the names the APPLICATIONS actually read — the environment",
+    "variables inside the containers, and the build arguments Vite inlines —",
+    "and NOT `.env.example`'s host-side names. That distinction is the whole",
+    "of H6: `.env.example` says OIDC_ISSUER_API and the compose file says",
+    "`API_ISSUER: ${OIDC_ISSUER_API}`, so the two files use different names",
+    "for one value. The host names are compose interpolation inputs; they are",
+    "not application configuration, and comparing them against Azure would",
+    "need a permanent alias table between two naming schemes — a list that",
+    "rots, which is the failure §19 warns about.",
+    "",
+    "A row here with no key behind it fails, exactly as a key with no row",
+    "does. That is what stops the table decaying into a list of good",
+    "intentions.",
+    "",
+    "CORRECTED AGAINST THE SHIPPED FILES (Task 26): the task brief's draft of",
+    "this file named API_OIDC_ISSUER, API_OIDC_AUDIENCE and the rest, which no",
+    "code reads — apps/api/src/config.ts reads API_ISSUER, API_AUDIENCE,",
+    "API_SUBJECT_CLAIM, API_GROUPS_CLAIM and API_REQUIRED_CLAIMS, with no",
+    "_OIDC_ infix. It also tabled the identity keys as divergences when their",
+    "NAMES are identical in both environments and only their VALUES differ,",
+    "which is the sameEverywhere kind."
+  ],
+  "rows": [
+    {
+      "n": 1,
+      "what": "Identity issuer",
+      "keys": [
+        "KC_BOOTSTRAP_ADMIN_USERNAME",
+        "KC_BOOTSTRAP_ADMIN_PASSWORD",
+        "KC_HEALTH_ENABLED"
+      ],
+      "why": "The API's and the browser's identity keys are the SAME NAMES in both environments and carry different values — Keycloak's issuer locally, Entra's in a tenant — so they are sameEverywhere, not a divergence. What genuinely exists in only one environment is Keycloak's own bootstrap: locally the issuer is a container this stack runs, and in a tenant it is somebody else's service."
+    },
+    {
+      "n": 2,
+      "what": "Inference provider and credential",
+      "keys": []
+    },
+    {
+      "n": 3,
+      "what": "Provider secret source",
+      "keys": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"],
+      "why": "Local only, and deliberately so. In Azure every credential models.json declares resolves through the gateway's managed identity or Key Vault, so no provider key is an environment variable, a parameter or an output — which is the whole of S2's stronger property, expressed as an absence in infra/modules/containerApps.bicep."
+    },
+    {
+      "n": 7,
+      "what": "api egress denial",
+      "keys": []
+    },
+    {
+      "n": 8,
+      "what": "Gateway log sink",
+      "keys": []
+    },
+    {
+      "n": 9,
+      "what": "Ingress and TLS",
+      "keys": [
+        "API_MTLS_CA_FILE",
+        "API_MTLS_CERT_FILE",
+        "API_MTLS_KEY_FILE",
+        "GATEWAY_MTLS_CA_FILE",
+        "GATEWAY_MTLS_CERT_FILE",
+        "GATEWAY_MTLS_KEY_FILE",
+        "GATEWAY_MTLS_ALLOWED_SUBJECT",
+        "GATEWAY_ENTRA_TENANT_ID",
+        "GATEWAY_ENTRA_AUDIENCE",
+        "GATEWAY_ENTRA_ALLOWED_OIDS",
+        "GATEWAY_PUBLIC_ORIGIN"
+      ],
+      "why": "GATEWAY_CALLER_AUTH itself is sameEverywhere — the key is set in both and its VALUE selects the mode — so what diverges is the material each mode needs: certificate paths and an allowed subject locally, a tenant, an audience and an allowed object id in Azure. GATEWAY_PUBLIC_ORIGIN joins them because it is the deployment's own public URL: Azure sets it from the web app's provisioned FQDN, and the compose stack has no provisioned FQDN to set it from."
+    }
+  ],
+  "rowsWithNoKeys": {
+    "2": "The divergence lives INSIDE models.json — each entry's `credential.source` is `env`/`file` locally and `managed-identity`/`key-vault` in Azure — and models.json is mounted as a file in both environments under the same GATEWAY_MODELS_FILE key. No application environment variable varies. The file's own content is the operator's, and is gitignored in both.",
+    "7": "Infrastructure, not application code: compose networks versus Container Apps egress rules. Asserted by apps/api/test/egress.compose.test.ts (Task 24) and, in Azure, by Spike 2 — which has not been done, and which the README says plainly is not done.",
+    "8": "The gateway writes the same JSON lines to stdout in both environments (§10.5). What differs is the collector that reads them; no application key varies. Ruling L1 records why there is no log-sink configuration at all to diverge."
+  },
+  "sameEverywhere": [
+    "API_PORT",
+    "API_ISSUER",
+    "API_AUDIENCE",
+    "API_SUBJECT_CLAIM",
+    "API_GROUPS_CLAIM",
+    "API_REQUIRED_CLAIMS",
+    "API_WORKSPACE_ID",
+    "API_GATEWAY_URL",
+    "GATEWAY_PORT",
+    "GATEWAY_MODELS_FILE",
+    "GATEWAY_ALLOWED_JURISDICTIONS",
+    "GATEWAY_CALLER_AUTH",
+    "VITE_API_BASE_URL",
+    "VITE_OIDC_ISSUER",
+    "VITE_OIDC_CLIENT_ID",
+    "VITE_OIDC_SCOPE"
+  ],
+  "sameEverywhereNote": [
+    "GATEWAY_ALLOWED_JURISDICTIONS is in this list, not in a divergence row,",
+    "and that is deliberate and load-bearing. It is not a value that differs",
+    "BECAUSE one environment is local; it is a value the operator supplies in",
+    "BOTH, from the same source — their own contracts and data provisions —",
+    "and neither has a default (P4). Filing it as a divergence would say the",
+    "two environments are entitled to different policies, which is the",
+    "opposite of what the owner decided. §5.1's own nine-row table does not",
+    "list it either."
+  ],
+  "defaultedInBothEnvironments": [
+    "GATEWAY_MAX_PROMPT_CHARS",
+    "GATEWAY_REQUEST_TIMEOUT_MS",
+    "GATEWAY_DEFAULT_MAX_TOKENS",
+    "GATEWAY_RPM_PER_ACTOR",
+    "GATEWAY_RPM_PER_WORKSPACE",
+    "GATEWAY_TOKENS_PER_HOUR_PER_ACTOR",
+    "GATEWAY_TOKENS_PER_HOUR_PER_WORKSPACE",
+    "GATEWAY_RECORDED_DIR"
+  ],
+  "defaultedNote": [
+    "Read by a configuration module, set by NEITHER environment: each falls",
+    "back to a value in apps/gateway/src/config.ts. They are listed because a",
+    "key that reaches only one environment's file stops being a shared",
+    "default and becomes an undeclared divergence, and the check that it is",
+    "set in neither is what catches that the day it happens rather than on a",
+    "first deployment.",
+    "",
+    "They are NOT the same case as GATEWAY_ALLOWED_JURISDICTIONS. Each of",
+    "these is a property of the software's own behaviour — a size cap, a",
+    "timeout, a rate — that the software is entitled to have an opinion",
+    "about. Which jurisdictions a firm permits is a property of that firm's",
+    "contracts, which the software has no standing to guess at all."
+  ],
+  "localOnlyServices": ["keycloak"]
+}

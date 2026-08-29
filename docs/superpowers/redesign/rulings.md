@@ -1592,3 +1592,316 @@ D3 exists to keep apart: it reads as a decision, it is a guess, and nobody looks
 if the framing itself is left uncorrected, the document tells a firm's Risk function that the
 system has judged their provider, which is a claim this design cannot support and which would
 be read as assurance by exactly the reader least able to check it.*
+
+---
+
+# Stage 1 (gateway) — rulings made without owner review (2026-08-29)
+
+The execution ledger lives at
+`.superpowers/sdd/2026-08-28-lexprompt-server-stage-1-gateway/progress.md`, which is
+**gitignored and disposable**. These are the decisions from it that outlive the stage,
+recorded here because this file is the durable home for "decided without review, with
+cost-if-wrong" — and because several of them **corrected an earlier mistake**, including
+two of the repository owner's own. That is the useful half of the record and it is kept
+intact; none of these is written as an achievement.
+
+**A note on the identifiers.** The ledger numbered its rulings by the task that raised
+them (`L1`, `T1`, `A1`, `F1`, `R1`, `E1`, `H1`, `E2`, `O1`, `S1`), and two of those names
+collide with names already in use: this file's **R1** is the identity/multi-user ruling at
+the top, and the server spec's **S1** is "the gateway is the only component permitted to
+egress". The ledger's `R1` and `S1` below are neither. They keep their original names so
+the ledger and this file can be read against each other, and the collision is stated
+rather than silently renamed away.
+
+## Rulings taken during execution
+
+- **L1 (Task 6, the log sink) — the spec was stale and the plan was right.** §10.5, §12,
+  §14, §18 and spec ruling S26 all say the gateway "refuses to start with no log sink
+  configured". The implementation has **no log-sink configuration at all**:
+  `JsonlAuditSink` writes JSON lines to stdout unconditionally, in every environment, and
+  a runtime write failure refuses the call (P3). There is therefore no configuration in
+  which the sink is absent, missing or disabled, and nothing for a startup check to check.
+  The **spec** was corrected, with S26 gaining a dated amendment note rather than being
+  edited away. The property is now held by construction rather than by validation — with
+  no configuration there is nothing to misconfigure, which removes the failure mode
+  instead of detecting it — and a `stage1DoD` assertion forbids any
+  `GATEWAY_*LOG*`/`*SINK*` key appearing in the gateway's configuration surface.
+  *Cost if wrong: a spec that under-promises. The logging floor itself does not move. But
+  if a later stage adds a configurable sink — a collector endpoint, a second destination —
+  this ruling is void and §10.5's startup refusal must actually be written; recorded here
+  rather than left implicit, because otherwise §18.2's line is satisfied vacuously and
+  nobody would notice it had stopped being true.*
+
+- **T1 (Task 7) — the typecheck gate was checking three fewer projects than anyone
+  believed.** Task 7 reported two type errors that its own gate surfaced and the
+  supervising gate did not. The cause was worse than two bad casts: `npm run typecheck`
+  named its projects by hand and the list had three holes — it never checked
+  `packages/core` at all, and it chained a nonexistent `apps/api/tsconfig.json` (so the
+  script exited non-zero regardless of the code, and would have until Task 16) — while the
+  gate actually being run between tasks was the ROOT `tsc --noEmit`, which does not cover
+  the gateway's test files. Two real errors survived two task reviews. The list was
+  replaced with **discovery** over `packages/*` and `apps/*`, and the script now reports
+  every failing project instead of stopping at the first.
+  *Cost if wrong: the script runs `tsc` on a tsconfig that was not meant to be a project
+  root, which fails loudly and visibly on the next run. Against that: a list has to be
+  updated by whoever adds a workspace, and discovery cannot be forgotten.*
+
+- **A1 (after Task 9) — a flattened error status made permanent failures retryable.**
+  Task 9's implementer flagged, without resolving it, that `decodeEvent` flattened every
+  mid-stream Anthropic error except `overloaded_error` to 502. Since `isRetryableStatus`
+  is `429 || >= 500`, the flattening made `authentication_error`, `permission_error` and
+  `invalid_request_error` **retryable**: the gateway would have retried calls that can
+  never succeed and then reported a permanent misconfiguration as a transient provider
+  fault — the loud specific failure arriving late and under the wrong name — and Task 11
+  was about to build the retry policy on top of it. It was also sibling drift:
+  `openaiCompatible` already used the provider's own status where it had one. Fixed with a
+  lookup, unknown types still falling back to 502; the tests assert the retry
+  **consequence** (`isRetryableStatus(401) === false`) beside the status, so they cannot
+  keep passing if the retry predicate changes underneath them.
+  *Cost if wrong: a status mapped one step off sends a retryable failure to a fail-fast
+  path or the reverse — visible immediately in the conformance suite and in the retry
+  tests.*
+
+- **F1 (Task 10) — every stream fixture is synthetic, and says so.** The brief wants
+  fixtures captured from live provider responses. **There are no provider API keys in this
+  environment**, so all five are hand-authored from each provider's published wire format
+  and all five are marked `synthetic: true`; no fixture header claims a live capture. A
+  synthetic fixture wearing a recording date would make the suite look stronger than it is
+  and destroy the only thing the flag is for. The suite still catches what it exists for: a
+  dropped final event, CRLF framing, split chunk boundaries, and provider-isolated decoder
+  regressions.
+  *Cost if wrong: a fixture that misstates a provider's real wire format passes the suite
+  and fails against the live provider — which is precisely the failure §19 calls the
+  highest-risk code in Stage 1, so this is a known gap rather than a covered one.*
+  **Open follow-up: re-record all five against live providers once keys exist, and flip
+  `synthetic` to false only for the ones actually captured.**
+
+- **R1 (Task 11; NOT this file's R1) — a placeholder rate limiter, named so it cannot be
+  mistaken for a policy.** The brief's `CallContext` requires `limiter: RateLimiter` and
+  imports it from a file Task 14 creates, so Task 11 as written could not typecheck. Task
+  11 creates the interface, Task 14 the implementation; the `limiter.check`/
+  `limiter.record` call sites stay exactly where the brief puts them, because they are
+  integral to `callModel`'s shape and re-threading "the one call path" in a later task is
+  exactly what must not happen. The placeholder is named **`unlimitedRateLimiter`**, never
+  `defaultRateLimiter`: it enforces nothing, and a limiter that silently permits
+  everything while calling itself "default" is a correct mechanism with no path to it —
+  this project's single most repeated defect. The self-describing name is the guard.
+  *Cost if wrong: the gateway does not rate-limit between Tasks 11 and 14, a window inside
+  one stage with no deployment in it.*
+
+- **E1 (after Task 13) — a scheme branch that held by convention, not by construction.**
+  `transport.ts` branches on the endpoint URL's **scheme**: anything not http(s) is read
+  from the filesystem, which is how the `recorded` provider replays a fixture without
+  becoming a second code path chosen by an environment flag. The design is right, but it
+  was safe only while no other adapter could produce a non-http URL — and `config.ts`
+  validated `endpoint` with a non-empty-string check and nothing else. An endpoint written
+  `api.openai.com/v1` (a missing scheme, the likeliest typo in that file) would have sent
+  a real provider call into `readFileSync`: an ENOENT blaming a fixture for a malformed
+  endpoint, or — if the path happened to exist — a local file parsed as a model response.
+  Now required `https://`, or `http://` on loopback only, mirroring the rule §7 already
+  applies to the API's OIDC issuer. Same distinction as L1: a property everyone must
+  remember to uphold is weaker than one that cannot be violated.
+  *Cost if wrong: a legitimate endpoint form is refused at startup, loudly, naming the
+  entry.*
+
+- **H1 (after Task 15) — the `/healthz` auth exclusion is mode-dependent, and its comment
+  said otherwise.** The implementer flagged, without resolving it, that with
+  `rejectUnauthorized: true` a certless caller fails the TLS handshake before Fastify
+  routes anything, so `server.ts`'s `/healthz` exclusion never runs for it — contradicting
+  its own comment. Investigated: the exclusion is not dead code, it is mode-dependent.
+  `main.ts` applies TLS options **only** when `mode === 'mtls'`; in `entra` mode the
+  server is plain HTTP behind internal-only ingress, the platform's probe reaches
+  `/healthz` with no token, and the exclusion is load-bearing. In `mtls` mode the
+  handshake rejects first, and the consequence is concrete: **a compose healthcheck written
+  without `--cert` reports the gateway permanently unhealthy while it is fine**, restarting
+  a healthy container on a schedule and looking exactly like a crash loop. The comment now
+  states both cases; no behaviour changed.
+  *Cost if wrong: none to running code. The carried obligation — that the compose
+  healthcheck presents the client certificate — was discharged in Task 24 and is written
+  into `docker-compose.yml`'s own comment.*
+
+- **E2 (after Task 16) — a variable named `loopback` for a check that was not.**
+  (a) `assertIssuerUsable` permitted plaintext `http` for loopback **or any dotless
+  hostname**, and stored that in a variable called `loopback`. The widening is necessary —
+  compose reaches Keycloak at `http://keycloak:8080`, a container-network name that is not
+  loopback and cannot be made so from inside another container — but the identifier claimed
+  a stricter check than the code performed, which is how the next reader concludes plaintext
+  is impossible off localhost. Renamed `plaintextPermitted`, with the error naming which
+  form the host failed to be. (b) `apps/api/src/config.ts` had **no tests at all**,
+  including the path where S29's issuer refusal runs; a refusal nothing exercises is one
+  nobody would notice losing. Eleven cases added and mutation-tested.
+  *Cost if wrong: (a) is naming and documentation, no behaviour change.*
+  **Open question for the owner, and it is a real one:** a single-label hostname is
+  unroutable on the internet but **is** resolvable on a corporate network, so `http://sso`
+  in a firm deployment would pass this check. That is wider than §7/S29's words. It should
+  be a decision — accept it, or ship a dev CA so https is required everywhere — rather
+  than a discovery.
+
+- **O1 (after Task 20) — Tasks 21 and 22 swapped, and a live credential left at rest.**
+  Task 21's guard asserts no call site passes `modelId`, while Task 21's own snippet reads
+  `settings.modelChoiceId` — a rename belonging to Task 22. Running 21 first would have
+  forced a broken assertion, a relaxed guard, or a dishonest bridge. Reordering also closed
+  sooner a finding Task 20 raised and rightly refused to fix from its own files:
+  **`openrouter.ts` was deleted and no request could carry a user key, but Settings still
+  asked for one, still wrote it to `localStorage`, and `isConfigured` still required it.**
+  A user pastes a valid key, is told they are configured, and every review fails for a
+  reason the screen never names — a confidently-wrong UI over a live credential sitting at
+  rest for nothing. Task 22 therefore also **actively purges** an already-stored key: a key
+  typed last week does not vanish when the field does.
+  *Cost if wrong: Task 21 runs against a settings shape that has already moved, which fails
+  loudly at typecheck rather than silently.*
+
+- **S1 (after Task 23; NOT the spec's S1) — one sentence, five copies, three workspaces,
+  and a network in the middle.** Task 23's implementer flagged that `ResultsView`
+  classifies a finding's failure by **matching the gateway's exact wording** with a regex.
+  Searched rather than assumed, and it was worse than the one coupling flagged: five copies
+  of the same sentence across three workspaces, four writers and one reader, with nothing
+  making them agree. Reword any one and the browser silently stops classifying — no error,
+  no failing test, just a firm-configuration fault shown to a lawyer as an ordinary one
+  they might fix. Sibling drift with a network in the middle, the version nothing catches
+  by accident. `SERVICE_CONFIG_HINT` now lives in `packages/core` and every writer and the
+  one reader use it. **Demonstrated, not asserted:** rewording the constant leaves the full
+  suite green, because they all move together.
+  *Cost if wrong: the sentence becomes a shared vocabulary rather than per-surface copy. If
+  a surface ever needs its own wording it takes its own constant, visibly.*
+
+## Rulings taken in Task 26, the closing sweep
+
+- **The composition-root exemption is three files, not two.** `configSurface` permits
+  `process.env` in the three typed config modules and in the composition roots, and the
+  plan named two — the `main.ts` of each service. The shipped gateway has a third entry
+  point, `smoke.ts`, with its own `main()`, its own `loadConfig` call and its own npm
+  script. The honest options were to name it or to exempt its whole file from the scan, and
+  **a file-level scanner exemption hides everything in that file, not just the part you
+  meant to protect** — the `PdfCanvas` lesson, which cost three hidden dark-palette states.
+  Naming it also held it to the pass-through rule, which is what caught it reading
+  `process.env.USER` directly; that now goes through `config.readEnv`, so all three roots
+  hand the environment to `loadConfig` and read no key themselves. The list is asserted to
+  be exactly those three.
+  *Cost if wrong: a fourth entry point has to be added to a list and justified in review,
+  rather than arriving unnoticed. The exemption is the one part of this guard that can be
+  widened to make a failure go away, so it has a test of its own.*
+
+- **`GATEWAY_PUBLIC_ORIGIN` is a divergence, not a same-everywhere value.** Azure sets it
+  from the web app's provisioned FQDN; the compose stack has no provisioned FQDN and falls
+  back to the code default. The plan filed it under "same everywhere", which the
+  both-directions check disproves. It is tabled under §5.1 row 9 (ingress) instead — the
+  alternative was to invent a local value and set it in `docker-compose.yml`, which would
+  have made the table say the two environments agree about something they do not.
+  *Cost if wrong: one row in a table is longer than it needed to be. The opposite error — a
+  real difference filed as "no difference" — is the exact rot §19 says §5.1 is exposed to.*
+
+- **A third configuration category: read by a module, set by neither environment.** Eight
+  gateway values (prompt-size cap, request timeout, four rate limits, default max tokens,
+  recorded-fixture directory) are read by `config.ts` and set in no environment file at all
+  — they are code defaults. Left unclassified they are invisible to the divergence check
+  entirely, which is how one of them could later be set in one environment only and become
+  an undeclared divergence. They are listed, and asserted to be set by **neither** side.
+  They are **not** the same case as `GATEWAY_ALLOWED_JURISDICTIONS`: a size cap or a
+  timeout is a property of the software's own behaviour, which the software is entitled to
+  have an opinion about; which jurisdictions a firm permits is a property of that firm's
+  contracts, which it is not.
+  *Cost if wrong: eight names in a JSON file to keep current. Against that, a value that
+  silently starts differing between environments with no row naming it.*
+
+- **The sweep searches comment-stripped source, not raw text.** §18 says "searched for, not
+  assumed" four times, and the naive search does not work on this codebase: it explains its
+  own rules at length in prose — why nothing reads `process.env`, why the app does not use
+  MSAL, why `storage.ts` deletes an `apiKey`, why `openrouter.ts`'s old contract retired —
+  and a raw text scan reports every one of those notes as a violation of the rule it exists
+  to explain. An executor meeting that either relaxes the pattern until it stops biting or
+  exempts the file, and both end with a guard that no longer searches for the thing it
+  names. Comments are removed first, by the TypeScript parser rather than by a regex that
+  cannot tell `//` inside a string from `//` starting a comment. Where an exemption is
+  genuinely needed it is ONE NAMED FILE and the list is asserted to be exactly that file —
+  `storage.ts` for `apiKey` (it deletes one) and `privacyCopy.ts` for `openrouter.ai` (it
+  tells a user to go and revoke a key, because deleting a key from a browser is not
+  revoking it).
+  *Cost if wrong: a violation written inside a comment is not flagged — the correct trade,
+  since a comment is not a code path, and the alternative demonstrably ends in a guard
+  nobody trusts.*
+
+- **Every scanner asserts it found something before anything is asserted with it.** A
+  scanner that silently matches nothing passes vacuously and reads as coverage. Each one
+  here is preceded by a check that it walks a realistic number of files, that its patterns
+  match a known-positive sample, and — for the audit-record AST walk — that both record
+  literals were actually found.
+  *Cost if wrong: a handful of extra assertions. Against that, this project has shipped
+  tests that passed against unfixed code and proved nothing, more than once.*
+
+- **The API refuses to start when it cannot authenticate to the gateway.** Task 25 raised
+  this as an OPEN finding it could not fix from its own files: `main.ts` called
+  `makeGatewayClient(config)` with no `getGatewayToken`, so under
+  `GATEWAY_CALLER_AUTH=entra` — the Azure configuration — the gateway would have refused
+  **every** call from the API. The two ways to close it were to wire managed-identity token
+  acquisition, or to make the gap loud. **Made loud**, deliberately: wiring it needs
+  `@azure/identity` in `apps/api`, a gateway-audience value this service is not given, and
+  a real tenant to test against — none of which exists here, and shipping unverifiable
+  authentication code into the one path that protects the credential boundary is the worse
+  of the two mistakes. `makeGatewayClient` now throws a `ConfigError` when it has neither a
+  client certificate nor a token source, inside `main.ts`'s startup guard, naming both
+  caller-auth modes and the missing wiring. The check is written as "some credential
+  exists", never as "mTLS is configured", so Stage 2 supplies `getGatewayToken` and edits
+  nothing else.
+  *Cost if wrong: `azd up` provisions successfully and the `api` container then fails its
+  startup, loudly, until the token wiring lands — where before it would have started
+  cleanly, reported itself healthy, and had every model call refused. A crash-looping
+  container with an explanatory log line is a far cheaper failure than a healthy-looking
+  service whose model calls silently never succeed, and it is the one this project's own
+  rule prefers.*
+
+- **The Task 26 brief's reference code was wrong in five places, and was corrected against
+  the shipped files rather than adopted.** It named `API_OIDC_ISSUER` and four siblings
+  that no code reads (the real names carry no `_OIDC_` infix); it tabled the identity keys
+  as divergences when their NAMES are identical in both environments and only their VALUES
+  differ; it listed eleven `sameEverywhere` keys that appear in neither environment; its
+  compose parser read only `environment:` blocks, so the web app's four `VITE_*` build
+  arguments — the only place the browser's configuration exists, in either environment —
+  were invisible to it; and it asked for five doc comments naming `openrouter.ts` to be
+  corrected in five files that do not contain the string. **Before applying anything a
+  brief calls current, diff it against the shipped source.**
+  *Cost if wrong: a divergence check that passes while asserting half of what it claims —
+  the specific failure §18 item 10(b) exists to prevent, reintroduced by the document that
+  specifies it.*
+
+## The plan's own rulings, as executed
+
+Recorded because they were taken while planning this stage, without owner review, and they
+bind anything that extends it. The spec's S1–S31 are not restated here; only what execution
+decided.
+
+- **P1. One SSE event splitter in `packages/core`; each adapter contributes only a pure
+  `decodeEvent`; `apps/api` parses nothing.** *Cost if wrong: five copies of a parser this
+  project has already fixed twice, at a boundary where the failure is a short answer rather
+  than an error.*
+- **P2. A stream that ends without a terminator frame is an error, not a short answer.**
+  *Cost if wrong: a truncated answer about a contract, indistinguishable from a complete
+  one — which a lawyer would find and a test would not.*
+- **P3. The audit record is written before the upstream call, and a sink failure refuses
+  the call.** *Cost if wrong: an unlogged egress, which is the one thing the gateway exists
+  to prevent, and "what of ours went where" stops being answerable.*
+- **P4. The jurisdiction gate has no default anywhere, and its absence is mutation-tested
+  in all six of its homes** — the gateway's config loader, `docker-compose.yml`,
+  `.env.example`, both Bicep files, and `main.parameters.json`. *Cost if wrong: an operator
+  types one variable before the gateway starts. Against that, the absence of a default is
+  invisible to every happy-path test — with one restored the gateway starts, the gate still
+  refuses an undeclared model, the banner still prints its table, and nothing looks wrong —
+  so a later, entirely well-meant "sensible default" would slip in green, and the system
+  would then enforce one firm's contractual scope as though it were a property of the
+  software.*
+- **P5. Every provider's stream decoding is proved by one conformance battery over recorded
+  fixtures; a provider with no fixture fails the build; a synthetic fixture says so in the
+  file.** *Cost if wrong: a provider changes its event shape and the suite stays green. See
+  F1 — all five fixtures are currently synthetic.*
+- **S25, narrowed deliberately.** §10.2's interface has six members and S25 lists five
+  adapter-owned concerns; the shipped `ProviderAdapter` has three functions. Two moved:
+  **credential acquisition** to `credentials/resolve.ts`, because which of four sources a
+  credential comes from is a property of the deployment and not of the provider's wire
+  protocol; and **error classification** to `isRetryableStatus` in `packages/core`, applied
+  once in `callModel.ts`, because §10 itself says the retry policy runs once in the core.
+  *Cost if wrong: retryability is read off the HTTP status alone, which is correct for all
+  six current providers (Anthropic's 529 falls under `>= 500`) and wrong for any provider
+  that signals it in a response body. The remedy is named in `adapters/types.ts` so it is
+  not improvised: such a provider adds an optional `classifyError?` to the interface. It
+  never becomes an `if` on a provider id in the core, which `stage1DoD` forbids and which
+  would be the duplication S25 exists to prevent, inverted.*

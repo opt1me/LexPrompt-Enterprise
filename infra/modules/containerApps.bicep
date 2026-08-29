@@ -232,12 +232,23 @@ resource gatewayApp 'Microsoft.App/containerApps@2024-03-01' = {
 // `api` is externally reachable, not merely "reachable from web": the web
 // app is a static SPA whose JS runs in the USER's browser (see
 // Dockerfile.web's own comment — VITE_* values are inlined at build time),
-// so it is the browser, not the `web` container, that calls `api` directly,
-// exactly as `docker-compose.yml` publishes `api` on `8080:8080` for the
-// same reason. An internal-only `api` would make every page load in every
-// browser fail to reach it. This is the one place this template resolves
-// an ambiguity in the brief's own wording ("api is reachable from web")
-// rather than encoding it literally — see the Task 25 report.
+// so it is the browser, not the `web` container, that calls `api`, and
+// `main.bicep` bakes api's own FQDN into the bundle as VITE_API_BASE_URL.
+// An internal-only `api` would make every page load in every browser fail
+// to reach it. This is the one place this template resolves an ambiguity in
+// the brief's own wording ("api is reachable from web") rather than
+// encoding it literally — see the Task 25 report.
+//
+// CORRECTED (Task 26): this comment used to justify itself by saying
+// docker-compose.yml publishes `api` on 8080:8080 "for the same reason".
+// It no longer does. Compose now puts `api` on the `internal` network ONLY,
+// with no published port, reached through `web`'s nginx proxy at /api —
+// because outbound access in Docker comes from being attached to any
+// non-internal network, so a routable attachment gave `api` a default route
+// while the topology still read as "api is not on egress". The two
+// environments therefore differ here in TOPOLOGY, which §5.1 row 9
+// (ingress) is the row for, and the local shape is the stricter of the two:
+// compose proves the egress denial, Azure only expresses it (Spike 2).
 resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
   name: '${namePrefix}-api'
   location: location

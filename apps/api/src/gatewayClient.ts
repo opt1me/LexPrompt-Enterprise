@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { Agent, request } from 'undici';
-import type { ApiConfig } from './config.ts';
+import { ConfigError, type ApiConfig } from './config.ts';
 
 /**
  * The ONLY outbound client in this service (S1: `api` may not egress).
@@ -28,7 +28,58 @@ export interface StreamResponse {
   text: () => Promise<string>;
 }
 
+/**
+ * The API must be able to prove who it is to the gateway, or it must not start.
+ *
+ * `GATEWAY_CALLER_AUTH` has exactly two values and neither of them turns the
+ * gateway's caller check off (S29's shape, applied to the gateway's own front
+ * door): `mtls` wants a client certificate, `entra` wants a bearer token. This
+ * client can present a certificate — `config.mtls` — and it can present a token
+ * — `getGatewayToken`. With NEITHER, there is no gateway configuration in which
+ * a single call from this process could succeed.
+ *
+ * That is exactly the state `main.ts` shipped in: it called
+ * `makeGatewayClient(config)` with no token callback, so under
+ * `GATEWAY_CALLER_AUTH=entra` — the Azure configuration — the API would have
+ * started cleanly, reported itself healthy, and had every single request
+ * refused by the gateway. A firm would meet that as "the model never answers",
+ * on a deployment whose logs say nothing is wrong.
+ *
+ * Acquiring a managed-identity token is Stage 2's work: it needs
+ * `@azure/identity` in this service, an audience to request the token FOR
+ * (the gateway's own App Registration, which is not yet a value this service
+ * is given), and a real tenant to be tested against — none of which exists
+ * here, and shipping unverifiable authentication code would be the worse of
+ * the two mistakes. So the gap is made LOUD instead: the process refuses to
+ * start, naming the missing piece, rather than running and failing every
+ * request for a reason nothing on the deployment explains.
+ *
+ * When Stage 2 supplies `getGatewayToken`, this check passes on that branch
+ * with nothing else to change. It is written as "some credential exists",
+ * never as "mTLS is configured", so wiring the token is the only edit.
+ */
+export function assertCanAuthenticateToGateway(
+  config: ApiConfig,
+  getGatewayToken?: () => Promise<string>,
+): void {
+  if (config.mtls || getGatewayToken) return;
+  throw new ConfigError(
+    'This API has no way to authenticate to the gateway at '
+    + `${config.gatewayUrl}, so it will not start.\n`
+    + 'The gateway has two caller-auth modes and neither can be turned off: '
+    + 'GATEWAY_CALLER_AUTH=mtls requires a client certificate, and '
+    + 'GATEWAY_CALLER_AUTH=entra requires a bearer token. This process can '
+    + 'present a certificate (set API_MTLS_CA_FILE, API_MTLS_CERT_FILE and '
+    + 'API_MTLS_KEY_FILE), and it cannot yet acquire a managed-identity token '
+    + '— that wiring is Stage 2 work and is not implemented.\n'
+    + 'Starting anyway would mean a healthy-looking service whose every '
+    + 'request the gateway refuses, which is a worse failure than this one.',
+  );
+}
+
 export function makeGatewayClient(config: ApiConfig, getGatewayToken?: () => Promise<string>) {
+  assertCanAuthenticateToGateway(config, getGatewayToken);
+
   const dispatcher = config.mtls
     ? new Agent({ connect: {
         ca: readFileSync(config.mtls.caFile),

@@ -5,8 +5,16 @@ import { makeGatewayClient } from './gatewayClient.ts';
 
 async function main(): Promise<void> {
   let config;
+  let gateway;
   try {
     config = loadConfig(process.env);
+    // Inside the same guard as `loadConfig`, deliberately. `makeGatewayClient`
+    // refuses to build a client that could not authenticate to the gateway in
+    // EITHER of its caller-auth modes, and that refusal is the same kind of
+    // fact as a missing issuer: something about how this process is configured
+    // that makes serving impossible. It belongs in the same loud startup exit,
+    // not in an unhandled rejection.
+    gateway = makeGatewayClient(config);
   } catch (err) {
     if (err instanceof ConfigError) {
       // Fail loudly, at startup, before a single call can be served — the
@@ -22,7 +30,6 @@ async function main(): Promise<void> {
 
   const jwks = await discoverJwks(config.auth.issuer);
   const verify = makeTokenVerifier(config.auth, jwks);
-  const gateway = makeGatewayClient(config);
 
   const app = buildServer({ verify, gateway, workspaceId: config.workspaceId });
   await app.listen({ port: config.port, host: '0.0.0.0' });
