@@ -1,11 +1,12 @@
 import { fileURLToPath } from 'node:url';
 import type { JWTVerifyGetKey } from 'jose';
 import { loadConfig, describeConfig, type ApiConfig } from './config.ts';
-import { discoverJwks, makeTokenVerifier } from './oidc.ts';
+import { discoverJwks, makeTokenVerifier, type Principal } from './oidc.ts';
 import { buildServer } from './server.ts';
 import { makeGatewayClient, type GatewayClient } from './gatewayClient.ts';
 import { makeDb, makePool, type Db } from './db/pool.ts';
 import { runMigrations } from './db/migrate.ts';
+import { resolveActor, type Actor } from './auth/actor.ts';
 
 /** Every startup failure reaches the operator as the same banner, whatever
  *  threw it. `ConfigError` was the only thing caught before, so a missing
@@ -78,10 +79,19 @@ async function main(): Promise<void> {
   }
   const verify = makeTokenVerifier(config.auth, jwks);
 
+  // TEMPORARY: every principal provisions as 'reviewer' until Task 4 wires a
+  // real lookup through `role_mapping` (§6.5) from the token's groups claim.
+  // Task 3's `resolveActor` takes the role as a parameter precisely so this
+  // seam exists — see `auth/actor.ts`'s own comment on why. Nothing in
+  // Stage 2 up to this task can grant `partner` or `admin` outside a test.
+  const resolveActorForRequest = async (principal: Principal): Promise<Actor> =>
+    db.tx(t => resolveActor(t, principal, 'reviewer', config.workspaceId));
+
   const app = buildServer({
-    verify, gateway,
+    verify, gateway, db,
     workspaceId: config.workspaceId,
     maxBodyBytes: config.maxBodyBytes,
+    resolveActor: resolveActorForRequest,
   });
   await app.listen({ port: config.port, host: '0.0.0.0' });
 }

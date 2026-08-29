@@ -43,6 +43,7 @@ describe('import boundary (S14)', () => {
     'SERVICE_CONFIG_HINT',
     'createSseEventReader', 'sseFields', 'encodeFrame', 'decodeFrame', 'readFrames',
     'isModelErrorCode', 'truncationRefusal',
+    'Role', 'ROLES', 'isRole', 'MeResponse',
   ];
 
   it('nothing outside packages/core defines an export of packages/core', () => {

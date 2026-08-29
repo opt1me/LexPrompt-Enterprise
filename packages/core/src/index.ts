@@ -14,3 +14,5 @@ export {
   createSseEventReader, sseFields, encodeFrame, decodeFrame, readFrames,
 } from './model/sse.ts';
 export type { Frame, StreamEnd } from './model/sse.ts';
+export { ROLES, isRole } from './api/records.ts';
+export type { Role, MeResponse } from './api/records.ts';

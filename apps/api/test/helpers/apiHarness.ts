@@ -3,6 +3,8 @@ import { buildServer } from '../../src/server.ts';
 import { DEFAULT_MAX_BODY_BYTES } from '../../src/config.ts';
 import type { Principal } from '../../src/oidc.ts';
 import type { GatewayClient } from '../../src/gatewayClient.ts';
+import type { Db, Tx } from '../../src/db/pool.ts';
+import type { Actor } from '../../src/auth/actor.ts';
 
 /** The workspace `buildTestApi` wires in, standing in for `API_WORKSPACE_ID`
  *  (§6: Stage 1 has exactly one, configured, never resolved per-request). A
@@ -58,11 +60,27 @@ export interface TestApiOptions {
    *  the response itself, so the browser reads the missing `done` frame as
    *  `stream_truncated` (m9). */
   streamThrowsAfter?: number;
+  /** The `Actor` `resolveActor` resolves to when a `principal` is supplied.
+   *  Defaults to a reviewer whose `issuer`/`subject` are taken from
+   *  `principal` — never fixed — because that fidelity is the one property
+   *  Task 3's `me.route.test.ts` exists to prove: the response's identity
+   *  fields come from the validated token, never from a stub that merely
+   *  agrees with it. */
+  actor?: Omit<Actor, 'issuer' | 'subject'>;
+  /** Makes the preHandler's `resolveActor` call reject with a `ModelError` —
+   *  e.g. `account_disabled` — reproducing Task 2's admin-disable path
+   *  without a database. */
+  actorError?: PrincipalError;
 }
 
 export interface CallLog {
   infer: Array<Record<string, unknown>>;
   stream: Array<Record<string, unknown>>;
+  /** Every statement sent to the fake `Db` behind `/v1/me`'s PUT handler —
+   *  in particular, whether it was called AT ALL, which is how
+   *  `me.route.test.ts` proves an empty display name is refused before any
+   *  write is attempted. */
+  dbQueries: Array<{ text: string; values?: unknown[] }>;
 }
 
 /**
@@ -74,7 +92,35 @@ export interface CallLog {
  * routing rather than about a test double standing in for it.
  */
 export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof buildServer>; calls: CallLog } {
-  const calls: CallLog = { infer: [], stream: [] };
+  const calls: CallLog = { infer: [], stream: [], dbQueries: [] };
+
+  const tx: Tx = {
+    async query<R>(text: string, values?: unknown[]): Promise<R[]> {
+      calls.dbQueries.push({ text, values });
+      return [] as R[];
+    },
+    async tx<T>(run: (t: Tx) => Promise<T>): Promise<T> {
+      return run(tx);
+    },
+  };
+  const db: Db = {
+    query: tx.query,
+    async tx<T>(run: (t: Tx) => Promise<T>): Promise<T> {
+      return run(tx);
+    },
+  };
+
+  const defaultActor: Omit<Actor, 'issuer' | 'subject'> = {
+    id: 'actor-1', displayName: 'Test Reviewer', initials: 'TR',
+    role: 'reviewer', workspaceId: WORKSPACE_ID,
+  };
+  const resolveActor = async (principal: Principal): Promise<Actor> => {
+    if (opts.actorError) {
+      throw new ModelError(opts.actorError.message, opts.actorError.code, opts.actorError.status);
+    }
+    const base = opts.actor ?? defaultActor;
+    return { ...base, issuer: principal.issuer, subject: principal.subject };
+  };
 
   const verify = async (_token: string): Promise<Principal> => {
     if (opts.principalError) {
@@ -131,7 +177,7 @@ export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof bui
   } as GatewayClient;
 
   const app = buildServer({
-    verify, gateway,
+    verify, gateway, db, resolveActor,
     workspaceId: WORKSPACE_ID,
     maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
   });

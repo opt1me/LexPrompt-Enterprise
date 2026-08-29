@@ -4,6 +4,8 @@ import { buildServer } from '../src/server.ts';
 import { DEFAULT_MAX_BODY_BYTES } from '../src/config.ts';
 import type { GatewayClient } from '../src/gatewayClient.ts';
 import type { Principal } from '../src/oidc.ts';
+import type { Db } from '../src/db/pool.ts';
+import type { Actor } from '../src/auth/actor.ts';
 
 /**
  * M1: the stream route's abort listener was attached to the WRONG emitter,
@@ -24,6 +26,17 @@ import type { Principal } from '../src/oidc.ts';
  */
 
 const PRINCIPAL: Principal = { issuer: 'iss', subject: 'sub-1', groups: [] };
+const ACTOR: Actor = {
+  id: 'actor-1', issuer: PRINCIPAL.issuer, subject: PRINCIPAL.subject,
+  displayName: 'Test User', initials: 'TU', role: 'reviewer', workspaceId: 'ws-configured',
+};
+/** This suite never reaches a route that reads the database — the stream
+ *  route forwards to a fake gateway, nothing else. A `Db` that throws on any
+ *  use makes that true rather than assumed. */
+const UNUSED_DB: Db = {
+  query: () => { throw new Error('streamAbort.test.ts should never touch the database'); },
+  tx: () => { throw new Error('streamAbort.test.ts should never touch the database'); },
+};
 
 let servers: http.Server[] = [];
 afterEach(async () => {
@@ -66,6 +79,8 @@ async function listen(gateway: GatewayClient): Promise<number> {
     gateway,
     workspaceId: 'ws-configured',
     maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
+    db: UNUSED_DB,
+    resolveActor: async () => ACTOR,
   });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const server = app.server;

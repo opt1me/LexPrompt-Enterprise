@@ -4,8 +4,11 @@ import Fastify, {
 import { ModelError } from '@lexprompt/core';
 import type { Principal } from './oidc.ts';
 import type { GatewayClient } from './gatewayClient.ts';
+import type { Actor } from './auth/actor.ts';
+import type { Db } from './db/pool.ts';
 import { registerInfer } from './routes/infer.ts';
 import { registerInferStream } from './routes/inferStream.ts';
+import { registerMe } from './routes/me.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -13,6 +16,11 @@ declare module 'fastify' {
      *  the configured issuer. Absent on `/healthz`, which is excluded from
      *  the hook by URL, exactly as the gateway excludes it (Task 15). */
     principal?: Principal;
+    /** Set by the SAME preHandler that sets `principal`, once, so no route
+     *  resolves an actor of its own. A route reading `req.actor!` reads a
+     *  value the hook guarantees; a route that resolved its own would be a
+     *  second implementation of provisioning. */
+    actor?: Actor;
   }
 }
 
@@ -60,6 +68,15 @@ export interface ServerDeps {
   /** `ApiConfig.maxBodyBytes` — see there for why this hop declares a limit
    *  rather than inheriting Fastify's undeclared 1 MiB. */
   maxBodyBytes: number;
+  /** The app role's connection (Task 2). Used directly by `/v1/me`'s PUT
+   *  handler; every OTHER write that needs a person's identity goes through
+   *  `resolveActor` instead, so this is not a second route to provisioning. */
+  db: Db;
+  /** Just-in-time provisioning (§7, Task 2's `app_user`): resolves a
+   *  validated `Principal` to the `app_user` row it names, creating one on
+   *  first sight. Injected, so a route test needs no database and so Task
+   *  4's role lookup has exactly one place to live. */
+  resolveActor(principal: Principal): Promise<Actor>;
 }
 
 /**
@@ -118,11 +135,13 @@ function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number): void
 }
 
 /**
- * Stage 1 boundary (§13): this derives a `Principal`, answers `/healthz`,
- * and forwards `/v1/infer`, `/v1/infer/stream` and `/v1/models` to the
- * gateway with the actor overwritten from the token (Task 17, reused by
- * Task 18 for the streaming route) — never a role gate, never an
- * `app_user` row, both of which stay Stage 2.
+ * This derives a `Principal`, resolves it to an `app_user` row on the SAME
+ * hook (Task 2's just-in-time provisioning), answers `/healthz`, forwards
+ * `/v1/infer`, `/v1/infer/stream` and `/v1/models` to the gateway with the
+ * actor overwritten from the token (Task 17, reused by Task 18 for the
+ * streaming route), and answers `/v1/me`. There is still no role gate —
+ * `role` is provisioned from whatever `resolveActor` was handed, and reading
+ * a group claim into one is Task 4's.
  */
 export function buildServer(deps: ServerDeps): FastifyInstance {
   const app: FastifyInstance = Fastify({ logger: false, bodyLimit: deps.maxBodyBytes });
@@ -132,12 +151,19 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   const auth = requireUser(deps.verify);
   app.addHook('preHandler', async (req, reply) => {
     if (req.url === '/healthz') return;
-    return auth(req, reply);
+    await auth(req, reply);
+    // `requireUser` answers the reply itself on failure and `reply.sent`
+    // records that. Continuing past it would resolve an actor for a caller
+    // that has already been refused — and would create an `app_user` row for
+    // a token that did not validate.
+    if (reply.sent) return;
+    req.actor = await deps.resolveActor(req.principal!);
   });
 
   app.get('/healthz', async () => ({ ok: true }));
   registerInfer(app, deps.gateway, deps.workspaceId);
   registerInferStream(app, deps.gateway, deps.workspaceId);
+  registerMe(app, deps.db);
 
   return app;
 }

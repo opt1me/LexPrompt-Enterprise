@@ -240,6 +240,10 @@ export const MODEL_ERROR_CODES = [
   'answer_truncated',
   'network',
   'unknown',
+  'account_disabled',   // 403 — an admin turned this account off. Signing in again changes nothing.
+  'no_role',            // 403 — authenticated, in no mapped group. §7's "told plainly", not an empty app.
+  'not_found',          // 404 — no such record in this workspace.
+  'conflict',           // 409 — a stale write (P9), or an id already owned by another workspace.
 ] as const;
 
 export type ModelErrorCode = (typeof MODEL_ERROR_CODES)[number];

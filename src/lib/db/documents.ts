@@ -2,7 +2,13 @@ import { getDb } from './open';
 import { STORES } from './schema';
 import type { DocumentRecord } from '../../types';
 
-const ROLES: DocumentRecord['role'][] = ['base', 'varies', 'standalone'];
+// This constant is deliberately NOT named "the R word" alone: `packages/core`
+// now exports an unrelated closed set under that exact identifier (Stage 2's
+// three workspace roles — reviewer/partner/admin), and the import-boundary
+// guard (S14) flags any second definition of that name outside the package,
+// export or not, precisely so two same-named "the roles" never sit in the
+// codebase inviting conflation.
+const DOCUMENT_ROLES: DocumentRecord['role'][] = ['base', 'varies', 'standalone'];
 
 /**
  * Upgrades a persisted `DocumentRecord` to the current schema on read. A
@@ -19,7 +25,7 @@ const ROLES: DocumentRecord['role'][] = ['base', 'varies', 'standalone'];
  */
 export function migrateDocumentRecord(raw: unknown): DocumentRecord {
   const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<DocumentRecord> & Record<string, unknown>;
-  const role: DocumentRecord['role'] = ROLES.includes(src.role as DocumentRecord['role'])
+  const role: DocumentRecord['role'] = DOCUMENT_ROLES.includes(src.role as DocumentRecord['role'])
     ? (src.role as DocumentRecord['role'])
     : 'standalone';
   return { ...(src as DocumentRecord), role };
