@@ -177,9 +177,17 @@ function AdminModelForm({
     setError(null);
     try {
       const saved = await saveWorkspaceSettings({
-        modelChoiceId: patch.modelChoiceId ?? settings.modelChoiceId,
-        modelChoiceLabel: patch.modelChoiceLabel ?? settings.modelChoiceLabel,
-        modelChoiceModel: patch.modelChoiceModel ?? settings.modelChoiceModel,
+        // The model fields travel ONLY when the model is what changed
+        // (Part 2A m7). Re-sending the stored choice on a concurrency-only
+        // save made the "Parallel requests" Save on a fresh workspace — where
+        // the stored choice is `''` — answer *"A model choice is required."*,
+        // a 400 naming a field the admin never touched. Omitting them says
+        // what is true: this write is not about the model.
+        ...(patch.modelChoiceId === undefined ? {} : {
+          modelChoiceId: patch.modelChoiceId,
+          modelChoiceLabel: patch.modelChoiceLabel,
+          modelChoiceModel: patch.modelChoiceModel,
+        }),
         concurrency: patch.concurrency,
         // A real fetch always sets `version` — this form only ever renders
         // over a `state.status === 'ready'` load — but the TYPE keeps it

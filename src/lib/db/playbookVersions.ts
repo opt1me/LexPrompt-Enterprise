@@ -1,4 +1,5 @@
 import { apiGet, apiGetOrNull } from '../api/client';
+import { migrateVersionRecord } from './playbookMigration';
 import type { PlaybookVersion } from '../../types';
 
 /**
@@ -31,17 +32,35 @@ import type { PlaybookVersion } from '../../types';
  * types exactly.
  */
 
+/**
+ * Repair-on-read, applied HERE too (Part 2A m8).
+ *
+ * `playbooks.ts` states "repair-on-read is KEPT" as a property of this
+ * stage, and it was true of `getPlaybookContent` and of nothing in this
+ * module — so the SAME stored version was migrated when read as a
+ * playbook's current content and handed back raw when read through the
+ * version list or by id. A pre-D record reaching a reader unmigrated is a
+ * playbook rendered by the shape it had before the field it is being read
+ * for existed; the two paths disagreeing about it is worse than either
+ * answer, because which one a reader gets depends on which screen they came
+ * from. Pre-existing (the IndexedDB module behaved the same way), and named
+ * rather than left as a property that holds in one of two modules.
+ */
+const repaired = (v: PlaybookVersion): PlaybookVersion => migrateVersionRecord(v);
+
 /** `null` for "there is no such version", and ONLY for that. A 500 rejects
  *  — a version read that answered `null` over a broken server would render
  *  a review's history as though the version it ran against had been
  *  deleted. */
 export async function getVersion(id: string): Promise<PlaybookVersion | null> {
-  return apiGetOrNull<PlaybookVersion>(`/v1/versions/${encodeURIComponent(id)}`);
+  const version = await apiGetOrNull<PlaybookVersion>(`/v1/versions/${encodeURIComponent(id)}`);
+  return version ? repaired(version) : null;
 }
 
 /** Newest first. The order is the server's (`order by version_number desc`)
  *  and is not re-derived here. */
 export async function listVersions(playbookId: string): Promise<PlaybookVersion[]> {
-  return apiGet<PlaybookVersion[]>(
+  const versions = await apiGet<PlaybookVersion[]>(
     `/v1/playbooks/${encodeURIComponent(playbookId)}/versions`);
+  return versions.map(repaired);
 }

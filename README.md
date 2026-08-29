@@ -266,6 +266,35 @@ npm run compose:down   # stop and remove the stack (including the Keycloak volum
 
 **The one architectural claim this whole arrangement exists to make checkable:** `api` sits on the `internal` network **only**, with no published port of its own — a browser reaches it through `web`'s nginx proxy. `gateway` sits on `internal` and `egress`. Being off `egress` was never sufficient on its own: a container's outbound access in Docker comes from being attached to **any** non-internal network, so an `api` also attached to a routable network had a default route and full internet access while the file still read as "api is not on egress". `internal` is marked `internal: true`, so Docker adds no default route to anywhere outside the stack. "The API cannot reach a model provider directly" is therefore a fact about the network, checkable by anyone with `docker network inspect`, not only a property of `apps/api/src/gatewayClient.ts` being the only file in that service that ever calls `fetch`. `npm run test:compose` (`apps/api/test/egress.compose.test.ts`) asserts it against the live stack: `api` cannot reach a model provider, `api` cannot reach the internet at all, `api` *can* reach the gateway, and the gateway *can* reach the internet — the last two rule out a false pass from a stack that is simply unplugged.
 
+### Reclaiming orphaned document files (operator only)
+
+A document's bytes are written to blob storage *before* its database row is inserted, deliberately: a row pointing at bytes that do not exist is a document that opens empty, and a few bytes nobody claims is a leak. So a failure between those two steps — or a `delete` that storage refuses during a matter cascade — leaves **orphaned blobs**: a client's contract sitting in the firm's storage with no record claiming it. The README's promise that deleting a matter deletes its documents' bytes is only true if somebody sweeps them.
+
+Two admin-only routes do the sweep. **There is no screen for them, and there is no scheduler** — a scheduled job needs a worker, which is Stage 3. That is deferred, not silently missing: today the path is `curl`, and this section is it.
+
+Both need an **admin's** bearer token (`GET`/`POST` are `admin` in `ROUTE_POLICY`; a reviewer or partner gets a 403). Keycloak's `lexprompt-web` client has direct access grants disabled on purpose, so there is no password grant to script — take the token from a signed-in admin's own browser session instead: sign in at `http://localhost:3005` as `admin` / `admin`, then DevTools → Application → Session Storage → the `oidc.user:…` entry → `access_token`.
+
+```bash
+TOKEN=...   # the access_token from the signed-in admin's session
+
+# What is orphaned. Read-only: nothing is deleted, and the keys are scoped
+# to this workspace's prefix at both ends, so another workspace's bytes can
+# never appear here.
+curl -s -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3005/api/v1/admin/blob-orphans
+
+# Delete them. The list is RECOMPUTED server-side rather than taken from the
+# request body — a key list in a body is a caller naming bytes to destroy,
+# and the only list this route acts on is the one it derived itself. Run the
+# GET first and read it.
+curl -s -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:3005/api/v1/admin/blob-orphans/delete
+```
+
+This is also the remedy behind the error a user sees when a delete half-succeeds — *"The records were deleted, but N document files could not be deleted from storage… An administrator can list and remove them"*. That sentence used to point at an administrator who had nothing to act with.
+
+In Azure the host differs and the token comes from Entra rather than Keycloak; the two routes and their behaviour do not.
+
 ### What has actually been run, and what has not
 
 Stated plainly, because a reader of this file has no other way to tell.

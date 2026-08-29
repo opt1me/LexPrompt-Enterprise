@@ -36,6 +36,36 @@ describe('resolveActor', () => {
     });
   });
 
+  it('does NOT put the token s name back over one a person set (Part 2A m1)', async () => {
+    // `PUT /v1/me` is the one thing §7 lets a person change about
+    // themselves, and `display_name = excluded.display_name` in the DO
+    // UPDATE made it a write that undid itself: the rename survived until
+    // the next authenticated request, milliseconds later. `saveProfile`, its
+    // docstring and its test all asserted a behaviour the server did not
+    // have.
+    await withPg(async t => {
+      const actor = await resolveActor(t, principal(), 'reviewer', WS);
+      // Exactly what `PUT /v1/me` writes.
+      await t.query('update app_user set display_name = $2, initials = $3 where id = $1',
+        [actor.id, 'Ada L', 'AL']);
+      const next = await resolveActor(t, principal(), 'reviewer', WS);
+      expect(next.displayName).toBe('Ada L');
+      expect(next.initials).toBe('AL');
+    });
+  });
+
+  it('leaves a stored email alone when the token carries no email claim (Part 2A m1)', async () => {
+    // `email = excluded.email` NULLed a stored address for a token minted
+    // without the claim — a narrower scope, a different client — deleting a
+    // fact nothing in this system can recover.
+    await withPg(async t => {
+      const actor = await resolveActor(t, principal(), 'reviewer', WS);
+      expect(actor.email).toBe('trainee@lexprompt.local');
+      const next = await resolveActor(t, principal({ email: undefined }), 'reviewer', WS);
+      expect(next.email).toBe('trainee@lexprompt.local');
+    });
+  });
+
   it('updates the role when the mapping has changed since the last sign-in', async () => {
     await withPg(async t => {
       await resolveActor(t, principal(), 'reviewer', WS);

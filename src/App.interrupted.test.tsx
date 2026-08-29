@@ -73,6 +73,23 @@ vi.mock('./lib/db/reviews', () => ({
   })),
 }));
 
+// Task 18 / Part 2A M1: `getWorkspaceSettings` is a NETWORK call, and this
+// file never mocked it — so `vitest.setup.ts`'s refusing `fetch` stub
+// answered it, App swallowed the rejection, and `modelChoiceId` sat at `''`.
+// That silent swallow is the defect M1 fixed: a failed settings load now has
+// its own state and its own Retry banner, and a suite that leaves the fetch
+// failing gets that banner rendered over every screen it asserts against.
+//
+// Mocked to resolve with NOTHING CHOSEN — byte-for-byte the state this file
+// was actually running in before, so no assertion here moves. This suite is
+// about reopening an abandoned review, not about the workspace's model.
+const getWorkspaceSettingsMock = vi.fn()
+  .mockResolvedValue({ modelChoiceId: '', concurrency: 5, version: 1, updatedAt: 1 });
+vi.mock('./lib/db/workspaceSettings', () => ({
+  getWorkspaceSettings: (...args: unknown[]) => getWorkspaceSettingsMock(...args),
+  saveWorkspaceSettings: vi.fn(),
+}));
+
 vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
   // See App.authoring.test.tsx's copy of this comment: keeps `useRole()`'s

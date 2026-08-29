@@ -6,6 +6,9 @@ import { roleFor, seedRoleMappings } from '../src/auth/roles.ts';
 const WS = '00000000-0000-0000-0000-000000000001';
 const KC = 'http://keycloak:8080/realms/lexprompt';
 const ENTRA = 'https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0';
+/** An issuer no deployment seeds and no test maps, so a lookup against it
+ *  returns no rows whatever the live `role_mapping` happens to hold. */
+const NO_SUCH_ISSUER = 'https://no-such-issuer.invalid/realms/none';
 
 const MAPPINGS = [
   // Keycloak: bare group NAMES, because the realm's mapper sets
@@ -142,9 +145,26 @@ describe('the role a request runs under is READ by the app role and WRITABLE by 
   // fails at once. Proved by running the real query as the real role.
   it('the app role can run roleFor\u2019s lookup', async () => {
     await withPg(async t => {
-      const err = await roleFor(t, KC, ['reviewers']).catch((e: unknown) => e);
-      // No rows are visible inside this rolled-back transaction, so the
-      // honest outcome is `no_role` — what matters is that it is LexPrompt
+      // NO_SUCH_ISSUER, not `KC` (Part 2A m6). The stated reason used to be
+      // "no rows are visible inside this rolled-back transaction", and that
+      // was not why it passed: these suites run against the LIVE database,
+      // whose `role_mapping` carries the rows `compose:up` seeded — and it
+      // passed only because the deployed issuer is
+      // `http://localhost:8088/realms/lexprompt` (the BROWSER issuer) while
+      // this file's `KC` is the container address. A deployment that set
+      // `OIDC_ISSUER_BROWSER` to the container address — a configuration
+      // `config.ts`'s own refusal message warns about — would resolve
+      // `roleFor(t, KC, ['reviewers'])` to 'reviewer' and fail a test about
+      // GRANTS for a reason that has nothing to do with grants.
+      //
+      // An issuer nothing can ever have a mapping for makes the stated
+      // reason true whatever the live table holds, and keeps the property
+      // this case was written for: the SELECT SUCCEEDS and returns no rows,
+      // so the refusal is LexPrompt's `no_role` rather than Postgres
+      // refusing the read. Revoke the app role's SELECT on `role_mapping`
+      // and this fails with a permission error instead.
+      const err = await roleFor(t, NO_SUCH_ISSUER, ['reviewers']).catch((e: unknown) => e);
+      // The honest outcome is `no_role` — what matters is that it is LexPrompt
       // refusing, not Postgres refusing the read.
       expect(err).toBeInstanceOf(ModelError);
       expect((err as ModelError).code).toBe('no_role');

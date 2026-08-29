@@ -131,6 +131,12 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // any matter — and the second route destroys them. A reviewer who could
   // run it could delete bytes whose rows had not yet been written by an
   // upload still in flight.
+  //
+  // OPERATOR-ONLY, and named as such rather than left to look like a route
+  // some screen calls: nothing in `src/` calls either of these, deliberately
+  // and for now. The path is `curl` with an admin's own bearer token,
+  // documented in README's "Reclaiming orphaned document files"; an in-app
+  // screen is deferred, the way `⌘K` and the Report tab are deferred.
   'GET /v1/admin/blob-orphans': 'admin',
   'POST /v1/admin/blob-orphans/delete': 'admin',
 

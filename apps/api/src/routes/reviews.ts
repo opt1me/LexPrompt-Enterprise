@@ -36,12 +36,19 @@ import { fromReviewRow, toReviewRow, type Review, type ReviewRow } from '../db/r
  * on screen. A refused save costs a reload; an applied one costs a lawyer's
  * judgement.
  *
- * ## 3. A review may only name documents in its own matter
+ * ## 3. A review may only INTRODUCE documents in its own matter
  *
  * `ReviewTarget` carries document ids, and a target pointing outside the
  * matter is a review that would cite the wrong client's document. Checked in
  * the SAME transaction as the write, so a document moved between the check
  * and the insert cannot slip through.
+ *
+ * Scoped to the ids a write ADDS, though — never re-run over the ids the
+ * stored row already holds. Deleting a document from a matter is a single
+ * click that touches no review, and re-validating a historical review's own
+ * ids against today's membership made every later save of it fail 400
+ * forever: a review that still opened, still read, and could never record
+ * another verification. See the block that does it for the long form.
  */
 export function registerReviews(app: FastifyInstance, db: Db): void {
   app.get('/v1/matters/:id/reviews', async (req): Promise<Review[]> => {
@@ -115,15 +122,40 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
         }
       }
 
-      // Every document the target names must be IN THIS MATTER. A review
-      // citing a document from another matter is the wrong client's contract
-      // quoted with apparent authority — the failure S23 exists to prevent,
-      // one table early. Checked inside the transaction, so a document moved
-      // between the check and the write cannot slip through.
+      // Every document this write INTRODUCES must be IN THIS MATTER. A
+      // review citing a document from another matter is the wrong client's
+      // contract quoted with apparent authority — the failure S23 exists to
+      // prevent, one table early. Checked inside the transaction, so a
+      // document moved between the check and the write cannot slip through.
+      //
+      // INTRODUCES, not "names": the ids the stored row already holds are
+      // grandfathered, and that distinction is the whole of this block.
+      // Removing a document from a matter is one click that touches no
+      // review (`handleRemoveMatterDocument`), and spec §9 deliberately
+      // keeps such a review OPENABLE — `openReview` renders a placeholder
+      // saying the document was removed. Re-validating the ids already on
+      // the row turned that into a review that opens, reads, and can never
+      // be written again: every verification, note, net-position
+      // confirmation, retry and auto-save on it answered 400, permanently,
+      // with no UI anywhere that can edit a stored review's `documentIds`.
+      // A review is the record of what was examined; the matter's
+      // membership having changed since does not make that record false, and
+      // "the reviewer must never see a state the store did not actually
+      // take" is not survivable by a store that refuses every take.
+      //
+      // The guard is not weakened by this, because an id can only be in the
+      // stored row's set by having passed this same check on the write that
+      // first put it there, and `matter_id` is NOT in the DO UPDATE list —
+      // so a review cannot be walked into another matter and have its ids
+      // re-read as native there.
       //
       // Task 19 adds `and kind = 'matter'` here, with the test that proves a
       // precedent cannot be a review target.
-      const ids = targetDocumentIds(input);
+      const held = await t.query<{ document_ids: unknown; target: unknown }>(
+        'select document_ids, target from review where id = $1 and workspace_id = $2',
+        [row.id, ws]);
+      const already = new Set(held[0] ? documentIdsIn(held[0]) : []);
+      const ids = documentIdsIn(input).filter(docId => !already.has(docId));
       if (ids.length > 0) {
         const found = await t.query<{ id: string }>(
           `select id from document
@@ -186,20 +218,33 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
 }
 
 /**
- * Every document id this review claims to cover, from the target AND from
+ * Every document id a review claims to cover, from the target AND from
  * `documentIds`.
  *
  * Both, because `documentIds` is a convenience MIRROR of the ids nested in
  * `target` and the two are written separately — so checking only one leaves
  * the other free to name a document from somebody else's matter. The union
  * is de-duplicated, since the two normally agree.
+ *
+ * Read off ANY carrier of the pair: the parsed body, or a stored `review`
+ * row. ONE function rather than two, because "which ids does this review
+ * claim to cover" must mean exactly the same thing when the answer decides
+ * what to REFUSE as it does when the answer decides what to GRANDFATHER —
+ * two copies drifting apart here would either re-open C1 or re-open the hole
+ * C1 was fixed without opening.
  */
-function targetDocumentIds(input: Review): string[] {
-  const target = input.target as { documentIds?: unknown } | null;
-  const fromTarget = Array.isArray(target?.documentIds)
-    ? (target.documentIds as unknown[]).filter((v): v is string => typeof v === 'string')
-    : [];
-  return [...new Set([...input.documentIds, ...fromTarget])];
+function documentIdsIn(carrier: { documentIds?: unknown; target?: unknown }): string[] {
+  const strings = (value: unknown): string[] => (Array.isArray(value)
+    ? (value as unknown[]).filter((v): v is string => typeof v === 'string')
+    : []);
+  // A stored row's jsonb arrives parsed from `pg`, but `toReviewRow` writes
+  // it as a JSON STRING, so a value read back through a path that did not
+  // parse it would be a string. Handled rather than assumed: reading `[` as
+  // an id is not a failure anything downstream would name.
+  const parse = (value: unknown): unknown =>
+    (typeof value === 'string' ? JSON.parse(value) as unknown : value);
+  const target = parse(carrier.target) as { documentIds?: unknown } | null;
+  return [...new Set([...strings(parse(carrier.documentIds)), ...strings(target?.documentIds)])];
 }
 
 function bad(detail: string): never {

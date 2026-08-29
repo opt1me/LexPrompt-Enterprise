@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Settings as SettingsIcon, ClipboardList, Briefcase, ShieldCheck } from 'lucide-react';
 import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import type { WorkspaceSettings } from '@lexprompt/core';
@@ -561,40 +561,63 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
    * than read out of `localStorage` on the very first render. The zeroed
    * default below is deliberately NOT "configured" — `isConfigured` reads
    * `modelChoiceId`, and an empty string there is the same "nothing chosen
-   * yet" state a fresh `Settings` blob used to start in, so nothing
-   * downstream has to learn a fourth state for "the fetch hasn't answered
-   * yet". A failed fetch is reported once, below, and otherwise behaves
-   * exactly like "no model configured" — `ensureConfigured` already has
-   * the right sentence for that.
+   * yet" state a fresh `Settings` blob used to start in.
+   *
+   * It is NOT what a FAILED fetch leaves behind, though; `settingsLoadError`
+   * below is. An empty `modelChoiceId` reached by a 503 is a load failure
+   * wearing a legitimate empty state — this project's founding defect, one
+   * transport out — and it is worse than the usual shape of that, because
+   * the sentence it produces ("Choose a model in Settings") sends a
+   * reviewer to a screen that fetches independently, usually succeeds, and
+   * tells them a model IS configured and is an administrator's to change.
    */
   const [settings, setSettings] = useState<WorkspaceSettings>({
     modelChoiceId: '', concurrency: 5, version: 0, updatedAt: 0,
   });
+  /**
+   * The third state, beside "configured" and "not configured": the workspace
+   * settings could not be READ, so nothing is known about what is chosen.
+   *
+   * The same argument `RoleState` makes about a permission ("a default role
+   * would be a permission GRANTED by a loading state"), applied to a model
+   * choice. Classified through `describeLoadError` like every other load
+   * path in this file, and rendered through `LoadErrorPanel` with a working
+   * Retry — the one route this codebase permits for "empty versus broken".
+   */
+  const [settingsLoadError, setSettingsLoadError] = useState<string | null>(null);
   const { notify, toast } = useToast();
 
-  // Task 18: the one fetch that replaces `loadSettings().settings` for
-  // everything that moved to `WorkspaceSettings`. A failure here is NOT
-  // treated as "the app is broken" and is deliberately quiet at THIS layer
-  // — the same "best-effort" posture the capability cross-reference effect
-  // below already takes, for the same reason: `settings.modelChoiceId`
-  // simply stays `''`, which `isConfigured`/`ensureConfigured` already read
-  // as "nothing chosen yet" and refuse to proceed on, with their own
-  // explicit message, the moment anything actually needs a model. Opening
-  // Settings gives the REAL failure its own screen — `WorkspaceModelPanel`
-  // retries independently and reports there — which is a more useful place
-  // for a reviewer to see "why" than a toast fired at an arbitrary moment
-  // during an unrelated screen's mount.
-  useEffect(() => {
-    let cancelled = false;
-    getWorkspaceSettings()
-      .then(ws => {
-        if (cancelled) return;
-        setSettings(prev => ({ ...prev, ...ws }));
-      })
-      .catch(() => { /* best-effort; WorkspaceModelPanel reports this for real */ });
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+  /**
+   * Task 18: the one fetch that replaces `loadSettings().settings` for
+   * everything that moved to `WorkspaceSettings`.
+   *
+   * A failure here is a LOAD FAILURE with its own state and its own Retry,
+   * never a quiet fall-through to `modelChoiceId: ''`. It was the latter,
+   * and one 503 / 502 / network blip / expired-token race on this single
+   * boot-time request then refused every run, every drafted playbook and
+   * every redline session for the rest of the tab's life with "Choose a
+   * model in Settings to get started." — a specific, wrong reason, pointing
+   * at a screen that contradicts it and that a reviewer has no permission to
+   * change anyway. Nothing retried it: this effect runs once, and the
+   * capability cross-reference effect returns immediately while
+   * `modelChoiceId` is `''`.
+   */
+  const loadWorkspaceSettings = useCallback(() => {
+    setSettingsLoadError(null);
+    return getWorkspaceSettings()
+      .then(ws => { setSettings(prev => ({ ...prev, ...ws })); })
+      .catch((e: unknown) => {
+        setSettingsLoadError(describeLoadError(
+          e,
+          "This workspace's model settings could not be read, so LexPrompt cannot tell which "
+          + 'model reviews run on. Nothing has been changed. Try again.',
+        ));
+      });
   }, []);
+
+  useEffect(() => {
+    void loadWorkspaceSettings();
+  }, [loadWorkspaceSettings]);
 
   /** A `service_misconfigured`-class failure (Task 23): shown "in place",
    *  wherever the user already is, and never routed to Settings — there is
@@ -1600,6 +1623,19 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
    */
   const ensureConfigured = (message = 'Choose a model in Settings to get started.') => {
     if (isConfigured) return true;
+    // THREE reasons, not one. A workspace whose settings could not be READ
+    // is not a workspace with nothing chosen — saying so would be a load
+    // failure reported as a legitimate empty state, and the instruction it
+    // carries ("choose a model in Settings") is one no reviewer can act on
+    // and one an administrator's own Settings screen will contradict as
+    // soon as its independent fetch succeeds. Deliberately does NOT route
+    // to Settings for the same reason `serviceConfigError` does not: there
+    // is nothing there that fixes this. The banner rendered in the shell
+    // carries the Retry that does.
+    if (settingsLoadError) {
+      notify(settingsLoadError, 'error');
+      return false;
+    }
     // A user who never chose a model and a user whose choice was withdrawn
     // by an administrator are being told two different things, and only one
     // of them is answered by "choose a model".
@@ -3573,6 +3609,23 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
           <ServiceConfigError
             error={serviceConfigError}
             onDismiss={() => setServiceConfigError(null)}
+          />
+        </div>
+      )}
+
+      {/* Part 2A M1: the workspace's model settings could not be READ. Shown
+          in place, wherever the reader already is, and never as a routed
+          "choose a model" — the difference between "nothing is configured"
+          and "we could not find out" is the empty-versus-broken rule, and
+          this is the one load path in the HTTP move that had missed it.
+          `LoadErrorPanel`, not a hand-rolled banner: it is the only route
+          this codebase permits, and it is what carries the Retry. */}
+      {settingsLoadError && (
+        <div className="shrink-0 border-b border-rule bg-card px-6 py-3">
+          <LoadErrorPanel
+            compact
+            message={settingsLoadError}
+            onRetry={() => { void loadWorkspaceSettings(); }}
           />
         </div>
       )}

@@ -39,6 +39,27 @@ async function aMatter(t: Tx, id = 'm1', ws = WS): Promise<void> {
      values ($1, $2, 'Brookvale', now(), now())`, [id, ws]);
 }
 
+/**
+ * The three documents `BASE` groups.
+ *
+ * A collection may only group documents in its own matter (Part 2A m2), the
+ * check `PUT /v1/reviews/:id` already made and this route did not — so the
+ * fixture matter has to actually carry them now. Additive fixture seeding
+ * only: no assertion in this file moved.
+ */
+async function aMembers(t: Tx, matterId = 'm1', ws = WS,
+  ids: readonly string[] = ['d-base', 'd-a', 'd-b']): Promise<void> {
+  for (const id of ids) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.query(
+      `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
+                             byte_size, mime, blob_key, role, added_at)
+       values ($1, $2, $3, $4, 'pdf', 'x', 'parsed', 4, 'application/pdf', $5, 'standalone', now())
+       on conflict (id) do nothing`,
+      [id, ws, matterId, `${id}.pdf`, `workspace/${ws}/document/${id}`]);
+  }
+}
+
 const BASE = {
   id: 'c1', matterId: 'm1', name: 'Lease + two DoVs', baseDocumentId: 'd-base',
   variesDocumentIds: ['d-a', 'd-b'], createdAt: 1_700_000_000_000, createdByUserId: '',
@@ -84,6 +105,7 @@ describe('collection routes over a real Postgres', () => {
   it('round-trips a collection through Postgres, unchanged', async () => {
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const h = harness(t, await aUser(t));
       const saved = await h.put('/v1/collections/c1', BASE);
       // `toEqual` on the WHOLE record, so a dropped field fails here rather
@@ -103,6 +125,8 @@ describe('collection routes over a real Postgres', () => {
     // ordered by anything at all would fail here.
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
+      await aMembers(t, 'm1', WS, ['d1', 'd2', 'd3']);
       const h = harness(t, await aUser(t));
       const saved = await h.put('/v1/collections/c1',
         { ...BASE, variesDocumentIds: ['d3', 'd1', 'd2'] });
@@ -122,6 +146,7 @@ describe('collection routes over a real Postgres', () => {
   it('keeps a repeated member rather than de-duplicating it, and an empty list rather than a null', async () => {
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const h = harness(t, await aUser(t));
       const dup = await h.put('/v1/collections/c1', { ...BASE, variesDocumentIds: ['d-a', 'd-a'] });
       expect(dup.variesDocumentIds).toEqual(['d-a', 'd-a']);
@@ -138,6 +163,7 @@ describe('collection routes over a real Postgres', () => {
     // screen to show it.
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const h = harness(t, await aUser(t));
       const res = await h.raw('PUT', '/v1/collections/c1',
         { ...BASE, variesDocumentIds: { first: 'd-a', second: 'd-b' } });
@@ -162,6 +188,7 @@ describe('collection routes over a real Postgres', () => {
   it('records the AUTHENTICATED actor as the author, not whoever the body named', async () => {
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const actor = await aUser(t);
       const someoneElse = await aUser(t);
       const h = harness(t, actor);
@@ -174,6 +201,7 @@ describe('collection routes over a real Postgres', () => {
   it('leaves the original author alone when the collection is saved again', async () => {
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const first = await aUser(t);
       const second = await aUser(t);
       const h1 = harness(t, first);
@@ -192,6 +220,7 @@ describe('collection routes over a real Postgres', () => {
   it('orders the list by createdAt then seq, so a same-millisecond pair is stable', async () => {
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const h = harness(t, await aUser(t));
       await h.put('/v1/collections/aaa', { ...BASE, id: 'aaa', createdAt: 5_000 });
       await h.put('/v1/collections/bbb', { ...BASE, id: 'bbb', createdAt: 5_000 });
@@ -207,12 +236,72 @@ describe('collection routes over a real Postgres', () => {
   it('lists only the requested matter s collections', async () => {
     await withPg(async t => {
       await aMatter(t, 'm1');
+      await aMembers(t);
       await aMatter(t, 'm2');
+      await aMembers(t, 'm2', WS, ['d-base-2', 'd-a-2']);
       const h = harness(t, await aUser(t));
       await h.put('/v1/collections/c1', BASE);
-      await h.put('/v1/collections/c2', { ...BASE, id: 'c2', matterId: 'm2' });
+      await h.put('/v1/collections/c2', {
+        ...BASE, id: 'c2', matterId: 'm2',
+        baseDocumentId: 'd-base-2', variesDocumentIds: ['d-a-2'],
+      });
       expect((await h.get('/v1/matters/m1/collections') as Collection[]).map(c => c.id))
         .toEqual(['c1']);
+      await h.app.close();
+    });
+  });
+
+  it('refuses a collection naming a document from ANOTHER matter (Part 2A m2)', async () => {
+    // The check `PUT /v1/reviews/:id` already made and this sibling did not.
+    // `collection.varies_document_ids` deliberately carries no foreign key
+    // (grouping writes the record and each member's `role` non-atomically),
+    // so nothing below the route would have noticed — and a review over such
+    // a collection is then refused on every save, blaming the review.
+    await withPg(async t => {
+      await aMatter(t, 'm1');
+      await aMembers(t);
+      await aMatter(t, 'm2');
+      await aMembers(t, 'm2', WS, ['d-theirs']);
+      const h = harness(t, await aUser(t));
+      const res = await h.raw('PUT', '/v1/collections/c1', {
+        ...BASE, variesDocumentIds: ['d-a', 'd-theirs'],
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/d-theirs/);
+      expect((await t.query("select 1 from collection where id = 'c1'")).length).toBe(0);
+      await h.app.close();
+    });
+  });
+
+  it('checks baseDocumentId too, not only variesDocumentIds (Part 2A m2)', async () => {
+    await withPg(async t => {
+      await aMatter(t, 'm1');
+      await aMembers(t);
+      await aMatter(t, 'm2');
+      await aMembers(t, 'm2', WS, ['d-theirs']);
+      const h = harness(t, await aUser(t));
+      const res = await h.raw('PUT', '/v1/collections/c1',
+        { ...BASE, baseDocumentId: 'd-theirs' });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/d-theirs/);
+      await h.app.close();
+    });
+  });
+
+  it('STILL SAVES after a member was deleted from the matter (Part 2A m2, C1 s shape)', async () => {
+    // Scoped to ids being INTRODUCED, exactly as the review route now is:
+    // a member deleted afterwards must not make an existing collection
+    // unsaveable, which is C1 one table over.
+    await withPg(async t => {
+      await aMatter(t);
+      await aMembers(t);
+      const h = harness(t, await aUser(t));
+      const first = await h.put('/v1/collections/c1', BASE);
+      await t.query("delete from document where id = 'd-b'");
+      const again = await h.put('/v1/collections/c1',
+        { ...BASE, name: 'Renamed', version: first.version });
+      expect(again.name).toBe('Renamed');
+      expect(again.variesDocumentIds).toEqual(['d-a', 'd-b']);
       await h.app.close();
     });
   });
@@ -230,6 +319,7 @@ describe('collection routes over a real Postgres', () => {
   it('refuses a stale write with 409 and returns the current row (P9)', async () => {
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const h = harness(t, await aUser(t));
       const first = await h.put('/v1/collections/c1', BASE);
       expect(first.version).toBe(1);
@@ -253,6 +343,7 @@ describe('collection routes over a real Postgres', () => {
   it('refuses a create over an id that already exists, rather than overwriting it', async () => {
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const h = harness(t, await aUser(t));
       await h.put('/v1/collections/c1', BASE);
       // No `version` at all — the claim `newCollection` makes.
@@ -283,6 +374,7 @@ describe('collection routes over a real Postgres', () => {
         `insert into collection (id, workspace_id, matter_id, name, base_document_id, created_at)
          values ('foreign', $1, 'theirs', 'Theirs', 'd', now())`, [OTHER_WS]);
       await aMatter(t, 'm1');
+      await aMembers(t);
       const h = harness(t, await aUser(t));
 
       // NOT FOUND, not FORBIDDEN.
@@ -311,13 +403,14 @@ describe('collection routes over a real Postgres', () => {
     // `document.collection_id` carries no foreign key for the same reason.
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const h = harness(t, await aUser(t));
       await h.put('/v1/collections/c1', BASE);
+      // `aMembers` already created `d-a`; this is the grouping write that
+      // used to insert it, now expressed as the update it always was.
       await t.query(
-        `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
-                               byte_size, mime, blob_key, role, collection_id, added_at)
-         values ('d-a', $1, 'm1', 'DoV.pdf', 'pdf', 'x', 'parsed', 4, 'application/pdf',
-                 'k', 'varies', 'c1', now())`, [WS]);
+        "update document set role = 'varies', collection_id = 'c1' where id = 'd-a' and workspace_id = $1",
+        [WS]);
 
       expect((await h.raw('DELETE', '/v1/collections/c1')).statusCode).toBe(204);
       const doc = await t.query<{ role: string; collection_id: string | null }>(
@@ -333,6 +426,7 @@ describe('collection routes over a real Postgres', () => {
   it('encodes an id with URL-significant characters rather than losing it', async () => {
     await withPg(async t => {
       await aMatter(t);
+      await aMembers(t);
       const h = harness(t, await aUser(t));
       const id = 'a/b c?d';
       const url = `/v1/collections/${encodeURIComponent(id)}`;

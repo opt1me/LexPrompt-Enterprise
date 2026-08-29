@@ -83,6 +83,56 @@ export function registerCollections(app: FastifyInstance, db: Db): void {
         `There is no matter ${input.matterId} to put this collection in.`, 'not_found', 404);
     }
 
+    // Every document this collection NAMES must be in that same matter —
+    // the check `PUT /v1/reviews/:id` already made, and the sibling that
+    // did not make it (Part 2A m2). The column deliberately carries no
+    // foreign key (grouping and ungrouping write the collection record and
+    // each member's `role` non-atomically, so an FK would refuse the
+    // intermediate state), which means nothing below this line would notice
+    // a member from another matter — and a review over such a collection is
+    // then refused on every save, blaming the review.
+    //
+    // Scoped to ids being INTRODUCED, exactly as the review route is and for
+    // the same reason: a member document deleted from the matter afterwards
+    // must not make an existing collection unsaveable. `baseDocumentId` and
+    // `variesDocumentIds` together, because both are member ids and checking
+    // one leaves the other free.
+    const named = [
+      ...(input.baseDocumentId ? [input.baseDocumentId] : []),
+      ...input.variesDocumentIds,
+    ];
+    if (named.length > 0) {
+      const held = await db.query<{ base_document_id: string | null; varies_document_ids: unknown }>(
+        'select base_document_id, varies_document_ids from collection where id = $1 and workspace_id = $2',
+        [id, ws]);
+      const already = new Set<string>();
+      if (held[0]) {
+        if (held[0].base_document_id) already.add(held[0].base_document_id);
+        const varies = typeof held[0].varies_document_ids === 'string'
+          ? JSON.parse(held[0].varies_document_ids) as unknown
+          : held[0].varies_document_ids;
+        if (Array.isArray(varies)) {
+          for (const v of varies) if (typeof v === 'string') already.add(v);
+        }
+      }
+      const introduced = [...new Set(named)].filter(docId => !already.has(docId));
+      if (introduced.length > 0) {
+        const found = await db.query<{ id: string }>(
+          `select id from document
+           where workspace_id = $1 and matter_id = $2 and id = any($3::text[])`,
+          [ws, input.matterId, introduced]);
+        if (found.length !== introduced.length) {
+          const missing = introduced.filter(docId => !found.some(r => r.id === docId));
+          throw new ModelError(
+            `This collection names ${missing.length} document${missing.length === 1 ? '' : 's'} `
+            + `that ${missing.length === 1 ? 'is' : 'are'} not in this matter: `
+            + `${missing.join(', ')}. A collection can only group documents in the matter it `
+            + 'belongs to.',
+            'conflict', 400);
+        }
+      }
+    }
+
     // THE ATTRIBUTION COMES FROM THE TOKEN, NEVER FROM THE BODY (property 3),
     // and only on the INSERT — `created_by_user_id` is not in the DO UPDATE
     // list, because whoever built this collection still built it and the last

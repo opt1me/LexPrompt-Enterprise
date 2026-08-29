@@ -77,6 +77,10 @@ describe('every route has a declared minimum role', () => {
 
     const { app, calls } = buildTestApi({ principal: null });
     expect((await app.inject({ method: 'GET', url: '/healthz' })).statusCode).toBe(200);
+    // …and with a query string (Part 2A m11). The hook matched the whole
+    // `req.url`, so a probe with a cache-buster needed a token: fail-closed,
+    // but the two lists then agreed only on one exact string.
+    expect((await app.inject({ method: 'GET', url: '/healthz?probe=1' })).statusCode).toBe(200);
     expect(calls.infer).toHaveLength(0);
     await app.close();
   });

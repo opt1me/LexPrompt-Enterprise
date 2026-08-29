@@ -48,6 +48,44 @@ describe('Db.tx nests with savepoints, never with a second BEGIN', () => {
     ]);
   });
 
+  it('lets the ORIGINAL error out when ROLLBACK itself throws (Part 2A m11)', async () => {
+    // A connection that has already gone away makes ROLLBACK throw, and
+    // rethrowing that handed the caller a transport error instead of the
+    // constraint violation that actually happened — the wrong diagnosis,
+    // delivered with apparent authority, at the one moment a caller is
+    // trying to find out what it did wrong.
+    const statements: string[] = [];
+    const client = {
+      query: async (text: string) => {
+        statements.push(text);
+        if (text === 'ROLLBACK') throw new Error('Connection terminated unexpectedly');
+        return { rows: [] };
+      },
+      release: () => { statements.push('RELEASE-CLIENT'); },
+    };
+    const db = makeDb({ connect: async () => client });
+    await expect(db.tx(async () => {
+      throw new Error('duplicate key value violates unique constraint');
+    })).rejects.toThrow('duplicate key value violates unique constraint');
+    // …and the client is still released, so a throwing rollback cannot leak
+    // a connection either.
+    expect(statements.at(-1)).toBe('RELEASE-CLIENT');
+  });
+
+  it('lets the original error out when ROLLBACK TO SAVEPOINT throws (Part 2A m11)', async () => {
+    const client = {
+      query: async (text: string) => {
+        if (text.startsWith('ROLLBACK TO SAVEPOINT')) throw new Error('savepoint gone');
+        return { rows: [] };
+      },
+      release: () => {},
+    };
+    const db = makeDb({ connect: async () => client });
+    await expect(db.tx(async outer => {
+      await outer.tx(async () => { throw new Error('inner failed'); });
+    })).rejects.toThrow('inner failed');
+  });
+
   it('releases the client even when the outermost block throws', async () => {
     const { client, statements } = recorder();
     const db = makeDb({ connect: async () => client });

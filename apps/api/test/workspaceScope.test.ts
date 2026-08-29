@@ -92,6 +92,46 @@ describe('the scanner finds something (a guard that matches nothing passes vacuo
   });
 });
 
+/**
+ * The part of a statement where a workspace predicate has to APPEAR.
+ *
+ * Part 2A m5: this used to be "anywhere in the statement", which is a
+ * substring test an upsert satisfies for free — every `insert … on conflict
+ * … do update … where` in `routes/` names `workspace_id` in its INSERT
+ * COLUMN LIST, so deleting `and review.workspace_id = $2` from the DO
+ * UPDATE's `where` left the guard green. A guard that passes over the exact
+ * mutation it exists to catch is decoration, and this one was: the
+ * workspace predicate on a DO UPDATE is the load-bearing half, because that
+ * is the clause deciding whether ANOTHER workspace's row gets overwritten.
+ *
+ * Three shapes, in the order they must be tested:
+ *
+ *  1. `… do update … where <pred>` — the predicate is what guards the
+ *     UPDATE half of an upsert, and it is the only region that counts. The
+ *     INSERT column list is not a filter.
+ *  2. any other statement with a `where` — the predicate is the filter.
+ *  3. a statement with NO `where` at all — an `insert … values` (or an
+ *     `on conflict … do nothing`, which cannot touch a foreign row): here
+ *     `workspace_id` in the column list IS the scoping, because the value
+ *     being written is the actor's own, so the whole statement is the
+ *     region.
+ *
+ * `returning` is trimmed off in every case: it names columns, not rows.
+ */
+function predicateRegion(statement: string): string {
+  const trimmed = statement.replace(/\breturning\b[\s\S]*$/i, '');
+  const upsert = /\bdo\s+update\b([\s\S]*)$/i.exec(trimmed);
+  if (upsert) {
+    const where = /\bwhere\b([\s\S]*)$/i.exec(upsert[1]);
+    // A `do update` with NO `where` cannot be scoped at all — return the
+    // empty string so it is reported rather than passed by its column list.
+    return where ? where[1] : '';
+  }
+  const where = /\bwhere\b([\s\S]*)$/i.exec(trimmed);
+  if (where) return where[1];
+  return trimmed;
+}
+
 describe('every SQL statement in a route module names workspace_id', () => {
   it('has no statement against a scoped table without a workspace predicate', () => {
     const offenders: string[] = [];
@@ -99,11 +139,44 @@ describe('every SQL statement in a route module names workspace_id', () => {
       for (const statement of statementsIn(codeOf(file))) {
         const table = namesScopedTable(statement);
         if (table === undefined) continue;
-        if (!/workspace_id/.test(statement)) {
+        if (!/workspace_id/.test(predicateRegion(statement))) {
           offenders.push(`${rel(file)} (${table}): ${statement.slice(0, 80)}`);
         }
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('reads the DO UPDATE s own where clause, not the INSERT column list', () => {
+    // THE MUTATION THIS GUARD MISSED. Both statements below name
+    // `workspace_id` in the column list; only one names it where it decides
+    // whose row is overwritten.
+    const guarded = 'insert into review (id, workspace_id, findings) values ($1, $2, $3)'
+      + ' on conflict (id) do update set findings = excluded.findings'
+      + ' where review.workspace_id = $2 and review.version = $4 returning *';
+    const unguarded = 'insert into review (id, workspace_id, findings) values ($1, $2, $3)'
+      + ' on conflict (id) do update set findings = excluded.findings'
+      + ' where review.version = $4 returning *';
+    expect(/workspace_id/.test(predicateRegion(guarded))).toBe(true);
+    expect(/workspace_id/.test(predicateRegion(unguarded))).toBe(false);
+    // …and the old test — `workspace_id` anywhere in the literal — cannot
+    // tell them apart at all, which is why it was green over the defect.
+    expect(/workspace_id/.test(unguarded)).toBe(true);
+  });
+
+  it('still accepts a plain insert, whose column list IS the scoping', () => {
+    expect(/workspace_id/.test(predicateRegion(
+      'insert into matter (id, workspace_id, name) values ($1, $2, $3)'))).toBe(true);
+  });
+
+  it('reads a plain where clause, and reports one that filters on id alone', () => {
+    expect(/workspace_id/.test(predicateRegion(
+      'select * from review where id = $1 and workspace_id = $2'))).toBe(true);
+    expect(/workspace_id/.test(predicateRegion(
+      'select * from review where id = $1'))).toBe(false);
+    // `returning` names columns, not rows: a `workspace_id` there is not a
+    // filter and must not satisfy the check.
+    expect(/workspace_id/.test(predicateRegion(
+      'delete from document where id = $1 returning workspace_id'))).toBe(false);
   });
 });

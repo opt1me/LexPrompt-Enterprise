@@ -125,6 +125,23 @@ async function aMatter(t: Tx, id = 'm1', ws = WS): Promise<void> {
      values ($1, $2, 'Brookvale', now(), now())`, [id, ws]);
 }
 
+/**
+ * A collection for a document to be moved into.
+ *
+ * `PATCH /v1/documents/:id/role` now checks that the `collectionId` it is
+ * handed exists in this workspace (Part 2A m3) — the absent foreign key is
+ * deliberate, "deliberately not enforced by the database" is not
+ * "deliberately not checked" — so a test that groups a document has to
+ * group it into something. Additive fixture seeding: no assertion moved.
+ */
+async function aCollection(t: Tx, id = 'c1', matterId = 'm1', ws = WS): Promise<void> {
+  await t.query(
+    `insert into collection (id, workspace_id, matter_id, name, base_document_id,
+                             varies_document_ids, created_at)
+     values ($1, $2, $3, 'A collection', $4, '[]'::jsonb, now())`,
+    [id, ws, matterId, `${id}-base`]);
+}
+
 describe('uploading a document', () => {
   it('stores the row and puts the bytes under blobKeyFor, and returns the row', async () => {
     await withPg(async t => {
@@ -200,6 +217,46 @@ describe('uploading a document', () => {
       // somewhere, which is a fact this workspace is not entitled to.
       expect(res.statusCode).toBe(404);
       expect(h.blobs.keys()).toEqual([]);
+      await h.app.close();
+    }, migratorDb());
+  });
+
+  it('refuses an id held by ANOTHER workspace without claiming an overwrite (Part 2A m4)', async () => {
+    // `document.id` is a GLOBAL primary key and the "id already taken"
+    // pre-check is workspace-scoped, so a foreign id passed it, the blob was
+    // written, `on conflict (id) do nothing` swallowed the insert, and the
+    // caller was told *"Its file HAS been written to storage under that id
+    // and may have replaced the other document's. Tell an administrator
+    // before opening it."* — false, because the blob key carries the
+    // workspace, so the two documents' bytes never shared a key. A confident
+    // wrong claim about a client's file, in the one message that sends a
+    // reader to fetch an administrator.
+    //
+    // A bare `ConflictError` instead, exactly as `matters.ts` answers the
+    // same P6 collision: that id is taken, and by what is not yours to know.
+    await withPg(async t => {
+      await t.query("insert into workspace (id, name) values ($1, 'Other')", [OTHER_WS]);
+      await aMatter(t);
+      await aMatter(t, 'theirs', OTHER_WS);
+      await t.query(
+        `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
+                               byte_size, mime, blob_key, role, added_at)
+         values ('d1', $1, 'theirs', 'theirs.pdf', 'pdf', 'x', 'parsed', 4, 'application/pdf',
+                 $2, 'standalone', now())`, [OTHER_WS, blobKeyFor(OTHER_WS, 'd1')]);
+
+      const h = harness(t, await aUser(t));
+      const res = await h.rawPost(RECORD, Buffer.from('mine'));
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.message).not.toMatch(/HAS been written/);
+      expect(res.json().error.message).not.toMatch(/may have replaced/);
+      expect(res.json().error.message).toMatch(/not yours to overwrite/);
+      // …and no bytes were written for an insert that was never going to
+      // land, so the refusal leaves no orphan behind either.
+      expect(h.blobs.keys()).toEqual([]);
+      // The other workspace's row is untouched.
+      const theirs = await t.query<{ name: string }>(
+        'select name from document where id = $1 and workspace_id = $2', ['d1', OTHER_WS]);
+      expect(theirs[0].name).toBe('theirs.pdf');
       await h.app.close();
     }, migratorDb());
   });
@@ -356,6 +413,7 @@ describe('collection membership', () => {
       await aMatter(t);
       const h = harness(t, await aUser(t));
       await h.post({ ...RECORD, markupNotice: 'Tracked changes were accepted.', documentDate: 1_600_000_000_000 });
+      await aCollection(t);
       await t.query(
         'update document set content_sha256 = $2 where id = $1 and workspace_id = $3',
         ['d1', 'abc123', WS]);
@@ -381,6 +439,7 @@ describe('collection membership', () => {
       await aMatter(t);
       const h = harness(t, await aUser(t));
       await h.post(RECORD);
+      await aCollection(t);
       await h.raw('PATCH', '/v1/documents/d1/role', { role: 'base', collectionId: 'c1' });
       const doc = (await h.raw('PATCH', '/v1/documents/d1/role',
         { role: 'standalone' })).json() as DocumentRecord;
@@ -402,6 +461,43 @@ describe('collection membership', () => {
       expect((await h.get('/v1/documents/d1') as DocumentRecord).role).toBe('standalone');
       await h.app.close();
     });
+  });
+
+  it('refuses a collectionId naming no collection here, before writing (Part 2A m3)', async () => {
+    // `document.collection_id` carries no foreign key on purpose — grouping
+    // writes the collection record and each member's `role` as separate
+    // statements, and an FK would refuse the intermediate state. Without a
+    // route-level check a stale id then wrote a document into a collection
+    // that does not exist: gone from the matter's standalone list, and in
+    // nothing.
+    await withPg(async t => {
+      await aMatter(t);
+      const h = harness(t, await aUser(t));
+      await h.post(RECORD);
+      const res = await h.raw('PATCH', '/v1/documents/d1/role',
+        { role: 'varies', collectionId: 'no-such-collection' });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.message).toMatch(/no-such-collection/);
+      // Nothing was written: role and membership are as they were.
+      const doc = await h.get('/v1/documents/d1') as DocumentRecord;
+      expect(doc.role).toBe('standalone');
+      expect('collectionId' in doc).toBe(false);
+      await h.app.close();
+    });
+  });
+
+  it('refuses a collection belonging to ANOTHER workspace (Part 2A m3)', async () => {
+    await withPg(async t => {
+      await t.query("insert into workspace (id, name) values ($1, 'Other')", [OTHER_WS]);
+      await aMatter(t);
+      await aMatter(t, 'theirs', OTHER_WS);
+      await aCollection(t, 'c-theirs', 'theirs', OTHER_WS);
+      const h = harness(t, await aUser(t));
+      await h.post(RECORD);
+      expect((await h.raw('PATCH', '/v1/documents/d1/role',
+        { role: 'varies', collectionId: 'c-theirs' })).statusCode).toBe(404);
+      await h.app.close();
+    }, migratorDb());
   });
 
   it('answers 404 for a role patch on a document that is not there', async () => {
@@ -499,7 +595,10 @@ describe('the matter cascade reaches the bytes', () => {
       const h = harness(t, await aUser(t));
       await h.post({ ...RECORD, id: 'd1' });
       await h.post({ ...RECORD, id: 'd2' });
-      expect(h.blobs.keys()).toEqual([blobKeyFor(WS, 'd1'), blobKeyFor(WS, 'd2')]);
+      // Sorted, for the reason the cascade case below gives: the store's own
+      // listing order is not something either side promises.
+      expect([...h.blobs.keys()].sort())
+        .toEqual([blobKeyFor(WS, 'd1'), blobKeyFor(WS, 'd2')].sort());
 
       expect((await h.raw('DELETE', '/v1/matters/m1')).statusCode).toBe(204);
       expect((await t.query("select 1 from document where matter_id = 'm1'")).length).toBe(0);
@@ -523,7 +622,16 @@ describe('the matter cascade reaches the bytes', () => {
       h.blobs.deleteCalls.length = 0;
 
       expect((await h.raw('DELETE', '/v1/matters/m1')).statusCode).toBe(204);
-      expect(h.blobs.deleteCalls).toEqual([blobKeyFor(WS, 'd1'), blobKeyFor(WS, 'd2')]);
+      // SORTED. The cascade reads `select blob_key from document where
+      // matter_id = $1 and workspace_id = $2` with no ORDER BY, so Postgres
+      // guarantees nothing about the order those keys come back in — and it
+      // does flip: this assertion passed for hundreds of runs and then
+      // failed as `[d2, d1]` on a rebuilt stack. What the cascade promises
+      // is that EVERY key is attempted even after one has already gone, and
+      // that is what this now asserts. An assertion whose truth depends on a
+      // heap-scan order is a test passing for a reason nothing guarantees.
+      expect([...h.blobs.deleteCalls].sort())
+        .toEqual([blobKeyFor(WS, 'd1'), blobKeyFor(WS, 'd2')].sort());
       expect(h.blobs.keys()).toEqual([]);
       await h.app.close();
     });

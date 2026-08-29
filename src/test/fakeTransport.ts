@@ -131,8 +131,14 @@ export function transportModule(t: FakeTransport): Record<string, unknown> {
       return t.responses.get(path);
     },
     apiSendBlob: async (path: string, form: unknown) => {
-      check(path);
+      // RECORDED BEFORE the failure check, for the reason `apiSend` above
+      // gives: the real client sends the request and then turns the response
+      // into a `ModelError`, so a refused upload is an upload that was
+      // ATTEMPTED. Recorded after, a test asking "what did the refused
+      // upload send?" saw nothing — two siblings, one rule, previously
+      // applied to one of them.
       t.sent.push({ method: 'POST', path, body: form });
+      check(path);
       return t.responses.get(path) ?? undefined;
     },
     apiGetBlob: async (path: string) => {

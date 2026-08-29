@@ -54,6 +54,30 @@ export function initialsFrom(displayName: string): string {
  * would make re-authentication the undo button for an administrator's
  * decision, and nothing in the UI would ever show it happening.
  *
+ * `display_name` and `initials` are out of the DO UPDATE list for the SAME
+ * reason, one person rather than one administrator. They were in it, which
+ * made `PUT /v1/me` — the one thing §7 lets a person change about
+ * themselves — a write that undid itself: a rename survived until the next
+ * authenticated request, milliseconds later, when this statement put the
+ * token's name back. A route, a repository function (`saveProfile`), its
+ * docstring ("so the header shows a renamed user without a reload") and its
+ * test all asserted a behaviour the server did not have. Nothing calls
+ * `saveProfile` today, so the consequence was nil — and that is exactly the
+ * shape that ships as a defect the day a rename screen lands.
+ *
+ * The cost, stated rather than hidden: a name changed in the identity
+ * provider no longer propagates to an existing row. The token's name is
+ * what PROVISIONS a row and is not what maintains it. Making both true at
+ * once needs a `display_name_source` column ('token' | 'user'), so that a
+ * name a person set wins and a name nobody set follows the token — a schema
+ * change, and a Stage 3 one. Until then this is the direction that leaves
+ * no self-undoing write.
+ *
+ * `email` is COALESCEd rather than taken from `excluded`. A token minted
+ * without an `email` claim — a narrower scope, a different client — would
+ * otherwise NULL a stored address rather than leave it, deleting a fact
+ * nothing in this system can recover.
+ *
  * The disabled check reads the row the upsert RETURNED — after the write,
  * not before it. Refusing first would suppress `last_seen_at`, which is the
  * fact an administrator uses to see that a disabled person is still trying.
@@ -70,9 +94,7 @@ export async function resolveActor(
        (id, workspace_id, issuer, subject, email, display_name, initials, role, status)
      values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'active')
      on conflict (issuer, subject) do update set
-       email        = excluded.email,
-       display_name = excluded.display_name,
-       initials     = excluded.initials,
+       email        = coalesce(excluded.email, app_user.email),
        role         = excluded.role,
        last_seen_at = now()
      returning id, email, display_name, initials, role, status`,

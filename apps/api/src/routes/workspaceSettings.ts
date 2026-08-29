@@ -100,8 +100,18 @@ export function registerWorkspaceSettings(app: FastifyInstance, db: Db, gateway:
     const ws = req.actor!.workspaceId;
     const body = (req.body ?? {}) as Record<string, unknown>;
 
+    // OMITTING `modelChoiceId` means "unchanged", exactly as omitting
+    // `concurrency` does (Part 2A m7). It used to be required on every PUT,
+    // which made the concurrency slider's Save on a FRESH workspace answer
+    // *"A model choice is required."* — a 400 naming a field the admin did
+    // not touch, on the one workspace state where they cannot satisfy it
+    // without abandoning what they were doing. Sending it EMPTY is still
+    // refused: "I am not changing the model" and "I am setting the model to
+    // nothing" are different requests, and only the first is one this route
+    // should carry out.
+    const hasModelChoice = body.modelChoiceId !== undefined;
     const modelChoiceId = typeof body.modelChoiceId === 'string' ? body.modelChoiceId.trim() : '';
-    if (!modelChoiceId) {
+    if (hasModelChoice && !modelChoiceId) {
       throw new ModelError('A model choice is required.', 'unknown', 400);
     }
     // A row always exists by the time a real caller reaches this route (a
@@ -123,25 +133,43 @@ export function registerWorkspaceSettings(app: FastifyInstance, db: Db, gateway:
     // The allowlist has ONE home. This asks the gateway rather than holding
     // a second list — a second list here would be the exact drift Stage 1's
     // interface note 2 exists to prevent.
-    let status: number;
-    let json: unknown;
-    try {
-      ({ status, json } = await gateway.models());
-    } catch (err) {
-      throw unreachableGateway(err, 'model list');
-    }
-    const refusal = callerAuthRefusal(status);
-    if (refusal) throw refusal;
-    if (status !== 200) {
-      throw new ModelError('LexPrompt could not read the model allowlist.', 'service_misconfigured', 503);
-    }
-    const models = (json as { models?: AllowedModel[] })?.models ?? [];
-    const chosen = models.find(m => m.id === modelChoiceId);
-    if (!chosen) {
-      throw new ModelError(
-        `"${modelChoiceId}" is not on your firm's model allowlist. Choose a model from the list.`,
-        'model_not_allowed', 400,
-      );
+    //
+    // Asked ONLY when the model is actually being set. A write that does
+    // not name a model asserts nothing about one, so checking the stored id
+    // against the allowlist here would let a withdrawn model block a
+    // concurrency change — and would make a save fail for a reason the
+    // admin's own request had nothing to do with. Whether the STORED choice
+    // is still allowed is `staleModelChoiceId`'s question, asked where a
+    // reader can act on it.
+    let chosen: { id: string; label?: string; model?: string };
+    if (hasModelChoice) {
+      let status: number;
+      let json: unknown;
+      try {
+        ({ status, json } = await gateway.models());
+      } catch (err) {
+        throw unreachableGateway(err, 'model list');
+      }
+      const refusal = callerAuthRefusal(status);
+      if (refusal) throw refusal;
+      if (status !== 200) {
+        throw new ModelError('LexPrompt could not read the model allowlist.', 'service_misconfigured', 503);
+      }
+      const models = (json as { models?: AllowedModel[] })?.models ?? [];
+      const found = models.find(m => m.id === modelChoiceId);
+      if (!found) {
+        throw new ModelError(
+          `"${modelChoiceId}" is not on your firm's model allowlist. Choose a model from the list.`,
+          'model_not_allowed', 400,
+        );
+      }
+      chosen = found;
+    } else {
+      chosen = {
+        id: before.model_choice_id ?? '',
+        ...(before.model_choice_label ? { label: before.model_choice_label } : {}),
+        ...(before.model_choice_model ? { model: before.model_choice_model } : {}),
+      };
     }
 
     // Same shape as `matters.ts`'s PUT: a record with NO version claims to
@@ -163,7 +191,7 @@ export function registerWorkspaceSettings(app: FastifyInstance, db: Db, gateway:
          version             = workspace_setting.version + 1
        where workspace_setting.version = $7
        returning *`,
-      [ws, chosen.id, chosen.label, chosen.model, concurrency, req.actor!.id,
+      [ws, chosen.id, chosen.label ?? null, chosen.model ?? null, concurrency, req.actor!.id,
         typeof body.version === 'number' ? body.version : null],
     );
     if (!rows[0]) {

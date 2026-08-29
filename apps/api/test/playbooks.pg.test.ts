@@ -452,6 +452,31 @@ describe('reading and saving a playbook', () => {
     });
   });
 
+  it('404s the version list for a playbook that does not exist (Part 2A m9)', async () => {
+    await withPg(async t => {
+      const h = harness(t, await aUser(t));
+      const res = await h.raw('GET', '/v1/playbooks/no-such/versions');
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.message).toMatch(/no such playbook/i);
+      await h.app.close();
+    });
+  });
+
+  it('still answers [] for a playbook that exists with nothing published (Part 2A m9)', async () => {
+    // The other half: "no versions yet" is a real, legitimate empty state
+    // and must stay distinguishable from "no such playbook".
+    await withPg(async t => {
+      const h = harness(t, await aUser(t));
+      await t.query(
+        `insert into playbook (id, workspace_id, name, created_at, updated_at, schema_version)
+         values ('p-empty', $1, 'Nothing published', now(), now(), 7)`, [WS]);
+      const res = await h.raw('GET', '/v1/playbooks/p-empty/versions');
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual([]);
+      await h.app.close();
+    });
+  });
+
   it('never lets a playbook or a version be read or published across workspaces', async () => {
     await withPg(async t => {
       await t.query("insert into workspace (id, name) values ($1, 'Other')", [OTHER_WS]);
@@ -466,7 +491,10 @@ describe('reading and saving a playbook', () => {
       expect((await h.raw('GET', '/v1/playbooks/foreign')).statusCode).toBe(404);
       expect((await h.raw('GET', '/v1/versions/fv')).statusCode).toBe(404);
       expect((await h.raw('GET', '/v1/playbooks/foreign/content')).statusCode).toBe(404);
-      expect((await h.get('/v1/playbooks/foreign/versions') as PlaybookVersion[])).toEqual([]);
+      // 404, not `[]` (Part 2A m9). An empty list renders in a version
+      // history pane as "nothing published yet" — the one list route where
+      // "no such playbook" and "no versions yet" arrived identically.
+      expect((await h.raw('GET', '/v1/playbooks/foreign/versions')).statusCode).toBe(404);
       expect((await h.get('/v1/playbooks') as Playbook[]).map(p => p.id)).not.toContain('foreign');
 
       // A PUBLISH over another workspace's id is refused, not a takeover.

@@ -178,10 +178,19 @@ export function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number
  * `main.ts`'s `resolveActor`; this function only sees the `Actor` that
  * produced.
  */
+/** The path half of a request URL — everything before `?` or `#`. Written
+ *  here rather than through `new URL()` because `req.url` is origin-relative
+ *  and `URL` needs a base it would then have to invent. */
+function pathOf(url: string): string {
+  const cut = url.search(/[?#]/);
+  return cut === -1 ? url : url.slice(0, cut);
+}
+
 export function buildServer(deps: ServerDeps): FastifyInstance {
   const app: FastifyInstance = Fastify({ logger: false, bodyLimit: deps.maxBodyBytes });
 
-  // The DECLARED limit, applied to the multipart path too.
+  // The DECLARED limit, applied to the multipart path too — to BOTH parts
+  // of it.
   //
   // `bodyLimit` above does not govern a multipart file part — @fastify/multipart
   // has its OWN default (1 MiB, and an unlimited part count), so with nothing
@@ -191,24 +200,47 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   // defer to this process), one layer further in, on the path that carries a
   // scanned lease.
   //
-  // So four limits agree by construction: nginx defers, Fastify declares
-  // `API_MAX_BODY_BYTES`, multipart declares the same value, and the
-  // gateway's prompt cap stays its own separate, separately-reported number
-  // because it counts characters of PROMPT rather than bytes of upload.
+  // `fieldSize` IS THE THIRD TIME THAT TRAP HAS BEEN SPRUNG on this same
+  // path, and it was left undeclared here while the paragraph above claimed
+  // the chain agreed. @fastify/multipart defaults only `parts` and
+  // `fileSize`; `fieldSize` fell through to busboy's own 1 MiB default, and
+  // busboy TRUNCATES an oversized field rather than erroring. The `record`
+  // part is `text/plain` (that is what `FormData.append` of a string sends),
+  // so @fastify/multipart's `InvalidJSONFieldError` — raised on a truncated
+  // field only when the part is labelled `application/json` — never fired.
+  // A `DocumentRecord` over 1,048,576 bytes, which is `record.text`: the
+  // whole extracted text of a long lease bundle or an OCR'd scan, arrived at
+  // `JSON.parse` cut mid-string and was refused as *"the record field is not
+  // JSON"* — a message blaming the browser's serialisation, naming no size,
+  // and pointing at no key an administrator could raise.
+  //
+  // So FIVE limits agree by construction: nginx defers, Fastify declares
+  // `API_MAX_BODY_BYTES`, multipart declares the same value for a file part
+  // AND for a field, and the gateway's prompt cap stays its own separate,
+  // separately-reported number because it counts characters of PROMPT rather
+  // than bytes of upload.
   //
   // `throwFileSizeLimit` so an oversized upload is REFUSED rather than
   // silently truncated: a document stored with its tail missing is bytes
-  // that lie about being the file.
+  // that lie about being the file. There is no `throwFieldSizeLimit` to pair
+  // with it — busboy simply truncates — which is precisely why the declared
+  // value has to be one no legitimate record reaches rather than a cap the
+  // route could report hitting.
   void app.register(multipart, {
     throwFileSizeLimit: true,
-    limits: { fileSize: deps.maxBodyBytes, files: 2, fields: 8 },
+    limits: { fileSize: deps.maxBodyBytes, fieldSize: deps.maxBodyBytes, files: 2, fields: 8 },
   });
 
   registerErrorEnvelope(app, deps.maxBodyBytes);
 
   const auth = requireUser(deps.verify);
   app.addHook('preHandler', async (req, reply) => {
-    if (req.url === '/healthz') return;
+    // The PATH, not the whole URL. `req.url === '/healthz'` made
+    // `/healthz?probe=1` require a token — fail-closed and harmless in
+    // itself, but the two exemption lists `authz.route.test.ts` asserts
+    // "agree" then agreed only on one exact string, and a probe with a
+    // cache-buster is a normal thing for a load balancer to send.
+    if (pathOf(req.url) === '/healthz') return;
     await auth(req, reply);
     // `requireUser` answers the reply itself on failure and `reply.sent`
     // records that. Continuing past it would resolve an actor for a caller

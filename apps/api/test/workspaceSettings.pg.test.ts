@@ -156,6 +156,56 @@ describe('workspace settings over a real Postgres', () => {
     });
   });
 
+  it('lets an admin set concurrency on a FRESH workspace, with no model chosen (Part 2A m7)', async () => {
+    // The "Parallel requests" Save used to answer 400 "A model choice is
+    // required." on a fresh workspace: a refusal naming a field the admin
+    // did not touch, on the one state where they cannot satisfy it without
+    // abandoning what they were doing. Omitting modelChoiceId now means
+    // "unchanged", exactly as omitting concurrency does.
+    await withPg(async t => {
+      const admin = await aUser(t, 'admin');
+      const h = harness(t, admin, 'admin');
+      const before = await h.get();
+      expect(before.modelChoiceId).toBe('');
+      const res = await h.raw('PUT', { concurrency: 7, version: before.version });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json().concurrency).toBe(7);
+      // …and it did not invent a model choice on the way.
+      expect(res.json().modelChoiceId).toBe('');
+    });
+  });
+
+  it('still refuses an EMPTY modelChoiceId, which is a request to unset it (Part 2A m7)', async () => {
+    // "I am not changing the model" and "I am setting the model to nothing"
+    // are different requests, and only the first is one this route carries
+    // out. Absent is not empty.
+    await withPg(async t => {
+      const admin = await aUser(t, 'admin');
+      const h = harness(t, admin, 'admin');
+      const before = await h.get();
+      const res = await h.raw('PUT',
+        { modelChoiceId: '  ', concurrency: 7, version: before.version });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/model choice is required/i);
+    });
+  });
+
+  it('preserves the stored model choice through a concurrency-only save (Part 2A m7)', async () => {
+    await withPg(async t => {
+      const admin = await aUser(t, 'admin');
+      const h = harness(t, admin, 'admin');
+      const before = await h.get();
+      const chosen = await h.raw('PUT', { modelChoiceId: 'uk-gpt', version: before.version });
+      expect(chosen.json().modelChoiceId).toBe('uk-gpt');
+      const only = await h.raw('PUT',
+        { concurrency: 3, version: chosen.json().version });
+      expect(only.statusCode, only.body).toBe(200);
+      expect(only.json().modelChoiceId).toBe('uk-gpt');
+      expect(only.json().modelChoiceLabel).toBe(chosen.json().modelChoiceLabel);
+      expect(only.json().concurrency).toBe(3);
+    });
+  });
+
   it('omitting concurrency on a PUT PRESERVES it, rather than resetting to the table default', async () => {
     // The easiest field in this route to get silently wrong: an admin
     // changing only the model must not also revert a concurrency limit a

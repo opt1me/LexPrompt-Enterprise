@@ -109,11 +109,22 @@ export function registerPlaybooks(app: FastifyInstance, db: Db): void {
 
   app.get('/v1/playbooks/:id/versions', async (req): Promise<PlaybookVersion[]> => {
     const { id } = req.params as { id: string };
+    const ws = req.actor!.workspaceId;
+    // The PARENT first (Part 2A m9). Without this, a playbook that does not
+    // exist — or belongs to another workspace — answered `[]`, which a
+    // version-history pane renders as "nothing published yet": the one list
+    // route where "no such playbook" and "no versions yet" arrived
+    // identically, and the empty-versus-broken rule says they must not.
+    // 404 rather than 403 for a foreign id, exactly as every other read of a
+    // specific record here: a 403 would confirm the id exists somewhere.
+    const parent = await db.query<{ id: string }>(
+      'select id from playbook where id = $1 and workspace_id = $2', [id, ws]);
+    if (!parent[0]) throw new ModelError('There is no such playbook.', 'not_found', 404);
     // Newest first, as `listVersions` sorted for itself.
     const rows = await db.query<PlaybookVersionRow>(
       `select * from playbook_version where playbook_id = $1 and workspace_id = $2
        order by version_number desc`,
-      [id, req.actor!.workspaceId]);
+      [id, ws]);
     return rows.map(fromPlaybookVersionRow);
   });
 

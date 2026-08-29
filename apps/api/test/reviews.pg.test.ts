@@ -487,6 +487,84 @@ describe('a review may only name documents in its own matter', () => {
     });
   });
 
+  it('STILL SAVES a review after one of its documents was deleted from the matter', async () => {
+    // THE ONE C1 EXISTS FOR. Removing a document from a matter is a single
+    // click that touches no review, and spec §9 deliberately keeps such a
+    // review openable. Re-validating the ids the row ALREADY HOLDS turned
+    // that into a review that opens, reads, and can never be written again:
+    // every verification, note, net-position confirmation, retry and
+    // auto-save on it answered 400, permanently, with no UI anywhere able to
+    // edit a stored review's `documentIds`. A guard against a lost human
+    // judgement that has never been seen to fail is decoration, so this
+    // re-reads the row and asserts the verification actually landed.
+    await withPg(async t => {
+      await aMatter(t, 'm1');
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      await aDocument(t, 'd2');
+      const h = harness(t, await aUser(t));
+
+      const first = await h.put('/v1/reviews/r1', REVIEW({
+        documentIds: ['d1', 'd2'],
+        target: { kind: 'documents', documentIds: ['d1', 'd2'] },
+        findings: { d1: { c1: finding() } },
+      }));
+
+      // The delete the reviewer actually performs — the row goes, the review
+      // is not touched.
+      await t.query("delete from document where id = 'd2'");
+
+      const saved = await h.put('/v1/reviews/r1', {
+        ...REVIEW({
+          documentIds: ['d1', 'd2'],
+          target: { kind: 'documents', documentIds: ['d1', 'd2'] },
+          findings: {
+            d1: { c1: finding({ verification: {
+              state: 'verified', byUserId: 'u-human', at: 1_700_000_099_000,
+            } }) },
+          },
+        }),
+        version: first.version,
+      });
+      expect(saved.documentIds).toEqual(['d1', 'd2']);
+
+      const back = await h.get('/v1/reviews/r1') as Review;
+      const findings = back.findings as Record<string, Record<string, {
+        verification: { at: number } }>>;
+      expect(findings.d1.c1.verification.at).toBe(1_700_000_099_000);
+      await h.app.close();
+    });
+  });
+
+  it('still refuses a document id the stored review did NOT already hold', async () => {
+    // The other half of C1's fix: grandfathering the row's own ids must not
+    // become a door around the guard. A SECOND save that ADDS a foreign id
+    // is refused exactly as the first save naming one is.
+    await withPg(async t => {
+      await aMatter(t, 'm1');
+      await aVersion(t);
+      await aMatter(t, 'm2');
+      await aDocument(t, 'd1', 'm1');
+      await aDocument(t, 'd-theirs', 'm2');
+      const h = harness(t, await aUser(t));
+
+      const first = await h.put('/v1/reviews/r1', REVIEW());
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW({
+          documentIds: ['d1', 'd-theirs'],
+          target: { kind: 'documents', documentIds: ['d1', 'd-theirs'] },
+        }),
+        version: first.version,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/d-theirs/);
+      // And the row is unchanged — the refusal wrote nothing.
+      const back = await h.get('/v1/reviews/r1') as Review;
+      expect(back.documentIds).toEqual(['d1']);
+      await h.app.close();
+    });
+  });
+
   it('refuses a target whose kind is neither documents nor collection', async () => {
     await withPg(async t => {
       await aMatter(t);

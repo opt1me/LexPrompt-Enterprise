@@ -24,13 +24,21 @@ export async function getWorkspaceSettings(): Promise<WorkspaceSettings> {
  * (another admin, or another tab) is refused (P9) rather than silently
  * overwriting a decision this caller never saw.
  *
+ * `modelChoiceId` is optional for the same reason `concurrency` is, and
+ * omitting it PRESERVES the stored choice: a concurrency-only save is not a
+ * statement about which model a firm's reviews run on, and sending one
+ * anyway made that save fail on a fresh workspace with *"A model choice is
+ * required."* — a refusal naming a field the admin had not touched (Part 2A
+ * m7). An EMPTY STRING is still refused by the route: "not changing it" and
+ * "setting it to nothing" are different requests.
+ *
  * `concurrency` is optional: omitting it PRESERVES whatever value is
  * already stored (`workspaceSettings.ts` on the server reads the current
  * row before it decides, precisely so that changing only the model does not
  * also reset a concurrency limit a previous admin set).
  */
 export async function saveWorkspaceSettings(patch: {
-  modelChoiceId: string;
+  modelChoiceId?: string;
   modelChoiceLabel?: string;
   modelChoiceModel?: string;
   concurrency?: number;

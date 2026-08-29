@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ModelError } from '@lexprompt/core';
 import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
 import type { PlaybookVersion } from '../../types';
+import { SCHEMA_VERSION } from '../../types';
 
 /**
  * `playbookVersions`, now a READ-ONLY TRANSPORT.
@@ -33,6 +34,35 @@ const V1: PlaybookVersion = {
 };
 
 beforeEach(() => transport.reset());
+
+/** A version stored before D's rename: `prompt` rather than `extractPrompt`,
+ *  and no `schemaVersion`. `getPlaybookContent` repairs one of these on
+ *  read; this module did not, so the SAME stored record came back one shape
+ *  through a playbook's current content and another through its version
+ *  list (Part 2A m8). */
+const PRE_D = {
+  id: 'v0', playbookId: 'p1', version: 1, name: 'NDA', contractType: 'NDA',
+  systemPrompt: 'Be careful.', formatPrompt: 'Quote verbatim.',
+  clauses: [{ id: 'c1', title: 'Term', prompt: 'What is the term?' }],
+  changeSummary: '', publishedAt: 1_700_000_000_000, publishedByUserId: 'u1',
+};
+
+describe('repair-on-read (Part 2A m8)', () => {
+  it('migrates a pre-D version read by id, as getPlaybookContent already did', async () => {
+    transport.responses.set('/v1/versions/v0', PRE_D);
+    const v = await getVersion('v0');
+    expect(v?.clauses[0].extractPrompt).toBe('What is the term?');
+    expect(v?.schemaVersion).toBe(SCHEMA_VERSION);
+  });
+
+  it('migrates every entry of the version LIST too', async () => {
+    transport.responses.set('/v1/playbooks/p1/versions', [PRE_D, { ...PRE_D, id: 'v0b' }]);
+    const list = await listVersions('p1');
+    expect(list.map(v => v.clauses[0].extractPrompt))
+      .toEqual(['What is the term?', 'What is the term?']);
+    expect(list.every(v => v.schemaVersion === SCHEMA_VERSION)).toBe(true);
+  });
+});
 
 describe('getVersion', () => {
   it('reads /v1/versions/:id and returns the version', async () => {

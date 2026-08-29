@@ -137,6 +137,20 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
     const taken = await db.query<{ id: string }>(
       'select id from document where id = $1 and workspace_id = $2', [input.id, ws]);
     if (taken[0]) throw new ConflictError(undefined, DUPLICATE_MESSAGE);
+    // …and the id held by ANOTHER workspace, which `document.id` being a
+    // global primary key makes possible and the check above cannot see
+    // (Part 2A m4). A bare `ConflictError`, exactly as `matters.ts` answers
+    // the same P6 collision: "that id is taken and by what is not yours to
+    // know". Refused HERE, before the blob put, so no bytes are written for
+    // an insert that `on conflict (id) do nothing` was always going to
+    // swallow — the alternative left an orphan behind AND answered with
+    // `RACED_MESSAGE`, which asserts an overwrite that cannot have happened
+    // (the blob key is workspace-scoped, so the two documents' bytes never
+    // shared a key). A confident wrong claim about a client's file, in the
+    // one message that tells a reader to fetch an administrator.
+    const elsewhere = await db.query<{ id: string }>(
+      'select id from document where id = $1 and workspace_id <> $2', [input.id, ws]);
+    if (elsewhere[0]) throw new ConflictError();
 
     // ---- Blob first. See the module docstring. ----
     const blobKey = blobKeyFor(ws, input.id);
@@ -162,10 +176,18 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
         row.added_by_user_id],
     );
     if (!rows[0]) {
-      // The narrow race the check above cannot close. The bytes under this
-      // key are now this request's, not the surviving row's, and saying so
-      // is the only honest answer available — restoring bytes this route
-      // never read is not something it can offer.
+      // The narrow race the checks above cannot close. Which of the two
+      // races it was decides which answer is true: a row that appeared in
+      // ANOTHER workspace shares no blob key with this upload, so nothing
+      // was overwritten and the honest answer is the same bare refusal the
+      // pre-check gives. Only a row in THIS workspace shares the key, and
+      // only then are the bytes under it now this request's rather than the
+      // surviving row's — which `RACED_MESSAGE` says, because saying so is
+      // the only honest answer available: restoring bytes this route never
+      // read is not something it can offer.
+      const raced = await db.query<{ id: string }>(
+        'select id from document where id = $1 and workspace_id <> $2', [input.id, ws]);
+      if (raced[0]) throw new ConflictError();
       throw new ConflictError(undefined, RACED_MESSAGE);
     }
     // `reply.code(201)` and NOT `await reply.code(201)`. A `FastifyReply` is
@@ -199,6 +221,24 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
     const ws = req.actor!.workspaceId;
     const { id } = req.params as { id: string };
     const { role, collectionId } = parseRolePatch(req.body);
+    // The collection must EXIST, in this workspace (Part 2A m3). The absent
+    // foreign key is deliberate — grouping writes the collection record and
+    // each member's `role` non-atomically, and an FK would refuse the
+    // intermediate state — but "deliberately not enforced by the database"
+    // is not "deliberately not checked". Without this, a stale id writes a
+    // document into a collection that does not exist, and `collectionId` is
+    // what the ungroup path and the collection reader both key on: the
+    // document disappears from the matter's standalone list and appears in
+    // nothing.
+    if (collectionId !== undefined) {
+      const collection = await db.query<{ id: string }>(
+        'select id from collection where id = $1 and workspace_id = $2', [collectionId, ws]);
+      if (!collection[0]) {
+        throw new ModelError(
+          `There is no collection ${collectionId} to put this document in. Reload the matter `
+          + 'and try again; nothing has been changed.', 'not_found', 404);
+      }
+    }
     const rows = await db.query<DocumentRow>(
       'update document set role = $3, collection_id = $4 where id = $1 and workspace_id = $2 returning *',
       [id, ws, role, collectionId ?? null],
@@ -229,12 +269,28 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
   });
 
   /**
-   * The reconciliation §6.5 asks for, as two admin routes and no scheduler.
+   * The reconciliation §6.5 asks for, as two OPERATOR-ONLY routes and no
+   * scheduler.
    *
    * "The cascade is a promise the README makes and a half-done cascade is
    * the failure mode that promise exists to prevent." A scheduled job needs
-   * a worker, which is a Stage 3 concern; an administrator who can SEE the
-   * orphans is worth more right now than one who is told a job ran.
+   * a worker, which is a Stage 3 concern.
+   *
+   * SAID PLAINLY, because the earlier version of this comment justified the
+   * arrangement by "an administrator who can SEE the orphans", and there was
+   * nothing anywhere an administrator could see them WITH: no screen, no
+   * script, no README step, no caller of any kind. That is this project's
+   * most-recorded defect — a correct mechanism with no path to it — and a
+   * comment asserting the path exists is worse than the missing path,
+   * because it stops anyone looking for one.
+   *
+   * There is still NO IN-APP SCREEN, and that is deferred rather than
+   * silently missing, the same way `⌘K` and the Report tab are. The path
+   * that does exist is `curl` against these two routes with an admin's own
+   * bearer token, written down in README's "Reclaiming orphaned document
+   * files" beside the Postgres and Keycloak notes — and that section is what
+   * `blobDeleteFailure` below points a user's administrator at, so the
+   * remedy the error names is a remedy that exists.
    *
    * Scoped to the workspace at BOTH ends — the blob prefix and the `document`
    * query — so this can never propose deleting another workspace's bytes.
@@ -305,7 +361,9 @@ export function blobDeleteFailure(failed: string[]): ModelError {
   const one = failed.length === 1;
   return new ModelError(
     `The records were deleted, but ${failed.length} document ${one ? 'file' : 'files'} could `
-    + 'not be deleted from storage. The bytes are still held. Tell an administrator, quoting: '
+    + 'not be deleted from storage. The bytes are still held, and no record claims them any '
+    + 'more. An administrator can list and remove them — see "Reclaiming orphaned document '
+    + 'files" in the README. Tell them, quoting: '
     + failed.join(', '),
     'unknown', 500,
   );

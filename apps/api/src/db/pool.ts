@@ -48,7 +48,12 @@ function bind(client: PgClientLike, depth: number): Tx {
         await client.query(`RELEASE SAVEPOINT ${name}`);
         return value;
       } catch (err) {
-        await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
+        // The rollback's own failure must not REPLACE the error that caused
+        // it — the same rule, and the same sibling, as `tx` below. See the
+        // long form there.
+        try {
+          await client.query(`ROLLBACK TO SAVEPOINT ${name}`);
+        } catch { /* swallowed deliberately: see the note in `tx` */ }
         throw err;
       }
     },
@@ -75,7 +80,18 @@ export function makeDb(pool: PgPoolLike): Db {
           await client.query('COMMIT');
           return value;
         } catch (err) {
-          await client.query('ROLLBACK');
+          // The ROLLBACK's own failure must not REPLACE the error that
+          // caused it. A connection that has already gone away makes
+          // `ROLLBACK` throw, and rethrowing that handed the caller a
+          // transport error instead of the constraint violation that
+          // actually happened — the wrong diagnosis, delivered with
+          // apparent authority, at the one moment a caller is trying to
+          // find out what it did wrong. Postgres discards an uncommitted
+          // transaction when the connection closes anyway, so there is
+          // nothing left un-rolled-back to report.
+          try {
+            await client.query('ROLLBACK');
+          } catch { /* swallowed deliberately: see above */ }
           throw err;
         }
       } finally {
