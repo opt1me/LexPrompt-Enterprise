@@ -1,28 +1,72 @@
-import { getDb } from './open';
+import { ModelError } from '@lexprompt/core';
+import { apiDelete, apiGet, apiGetOrNull, apiSend } from '../api/client';
 import { debug } from '../debug';
-import { STORES } from './schema';
-import { nextSeq, seqOf } from './seq';
 import { migrateReviewRecord } from './reviewMigration';
 import { listVersions } from './playbookVersions';
 import { snapshotPlaybookId } from './playbookMigration';
 import type { Review } from '../../types';
 
-/** A review record as it actually sits in IndexedDB: the public `Review`
- *  shape plus a write sequence number. `_seq` exists to break ties when two
- *  saves land in the same millisecond (`Date.now()` resolution) — mirrors
- *  `playbooks.ts`'s `StoredPlaybook` / `matters.ts`'s `StoredMatter`. Never
- *  appears on a `Review` returned to callers. */
-interface StoredReview extends Review {
-  _seq: number;
+/**
+ * The reviews repository — an HTTP client over `apps/api` since Stage 2.
+ *
+ * Same file, same exports, same signatures (R3), and
+ * `createDebouncedReviewSaver` keeps its interface exactly. What moved OUT
+ * is the `_seq` tiebreak and the sort — they are `review.seq` and an
+ * `order by started_at desc, seq desc` in the route. What moved IN is the
+ * one thing this table needed and could not have before: a stale write is
+ * REFUSED rather than applied.
+ *
+ * ## The version this browser last SAW
+ *
+ * `reviewFromRun` builds a `Review` from a run in memory. A run has nowhere
+ * to carry an optimistic-concurrency token, and the debounced saver hands
+ * whatever it is given straight to `saveReview` — so a save built from a run
+ * carries no `version`, which the route reads as "I believe this is a
+ * create" and refuses against a row that already exists. Every save after
+ * the first would fail.
+ *
+ * So this module remembers, per review id, the version it last saw from the
+ * server — from a read, or from its own successful write — and stamps that
+ * onto a save. It is knowledge this browser genuinely has, and it is
+ * deliberately NOT a way around the check:
+ *
+ *  - Another tab, or another person, writing bumps the server's version past
+ *    what this browser remembers, so the next save from here is REFUSED.
+ *    That is the whole point. Verification state is set only by a human
+ *    action and nothing derives it; a run's saver silently overwriting one
+ *    is the worst defect available on this path, and `carryHumanState`
+ *    cannot close it across two tabs, because the other tab's write was
+ *    never in this one's snapshot to carry.
+ *  - The refusal reaches the reader: the debounced saver's write is
+ *    fire-and-forget, so it is reported through `debug()` AND through
+ *    `onError`, which `App.tsx` turns into a visible notice.
+ *
+ * The map is per TAB and dies with it, which is right: it records what this
+ * browser has seen, not what is true.
+ */
+const lastSeenVersion = new Map<string, number>();
+
+/** Records the version the server just reported. Called on every read and
+ *  every successful write — the two ways this browser learns one. */
+function remember(review: Review): Review {
+  if (typeof review.version === 'number') lastSeenVersion.set(review.id, review.version);
+  return review;
+}
+
+/** Drops what this browser believes about a review's version. Called when a
+ *  review is deleted; exported so a test can put this module back into the
+ *  state a fresh tab is in. */
+export function forgetReviewVersion(id: string): void {
+  lastSeenVersion.delete(id);
 }
 
 /**
  * Task 4: builds the one-entry `versionIndex` `migrateReviewRecord` needs to
  * back-fill `playbookVersionId` on a review written before D. Reaches into
- * the `playbookVersions` store — the pure repair function must not — but
+ * the playbook versions repository — the pure repair function must not — but
  * only when the review has no version id of its own yet, so an ordinary
  * post-D review (which already carries one from `reviewFromRun`) costs an
- * extra store read exactly never.
+ * extra request exactly never.
  *
  * `record.playbookSnapshot` may still be a pre-D `Template`, whose own `id`
  * IS the playbook's id (there was no separate identity/version split yet);
@@ -30,12 +74,9 @@ interface StoredReview extends Review {
  * `snapshotPlaybookId` (`playbookMigration.ts`) is the one place that
  * recovers a playbook id from either shape — `migrateVersionRecord` needs
  * the identical fact for the identical reason, and this function used to
- * re-derive it inline with a second copy of the same fallback chain, while
- * its own comment claimed the opposite (that reading `playbookId` first and
- * falling back to `id` here avoided duplicating `migrateVersionRecord`'s
- * logic). It did not; this is that fixed.
+ * re-derive it inline with a second copy of the same fallback chain.
  */
-async function buildVersionIndex(record: StoredReview): Promise<Record<string, string>> {
+async function buildVersionIndex(record: Review): Promise<Record<string, string>> {
   if (typeof record.playbookVersionId === 'string' && record.playbookVersionId) return {};
 
   const playbookId = snapshotPlaybookId(record.playbookSnapshot);
@@ -46,88 +87,83 @@ async function buildVersionIndex(record: StoredReview): Promise<Record<string, s
   return v1 ? { [playbookId]: v1.id } : {};
 }
 
-async function stripSeq(record: StoredReview): Promise<Review> {
-  const { _seq, ...review } = record;
-  void _seq;
-  // Every read path — `getReview`, `listReviews` — funnels through here, so
-  // a review written before sub-project B (or D) is upgraded exactly once,
-  // in one place, no matter which screen asked for it. No `documentText`
-  // lookup is passed — this is the only production caller of
-  // `migrateReviewRecord`, so a pre-B review's citations always come back
-  // without page pins (an absent page is the honest answer spec §4 asks
-  // for; it is never wrong, just less than it could be). See
-  // `migrateReviewRecord`'s own comment for why the parameter exists anyway.
+/**
+ * Repair-on-read, at the ONE funnel every read goes through, so a review
+ * written before sub-project B (or D) is upgraded exactly once no matter
+ * which screen asked for it.
+ *
+ * No `documentText` lookup is passed — this is the only production caller of
+ * `migrateReviewRecord`, so a pre-B review's citations come back without
+ * page pins, which is the honest answer spec §4 asks for (an absent page is
+ * never wrong, just less than it could be).
+ */
+async function repair(record: Review): Promise<Review> {
   const versionIndex = await buildVersionIndex(record);
-  return migrateReviewRecord(review, undefined, versionIndex);
+  return remember(migrateReviewRecord(record, undefined, versionIndex));
 }
 
 /** All reviews for a matter, most recently started first; tiebreak on write
  *  sequence descending so the review saved most recently wins a
- *  same-millisecond collision (mirrors `matters.ts`/`playbooks.ts`).
+ *  same-millisecond collision. The order is the server's and is not
+ *  re-derived here.
  *
- *  Rejects (rather than resolving to `[]`) on a genuine database failure —
- *  a caller must be able to tell "this matter has no reviews" apart from
- *  "the database failed". Nothing here catches errors from
- *  `getDb()`/`getAllFromIndex`, so they propagate as-is (mirrors
- *  `documents.ts`'s `listDocuments`). */
+ *  Rejects (rather than resolving to `[]`) on any failure — a caller must be
+ *  able to tell "this matter has no reviews" apart from "the server
+ *  failed". */
 export async function listReviews(matterId: string): Promise<Review[]> {
-  const db = await getDb();
-  const raw = (await db.getAllFromIndex(STORES.reviews, 'byMatter', matterId)) as StoredReview[];
-  const entries = await Promise.all(raw.map(async r => ({ review: await stripSeq(r), seq: seqOf(r) })));
-  entries.sort((a, b) => {
-    const diff = b.review.startedAt - a.review.startedAt;
-    return diff !== 0 ? diff : b.seq - a.seq;
-  });
-  return entries.map(e => e.review);
+  const raw = await apiGet<Review[]>(`/v1/matters/${encodeURIComponent(matterId)}/reviews`);
+  return Promise.all(raw.map(repair));
 }
 
+/** `null` for "there is no such review", and ONLY for that. */
 export async function getReview(id: string): Promise<Review | null> {
-  const db = await getDb();
-  const found = (await db.get(STORES.reviews, id)) as StoredReview | undefined;
-  return found ? await stripSeq(found) : null;
+  const found = await apiGetOrNull<Review>(`/v1/reviews/${encodeURIComponent(id)}`);
+  return found ? repair(found) : null;
 }
 
-/** Persists a review, deep-copying `playbookSnapshot` first.
+/**
+ * Persists a review, deep-copying `playbookSnapshot` first.
  *
- *  This carries forward v1's discipline: editing a playbook after a review
- *  must not retroactively change what that review claims to have checked.
- *  IndexedDB's own write path (`structuredClone` under the hood — see
- *  `fake-indexeddb`'s `cloneValueForInsertion`, and the spec's
- *  `StructuredSerializeForStorage`) already decouples the *stored* record
- *  from the caller's object graph, so relying on that alone would make the
- *  persisted snapshot safe. But it would NOT protect the `Review` object
- *  this function *returns* to its caller in the same tick — that object
- *  would still share `playbookSnapshot` (and everything nested under it)
- *  with the caller's in-memory playbook, so a mutation immediately after
- *  `await saveReview(r)` would corrupt the in-memory copy even though the
- *  database was fine. Cloning explicitly here fixes both: it does not rely
- *  on which storage backend is behind `getDb()`, and it protects the
- *  returned value, not just the stored one. */
+ * The clone still matters, for the half of its original reason the transport
+ * did not take over. `JSON.stringify` on the way out already decouples what
+ * is STORED from the caller's object graph, and the `Review` this returns is
+ * parsed from the response and is therefore a fresh object — but between
+ * this line and the request actually going out there is now a network's
+ * worth of time in which a caller can mutate the playbook it handed over.
+ * Cloning closes that.
+ *
+ * THE VERSION IS STAMPED FROM WHAT THIS BROWSER LAST SAW, and is preferred
+ * over whatever the record carries: a `Review` built by `reviewFromRun` has
+ * none, and one held in component state since a screen opened may carry a
+ * stale one this browser has already superseded with its own writes. See the
+ * module docstring for why that is not a way around the check.
+ *
+ * A stale write REJECTS with a `conflict` `ModelError` rather than being
+ * applied. Every caller must surface it — silently losing a colleague's
+ * verification is the failure this refusal exists to prevent.
+ */
 export async function saveReview(r: Review): Promise<Review> {
-  const db = await getDb();
-  const saved: Review = { ...r, playbookSnapshot: structuredClone(r.playbookSnapshot) };
-  // The read (current max _seq) and the write share ONE readwrite
-  // transaction, so two concurrent saveReview calls can never both read the
-  // same max before either has written theirs. Nothing non-IDB is awaited
-  // between the seq read and the put, which is what keeps IndexedDB from
-  // auto-committing the transaction early. Mirrors playbooks.ts/matters.ts.
-  const tx = db.transaction(STORES.reviews, 'readwrite');
-  // `nextSeq`'s parameter type only accepts a 'readwrite' store from a
-  // transaction scoped to this one store — so `tx.store` here is
-  // load-bearing, not incidental: passing e.g. `{ getAll: () =>
-  // db.getAll(STORES.reviews) }` instead would fail to compile, because
-  // that shape opens its own transaction and would silently break the
-  // atomicity below. See seq.ts's `SeqStore`.
-  const seq = await nextSeq(tx.store);
-  const record: StoredReview = { ...saved, _seq: seq };
-  await tx.store.put(record);
-  await tx.done;
-  return saved;
+  const known = lastSeenVersion.get(r.id);
+  const body: Review = {
+    ...r,
+    playbookSnapshot: structuredClone(r.playbookSnapshot),
+    ...(known === undefined ? {} : { version: known }),
+  };
+  const saved = await apiSend<Review>('PUT', `/v1/reviews/${encodeURIComponent(r.id)}`, body);
+  return remember(saved);
 }
 
+/** A 404 RESOLVES — the caller asked for the review to be gone and it is
+ *  gone, which is what `db.delete` on a missing key always did. Every other
+ *  failure rejects. */
 export async function deleteReview(id: string): Promise<void> {
-  const db = await getDb();
-  await db.delete(STORES.reviews, id);
+  try {
+    await apiDelete(`/v1/reviews/${encodeURIComponent(id)}`);
+  } catch (err) {
+    if (!(err instanceof ModelError && err.status === 404)) throw err;
+  }
+  // Whether it was there or not, nothing here knows its version any more.
+  forgetReviewVersion(id);
 }
 
 const DEFAULT_REVIEW_SAVE_DEBOUNCE_MS = 2000;
@@ -135,7 +171,9 @@ const DEFAULT_REVIEW_SAVE_DEBOUNCE_MS = 2000;
 /** Drives how a review's in-progress state gets persisted during a run,
  *  without writing on every `onUpdate` call. `runReview`'s `onUpdate` fires
  *  roughly twice per cell — a 3-document x 20-clause run is ~120 calls — and
- *  saving on every one of those would be 120 writes for one run. Instead:
+ *  saving on every one of those would be 120 writes for one run. Over a
+ *  network that arithmetic matters more than it did over a local disk, and
+ *  the shape below is unchanged by the move:
  *
  *  - `scheduleSave` records the latest state and, if no save is already
  *    pending, arms a timer for `debounceMs` (>= 2000ms). Further calls
@@ -150,23 +188,24 @@ const DEFAULT_REVIEW_SAVE_DEBOUNCE_MS = 2000;
  *    one every debounceMs while updates keep coming" is what actually
  *    delivers "a crash costs seconds, not the run".
  *  - `saveNow` cancels any pending timer and persists immediately — call it
- *    on completion and on cancellation, per the brief. Its promise is
- *    returned to the caller as-is, so a failure there is never swallowed.
+ *    on completion and on cancellation. Its promise is returned to the
+ *    caller as-is, so a failure there is never swallowed.
  *  - `dispose` cancels a pending timer without persisting (e.g. on
  *    unmount), so a stale save cannot land after the caller has moved on.
  *
  *  The debounced write that `scheduleSave` eventually fires is
- *  fire-and-forget by nature — nothing is `await`ing it — so a failure
- *  there (quota, a blocked upgrade) cannot surface as a rejection on any
- *  promise the caller holds. It is always reported through `debug()` so it
- *  is not dropped silently, and additionally handed to the optional
- *  `onError` callback below so a caller that wants to surface "your
- *  in-progress review isn't saving" to the user can do so without this
- *  module needing to guess what that should look like.
+ *  fire-and-forget by nature — nothing is `await`ing it — so a failure there
+ *  cannot surface as a rejection on any promise the caller holds. It is
+ *  always reported through `debug()` so it is not dropped silently, and
+ *  handed to the optional `onError` callback so a caller can surface "your
+ *  in-progress review isn't saving" without this module guessing what that
+ *  should look like.
  *
- *  This only persists `Review` records; converting a `ReviewRun` (the
- *  in-progress shape `runReview` operates on) into a `Review` and wiring
- *  this helper into the UI is left to a later task. */
+ *  `onError` was defensible-to-omit against a local disk and is not against
+ *  a network: over HTTP these failures go from rare to routine, and one of
+ *  them — a 409 refusing a save because somebody else's write landed first —
+ *  is not an error at all but a fact the reader has to act on. `App.tsx`
+ *  passes one. */
 export interface DebouncedReviewSaver {
   scheduleSave(review: Review): void;
   saveNow(review: Review): Promise<Review>;

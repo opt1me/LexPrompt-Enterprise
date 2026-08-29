@@ -1,76 +1,33 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import {
-  listReviews, getReview, saveReview, deleteReview, createDebouncedReviewSaver,
-} from './reviews';
-import { getVersion } from './playbookVersions';
-import { migrateDraft } from './playbookMigration';
-import { getDb, closeDb } from './open';
-import { STORES } from './schema';
-import { sharedTransport as transport } from '../../test/fakeTransport';
-import { SCHEMA_VERSION, type Review, type PlaybookVersion, type PlaybookDraft } from '../../types';
-
-// Stage 2 Task 13 made the playbook repositories HTTP clients, and
-// `buildVersionIndex` below reads `listVersions` to back-fill a pre-D
-// review's `playbookVersionId`. Only the NETWORK is replaced: the real
-// `buildVersionIndex`, `migrateReviewRecord` and `migrateFinding` still run,
-// which is what these cases are about.
-vi.mock('../api/client',
-  async () => (await import('../../test/fakeTransport')).sharedTransportModule());
+import { ModelError } from '@lexprompt/core';
+import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
+import { SCHEMA_VERSION, type Review, type PlaybookVersion } from '../../types';
 
 /**
- * Publishes a version INTO THE FAKE TRANSPORT, in the shape the server
- * answers with.
+ * The reviews repository, now a TRANSPORT.
  *
- * A fixture, not a copy of the route: the version-number allocation, the
- * change-summary rule and the one-transaction publish are proved against a
- * real Postgres in `apps/api/test/playbooks.pg.test.ts`, and reproducing any
- * of them here would be asserting against this helper. What these tests
- * need is only that `getVersion` and `listVersions` answer with a version.
+ * The STORAGE half of this file moved to `apps/api/test/reviews.pg.test.ts`,
+ * where a real Postgres proves it: the `_seq` tiebreak, the sort, the whole-
+ * record round trip with sixty findings, the absent-key cases, and — the one
+ * this table exists to get right — that a stale save is refused rather than
+ * applied over a human's verification.
+ *
+ * What stays here is what the browser still owns: which request each export
+ * makes, the repair-on-read funnel and its `playbookVersionId` back-fill,
+ * `saveReview`'s deep clone, the VERSION THIS BROWSER REMEMBERS (which has
+ * no server-side counterpart — it exists precisely because a `Review` built
+ * from a run cannot carry one), and the debounced saver, whose behaviour is
+ * unchanged by the transport and whose tests needed no edit beyond the
+ * transport itself.
  */
-let versionSeq = 0;
-async function publishVersion(
-  playbookId: string, draft: PlaybookDraft, byUserId: string,
-): Promise<PlaybookVersion> {
-  const listPath = `/v1/playbooks/${encodeURIComponent(playbookId)}/versions`;
-  const existing = (transport.responses.get(listPath) as PlaybookVersion[] | undefined) ?? [];
-  const record: PlaybookVersion = {
-    ...draft,
-    changeSummary: draft.changeSummary?.trim() ?? '',
-    id: `v-${++versionSeq}`,
-    playbookId,
-    version: existing.reduce((max, v) => Math.max(max, v.version), 0) + 1,
-    publishedAt: Date.now(),
-    publishedByUserId: byUserId,
-    schemaVersion: SCHEMA_VERSION,
-  };
-  transport.responses.set(`/v1/versions/${encodeURIComponent(record.id)}`, record);
-  // Newest first, as the route's `order by version_number desc` returns them.
-  transport.responses.set(listPath, [record, ...existing]);
-  return record;
-}
 
-/** The delete cascade's ANSWER — the versions stop resolving. The cascade
- *  itself is proved against a real Postgres in `playbooks.pg.test.ts`. */
-function deletePlaybookFixture(playbookId: string): void {
-  const listPath = `/v1/playbooks/${encodeURIComponent(playbookId)}/versions`;
-  for (const v of (transport.responses.get(listPath) as PlaybookVersion[] | undefined) ?? []) {
-    transport.responses.delete(`/v1/versions/${encodeURIComponent(v.id)}`);
-  }
-  transport.responses.set(listPath, []);
-}
+const transport = makeFakeTransport();
+vi.mock('../api/client', () => transportModule(transport));
 
-beforeEach(async () => {
-  const db = await getDb();
-  await db.clear(STORES.reviews);
-  // A playbook with no published versions answers 200 with an EMPTY LIST,
-  // not 404 — `GET /v1/playbooks/:id/versions` does no existence check, and
-  // `buildVersionIndex` relies on that: it is called for every review with
-  // no `playbookVersionId`, including ones whose snapshot names a playbook
-  // that was never in this workspace at all.
-  transport.fallback = path => (path.endsWith('/versions') ? [] : undefined);
-});
-
-afterEach(() => closeDb());
+const {
+  listReviews, getReview, saveReview, deleteReview, createDebouncedReviewSaver,
+  forgetReviewVersion,
+} = await import('./reviews');
 
 function uid(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -78,413 +35,359 @@ function uid(): string {
 
 function makePlaybook(): PlaybookVersion {
   return {
-    id: uid(),
-    playbookId: 'pb-1',
-    version: 1,
-    name: 'NDA',
-    contractType: 'NDA',
-    systemPrompt: 'Be careful.',
-    formatPrompt: 'Quote verbatim.',
-    clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }],
-    changeSummary: '',
-    publishedAt: Date.now(),
-    publishedByUserId: 'owner-1',
-    schemaVersion: 6,
+    id: 'v1', playbookId: 'pb-1', version: 1, name: 'Lease Review', contractType: 'Lease',
+    systemPrompt: 's', formatPrompt: 'f',
+    clauses: [{ id: 'c1', title: 'Break', extractPrompt: 'What is the break right?' }],
+    changeSummary: '', publishedAt: 1_700_000_000_000, publishedByUserId: 'u1',
+    schemaVersion: SCHEMA_VERSION,
   };
 }
 
-function makeReview(overrides: Partial<Review> = {}): Review {
+function makeReview(over: Partial<Review> = {}): Review {
   return {
-    id: uid(),
-    matterId: 'matter-1',
+    id: 'rev-1', matterId: 'matter-1',
     playbookSnapshot: makePlaybook(),
     documentIds: ['doc-1'],
     target: { kind: 'documents', documentIds: ['doc-1'] },
     findings: {},
     modelId: 'test-model',
-    startedAt: Date.now(),
+    startedAt: 1_700_000_000_000,
     createdByUserId: 'owner-1',
-    ...overrides,
+    playbookVersionId: 'v1',
+    ...over,
   };
 }
 
-describe('review CRUD', () => {
-  it('starts empty', async () => {
-    expect(await listReviews('matter-1')).toEqual([]);
-  });
+/** The server's answer to a save: the record it stored, with the version it
+ *  allocated. `echoWrites` cannot do this — the version is the server's to
+ *  state, and the whole point of the tests below is what the browser does
+ *  with the one it is given. */
+function serverEchoes(version: number): void {
+  transport.responses.set('/v1/reviews/rev-1', undefined);
+  transport.responses.delete('/v1/reviews/rev-1');
+  transport.responses.set('/v1/reviews/rev-1', { ...makeReview(), version });
+}
 
-  it('saves and reads back a review', async () => {
-    const r = makeReview();
-    await saveReview(r);
-    expect((await getReview(r.id))?.modelId).toBe('test-model');
-    expect((await listReviews(r.matterId)).map(x => x.id)).toEqual([r.id]);
-  });
+beforeEach(() => {
+  transport.reset();
+  forgetReviewVersion('rev-1');
+  // A playbook with no published versions answers 200 with an EMPTY LIST,
+  // not 404 — `buildVersionIndex` calls `listVersions` for every review with
+  // no `playbookVersionId`.
+  transport.fallback = path => (path.endsWith('/versions') ? [] : undefined);
+});
 
-  it('updates in place rather than duplicating', async () => {
-    const r = makeReview();
-    await saveReview(r);
-    await saveReview({ ...r, completedAt: Date.now() });
-    const all = await listReviews(r.matterId);
-    expect(all.length).toBe(1);
-    expect(all[0].completedAt).toBeDefined();
-  });
+afterEach(() => forgetReviewVersion('rev-1'));
 
-  it('returns null for an unknown id', async () => {
-    expect(await getReview('nope')).toBeNull();
-  });
-
-  it('deletes', async () => {
-    const r = makeReview();
-    await saveReview(r);
-    await deleteReview(r.id);
-    expect(await getReview(r.id)).toBeNull();
-    expect(await listReviews(r.matterId)).toEqual([]);
-  });
-
-  it('only lists reviews for the requested matter', async () => {
-    const a = makeReview({ matterId: 'matter-a' });
-    const b = makeReview({ matterId: 'matter-b' });
-    await Promise.all([saveReview(a), saveReview(b)]);
-    expect((await listReviews('matter-a')).map(x => x.id)).toEqual([a.id]);
-  });
-
-  it('lists most-recently-started first, deterministically on a same-millisecond tie', async () => {
-    const a = await saveReview(makeReview({ startedAt: 1 }));
-    await saveReview(makeReview({ startedAt: 2 }));
-    await saveReview({ ...a, startedAt: 3 });
-    expect((await listReviews('matter-1'))[0].id).toBe(a.id);
-  });
-
-  it('assigns distinct sequence numbers to concurrent saves and orders them deterministically', async () => {
-    const a = makeReview();
-    const b = makeReview();
-    await Promise.all([saveReview(a), saveReview(b)]);
-
-    const db = await getDb();
-    const [rawA, rawB] = await Promise.all([
-      db.get(STORES.reviews, a.id) as Promise<Review & { _seq: number }>,
-      db.get(STORES.reviews, b.id) as Promise<Review & { _seq: number }>,
+describe('the requests each export makes', () => {
+  it('lists a matter s reviews from /v1/matters/:id/reviews, in the server s order', async () => {
+    transport.responses.set('/v1/matters/matter-1/reviews', [
+      makeReview({ id: 'b', startedAt: 2 }), makeReview({ id: 'a', startedAt: 1 }),
     ]);
-    expect(rawA._seq).not.toBe(rawB._seq);
-
-    const tie = Date.now();
-    await db.put(STORES.reviews, { ...rawA, startedAt: tie });
-    await db.put(STORES.reviews, { ...rawB, startedAt: tie });
-    const winnerId = rawA._seq > rawB._seq ? a.id : b.id;
-    expect((await listReviews('matter-1'))[0].id).toBe(winnerId);
+    expect((await listReviews('matter-1')).map(r => r.id)).toEqual(['b', 'a']);
   });
 
-  it('rejects rather than resolving to [] when the database fails, so "no reviews" can be told apart from "db failed"', async () => {
-    const db = await getDb();
-    const spy = vi.spyOn(db, 'getAllFromIndex').mockRejectedValue(new Error('boom'));
-    try {
-      await expect(listReviews('matter-1')).rejects.toThrow('boom');
-    } finally {
-      spy.mockRestore();
-    }
+  it('reads one from /v1/reviews/:id', async () => {
+    transport.responses.set('/v1/reviews/rev-1', makeReview());
+    expect((await getReview('rev-1'))!.id).toBe('rev-1');
   });
 
-  it('saveReview allocates seq and put in one transaction, not two', async () => {
-    const db = await getDb();
-    const txSpy = vi.spyOn(db, 'transaction');
+  it('PUTs the whole record to /v1/reviews/:id', async () => {
+    serverEchoes(1);
     await saveReview(makeReview());
-    expect(txSpy).toHaveBeenCalledTimes(1);
-    expect(txSpy).toHaveBeenCalledWith(STORES.reviews, 'readwrite');
-    txSpy.mockRestore();
+    expect(transport.sent[0].method).toBe('PUT');
+    expect(transport.sent[0].path).toBe('/v1/reviews/rev-1');
   });
 
-  it('returns a pre-B review with its citations upgraded and every finding unchecked', async () => {
-    const legacy = {
-      ...makeReview({ id: 'rev-legacy' }),
-      findings: {
-        'doc-1': {
-          'clause-1': { clauseId: 'clause-1', status: 'done', summary: 's', citations: ['a quote here'] },
-        },
-      },
-    };
-    const db = await getDb();
-    await db.put(STORES.reviews, legacy as never);
-
-    const read = await getReview('rev-legacy');
-    expect(read!.findings['doc-1']['clause-1'].citations)
-      .toEqual([{ quote: 'a quote here', documentId: 'doc-1' }]);
-    expect(read!.findings['doc-1']['clause-1'].verification).toEqual({ state: 'unchecked' });
+  it('DELETEs /v1/reviews/:id', async () => {
+    transport.responses.set('/v1/reviews/rev-1', makeReview());
+    await deleteReview('rev-1');
+    expect(transport.deleted).toEqual(['/v1/reviews/rev-1']);
   });
 
-  it('migrates on listReviews too, not only on getReview', async () => {
-    const legacy = {
-      ...makeReview({ id: 'rev-legacy-2', matterId: 'matter-legacy' }),
-      findings: { 'doc-1': { 'clause-1': { clauseId: 'clause-1', status: 'done', citations: ['another quote'] } } },
-    };
-    const db = await getDb();
-    await db.put(STORES.reviews, legacy as never);
-
-    const [read] = await listReviews('matter-legacy');
-    expect(read.findings['doc-1']['clause-1'].citations)
-      .toEqual([{ quote: 'another quote', documentId: 'doc-1' }]);
+  it('escapes an id in every path it builds', async () => {
+    const id = 'a/b c?d';
+    transport.responses.set('/v1/reviews/a%2Fb%20c%3Fd', makeReview({ id }));
+    await getReview(id);
+    await saveReview(makeReview({ id }));
+    await deleteReview(id);
+    expect(transport.sent[0].path).toBe('/v1/reviews/a%2Fb%20c%3Fd');
+    expect(transport.deleted).toEqual(['/v1/reviews/a%2Fb%20c%3Fd']);
+    transport.responses.set('/v1/matters/a%2Fb%20c%3Fd/reviews', []);
+    expect(await listReviews(id)).toEqual([]);
   });
 });
 
-// Task 4: a review records the playbook version it ran against.
-//
-// `draftFrom` maps a `PlaybookVersion`-shaped fixture onto a `PlaybookDraft`
-// by calling `migrateDraft` (Task 3) rather than hand-rolling a second copy
-// of that mapping.
-function draftFrom(version: PlaybookVersion): PlaybookDraft {
-  return migrateDraft(version, version.name);
-}
-
-describe('Review.playbookVersionId (Task 4)', () => {
-  it('reopening a review reads the version it ran against, not the current one', async () => {
-    const v1 = await publishVersion('pb-1', draftFrom(makePlaybook()), 'u1');
-    const review = await saveReview(makeReview({ playbookVersionId: v1.id }));
-    await publishVersion('pb-1', { ...draftFrom(makePlaybook()), changeSummary: 'later' }, 'u1');
-
-    const reopened = await getReview(review.id);
-    const version = await getVersion(reopened!.playbookVersionId!);
-    expect(version!.version).toBe(1);
+describe('the version this browser last SAW', () => {
+  it('sends NO version on the first save of a review it has never seen', async () => {
+    // The absence is the claim "I believe this is a create", and the route
+    // reads it that way: a create colliding with an existing row is refused
+    // rather than overwriting it.
+    serverEchoes(1);
+    await saveReview(makeReview());
+    expect('version' in (transport.sent[0].body as Review)).toBe(false);
   });
 
-  // Exercises `buildVersionIndex`'s own back-fill path directly (the other
-  // tests in this block set `playbookVersionId` explicitly, which short-
-  // circuits it before it ever recovers a playbook id from the snapshot).
-  // This is the actual pre-D scenario the back-fill exists for: a review
-  // saved with no `playbookVersionId` at all, whose frozen snapshot still
-  // names the playbook it ran against.
-  it('back-fills playbookVersionId on read for a review that never had one, from its own snapshot', async () => {
-    // A playbook id of its own, not the shared 'pb-1' the rest of this
-    // describe block uses: `playbookVersions` is never cleared between
-    // tests in this file, and `buildVersionIndex` specifically looks for
-    // the version numbered 1 — colliding with 'pb-1' would pick up an
-    // earlier test's v1 instead of this one's.
-    const playbook = { ...makePlaybook(), playbookId: 'pb-backfill-once' };
-    const v1 = await publishVersion('pb-backfill-once', draftFrom(playbook), 'u1');
-    const review = await saveReview(makeReview({ playbookSnapshot: playbook })); // no playbookVersionId
-
-    const reopened = await getReview(review.id);
-    expect(reopened!.playbookVersionId).toBe(v1.id);
+  it('sends the version the server returned on the NEXT save', async () => {
+    // THE REASON THIS EXISTS. `reviewFromRun` builds a `Review` from a run,
+    // and a run has nowhere to carry an optimistic-concurrency token — so
+    // without this every save after the first would arrive as a create and
+    // be refused, and a run would stop persisting after two seconds.
+    serverEchoes(1);
+    await saveReview(makeReview());
+    serverEchoes(2);
+    // A review built afresh from a run: no version on it at all.
+    await saveReview(makeReview());
+    expect((transport.sent[1].body as Review).version).toBe(1);
   });
 
-  // R-D15: the id may DANGLE, not merely be absent. Task 3 made deleting a
-  // playbook cascade to its versions, so a review that ran against a
-  // deleted playbook's version still carries an id that resolves to
-  // nothing. Nothing may render "ran against v4" from the id's presence
-  // alone; the version must be fetched and a miss handled honestly.
-  it('a review whose version was deleted still opens, and says the version is gone', async () => {
-    // An explicit summary: `playbookVersions` is not cleared between tests
-    // here, so this is pb-1's THIRD version and `publishVersionIn` requires
-    // one from v2 onwards. (`draftFrom` carries the fixture's own empty
-    // summary through verbatim — `migrateDraft` no longer invents one.)
-    const v1 = await publishVersion(
-      'pb-1', { ...draftFrom(makePlaybook()), changeSummary: 'the version this review ran against' }, 'u1');
-    const review = await saveReview(makeReview({ playbookVersionId: v1.id }));
-    deletePlaybookFixture('pb-1'); // cascades to its versions (Task 3, R-D13)
+  it('prefers what it last saw over a stale version carried on the record', async () => {
+    // A `Review` held in component state since a screen opened can carry a
+    // version this browser has already superseded with its own writes.
+    serverEchoes(5);
+    await saveReview(makeReview());
+    serverEchoes(6);
+    await saveReview(makeReview({ version: 2 }));
+    expect((transport.sent[1].body as Review).version).toBe(5);
+  });
 
-    const reopened = await getReview(review.id);
-    // The id is still there — it is a record of what ran, not a live handle —
-    // but it no longer resolves, and the caller must not present it as one.
-    expect(reopened!.playbookVersionId).toBe(v1.id);
-    expect(await getVersion(v1.id)).toBeNull();
-    // and the review is still readable, on its snapshot, exactly as a review
-    // whose DOCUMENT was deleted still opens (spec §9's reasoning, one level up)
-    expect(reopened!.playbookSnapshot.clauses).toBeDefined();
+  it('learns the version from a READ as well as from a write', async () => {
+    transport.responses.set('/v1/reviews/rev-1', { ...makeReview(), version: 9 });
+    await getReview('rev-1');
+    await saveReview(makeReview());
+    expect((transport.sent[0].body as Review).version).toBe(9);
+  });
+
+  it('learns it from a LIST too, so a review opened from a matter saves correctly', async () => {
+    transport.responses.set('/v1/matters/matter-1/reviews', [{ ...makeReview(), version: 4 }]);
+    await listReviews('matter-1');
+    transport.responses.set('/v1/reviews/rev-1', { ...makeReview(), version: 5 });
+    await saveReview(makeReview());
+    expect((transport.sent[0].body as Review).version).toBe(4);
+  });
+
+  it('forgets it once the review is deleted', async () => {
+    transport.responses.set('/v1/reviews/rev-1', { ...makeReview(), version: 3 });
+    await getReview('rev-1');
+    await deleteReview('rev-1');
+    serverEchoes(1);
+    await saveReview(makeReview());
+    expect('version' in (transport.sent[0].body as Review)).toBe(false);
+  });
+
+  it('does NOT paper over a colleague s write — a refused save stays refused', async () => {
+    // The remembered version is what THIS browser last saw. Another tab
+    // writing moves the server past it, so the next save from here is
+    // refused rather than applied — which is the whole point, because what
+    // it would overwrite is a verification only a human can set.
+    serverEchoes(1);
+    await saveReview(makeReview());
+    const refused = new ModelError('This was changed since you opened it.', 'conflict', 409);
+    transport.failures.set('/v1/reviews/rev-1', refused);
+    await expect(saveReview(makeReview())).rejects.toBe(refused);
+    // …and it does not silently start sending a different version to get
+    // past it on the next attempt.
+    await expect(saveReview(makeReview())).rejects.toBe(refused);
+    expect((transport.sent[1].body as Review).version).toBe(1);
+    expect((transport.sent[2].body as Review).version).toBe(1);
   });
 });
 
 describe('playbookSnapshot isolation', () => {
   it('is unaffected by mutating a field nested inside a clause object after saving', async () => {
     // The load-bearing case: mutating something NESTED inside the snapshot
-    // (not just pushing onto the top-level `clauses` array) after save must
-    // not retroactively change what the review claims to have checked. A
-    // test that only pushes a new top-level clause would pass against a
-    // shallow copy of `playbookSnapshot` and prove nothing.
+    // (not just pushing onto the top-level `clauses` array) after the call
+    // must not retroactively change what the review claims to have checked.
+    // Over a network there is a real window between the clone and the
+    // request going out.
+    serverEchoes(1);
     const playbook = makePlaybook();
-    const originalPrompt = playbook.clauses[0].extractPrompt;
-    const r = makeReview({ playbookSnapshot: playbook });
-
-    const saved = await saveReview(r);
-    playbook.clauses[0].extractPrompt = 'MUTATED';
-
-    // The value returned from saveReview in this same tick must not have
-    // leaked a reference to the caller's clause object.
-    expect(saved.playbookSnapshot.clauses[0].extractPrompt).toBe(originalPrompt);
-
-    // And the persisted copy, read back fresh from the store, must also be
-    // unaffected.
-    const reread = await getReview(r.id);
-    expect(reread?.playbookSnapshot.clauses[0].extractPrompt).toBe(originalPrompt);
+    const review = makeReview({ playbookSnapshot: playbook });
+    const promise = saveReview(review);
+    playbook.clauses[0].title = 'Rewritten after the fact';
+    await promise;
+    const sent = (transport.sent[0].body as Review).playbookSnapshot as PlaybookVersion;
+    expect(sent.clauses[0].title).toBe('Break');
   });
 
   it('is unaffected by pushing a new clause onto the original playbook after saving', async () => {
+    serverEchoes(1);
     const playbook = makePlaybook();
-    const r = makeReview({ playbookSnapshot: playbook });
-    await saveReview(r);
-
-    playbook.clauses.push({ id: 'c2', title: 'New', extractPrompt: 'New?' });
-
-    const reread = await getReview(r.id);
-    expect(reread?.playbookSnapshot.clauses.length).toBe(1);
+    const promise = saveReview(makeReview({ playbookSnapshot: playbook }));
+    playbook.clauses.push({ id: 'c2', title: 'Added later', extractPrompt: 'x' });
+    await promise;
+    const sent = (transport.sent[0].body as Review).playbookSnapshot as PlaybookVersion;
+    expect(sent.clauses).toHaveLength(1);
   });
 });
 
-// Real timers throughout: fake-indexeddb schedules every request completion
-// via a real setImmediate/setTimeout(fn, 0) internally (see
-// `fake-indexeddb`'s `lib/scheduling.js`), so `vi.useFakeTimers()` would
-// freeze the database itself, not just this helper's debounce timer — any
-// `getDb()`/store call made while fake timers are active hangs until the
-// fake clock is advanced past every nested internal timer, which is
-// exactly the kind of coupling these tests should not depend on. Using a
-// short real `debounceMs` and a real `wait()` exercises the same logic
-// without that trap.
-function wait(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+describe('repair on read', () => {
+  it('returns a pre-B review with its citations upgraded and every finding unchecked', async () => {
+    // Every read funnels through the same repair, so a review written before
+    // sub-project B is upgraded exactly once no matter which screen asked.
+    transport.responses.set('/v1/reviews/rev-1', {
+      ...makeReview(),
+      findings: { 'doc-1': { 'clause-1': { clauseId: 'clause-1', status: 'done',
+        citations: ['a bare quote'] } } },
+    });
+    const read = (await getReview('rev-1'))!;
+    expect(read.findings['doc-1']['clause-1'].citations)
+      .toEqual([{ quote: 'a bare quote', documentId: 'doc-1' }]);
+    // Nothing derives a verification, so an upgraded finding is unchecked.
+    expect(read.findings['doc-1']['clause-1'].verification.state).toBe('unchecked');
+  });
+
+  it('migrates on listReviews too, not only on getReview', async () => {
+    transport.responses.set('/v1/matters/matter-1/reviews', [{
+      ...makeReview(),
+      findings: { 'doc-1': { 'clause-1': { clauseId: 'clause-1', status: 'done',
+        citations: ['another quote'] } } },
+    }]);
+    const [read] = await listReviews('matter-1');
+    expect(read.findings['doc-1']['clause-1'].citations)
+      .toEqual([{ quote: 'another quote', documentId: 'doc-1' }]);
+  });
+
+  it('back-fills playbookVersionId from the snapshot for a review that never had one', async () => {
+    // The pre-D scenario the back-fill exists for: a review saved with no
+    // `playbookVersionId` at all, whose frozen snapshot still names the
+    // playbook it ran against.
+    const bare = makeReview();
+    delete bare.playbookVersionId;
+    transport.responses.set('/v1/reviews/rev-1', bare);
+    transport.responses.set('/v1/playbooks/pb-1/versions', [makePlaybook()]);
+    expect((await getReview('rev-1'))!.playbookVersionId).toBe('v1');
+  });
+
+  it('costs a review that already has one no extra request at all', async () => {
+    transport.responses.set('/v1/reviews/rev-1', makeReview());
+    transport.fallback = undefined;
+    // No `/v1/playbooks/pb-1/versions` entry, so a lookup would reject.
+    await expect(getReview('rev-1')).resolves.not.toBeNull();
+  });
+
+  it('leaves playbookVersionId ABSENT when no v1 can be found for the snapshot', async () => {
+    // "Never recorded" must stay distinguishable from "recorded, then
+    // deleted"; inventing an id here would erase the difference.
+    const bare = makeReview();
+    delete bare.playbookVersionId;
+    transport.responses.set('/v1/reviews/rev-1', bare);
+    expect('playbookVersionId' in (await getReview('rev-1'))!).toBe(false);
+  });
+});
+
+describe('a failure is a failure, never an empty result', () => {
+  it('returns null for a review the server does not have', async () => {
+    expect(await getReview('nope')).toBeNull();
+  });
+
+  it('propagates a 500 from a read rather than swallowing it into null', async () => {
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    transport.failures.set('/v1/reviews/rev-1', boom);
+    await expect(getReview('rev-1')).rejects.toBe(boom);
+  });
+
+  it('rejects rather than resolving to [] when the list fails, so "no reviews" can be told apart', async () => {
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    transport.failures.set('/v1/matters/matter-1/reviews', boom);
+    await expect(listReviews('matter-1')).rejects.toBe(boom);
+  });
+
+  it('resolves quietly when the review to delete is not there', async () => {
+    await expect(deleteReview('gone')).resolves.toBeUndefined();
+  });
+
+  it('propagates any other delete failure', async () => {
+    const denied = new ModelError('This needs a LexPrompt role.', 'not_permitted', 403);
+    transport.failures.set('/v1/reviews/rev-1', denied);
+    await expect(deleteReview('rev-1')).rejects.toBe(denied);
+  });
+});
 
 describe('createDebouncedReviewSaver', () => {
-  it('does not persist immediately on scheduleSave', async () => {
-    const saver = createDebouncedReviewSaver(200);
-    const r = makeReview();
-    saver.scheduleSave(r);
-    try {
-      expect(await getReview(r.id)).toBeNull();
-    } finally {
-      // Dispose so this test's real, still-armed 200ms timer cannot fire
-      // during a later test and pollute that test's own save-count spy.
-      saver.dispose();
-    }
+  // KEPT from the IndexedDB version, with no assertion edited: the saver's
+  // behaviour is a property of its own timers and is unchanged by which
+  // store `saveReview` writes to. Only the fixture underneath moved.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('does not persist immediately on scheduleSave', () => {
+    serverEchoes(1);
+    createDebouncedReviewSaver(2000).scheduleSave(makeReview());
+    expect(transport.sent).toEqual([]);
   });
 
   it('persists the latest scheduled state once the debounce interval elapses', async () => {
-    const saver = createDebouncedReviewSaver(30);
-    const r = makeReview();
-    try {
-      saver.scheduleSave(r);
-      saver.scheduleSave({ ...r, findings: { 'doc-1': {} } });
-
-      await wait(80);
-
-      const found = await getReview(r.id);
-      expect(found).not.toBeNull();
-      expect(found?.findings).toEqual({ 'doc-1': {} });
-    } finally {
-      saver.dispose();
-    }
+    serverEchoes(1);
+    const saver = createDebouncedReviewSaver(2000);
+    saver.scheduleSave(makeReview({ modelId: 'first' }));
+    saver.scheduleSave(makeReview({ modelId: 'second' }));
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(transport.sent).toHaveLength(1);
+    expect((transport.sent[0].body as Review).modelId).toBe('second');
   });
 
-  it('does not fire more than once per debounce interval even under continuous updates', async () => {
-    const db = await getDb();
-    const txSpy = vi.spyOn(db, 'transaction');
-    try {
-      const saver = createDebouncedReviewSaver(60);
-      const r = makeReview();
-
-      // Simulate onUpdate firing every 15ms for ~150ms straight — well
-      // inside "continuous", the pattern a naive reset-on-every-call
-      // debounce would starve on (the timer would never go quiet enough to
-      // fire until updates stop).
-      for (let i = 0; i < 10; i++) {
-        saver.scheduleSave({ ...r, findings: { tick: {} } });
-        await wait(15);
-      }
-      await wait(80); // let the last-armed timer fire
-      saver.dispose(); // belt-and-braces: guarantee nothing is left armed for a later test
-
-      // Count only actual writes: `getReview`/`getDb` internally open their
-      // own incidental 'readonly' transactions on this store via the `idb`
-      // library's convenience wrappers, which this filter must not conflate
-      // with a real save.
-      const reviewSaveCalls = txSpy.mock.calls.filter(c => c[0] === STORES.reviews && c[1] === 'readwrite').length;
-      // By ~230ms of continuous updates into a 60ms interval, at least one
-      // save must have landed — a crash here costs seconds, not the whole
-      // run — but nowhere near one per update (10 updates).
-      expect(reviewSaveCalls).toBeGreaterThanOrEqual(1);
-      expect(reviewSaveCalls).toBeLessThan(10);
-      expect(await getReview(r.id)).not.toBeNull();
-    } finally {
-      txSpy.mockRestore();
+  it('THROTTLES rather than resetting, so a continuous run still saves', async () => {
+    // The shipped comment is emphatic and the behaviour is unchanged by the
+    // transport: `onUpdate` fires continuously through a run, so a
+    // reset-on-every-call debounce could in principle never fire — i.e.
+    // never save mid-run at all, which is the crash-loses-the-whole-run
+    // failure this exists to prevent.
+    serverEchoes(1);
+    const saver = createDebouncedReviewSaver(2000);
+    for (let i = 0; i < 10; i++) {
+      saver.scheduleSave(makeReview({ modelId: `update-${i}` }));
+      await vi.advanceTimersByTimeAsync(500);
     }
+    // 5000ms of continuous updates at a 2000ms interval: it fired, and it
+    // fired at most once per interval.
+    expect(transport.sent.length).toBeGreaterThanOrEqual(2);
+    expect(transport.sent.length).toBeLessThanOrEqual(3);
   });
 
   it('saveNow persists immediately and cancels a pending debounced save', async () => {
-    const db = await getDb();
-    const txSpy = vi.spyOn(db, 'transaction');
-    const writeCount = () => txSpy.mock.calls.filter(c => c[0] === STORES.reviews && c[1] === 'readwrite').length;
-    try {
-      const saver = createDebouncedReviewSaver(60);
-      const r = makeReview();
-      saver.scheduleSave(r);
-      const completed = { ...r, completedAt: Date.now() };
-      await saver.saveNow(completed);
+    serverEchoes(1);
+    const saver = createDebouncedReviewSaver(2000);
+    saver.scheduleSave(makeReview({ modelId: 'scheduled' }));
+    await saver.saveNow(makeReview({ modelId: 'now' }));
+    expect(transport.sent).toHaveLength(1);
+    expect((transport.sent[0].body as Review).modelId).toBe('now');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(transport.sent).toHaveLength(1);
+  });
 
-      expect((await getReview(r.id))?.completedAt).toBe(completed.completedAt);
-      const savesAfterSaveNow = writeCount();
-      expect(savesAfterSaveNow).toBe(1);
-
-      // Let the (cancelled) pending timer's window pass; it must not fire
-      // and overwrite the completed save with stale in-progress state.
-      await wait(100);
-      expect(writeCount()).toBe(savesAfterSaveNow);
-      expect((await getReview(r.id))?.completedAt).toBe(completed.completedAt);
-      saver.dispose();
-    } finally {
-      txSpy.mockRestore();
-    }
+  it('saveNow returns its promise as-is, so a failure there is never swallowed', async () => {
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    transport.failures.set('/v1/reviews/rev-1', boom);
+    await expect(createDebouncedReviewSaver(2000).saveNow(makeReview())).rejects.toBe(boom);
   });
 
   it('dispose cancels a pending save without persisting it', async () => {
-    const saver = createDebouncedReviewSaver(30);
-    const r = makeReview();
-    saver.scheduleSave(r);
+    serverEchoes(1);
+    const saver = createDebouncedReviewSaver(2000);
+    saver.scheduleSave(makeReview());
     saver.dispose();
-
-    await wait(80);
-    expect(await getReview(r.id)).toBeNull();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(transport.sent).toEqual([]);
   });
 
-  it('reports a failed debounced save via onError instead of an unhandled rejection', async () => {
-    // scheduleSave's eventual write is fire-and-forget (nothing awaits it),
-    // so a rejection there cannot surface on any promise a caller holds —
-    // it must be caught internally or it becomes an unhandled rejection.
-    const db = await getDb();
-    const original = db.transaction.bind(db);
-    const txSpy = vi.spyOn(db, 'transaction').mockImplementation(((...args: unknown[]) => {
-      if (args[0] === STORES.reviews && args[1] === 'readwrite') {
-        throw new Error('boom');
-      }
-      return (original as unknown as (...a: unknown[]) => unknown)(...args);
-    }) as typeof db.transaction);
-
-    let unhandled: unknown = 'not set';
-    const onUnhandledRejection = (reason: unknown) => {
-      unhandled = reason;
-    };
-    process.on('unhandledRejection', onUnhandledRejection);
-
-    const errors: Array<{ error: unknown; review: Review }> = [];
-    const saver = createDebouncedReviewSaver(30, (error, review) => {
-      errors.push({ error, review });
-    });
-
-    try {
-      const r = makeReview();
-      saver.scheduleSave(r);
-      await wait(80);
-
-      expect(errors.length).toBe(1);
-      expect(errors[0].review.id).toBe(r.id);
-      expect((errors[0].error as Error).message).toBe('boom');
-
-      // The failed write must not have landed.
-      txSpy.mockRestore();
-      expect(await getReview(r.id)).toBeNull();
-
-      // Give a would-be unhandled rejection a chance to surface as one.
-      await wait(0);
-      expect(unhandled).toBe('not set');
-    } finally {
-      saver.dispose();
-      txSpy.mockRestore();
-      process.off('unhandledRejection', onUnhandledRejection);
-    }
+  it('hands a failed debounced save to onError rather than losing it', async () => {
+    // NEWLY LOAD-BEARING. The debounced write is fire-and-forget — nothing
+    // awaits it, so a rejection cannot surface on a promise any caller
+    // holds. Over a local disk that was rare; over a network it fires, and
+    // one of the failures is a 409 refusing this save because somebody
+    // else's landed first.
+    const refused = new ModelError('This was changed since you opened it.', 'conflict', 409);
+    transport.failures.set('/v1/reviews/rev-1', refused);
+    const onError = vi.fn();
+    const saver = createDebouncedReviewSaver(2000, onError);
+    const review = makeReview();
+    saver.scheduleSave(review);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0][0]).toBe(refused);
+    // The review it FAILED to save is handed over too, so a caller can say
+    // which one is at risk.
+    expect((onError.mock.calls[0][1] as Review).id).toBe('rev-1');
   });
 });

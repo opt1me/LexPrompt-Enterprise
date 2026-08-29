@@ -119,6 +119,13 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'PUT /v1/changesets/:id': 'reviewer',
   'POST /v1/changesets/:id/publish': 'partner',
 
+  // §7: a reviewer runs reviews, sets dispositions and notes, and confirms
+  // net positions. All of that is one whole-record write to a review.
+  'GET /v1/matters/:id/reviews': 'reviewer',
+  'GET /v1/reviews/:id': 'reviewer',
+  'PUT /v1/reviews/:id': 'reviewer',
+  'DELETE /v1/reviews/:id': 'reviewer',
+
   // Reconciliation (§6.5). ADMIN, not reviewer: the listing names bytes
   // that no record claims — which is a fact about storage rather than about
   // any matter — and the second route destroys them. A reviewer who could

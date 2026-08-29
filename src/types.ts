@@ -555,4 +555,21 @@ export interface Review {
   completedAt?: number;
   cancelledAt?: number;
   createdByUserId: string;
+  /**
+   * The optimistic-concurrency token (§8) — see `Matter.version` for the
+   * full note.
+   *
+   * On THIS record it is the one that matters most. A run's debounced saver
+   * writes the whole review every two seconds from its own copy, and knows
+   * nothing about a verification somebody recorded in another tab in the
+   * meantime. `carryHumanState` re-applies human state within ONE tab;
+   * nothing can do that across two, because the other tab's write was never
+   * in this one's snapshot to carry. Without this field the second write
+   * silently wins and a human's judgement is gone with no trace.
+   *
+   * `saveReview` stamps it from the version this browser last SAW for the
+   * review — see its docstring — because `reviewFromRun` builds a `Review`
+   * from a run and has nowhere to carry one.
+   */
+  version?: number;
 }

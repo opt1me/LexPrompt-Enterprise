@@ -116,8 +116,12 @@ export function transportModule(t: FakeTransport): Record<string, unknown> {
       return t.fallback?.(path) ?? null;
     },
     apiSend: async (method: string, path: string, body: unknown) => {
-      check(path);
+      // RECORDED BEFORE the failure check, because the real client sends the
+      // request and then turns the response into a `ModelError` — a refused
+      // write is a write that was attempted, and a test asking "what did the
+      // second attempt send?" needs to see it.
       t.sent.push({ method, path, body });
+      check(path);
       // In echo mode the LAST write wins, so a record saved twice reads back
       // as it was saved the second time. Off by default: a suite that
       // registers responses is stating what the server answers, and a write

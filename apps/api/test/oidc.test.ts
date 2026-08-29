@@ -485,6 +485,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'DELETE /v1/matters/:id',
       'DELETE /v1/playbooks/:id',
       'DELETE /v1/playbooks/:id/draft',
+      'DELETE /v1/reviews/:id',
       'GET /healthz',
       'GET /v1/admin/blob-orphans',
       'GET /v1/changesets/:id',
@@ -495,6 +496,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/matters/:id',
       'GET /v1/matters/:id/collections',
       'GET /v1/matters/:id/documents',
+      'GET /v1/matters/:id/reviews',
       'GET /v1/me',
       'GET /v1/models',
       'GET /v1/playbooks',
@@ -502,6 +504,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/playbooks/:id/changesets',
       'GET /v1/playbooks/:id/content',
       'GET /v1/playbooks/:id/versions',
+      'GET /v1/reviews/:id',
       'GET /v1/versions/:id',
       'PATCH /v1/documents/:id/role',
       'POST /v1/admin/blob-orphans/delete',
@@ -516,6 +519,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'PUT /v1/matters/:id',
       'PUT /v1/me',
       'PUT /v1/playbooks/:id',
+      'PUT /v1/reviews/:id',
     ]);
   });
 
@@ -543,7 +547,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // every route task: 9 through Task 9, 17 with Task 11's six document
     // routes and two admin ones. A DROP in this number without a route
     // being removed is a route that stopped being registered.
-    expect(checked).toHaveLength(35);
+    expect(checked).toHaveLength(39);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

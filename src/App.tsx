@@ -1897,13 +1897,25 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
-    // Minor: `onError` used to go unused, so a failed debounced mid-run save
-    // was reported through `debug()` only — invisible to the user, exactly
-    // the "quietly wrong" failure mode this app exists to avoid. Now it
-    // surfaces the same way any other save failure in this function does.
+    // `onError` was already wired — a failed debounced mid-run save reported
+    // through `debug()` alone is invisible, which is the "quietly wrong"
+    // failure this app exists to avoid. What Stage 2 changes is WHAT it has
+    // to say. Over a local disk the underlying error's own message was the
+    // whole story; over a network the likeliest causes are an unreachable
+    // server and a 409 refusing this save because somebody else's landed
+    // first — and neither of those messages, on its own, tells the reader
+    // the thing they need to know.
+    //
+    // So the notice leads with the consequence and carries the cause after
+    // it. It does NOT block the run — a run whose auto-save is failing is
+    // still producing correct answers — and it must not read as a finding.
     const reviewSaver = matterId
       ? createDebouncedReviewSaver(undefined, (error) => {
-          notify(error instanceof Error ? error.message : 'This review is not saving. Check your connection or storage.', 'error');
+          const cause = error instanceof Error ? error.message : String(error);
+          notify(
+            `This review is not being saved — your work is at risk if you close this tab. ${cause}`,
+            'error',
+          );
         })
       : null;
     if (matterId && reviewSaver) {

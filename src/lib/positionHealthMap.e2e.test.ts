@@ -1,12 +1,25 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { buildPositionHealthMap } from './positionHealthMap';
 import { positionHealthLabel } from './positionHealth';
-import { saveReview, getReview, listReviews } from './db/reviews';
-import { closeDb } from './db/open';
+import { sharedTransport as transport } from '../test/fakeTransport';
+
+// Stage 2 Task 15 made the reviews repository an HTTP client. Only the
+// NETWORK is replaced here: the real `saveReview`, the real `getReview` and
+// `listReviews`, and the real `migrateReviewRecord`/`migrateFinding` repair
+// they funnel every read through all still run — which is the whole point of
+// this file. The defect it was written for lived in the SEAM between those
+// layers, not in any of them, and a mock of the repository would have hidden
+// exactly that.
+vi.mock('./api/client',
+  async () => (await import('../test/fakeTransport')).sharedTransportModule());
+
+const { saveReview, getReview, listReviews } = await import('./db/reviews');
+const { closeDb } = await import('./db/open');
 import { SCHEMA_VERSION } from '../types';
 import type { Finding, PlaybookDraft, PlaybookVersion, Review } from '../types';
 
-afterEach(() => closeDb());
+beforeEach(() => transport.reset());
+afterEach(() => { transport.reset(); closeDb(); });
 
 // The critical fix found in browser verification: every layer here —
 // `publishVersion`, `saveReview`/`getReview`/`listReviews` (and the
@@ -80,6 +93,10 @@ describe('end to end: a verified meets survives a real save/reopen and is counte
       playbookVersionId: version.id,
     };
 
+    // The server's answers, in the shape the routes give them: a save
+    // returns the stored record, and both read paths return it too.
+    transport.responses.set(`/v1/reviews/${review.id}`, { ...review, version: 1 });
+    transport.responses.set('/v1/matters/matter-e2e-health/reviews', [{ ...review, version: 1 }]);
     await saveReview(review);
 
     // Reopen through the SAME two read paths the app itself uses: `getReview`

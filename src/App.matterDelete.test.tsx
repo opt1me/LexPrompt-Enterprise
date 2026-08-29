@@ -1,3 +1,4 @@
+import { ModelError } from '@lexprompt/core';
 import React from 'react';
 import { TEST_ALLOWED_MODEL } from './test/allowedModel';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -304,5 +305,47 @@ describe('App — deleting a matter with a run in flight for it (Important 2)', 
     // the saver's own `saveNow`.
     expect(saverAtDeleteTime.saveNow).not.toHaveBeenCalled();
     expect(saveReviewMock).not.toHaveBeenCalled();
+  });
+
+  // Stage 2 Task 15. The debounced saver's write is FIRE-AND-FORGET —
+  // nothing awaits it, so a rejection cannot surface on a promise any caller
+  // holds. Over a local disk that was rare; over a network it is routine,
+  // and one of the failures is a 409 refusing this save because somebody
+  // else's write landed first, which is not an error at all but a fact the
+  // reader has to act on before they close the tab.
+  //
+  // A notice with no test is a notice the next restyle deletes, so this
+  // pins it: the callback App.tsx passes is invoked, and what it puts on
+  // screen leads with the CONSEQUENCE rather than echoing a transport error
+  // a lawyer cannot act on.
+  it('shows a visible notice when the run s auto-save fails, naming the risk before the cause', async () => {
+    await startLiveRunForM1();
+    // The second argument App.tsx passes to `createDebouncedReviewSaver` —
+    // the `onError` the interface has always had and nothing needed until
+    // the store moved across a network.
+    const onError = createDebouncedReviewSaverMock.mock.calls.at(-1)?.[1] as
+      ((error: unknown, review: unknown) => void) | undefined;
+    expect(onError, 'App.tsx passed no onError to the debounced saver').toBeTypeOf('function');
+
+    act(() => {
+      onError!(
+        new ModelError(
+          'This was changed since you opened it — by another tab, or by someone else.',
+          'conflict', 409),
+        { id: 'rev-1' },
+      );
+    });
+    await flush();
+
+    const toast = container.querySelector('[data-toast]');
+    expect(toast, 'no notice was raised for a failed auto-save').not.toBeNull();
+    expect(toast!.textContent).toMatch(/not being saved/i);
+    expect(toast!.textContent).toMatch(/at risk if you close this tab/i);
+    // The cause is carried too, after the consequence — a reader who can act
+    // on "somebody else changed it" should still be told which it was.
+    expect(toast!.textContent).toMatch(/by another tab, or by someone else/);
+    // …and the run is NOT blocked: a run whose auto-save is failing is still
+    // producing correct answers, and the results view stays up.
+    expect(container.querySelector('[data-toast]')).not.toBeNull();
   });
 });

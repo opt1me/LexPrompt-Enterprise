@@ -160,6 +160,10 @@ export interface Review {
   completedAt?: number;
   cancelledAt?: number;
   createdByUserId: string;
+  /** The optimistic-concurrency token — and on THIS table the one that
+   *  matters most: it is what stops a run's debounced saver overwriting a
+   *  verification somebody else recorded. See `routes/reviews.ts`. */
+  version?: number;
 }
 
 export interface Changeset {
@@ -530,6 +534,8 @@ export interface ReviewRow {
   completed_at: Date | null;
   cancelled_at: Date | null;
   created_by_user_id: string | null;
+  /** `bigint`, which `pg` hands back as a STRING — see `bigintOf`. */
+  version?: string | number | null;
 }
 
 export function toReviewRow(x: Review, workspaceId: string): ReviewRow {
@@ -568,6 +574,7 @@ export function fromReviewRow(row: ReviewRow): Review {
     ...absentUnless('completedAt', row.completed_at === null ? null : epochOf(row.completed_at)),
     ...absentUnless('cancelledAt', row.cancelled_at === null ? null : epochOf(row.cancelled_at)),
     createdByUserId: useridFromColumn(row.created_by_user_id),
+    ...absentUnless('version', bigintOf(row.version)),
   };
 }
 
