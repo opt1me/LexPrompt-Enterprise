@@ -10,6 +10,8 @@ import { registerRoleGate } from './auth/requireRole.ts';
 import { registerInfer } from './routes/infer.ts';
 import { registerInferStream } from './routes/inferStream.ts';
 import { registerMe } from './routes/me.ts';
+import { registerMatters } from './routes/matters.ts';
+import { ConflictError } from './errors.ts';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -111,7 +113,15 @@ export function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number
 
   app.setErrorHandler(async (err: FastifyError, request, reply) => {
     if (err instanceof ModelError) {
-      return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+      const body: Record<string, unknown> = { error: { code: err.code, message: err.message } };
+      // A `ConflictError` carries the row as it stands NOW, so a caller can
+      // show the reader what replaced their write without a second round
+      // trip. The key is ABSENT — never `current: null` — when the conflict
+      // came from an id this workspace may not see: "someone changed it,
+      // here it is" and "that id is taken, and by what is not yours to
+      // know" are different facts and must not arrive in one shape.
+      if (err instanceof ConflictError && err.current !== undefined) body.current = err.current;
+      return reply.code(err.status).send(body);
     }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500;
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || status === 413) {
@@ -187,6 +197,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerInfer(app, deps.gateway, deps.workspaceId);
   registerInferStream(app, deps.gateway, deps.workspaceId);
   registerMe(app, deps.db);
+  registerMatters(app, deps.db);
 
   return app;
 }

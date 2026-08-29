@@ -168,7 +168,16 @@ describe('App — running a playbook from the Library goes through a matter pick
     listMattersMock.mockReset().mockResolvedValue([makeMatter('m1', 'Acme v Bolt')]);
     listReviewsMock.mockReset().mockResolvedValue([]);
     listDocumentsMock.mockReset().mockResolvedValue([]);
-    saveMatterMock.mockReset().mockResolvedValue(undefined);
+    // `saveMatter` is declared `Promise<Matter>` and always was; this mock
+    // used to resolve `undefined`, which only went unnoticed while
+    // `createMatter` threw the returned record away. Since Stage 2 the
+    // record the STORE confirmed is the one the caller uses — the server
+    // sets `updatedAt`, mints a `version` and records the authenticated
+    // owner — so a mock that answers nothing is a mock that does not
+    // implement the function it stands in for.
+    saveMatterMock.mockReset().mockImplementation(
+      (m: { id: string }) => Promise.resolve({ ...m, updatedAt: 2, version: 1 }),
+    );
     newMatterMock.mockReset().mockImplementation((name: string, ownerId: string) => ({
       id: 'new-matter-id', name, ownerId, createdAt: 1, updatedAt: 1,
     }));

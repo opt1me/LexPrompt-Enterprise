@@ -3330,9 +3330,16 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
   const createMatter = async ({ name, client }: CreateMatterParams): Promise<Matter> => {
     const profile = await getProfile();
     const matter: Matter = { ...newMatter(name, profile.id), client };
-    await saveMatter(matter);
+    // Returns what the STORE confirmed, not what was sent to it
+    // (await-then-apply). Passing the local object back was harmless while
+    // the store was IndexedDB and the two were byte-identical; since Stage 2
+    // the server sets `updatedAt`, mints a `version`, and records the
+    // AUTHENTICATED actor as `ownerId` rather than the local profile id the
+    // browser guessed at — so the local object is now a record that never
+    // existed anywhere.
+    const saved = await saveMatter(matter);
     await refreshMatters();
-    return matter;
+    return saved;
   };
 
   const handleCreateMatter = async (params: CreateMatterParams) => {

@@ -68,6 +68,13 @@ export interface Matter {
   ownerId: string;
   createdAt: number;
   updatedAt: number;
+  /** The optimistic-concurrency token (§8), and the ONE field R3's seam
+   *  could not absorb — see `src/types.ts`'s own note on it. Optional
+   *  because a record that has never been read from the server (a freshly
+   *  minted `newMatter`, an imported one) has no version to state, and that
+   *  absence is a claim: "I believe this is a create." Never sent back as
+   *  `version: undefined`; `absentUnless` keeps the key off the wire. */
+  version?: number;
 }
 
 export interface DocumentRecord {
@@ -195,6 +202,22 @@ function dateOf(ms: number): Date {
   return new Date(ms);
 }
 
+/**
+ * A `bigint` column as a number.
+ *
+ * `pg` returns `bigint` as a STRING, deliberately — a 64-bit value does not
+ * fit a JS number — and `version` is compared for equality on the way back
+ * in, so `'3' !== 3` would make every optimistic-concurrency check fail
+ * against a row it should have matched. A version counter reaches
+ * `Number.MAX_SAFE_INTEGER` after nine quadrillion saves of one record, so
+ * the narrowing is safe here in a way it would not be for an arbitrary
+ * `bigint` column.
+ */
+function bigintOf(value: string | number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'number' ? value : Number(value);
+}
+
 /** The empty-string attribution (P16): `''` on the wire means "nobody
  *  attributed this", which is a fact about the DATA, not a valid foreign
  *  key — so it goes into the column as NULL, never as a zero-length string
@@ -222,6 +245,11 @@ export interface MatterRow {
   owner_id: string | null;
   created_at: Date;
   updated_at: Date;
+  /** `bigint`, which `pg` hands back as a STRING — see `bigintOf`. Optional
+   *  on this interface because `toMatterRow` never sets it: the database
+   *  owns a row's version and a client that could set one could defeat the
+   *  check the column exists for. */
+  version?: string | number | null;
 }
 
 export function toMatterRow(x: Matter, workspaceId: string): MatterRow {
@@ -246,6 +274,7 @@ export function fromMatterRow(row: MatterRow): Matter {
     ownerId: useridFromColumn(row.owner_id),
     createdAt: epochOf(row.created_at),
     updatedAt: epochOf(row.updated_at),
+    ...absentUnless('version', bigintOf(row.version)),
   };
 }
 

@@ -405,6 +405,24 @@ export interface Matter {
   ownerId: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * The optimistic-concurrency token (§8), set by the server and echoed back
+   * on the next write.
+   *
+   * THE ONE FIELD R3'S SEAM COULD NOT ABSORB, and therefore written down
+   * rather than slipped in. The nine repositories were made Promise-returning
+   * so a storage swap would not touch a caller; that held for every signature
+   * — `saveMatter(m): Promise<Matter>` is unchanged — but not for the record
+   * itself, because refusing a stale write needs the client to say what it
+   * was looking at, and nothing in an IndexedDB-shaped `Matter` could say it.
+   *
+   * OPTIONAL, and its absence is a claim rather than an omission: "I have not
+   * read this from the server, so I believe this is a create." That is what
+   * keeps `newMatter` unchanged and what lets a record from the uploader
+   * (which has no version) be accepted. A save carrying no version against a
+   * row that already exists is refused with 409, not applied.
+   */
+  version?: number;
 }
 
 /** The persisted record for a document once it belongs to a Matter: durable

@@ -8,6 +8,7 @@ import { createRoot, type Root } from 'react-dom/client';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 import { DbBlockedError } from './lib/db/open';
+import { ModelError } from '@lexprompt/core';
 
 const listPlaybooksMock = vi.fn();
 const getPlaybookMock = vi.fn();
@@ -149,6 +150,36 @@ describe('App mount — matters list load failure', () => {
     const retryButton = Array.from(container.querySelectorAll('button'))
       .find(b => /retry/i.test(b.textContent || ''));
     expect(retryButton).toBeTruthy();
+  });
+
+  it('surfaces a refusal from the firm s service with its own message, never an empty matters list', async () => {
+    // Stage 2: the matters list is an HTTP read now, so "empty is not broken"
+    // has a new set of ways to go wrong — a 401, a 403, a 503, a network
+    // failure, a timeout, a body that would not parse. Every one of them
+    // arrives as a `ModelError`, which `describeLoadError` passes through
+    // BECAUSE it already carries a specific, actionable message; folding it
+    // into the generic fallback would leave a reader retrying something that
+    // will keep failing, and rendering it as `[]` would tell a firm with a
+    // hundred matters that they have none.
+    listMattersMock.mockRejectedValue(new ModelError(
+      'This needs a LexPrompt role, and your account has none.', 'not_permitted', 403,
+    ));
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect(container.textContent).toContain('needs a LexPrompt role');
+    expect(container.textContent).not.toContain('No matters yet');
+  });
+
+  it('surfaces an unreachable service as its own message, never an empty matters list', async () => {
+    listMattersMock.mockRejectedValue(new ModelError(
+      "LexPrompt could not reach your firm's service (Failed to fetch).", 'network', 0,
+    ));
+    act(() => { root.render(<App />); });
+    await flush();
+
+    expect(container.textContent).toContain('could not reach');
+    expect(container.textContent).not.toContain('No matters yet');
   });
 
   it('retry re-fetches and clears the error once the matters list loads successfully', async () => {

@@ -1,88 +1,53 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { listMatters, getMatter, saveMatter, newMatter, deleteMatter } from './matters';
-import { getDb, closeDb } from './open';
-import { STORES } from './schema';
-import type { DocumentRecord, Review, PlaybookVersion } from '../../types';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ModelError } from '@lexprompt/core';
 
-beforeEach(async () => {
-  const db = await getDb();
-  await Promise.all([
-    db.clear(STORES.matters),
-    db.clear(STORES.documents),
-    db.clear(STORES.blobs),
-    db.clear(STORES.reviews),
-  ]);
-});
+/**
+ * The matters repository, now a TRANSPORT.
+ *
+ * What this file used to assert — the sort, the `_seq` tiebreak, the delete
+ * cascade — is not gone; it moved to `apps/api/test/matters.pg.test.ts`,
+ * where a real Postgres can prove it rather than a fake IndexedDB. Twelve
+ * assertions across eight cases moved; the `newMatter` case below is kept
+ * VERBATIM, because a pure-client function has no business changing when its
+ * neighbours' storage does, and its needing no edit is itself the evidence
+ * that R3's seam held for it.
+ *
+ * What stays here is what the browser still owns: which request each export
+ * makes, and — the one that matters — that a failure stays a failure. A
+ * `getMatter` that returned `null` on a 500 would render "no such matter"
+ * over a broken server, which is CLAUDE.md's founding defect at the new
+ * transport.
+ */
 
-afterEach(() => closeDb());
+const apiGet = vi.fn();
+const apiGetOrNull = vi.fn();
+const apiSend = vi.fn();
+const apiDelete = vi.fn();
 
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+vi.mock('../api/client', () => ({
+  apiGet: (...args: unknown[]) => apiGet(...args),
+  apiGetOrNull: (...args: unknown[]) => apiGetOrNull(...args),
+  apiSend: (...args: unknown[]) => apiSend(...args),
+  apiDelete: (...args: unknown[]) => apiDelete(...args),
+}));
 
-function makeDocument(matterId: string): DocumentRecord {
-  return {
-    id: uid(),
-    matterId,
-    name: 'contract.pdf',
-    kind: 'pdf',
-    text: 'Some extracted text.',
-    byteSize: 1234,
-    addedAt: Date.now(),
-    addedByUserId: 'owner-1',
-    role: 'standalone',
-  };
-}
+const { listMatters, getMatter, saveMatter, newMatter, deleteMatter } = await import('./matters');
 
-const playbookSnapshot: PlaybookVersion = {
-  id: 'pb-1-v1',
-  playbookId: 'pb-1',
-  version: 1,
-  name: 'NDA',
-  contractType: 'NDA',
-  systemPrompt: '',
-  formatPrompt: '',
-  clauses: [],
-  changeSummary: '',
-  publishedAt: Date.now(),
-  publishedByUserId: 'owner-1',
-  schemaVersion: 6,
+const MATTER = {
+  id: 'm1', name: 'Acme Merger', ownerId: 'u1',
+  createdAt: 1_700_000_000_000, updatedAt: 1_700_000_000_000, version: 3,
 };
 
-function makeReview(matterId: string, documentIds: string[]): Review {
-  return {
-    id: uid(),
-    matterId,
-    playbookSnapshot,
-    documentIds,
-    target: { kind: 'documents', documentIds },
-    findings: {},
-    modelId: 'test-model',
-    startedAt: Date.now(),
-    createdByUserId: 'owner-1',
-  };
-}
+beforeEach(() => {
+  apiGet.mockReset().mockResolvedValue([]);
+  apiGetOrNull.mockReset().mockResolvedValue(null);
+  apiSend.mockReset().mockResolvedValue(MATTER);
+  apiDelete.mockReset().mockResolvedValue(undefined);
+});
 
-/** Seeds a matter with `docCount` documents (each with a blob) and one
- *  review referencing them, writing directly to the stores so the setup
- *  does not depend on repositories this task does not produce. */
-async function seedMatterWithData(matterId: string, docCount: number) {
-  const db = await getDb();
-  const docs = Array.from({ length: docCount }, () => makeDocument(matterId));
-  const review = makeReview(matterId, docs.map(d => d.id));
-  for (const doc of docs) {
-    await db.put(STORES.documents, doc);
-    await db.put(STORES.blobs, { documentId: doc.id, bytes: new Blob(['x']), mime: 'application/pdf' });
-  }
-  await db.put(STORES.reviews, review);
-  return { docs, review };
-}
-
-describe('matter CRUD', () => {
-  it('starts empty', async () => {
-    expect(await listMatters()).toEqual([]);
-  });
-
+describe('newMatter', () => {
+  // KEPT VERBATIM from the IndexedDB version of this file. It is still pure,
+  // still client-side, and still mints a `uid()`.
   it('creates a matter with the given owner', () => {
     const m = newMatter('Acme Merger', 'owner-1');
     expect(m.name).toBe('Acme Merger');
@@ -92,105 +57,96 @@ describe('matter CRUD', () => {
     expect(m.updatedAt).toBeGreaterThan(0);
   });
 
-  it('saves and reads back a matter', async () => {
-    const m = newMatter('Acme Merger', 'owner-1');
-    await saveMatter(m);
-    expect((await getMatter(m.id))?.name).toBe('Acme Merger');
-  });
-
-  it('updates in place rather than duplicating', async () => {
-    const m = newMatter('Draft', 'owner-1');
-    await saveMatter(m);
-    await saveMatter({ ...m, name: 'Renamed' });
-    const all = await listMatters();
-    expect(all.length).toBe(1);
-    expect(all[0].name).toBe('Renamed');
-  });
-
-  it('advances updatedAt on save', async () => {
-    const m = newMatter('M', 'owner-1');
-    const saved = await saveMatter({ ...m, updatedAt: 0 });
-    expect(saved.updatedAt).toBeGreaterThan(0);
-  });
-
-  it('lists most-recently-updated first', async () => {
-    const a = await saveMatter({ ...newMatter('A', 'owner-1'), updatedAt: 1 });
-    await saveMatter({ ...newMatter('B', 'owner-1'), updatedAt: 2 });
-    await saveMatter({ ...a, name: 'A2', updatedAt: 3 });
-    expect((await listMatters())[0].name).toBe('A2');
-  });
-
-  it('returns null for an unknown id', async () => {
-    expect(await getMatter('nope')).toBeNull();
-  });
-
-  it('assigns distinct sequence numbers to concurrent saves and orders them deterministically', async () => {
-    // Both saves race to read the current max _seq and write theirs. If the
-    // read-then-write were not scoped to one shared transaction, both could
-    // read the same max and persist duplicate _seq values, which would make
-    // the same-millisecond tiebreak in listMatters non-deterministic.
-    const a = newMatter('A', 'owner-1');
-    const b = newMatter('B', 'owner-1');
-    await Promise.all([saveMatter(a), saveMatter(b)]);
-
-    const db = await getDb();
-    const [rawA, rawB] = await Promise.all([
-      db.get(STORES.matters, a.id) as Promise<(typeof a) & { _seq: number }>,
-      db.get(STORES.matters, b.id) as Promise<(typeof b) & { _seq: number }>,
-    ]);
-    expect(rawA._seq).not.toBe(rawB._seq);
-
-    // Force a same-millisecond tie on updatedAt so ordering can only come
-    // from the _seq tiebreak, then confirm it's stable and matches which
-    // save actually landed with the higher sequence number.
-    const tie = Date.now();
-    await db.put(STORES.matters, { ...rawA, updatedAt: tie });
-    await db.put(STORES.matters, { ...rawB, updatedAt: tie });
-    const winnerId = rawA._seq > rawB._seq ? a.id : b.id;
-    expect((await listMatters())[0].id).toBe(winnerId);
+  it('mints no version, because a new matter has none to state', () => {
+    // The absence is the claim "I believe this is a create" — a create that
+    // carried a version would be a stale write dressed as a new record.
+    expect('version' in newMatter('M', 'owner-1')).toBe(false);
   });
 });
 
-describe('deleteMatter cascade', () => {
-  it('cascade-deletes documents, blobs and reviews', async () => {
-    const matter = await saveMatter(newMatter('Target Matter', 'owner-1'));
-    const { docs } = await seedMatterWithData(matter.id, 2);
-    const [docId1, docId2] = docs.map(d => d.id);
-
-    await deleteMatter(matter.id);
-
-    const db = await getDb();
-    expect(await db.getAllFromIndex(STORES.documents, 'byMatter', matter.id)).toEqual([]);
-    expect(await db.getAllFromIndex(STORES.reviews, 'byMatter', matter.id)).toEqual([]);
-    expect(await db.get(STORES.blobs, docId1)).toBeUndefined();
-    expect(await db.get(STORES.blobs, docId2)).toBeUndefined();
-    expect(await db.get(STORES.matters, matter.id)).toBeUndefined();
-    expect(await getMatter(matter.id)).toBeNull();
+describe('the requests each export makes', () => {
+  it('lists from /v1/matters and returns the server order untouched', async () => {
+    const list = [{ ...MATTER, id: 'b' }, { ...MATTER, id: 'a' }];
+    apiGet.mockResolvedValue(list);
+    expect((await listMatters()).map(m => m.id)).toEqual(['b', 'a']);
+    expect(apiGet).toHaveBeenCalledWith('/v1/matters');
   });
 
-  it("does not touch another matter's data", async () => {
-    const target = await saveMatter(newMatter('Target Matter', 'owner-1'));
-    const other = await saveMatter(newMatter('Other Matter', 'owner-1'));
+  it('reads one from /v1/matters/:id', async () => {
+    apiGetOrNull.mockResolvedValue(MATTER);
+    expect(await getMatter('m1')).toEqual(MATTER);
+    expect(apiGetOrNull).toHaveBeenCalledWith('/v1/matters/m1');
+  });
 
-    await seedMatterWithData(target.id, 2);
-    const { docs: otherDocs, review: otherReview } = await seedMatterWithData(other.id, 1);
+  it('PUTs the WHOLE record to /v1/matters/:id and returns what the server saved', async () => {
+    const saved = { ...MATTER, name: 'Renamed', version: 4 };
+    apiSend.mockResolvedValue(saved);
+    expect(await saveMatter({ ...MATTER, name: 'Renamed' })).toEqual(saved);
+    expect(apiSend).toHaveBeenCalledWith(
+      'PUT', '/v1/matters/m1', { ...MATTER, name: 'Renamed' },
+    );
+  });
 
-    await deleteMatter(target.id);
+  it('sends the version it read, so a stale write can be refused', async () => {
+    await saveMatter(MATTER);
+    expect((apiSend.mock.calls[0][2] as { version?: number }).version).toBe(3);
+  });
 
-    const db = await getDb();
-    const remainingDocs = await db.getAllFromIndex(STORES.documents, 'byMatter', other.id);
-    expect(remainingDocs.map(d => d.id).sort()).toEqual(otherDocs.map(d => d.id).sort());
+  it('DELETEs /v1/matters/:id', async () => {
+    await deleteMatter('m1');
+    expect(apiDelete).toHaveBeenCalledWith('/v1/matters/m1');
+  });
 
-    const remainingReviews = await db.getAllFromIndex(STORES.reviews, 'byMatter', other.id);
-    expect(remainingReviews.map(r => r.id)).toEqual([otherReview.id]);
-
-    for (const doc of otherDocs) {
-      expect(await db.get(STORES.blobs, doc.id)).toBeDefined();
+  it('escapes an id in every path segment it builds', async () => {
+    const id = 'a/b c?d';
+    await getMatter(id);
+    await saveMatter({ ...MATTER, id });
+    await deleteMatter(id);
+    for (const call of [apiGetOrNull.mock.calls[0], apiSend.mock.calls[0].slice(1), apiDelete.mock.calls[0]]) {
+      expect(call[0]).toBe('/v1/matters/a%2Fb%20c%3Fd');
     }
-    expect(await db.get(STORES.matters, other.id)).toBeDefined();
+  });
+});
+
+describe('a failure is a failure, never an empty result', () => {
+  it('returns null for a matter the server does not have', async () => {
+    apiGetOrNull.mockResolvedValue(null);
+    expect(await getMatter('nope')).toBeNull();
+  });
+
+  it('propagates a ModelError from a read rather than swallowing it into null', async () => {
+    // THE ONE THAT MATTERS. `getMatter` answering `null` over a 500 would
+    // render "no such matter" for a server that is simply broken, and the
+    // reader would act on it.
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    apiGetOrNull.mockRejectedValue(boom);
+    await expect(getMatter('m1')).rejects.toBe(boom);
+  });
+
+  it('propagates a ModelError from the list rather than answering with no matters', async () => {
+    const denied = new ModelError('This needs a LexPrompt role.', 'not_permitted', 403);
+    apiGet.mockRejectedValue(denied);
+    await expect(listMatters()).rejects.toBe(denied);
+  });
+
+  it('propagates a conflict from a save rather than reporting it as written', async () => {
+    const stale = new ModelError('This was changed since you opened it.', 'conflict', 409);
+    apiSend.mockRejectedValue(stale);
+    await expect(saveMatter(MATTER)).rejects.toBe(stale);
   });
 
   it('resolves quietly when the matter does not exist', async () => {
+    // KEPT from the IndexedDB version, and still true: the caller asked for
+    // the matter to be gone, and it is gone. The ROUTE still answers 404,
+    // because a delete that deleted nothing must not claim otherwise; the
+    // two statements live at different layers on purpose.
+    apiDelete.mockRejectedValue(new ModelError('There is no such matter.', 'not_found', 404));
     await expect(deleteMatter('does-not-exist')).resolves.toBeUndefined();
+  });
+
+  it('propagates any other delete failure, so the UI never navigates away from a live matter', async () => {
+    const denied = new ModelError('This needs a LexPrompt role.', 'not_permitted', 403);
+    apiDelete.mockRejectedValue(denied);
+    await expect(deleteMatter('m1')).rejects.toBe(denied);
   });
 });

@@ -72,6 +72,17 @@ export interface TestApiOptions {
    *  e.g. `account_disabled` — reproducing Task 2's admin-disable path
    *  without a database. */
   actorError?: PrincipalError;
+  /**
+   * A real `Db` for the routes to run against, replacing the recording fake.
+   *
+   * Supplied by the `*.pg.test.ts` suites, which bind it to the ONE pinned
+   * client `withPg` rolls back — so a route test can exercise the real SQL
+   * against the real database and still leave nothing behind. Route suites
+   * that only care about which statement was issued leave this unset and
+   * read `calls.dbQueries` instead; both are needed, and neither can answer
+   * the other's question (Task 9's pattern for every repository route).
+   */
+  db?: Db;
 }
 
 export interface CallLog {
@@ -178,7 +189,7 @@ export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof bui
   } as GatewayClient;
 
   const app = buildServer({
-    verify, gateway, db, resolveActor,
+    verify, gateway, db: opts.db ?? db, resolveActor,
     workspaceId: WORKSPACE_ID,
     maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
   });

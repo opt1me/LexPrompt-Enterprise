@@ -68,4 +68,12 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'POST /v1/infer': 'reviewer',
   'POST /v1/infer/stream': 'reviewer',
   'GET /v1/models': 'reviewer',
+
+  // §7: a reviewer creates and edits matters. Publishing a playbook version
+  // (partner) and changing workspace configuration (admin) are the two
+  // things a reviewer cannot do, and neither is a matter route.
+  'GET /v1/matters': 'reviewer',
+  'GET /v1/matters/:id': 'reviewer',
+  'PUT /v1/matters/:id': 'reviewer',
+  'DELETE /v1/matters/:id': 'reviewer',
 };

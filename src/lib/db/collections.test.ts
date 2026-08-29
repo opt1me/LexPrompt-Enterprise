@@ -6,7 +6,6 @@ import {
   deleteCollection,
   newCollection,
 } from './collections';
-import { deleteMatter, newMatter, saveMatter } from './matters';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
 import type { DocumentRecord, Review, PlaybookVersion } from '../../types';
@@ -117,39 +116,18 @@ describe('collections repository', () => {
     expect(remainingVaries).toEqual({ ...varies, collectionId: c.id });
   });
 
-  it('deleting a matter deletes its collections', async () => {
-    const matter = await saveMatter(newMatter('Target Matter', 'owner-1'));
-    const other = await saveMatter(newMatter('Other Matter', 'owner-1'));
-    const c = await saveCollection(newCollection(matter.id, 'Lease + DoV', 'doc-base', 'owner-1'));
-    const otherC = await saveCollection(newCollection(other.id, 'Other Collection', 'doc-x', 'owner-1'));
-
-    await deleteMatter(matter.id);
-
-    expect(await getCollection(c.id)).toBeNull();
-    expect(await listCollections(matter.id)).toEqual([]);
-    expect(await getCollection(otherC.id)).toEqual(otherC);
-  });
-
-  it('deleting a matter still leaves no orphaned documents, blobs or reviews', async () => {
-    const db = await getDb();
-    const matter = await saveMatter(newMatter('Target Matter', 'owner-1'));
-    const base = makeDocument(matter.id, { role: 'base' });
-    const varies = makeDocument(matter.id, { role: 'varies' });
-    const c = await saveCollection(newCollection(matter.id, 'Lease + DoV', base.id, 'owner-1'));
-    await db.put(STORES.documents, { ...base, collectionId: c.id });
-    await db.put(STORES.documents, { ...varies, collectionId: c.id });
-    await db.put(STORES.blobs, { documentId: base.id, bytes: new Blob(['x']), mime: 'application/pdf' });
-    await db.put(STORES.blobs, { documentId: varies.id, bytes: new Blob(['x']), mime: 'application/pdf' });
-    const review = makeReview(matter.id, [base.id, varies.id]);
-    await db.put(STORES.reviews, review);
-
-    await deleteMatter(matter.id);
-
-    expect(await db.getAllFromIndex(STORES.documents, 'byMatter', matter.id)).toEqual([]);
-    expect(await db.getAllFromIndex(STORES.reviews, 'byMatter', matter.id)).toEqual([]);
-    expect(await db.get(STORES.blobs, base.id)).toBeUndefined();
-    expect(await db.get(STORES.blobs, varies.id)).toBeUndefined();
-    expect(await listCollections(matter.id)).toEqual([]);
-    expect(await getCollection(c.id)).toBeNull();
-  });
+  // The two `deleteMatter` cascade cases that stood here moved to
+  // `apps/api/test/matters.pg.test.ts` with the matters repository itself
+  // (Stage 2, Task 9). `deleteMatter` is an HTTP call now, and the cascade
+  // it triggers is `on delete cascade` in `002_records.sql` — a real
+  // database enforcing it rather than a hand-written transaction, proven
+  // there against a real Postgres and in `records.pg.test.ts` at the schema
+  // level. Keeping a fake-IndexedDB version here would assert a mechanism
+  // that no longer exists.
+  //
+  // WHAT IS NOT YET PROVEN ANYWHERE, and is a finding rather than an
+  // omission: this file's own store is still IndexedDB until Task 12, so
+  // between these two tasks a deleted matter's collections, documents and
+  // blobs survive in the browser with nothing left that can reach them.
+  // Task 12 closes it by moving this repository too.
 });

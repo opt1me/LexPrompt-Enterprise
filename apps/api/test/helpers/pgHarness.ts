@@ -46,6 +46,27 @@ afterAll(async () => {
   migratorPool = undefined;
 });
 
+/**
+ * The pinned transaction, presented as a `Db`.
+ *
+ * A route takes a `Db`; `withPg` hands out a `Tx` bound to ONE client whose
+ * work is always rolled back. Wrapping the second as the first is what lets
+ * a route suite run the real SQL against the real database and still leave
+ * nothing behind — every statement the route issues lands on the same
+ * pinned client, so it is inside the transaction the harness discards.
+ *
+ * `tx` is forwarded, not re-implemented: `pool.ts` turns a nested `tx` into
+ * a SAVEPOINT, which is exactly what a route's own transaction needs to be
+ * here. Opening a second connection instead would put the route's writes
+ * OUTSIDE the rollback, and they would survive the test.
+ */
+export function dbOn(t: Tx): Db {
+  return {
+    query: (text, values) => t.query(text, values),
+    tx: run => t.tx(run),
+  };
+}
+
 class RollbackSignal extends Error {}
 
 /**
