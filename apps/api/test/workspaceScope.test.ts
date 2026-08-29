@@ -34,7 +34,7 @@ import { ROOT, walk, rel, codeOf } from './sourceScan.ts';
  */
 const SCOPED_TABLES = [
   'matter', 'document', 'collection', 'playbook', 'playbook_version', 'review', 'changeset',
-  'precedent_set',
+  'precedent_set', 'position_basis',
 ];
 
 /** `from x` / `into x` / `update x` / `join x`, where x is a scoped table.

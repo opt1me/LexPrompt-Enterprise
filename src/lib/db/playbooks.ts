@@ -1,7 +1,10 @@
 import { ModelError } from '@lexprompt/core';
 import { apiDelete, apiGet, apiGetOrNull, apiSend } from '../api/client';
 import { migrateDraft, migratePlaybookRecord, migrateVersionRecord } from './playbookMigration';
-import { SCHEMA_VERSION, type Playbook, type PlaybookDraft, type PlaybookVersion } from '../../types';
+import {
+  SCHEMA_VERSION,
+  type Playbook, type PlaybookDraft, type PlaybookVersion, type RedlineEdit,
+} from '../../types';
 import { uid } from '../uid';
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_FORMAT_PROMPT } from '../playbookDefaults';
 
@@ -164,14 +167,40 @@ export async function savePlaybook(playbook: Playbook): Promise<Playbook> {
  * `published_by_user_id`'s foreign key satisfiable while the browser still
  * carries a local profile id. The parameter stays so no caller changed.
  */
+/**
+ * One `position_basis` row's worth of what a publish records (server §6.5).
+ *
+ * There is deliberately no `strength`, `supporting` or `total` on this shape
+ * and no column for one: `strength.ts` computes strength from a basis every
+ * time it is read, and `inferPositions.ts` discards any the model volunteers.
+ * A stored copy would be a second, frozen answer to the one number this
+ * feature's credibility rests on — and it would be the copy a panel read six
+ * months later.
+ */
+export interface PositionBasisInput {
+  clauseId: string;
+  /** What the standard position SAID at the moment it was published. */
+  adoptedText: string;
+  precedentSetId: string;
+  documentId: string;
+  edits: RedlineEdit[];
+  diffDerivedOnly: boolean;
+}
+
 export async function publishAndPoint(
   playbook: Playbook,
   draft: PlaybookDraft,
   byUserId: string,
+  /** The redline evidence behind this version's learned positions, written in
+   *  the SAME transaction as the version itself. Omitted for every publish
+   *  that adopts nothing new — an ordinary republish has no new evidence, and
+   *  sending an empty array is the same thing as omitting it. */
+  basis: PositionBasisInput[] = [],
 ): Promise<{ playbook: Playbook; version: PlaybookVersion }> {
   void byUserId;
   const saved = await apiSend<{ playbook: Playbook; version: PlaybookVersion }>(
-    'POST', `/v1/playbooks/${encodeURIComponent(playbook.id)}/versions`, { playbook, draft });
+    'POST', `/v1/playbooks/${encodeURIComponent(playbook.id)}/versions`,
+    { playbook, draft, ...(basis.length > 0 ? { basis } : {}) });
   return {
     playbook: migratePlaybookRecord(saved.playbook).playbook,
     version: migrateVersionRecord(saved.version),

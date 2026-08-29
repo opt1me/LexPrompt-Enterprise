@@ -66,6 +66,12 @@ export interface TemplateEditorProps {
    *  "empty" from "broken" applies to a section of a screen too. */
   healthError?: string;
   onRetryHealth?: () => void;
+  /** Opens `TheWorkings` over the stored `position_basis` for this clause
+   *  (server §6.5) — the answer to "where did this house rule come from?"
+   *  months after the session that produced it. Optional: a caller with no
+   *  route to that panel simply does not offer the link, rather than
+   *  offering one that goes nowhere. */
+  onSeeWorkings?: (clause: PlaybookClause) => void;
   /** Powers per-field "Draft this for me" suggestions and "Suggest what I'm
    *  missing" (spec §6, Task 8). Required rather than optional for the same
    *  reason `onPersistDraft` and `onShowVersionHistory` are: an optional
@@ -211,6 +217,7 @@ export function TemplateEditor({
   version, draft, onDraftChange, onPersistDraft, onShowVersionHistory,
   unsavedChanges = false, savingDraft = false,
   onPublish, onExport, onShowMegaPrompt, onClose, health, healthError, onRetryHealth,
+  onSeeWorkings,
   settings, onAuthError,
   role = { status: 'known', role: 'admin' },
 }: TemplateEditorProps) {
@@ -830,6 +837,28 @@ export function TemplateEditor({
                     <p className={`mt-2 font-mono text-chip uppercase ${HEALTH_INK[activeHealth.kind]}`}>
                       {positionHealthLabel(activeHealth)}
                     </p>
+                  )}
+                  {/* WHERE THIS HOUSE RULE CAME FROM (server §6.5). Offered
+                      only for a LEARNED position, because that is the only
+                      origin a `position_basis` row can exist for — a
+                      hand-written rule has no redline behind it, and a
+                      button that always answered "written by hand" would be
+                      a control that mostly says nothing.
+
+                      This is the entry point `position_basis` exists for.
+                      Without it the whole mechanism would be a correct
+                      implementation with no path to it, which is this
+                      project's most-recorded defect: §11.1's argument is
+                      that a partner asking "where did this come from?" gets
+                      an answer, and an answer nobody can reach is a shrug
+                      with extra tables. */}
+                  {onSeeWorkings && activeClause.standardPosition?.origin === 'learned' && (
+                    <button
+                      onClick={() => onSeeWorkings(activeClause)}
+                      className="mt-2 font-ui text-meta text-accent hover:text-accent-strong"
+                    >
+                      Where did this come from?
+                    </button>
                   )}
                 </div>
               </div>

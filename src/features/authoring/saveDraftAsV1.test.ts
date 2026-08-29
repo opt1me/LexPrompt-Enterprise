@@ -134,3 +134,80 @@ describe('saveDraftAsV1', () => {
     expect(version.clauses[0].standardPosition!.origin).toBe('ai-drafted');
   });
 });
+
+/**
+ * The redline evidence goes with the publish (server spec §6.5).
+ *
+ * A position that was never saved has no house rule to be the basis of, so
+ * the evidence is recorded at the one moment the rule becomes real — in the
+ * SAME call, which is one transaction server-side. A basis written outside it
+ * could survive a publish that failed: evidence for a version nobody ever
+ * published.
+ */
+describe('saveDraftAsV1 records the basis with the publish', () => {
+  const EDIT = {
+    documentId: 'd1', kind: 'deletion' as const, source: 'tracked' as const,
+    text: 'in its absolute discretion',
+    context: 'The landlord may withhold consent in its absolute discretion.',
+  };
+  const withBasis = (over: Partial<DraftClause> = {}) => clause('c1', {
+    disposition: 'kept',
+    standardPosition: { text: 'No unreasonable withholding.', origin: 'learned', reviewedByHuman: false },
+    basis: [{ precedentSetId: 's1', documentId: 'd1', edits: [EDIT], diffDerivedOnly: false }],
+    ...over,
+  });
+
+  it('hands the basis to publishAndPoint, in the same call as the version', async () => {
+    await saveDraftAsV1(draft([withBasis()]), 'Commercial Lease', 'u1');
+    expect(memoryPlaybooks.calls).toEqual(['publishAndPoint']);
+    expect(memoryPlaybooks.lastBasis).toEqual([{
+      clauseId: 'c1',
+      adoptedText: 'No unreasonable withholding.',
+      precedentSetId: 's1',
+      documentId: 'd1',
+      edits: [EDIT],
+      diffDerivedOnly: false,
+    }]);
+  });
+
+  it('records the wording AS PUBLISHED, not the one the model first proposed', () => {
+    // The whole of `adopted_text` rests on this: four leases support the
+    // sentence that was ADOPTED. If a person reworded the position before
+    // saving and this recorded the original, every later read would report
+    // "the wording has moved" on the day it was published.
+    const reworded = withBasis({
+      standardPosition: {
+        text: 'Consent not to be unreasonably withheld or delayed.',
+        origin: 'learned', reviewedByHuman: false,
+      },
+      positionEdited: true,
+    });
+    return saveDraftAsV1(draft([reworded]), 'Commercial Lease', 'u1').then(() => {
+      expect((memoryPlaybooks.lastBasis as { adoptedText: string }[])[0].adoptedText)
+        .toBe('Consent not to be unreasonably withheld or delayed.');
+    });
+  });
+
+  it('records nothing for a clause that was CUT', async () => {
+    // Evidence for a house rule nobody adopted.
+    await saveDraftAsV1(
+      draft([withBasis(), withBasis({ disposition: 'cut' })].map((c, i) => ({ ...c, id: `c${i + 1}` }))),
+      'Commercial Lease', 'u1');
+    expect((memoryPlaybooks.lastBasis as { clauseId: string }[]).map(b => b.clauseId)).toEqual(['c1']);
+  });
+
+  it('records nothing for a kept clause whose position was blanked', async () => {
+    // An empty `adoptedText` would make the "wording has moved" comparison
+    // meaningless in the direction that matters: everything would look
+    // moved, so nothing would.
+    await saveDraftAsV1(
+      draft([withBasis(), withBasis({ id: 'c2', standardPosition: undefined })]),
+      'Commercial Lease', 'u1');
+    expect((memoryPlaybooks.lastBasis as { clauseId: string }[]).map(b => b.clauseId)).toEqual(['c1']);
+  });
+
+  it('hands an empty basis for a draft with no learned positions at all', async () => {
+    await saveDraftAsV1(draft([clause('c1', { disposition: 'kept' })]), 'Commercial Lease', 'u1');
+    expect(memoryPlaybooks.lastBasis).toEqual([]);
+  });
+});

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Settings as SettingsIcon, ClipboardList, Briefcase, ShieldCheck } from 'lucide-react';
-import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
+import type { Playbook, PlaybookClause, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import type { WorkspaceSettings } from '@lexprompt/core';
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
 import { apiKeyWasPurgedThisSession, loadSettings } from './lib/storage';
@@ -96,7 +96,8 @@ import { inferPositions, type InferredPosition, type OpenQuestion } from './lib/
 import { PrecedentUploadPanel } from './features/redlines/PrecedentUploadPanel';
 import { PrecedentIntake, type UnreadableDocument } from './features/redlines/PrecedentIntake';
 import { WhatWeLearned } from './features/redlines/WhatWeLearned';
-import { TheWorkings } from './features/redlines/TheWorkings';
+import { TheWorkings, type StoredBasis } from './features/redlines/TheWorkings';
+import { getPositionBasis } from './lib/db/positionBasis';
 import { positionsToDraft, includedPositions } from './features/redlines/positionsToDraft';
 import { Button } from './components/Button';
 import { StandardPositionsView } from './features/positions/StandardPositionsView';
@@ -777,6 +778,11 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
   const [redlinesPositions, setRedlinesPositions] = useState<InferredPosition[]>([]);
   const [redlinesQuestions, setRedlinesQuestions] = useState<OpenQuestion[]>([]);
   const [redlinesWorkingsPosition, setRedlinesWorkingsPosition] = useState<InferredPosition | null>(null);
+  /** The stored-basis panel opened from the PLAYBOOK EDITOR (§6.5), which is
+   *  a different screen from the redlines session's own workings and holds
+   *  no session state at all. */
+  const [storedWorkings, setStoredWorkings] = useState<
+    { position: InferredPosition; stored: StoredBasis } | null>(null);
   /** Ruling on a gap Task 10A-fix left open (R-F-fix-1): every redlines
    *  playbook was named with the constant `REDLINES_DRAFT_NAME`, which is
    *  unusable the second the flow runs twice — two identically-named
@@ -3561,10 +3567,76 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     // `modelProvenanceName`, never `modelChoiceId`: the id is an
     // operator-defined alias an administrator can repoint, and this value is
     // printed by `positionProvenance` into every export of the playbook.
+    // The evidence carried forward with the draft (§6.5). Present only when
+    // this session actually stored a precedent set — which it always has by
+    // this point, since a document cannot reach the session without being
+    // stored, but `positionsToDraft` takes it as optional so a caller with no
+    // set records no basis rather than an empty one claiming evidence was
+    // looked for.
+    const setId = redlinesSetIdRef.current;
+    const evidence = setId === undefined ? undefined : {
+      precedentSetId: setId,
+      // Per DOCUMENT, from the session's own record of how each one's edits
+      // were read — `docxRedlines` tracked changes, or `pdfRedlineDiff`'s
+      // fallback. A diff never wears a tracked change's confidence, and this
+      // is the last point at which that distinction is still in hand.
+      documentSource: Object.fromEntries(
+        [...redlinesFilesRef.current].map(([id, entry]) => [id, entry.source])),
+    };
     updateAuthoringDraft(
-      positionsToDraft(included, redlinesDocumentNames, modelProvenanceName(settings), contractType),
+      positionsToDraft(
+        included, redlinesDocumentNames, modelProvenanceName(settings), contractType, evidence),
     );
     setView('authoring-review');
+  };
+
+  /**
+   * "Where did this house rule come from?" — the stored `position_basis`
+   * (server §6.5), read months after the session that produced it.
+   *
+   * This is the ENTRY POINT that mechanism exists for. Without it the whole
+   * of `position_basis` would be a correct implementation with no path to
+   * it, which is this project's most-recorded defect: §11.1's argument is
+   * that a partner asking the question gets the four leases and the four
+   * strikes, and an answer nobody can reach is a shrug with extra tables.
+   *
+   * The `InferredPosition` handed to `TheWorkings` is SYNTHESISED from the
+   * clause, and carries an empty `basis` deliberately: the panel is
+   * rendering `stored`, and a fabricated live basis would put edits on
+   * screen that no document was read for. `strength`/`supporting`/`total`
+   * are the harmless zero values the type requires and nothing in the
+   * read-only view reads them — `strength.ts` is still the only place a
+   * strength is computed, and this screen computes none.
+   */
+  const openStoredWorkings = (clause: PlaybookClause) => {
+    const playbookId = playbookRouteId;
+    if (!playbookId) return;
+    const position: InferredPosition = {
+      id: clause.id,
+      clauseTitle: clause.title,
+      statement: clause.standardPosition?.text ?? '',
+      strength: 'weak',
+      supporting: 0,
+      total: 0,
+      basis: [],
+      contradicted: false,
+      disposition: 'adopted',
+      diffDerivedOnly: false,
+    };
+    const load = () => {
+      setStoredWorkings({ position, stored: { state: 'loading' } });
+      void getPositionBasis(playbookId, clause.id)
+        .then(basis => setStoredWorkings({ position, stored: { state: 'loaded', basis } }))
+        .catch((e: unknown) => setStoredWorkings({
+          position,
+          stored: {
+            state: 'error',
+            message: e instanceof Error ? e.message : String(e),
+            onRetry: load,
+          },
+        }));
+    };
+    load();
   };
 
   const handleExportTemplate = (t: PlaybookDraft) => {
@@ -4104,6 +4176,7 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
               health={positionHealthMap}
               healthError={healthError ?? undefined}
               onRetryHealth={() => { if (playbookRouteId) loadPositionHealth(playbookRouteId); }}
+              onSeeWorkings={openStoredWorkings}
               settings={settings}
               onAuthError={handleModelError}
               role={roleState}
@@ -4111,6 +4184,25 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
           ) : (
             <div className="p-8 font-ui text-ui text-ink-3">No template selected.</div>
           )
+        )}
+        {/* "Where did this house rule come from?" — over the editor rather
+            than as a view of its own, so it needs no `Route` (there is
+            nothing to deep-link to that the editor's own URL does not
+            already name) and cannot interact with the unsaved-draft guards.
+            Closing returns to exactly the clause the reader left. */}
+        {storedWorkings && (
+          <div className="fixed inset-0 z-50 overflow-y-auto bg-paper">
+            <TheWorkings
+              position={storedWorkings.position}
+              stored={storedWorkings.stored}
+              readOnly
+              backLabel="Back to the clause"
+              onAdopt={() => {}}
+              onReword={() => {}}
+              onReject={() => {}}
+              onClose={() => setStoredWorkings(null)}
+            />
+          </div>
         )}
         {view === 'run' && (
           activeTemplate ? (

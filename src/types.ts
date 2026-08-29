@@ -18,7 +18,17 @@ export interface StandardPosition {
    *  the editor says so. */
   reviewedByHuman: boolean;
   /** Free text naming where it came from ("Commercial Lease — Tenant v4",
-   *  "6 redlines across 4 documents"). Presentational; nothing resolves it. */
+   *  "6 redlines across 4 documents"). Presentational; this string itself
+   *  resolves to nothing.
+   *
+   *  SOMETHING DOES RESOLVE IT NOW, and it is not this field. `position_basis`
+   *  (server spec §6.5) records the precedent documents and the specific
+   *  edits a learned position was adopted from, keyed by `(playbookId,
+   *  clauseId)` so the evidence survives every later publish — read by
+   *  `getPositionBasis` and rendered by `TheWorkings`. This stays the
+   *  human-readable SUMMARY rather than becoming the link: a sentence a
+   *  reader can take in at a glance, beside a panel that can show the four
+   *  leases and the four strikes. */
   provenance?: string;
 }
 

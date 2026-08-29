@@ -123,6 +123,14 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'GET /v1/playbooks/:id/versions': 'reviewer',
   'GET /v1/versions/:id': 'reviewer',
 
+  // §6.5: where a house rule came from. `reviewer` — reading the evidence
+  // behind a position is the same act as reading the position, and the whole
+  // argument for storing it is that a person can check it. There is no write
+  // route: a basis is recorded inside the publish transaction that adopts the
+  // position (`POST /v1/playbooks/:id/versions`, `partner`), so the only bar
+  // that could apply to writing one is already the publish's own.
+  'GET /v1/playbooks/:id/clauses/:clauseId/basis': 'reviewer',
+
   // PARTNER. Publishing a version is one of the two things §7 says a
   // reviewer cannot do, and an import publishes a v1, so it carries the same
   // bar — an import that only needed `reviewer` would be a door around the

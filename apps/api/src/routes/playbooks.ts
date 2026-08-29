@@ -8,6 +8,7 @@ import {
   type Playbook, type PlaybookDraft, type PlaybookRow,
   type PlaybookVersion, type PlaybookVersionRow,
 } from '../db/rows.ts';
+import { parseBasis, recordPositionBasis, type BasisInput } from './positionBasis.ts';
 
 /**
  * The `playbooks` and `playbookVersions` repositories, server side.
@@ -210,8 +211,8 @@ export function registerPlaybooks(app: FastifyInstance, db: Db): void {
   }> => {
     const ws = req.actor!.workspaceId;
     const { id } = req.params as { id: string };
-    const { playbook, draft } = parsePublish(id, req.body);
-    return db.tx(t => publishInto(t, ws, req.actor!.id, playbook, draft));
+    const { playbook, draft, basis } = parsePublish(id, req.body);
+    return db.tx(t => publishInto(t, ws, req.actor!.id, playbook, draft, basis));
   });
 
   /**
@@ -279,6 +280,7 @@ export function registerPlaybooks(app: FastifyInstance, db: Db): void {
  */
 async function publishInto(
   t: Tx, ws: string, actorId: string, playbook: Playbook, draft: PlaybookDraft,
+  basis: BasisInput[] = [],
 ): Promise<{ playbook: Playbook; version: PlaybookVersion }> {
   const identity = toPlaybookRow(playbook, ws);
   // FIRST, and it is the lock: `on conflict (id) do update` takes a row lock
@@ -360,6 +362,21 @@ async function publishInto(
        schema_version = $5, updated_at = now(), version = version + 1
      where id = $1 and workspace_id = $2 returning *`,
     [playbook.id, ws, inserted[0].id, version.name, playbook.schemaVersion]);
+
+  // The basis, IN THIS TRANSACTION (§6.5, Task 20). A position that was never
+  // saved has no house rule to be the basis of, so the evidence is recorded
+  // at the one moment the rule becomes real — and a basis written outside
+  // this transaction could survive a publish that failed, which is evidence
+  // for a version nobody ever published.
+  //
+  // Keyed on `(playbook_id, clause_id)` and carrying `adopted_in_version_id`
+  // plus the position's text AS ADOPTED: keying on the version would delete a
+  // firm's evidence on every publish (P13, and `positionBasis.ts`'s
+  // docstring). Nothing here records a strength, a supporting count or a
+  // total — `strength.ts` computes those from the basis, every time.
+  if (basis.length > 0) {
+    await recordPositionBasis(t, ws, playbook.id, inserted[0].id, actorId, basis);
+  }
 
   return {
     playbook: fromPlaybookRow(pointed[0]),
@@ -450,10 +467,15 @@ export function parseDraft(body: unknown): PlaybookDraft {
 }
 
 export function parsePublish(id: string, body: unknown): {
-  playbook: Playbook; draft: PlaybookDraft;
+  playbook: Playbook; draft: PlaybookDraft; basis: BasisInput[];
 } {
   if (typeof body !== 'object' || body === null) bad('the body is not a record');
   const b = body as Record<string, unknown>;
   const playbook = parsePlaybook(id, b.playbook);
-  return { playbook, draft: parseDraft(b.draft) };
+  // `basis` is OPTIONAL and absent for every publish that is not a redlines
+  // save-as-v1: an ordinary republish has no new evidence to record, and an
+  // empty array is the correct answer for it rather than a missing field
+  // being an error. `parseBasis` reads no `strength`, `supporting` or
+  // `total` — see `positionBasis.ts`.
+  return { playbook, draft: parseDraft(b.draft), basis: parseBasis(b.basis) };
 }

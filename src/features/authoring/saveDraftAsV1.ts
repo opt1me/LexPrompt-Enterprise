@@ -1,5 +1,5 @@
 import { canSaveDraft, toPlaybookDraft, type AuthoringDraft } from '../../lib/authoringDraft';
-import { newPlaybook, publishAndPoint } from '../../lib/db/playbooks';
+import { newPlaybook, publishAndPoint, type PositionBasisInput } from '../../lib/db/playbooks';
 import type { Playbook, PlaybookVersion } from '../../types';
 
 /** Sub-project E, Task 5 — `Save as v1` (spec §6).
@@ -41,5 +41,36 @@ export async function saveDraftAsV1(
   }
   const identity = newPlaybook(name);
   const playbookDraft = toPlaybookDraft(draft, name);
-  return publishAndPoint(identity, playbookDraft, byUserId);
+  // The redline evidence, read off the KEPT clauses only — `toPlaybookDraft`
+  // filters to `kept`, and a basis for a clause that was cut would be
+  // evidence for a house rule nobody adopted. Recorded in the SAME
+  // transaction as the publish (server §6.5): a position that was never
+  // saved has no house rule to be the basis of, and a basis written outside
+  // the publish could survive one that failed.
+  return publishAndPoint(identity, playbookDraft, byUserId, basisOf(draft));
+}
+
+/** `position_basis` rows for every clause this save will actually publish. */
+function basisOf(draft: AuthoringDraft): PositionBasisInput[] {
+  return draft.clauses
+    .filter((c) => c.disposition === 'kept' && c.basis && c.basis.length > 0)
+    .flatMap((c) => c.basis!.map((entry) => ({
+      clauseId: c.id,
+      // WHAT THE POSITION SAYS AT THE MOMENT IT IS PUBLISHED, not what the
+      // model first stated. A person may have reworded it on "What we
+      // learned" or again in draft review, and the evidence has to be
+      // recorded against the sentence actually adopted — four leases support
+      // the wording that was adopted, not one it was rewritten from. This is
+      // what makes the panel's "the wording has moved" comparison mean
+      // anything later.
+      adoptedText: c.standardPosition?.text ?? '',
+      precedentSetId: entry.precedentSetId,
+      documentId: entry.documentId,
+      edits: entry.edits,
+      diffDerivedOnly: entry.diffDerivedOnly,
+    })))
+    // A kept clause whose standard position was blanked has nothing for the
+    // comparison to compare, so it records no basis rather than an empty
+    // `adoptedText` against which every future wording would read as moved.
+    .filter((entry) => entry.adoptedText.trim() !== '');
 }

@@ -34,6 +34,11 @@ export interface MemoryPlaybooks {
    *  what `publishAndPoint` being one transaction is FOR and what used to be
    *  asserted by counting IndexedDB transactions. */
   calls: string[];
+  /** The `basis` the last `publishAndPoint` was handed (server §6.5) — so a
+   *  caller can be held to recording the redline evidence in the SAME call
+   *  as the publish, rather than in a second write that could survive a
+   *  publish that failed. */
+  lastBasis: unknown[] | null;
   reset(): void;
 }
 
@@ -41,12 +46,14 @@ export const memoryPlaybooks: MemoryPlaybooks = {
   playbooks: new Map<string, Playbook>(),
   versions: new Map<string, PlaybookVersion>(),
   failPublish: null,
+  lastBasis: null,
   calls: [],
   reset() {
     memoryPlaybooks.playbooks.clear();
     memoryPlaybooks.versions.clear();
     memoryPlaybooks.failPublish = null;
     memoryPlaybooks.calls.length = 0;
+    memoryPlaybooks.lastBasis = null;
   },
 };
 
@@ -88,9 +95,10 @@ export function memoryPlaybooksModule(): Record<string, unknown> {
       return saved;
     },
     async publishAndPoint(
-      playbook: Playbook, draft: PlaybookDraft, byUserId: string,
+      playbook: Playbook, draft: PlaybookDraft, byUserId: string, basis: unknown[] = [],
     ): Promise<{ playbook: Playbook; version: PlaybookVersion }> {
       memoryPlaybooks.calls.push('publishAndPoint');
+      memoryPlaybooks.lastBasis = basis;
       if (memoryPlaybooks.failPublish) throw memoryPlaybooks.failPublish;
       const next = versionsOf(playbook.id).reduce((max, v) => Math.max(max, v.version), 0) + 1;
       const summary = draft.changeSummary?.trim() ?? '';

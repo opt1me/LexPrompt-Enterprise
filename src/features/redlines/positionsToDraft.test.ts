@@ -166,3 +166,105 @@ describe('positionsToDraft', () => {
     );
   });
 });
+
+/**
+ * The redline evidence carried into the draft (server spec §6.5).
+ *
+ * This is the seam where a session's in-memory `ParsedEdit`s become the
+ * durable `position_basis` a partner reads next year. Two things it must get
+ * right and one it must refuse.
+ */
+describe('positionsToDraft carries the basis a house rule will be evidenced by', () => {
+  const EVIDENCE = {
+    precedentSetId: 's1',
+    documentSource: { d1: 'tracked' as const, d2: 'diff' as const },
+  };
+  const edit = (text: string) => ({
+    kind: 'deletion' as const, text,
+    context: `The landlord may withhold consent ${text}.`,
+    author: 'A Partner',
+  });
+  const withEdits = () => position({
+    basis: [
+      { documentId: 'd1', supports: true, edits: [edit('in its absolute discretion')] },
+      { documentId: 'd2', supports: true, edits: [edit('at its option')] },
+    ],
+  });
+
+  it('records one entry per supporting document, with its edits and its source', () => {
+    const draft = positionsToDraft([withEdits()], NAMES, 'test/model', CONTRACT_TYPE, EVIDENCE);
+    const basis = draft.clauses[0].basis!;
+    expect(basis.map(b => b.documentId)).toEqual(['d1', 'd2']);
+    expect(basis[0].precedentSetId).toBe('s1');
+    expect(basis[0].edits[0].text).toBe('in its absolute discretion');
+    expect(basis[0].edits[0].author).toBe('A Partner');
+    // Per DOCUMENT, from the session's own record of how each was read. A
+    // diff never wears a tracked change's confidence, and this is the last
+    // point at which the distinction is still in hand.
+    expect(basis[0].edits[0].source).toBe('tracked');
+    expect(basis[1].edits[0].source).toBe('diff');
+  });
+
+  it('records only SUPPORTING documents, never the ones that opposed', () => {
+    // This becomes the answer to "where did this house rule come from?", and
+    // an opposing document listed among a rule's evidence would read as
+    // having supported it.
+    const p = position({
+      basis: [
+        { documentId: 'd1', supports: true, edits: [edit('in its absolute discretion')] },
+        { documentId: 'd2', supports: false, edits: [edit('at its option')] },
+      ],
+    });
+    const draft = positionsToDraft([p], NAMES, 'test/model', CONTRACT_TYPE, EVIDENCE);
+    expect(draft.clauses[0].basis!.map(b => b.documentId)).toEqual(['d1']);
+  });
+
+  it('carries diffDerivedOnly from the POSITION, never recomputed here', () => {
+    // `inferPositions.ts` computes it; a second implementation here would be
+    // the sibling drift this project has paid for six times, on the flag
+    // that keeps weaker evidence weaker.
+    const draft = positionsToDraft(
+      [{ ...withEdits(), diffDerivedOnly: true }], NAMES, 'test/model', CONTRACT_TYPE, EVIDENCE);
+    expect(draft.clauses[0].basis!.every(b => b.diffDerivedOnly)).toBe(true);
+  });
+
+  it('records NOTHING — absent, not empty — when the session stored no documents', () => {
+    const draft = positionsToDraft([withEdits()], NAMES, 'test/model', CONTRACT_TYPE);
+    expect('basis' in draft.clauses[0]).toBe(false);
+  });
+
+  it('records nothing for a position with no supporting edits at all', () => {
+    // An empty array would claim evidence was gathered and was empty —
+    // "silence wearing a position's clothes", one layer along.
+    const p = position({ basis: [{ documentId: 'd1', supports: true, edits: [] }] });
+    expect('basis' in positionsToDraft([p], NAMES, 'test/model', CONTRACT_TYPE, EVIDENCE).clauses[0])
+      .toBe(false);
+  });
+
+  it('carries no strength, supporting count or total into the draft', () => {
+    // `strength.ts` computes those from a basis every time it is read. A
+    // copy carried here would be a second, frozen answer to the one number
+    // this feature's credibility rests on.
+    const draft = positionsToDraft([withEdits()], NAMES, 'test/model', CONTRACT_TYPE, EVIDENCE);
+    const keys = Object.keys(draft.clauses[0].basis![0]);
+    expect(keys).not.toContain('strength');
+    expect(keys).not.toContain('supporting');
+    expect(keys).not.toContain('total');
+    expect(keys).toContain('edits');
+  });
+
+  it('keeps the basis OUT of the published playbook content', () => {
+    // A `PlaybookClause` is what gets persisted as the version's own jsonb.
+    // The evidence belongs in `position_basis`; a second copy inside an
+    // IMMUTABLE version would be the one that could never be corrected.
+    const authoring = positionsToDraft(
+      [withEdits()], NAMES, 'test/model', CONTRACT_TYPE, EVIDENCE);
+    const kept = {
+      ...authoring,
+      clauses: authoring.clauses.map(c => ({ ...c, disposition: 'kept' as const })),
+    };
+    const published = toPlaybookDraft(kept, CONTRACT_TYPE);
+    expect('basis' in published.clauses[0]).toBe(false);
+    expect(JSON.stringify(published)).not.toContain('absolute discretion');
+  });
+});

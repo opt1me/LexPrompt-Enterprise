@@ -1,4 +1,4 @@
-import type { PlaybookClause, PlaybookDraft } from '../types';
+import type { PlaybookClause, PlaybookDraft, RedlineEdit } from '../types';
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_FORMAT_PROMPT } from './playbookDefaults';
 
 /** Sub-project E — playbook authoring. See
@@ -13,8 +13,43 @@ import { DEFAULT_SYSTEM_PROMPT, DEFAULT_FORMAT_PROMPT } from './playbookDefaults
 
 export type ClauseDisposition = 'unreviewed' | 'kept' | 'cut';
 
+/**
+ * One document's worth of the redline evidence behind a learned standard
+ * position (server spec §6.5, `position_basis`).
+ *
+ * Carried on the DRAFT and written by the publish that adopts the position —
+ * `saveDraftAsV1` hands it to `publishAndPoint`, which records it in the same
+ * transaction as the version, because a position that was never saved has no
+ * house rule to be the basis of.
+ *
+ * `toPlaybookDraft` strips it: a `PlaybookClause` is what gets PERSISTED as
+ * the playbook's own content, and the evidence belongs in `position_basis`,
+ * not duplicated inside the version's jsonb where nothing would keep the two
+ * in step. Dropping that strip is how a durable second copy appears.
+ *
+ * **No `strength`, no `supporting`, no `total`.** `strength.ts` computes
+ * those from a basis on every render and `inferPositions.ts` discards any the
+ * model volunteers; a copy carried here would be a second, frozen answer to
+ * the one number this feature's credibility rests on.
+ */
+export interface DraftClauseBasis {
+  precedentSetId: string;
+  documentId: string;
+  edits: RedlineEdit[];
+  /** The POSITION's flag, as `inferPositions` computed it, recorded on every
+   *  document's row so the basis as a whole still carries it. `source:
+   *  'diff'` never wears `source: 'tracked'`'s confidence, and "everywhere it
+   *  appears" now includes a panel opened six months later. */
+  diffDerivedOnly: boolean;
+}
+
 export interface DraftClause extends PlaybookClause {
   disposition: ClauseDisposition;
+  /** The redline evidence this clause's standard position was learned from,
+   *  when it came from a "learn from redlines" session. Absent for a clause
+   *  drafted by a model or written by hand — there is no evidence to record,
+   *  and an empty array would claim there was and that it was empty. */
+  basis?: DraftClauseBasis[];
   /** True when the human changed a field before keeping it. R-E5: computed
    *  by comparing values, never set by an onChange firing — "kept as
    *  drafted" and "rewritten then kept" are different claims about how much
@@ -243,6 +278,15 @@ export function toPlaybookDraft(draft: AuthoringDraft, name: string): PlaybookDr
     .map((c) => {
       const {
         disposition: _disposition, edited: _edited, positionEdited: _positionEdited,
+        // STRIPPED, and not as tidiness. `basis` is the redline evidence
+        // behind a learned position; it belongs in `position_basis`, written
+        // by the same transaction that publishes this version. Letting it
+        // through `...rest` would put a SECOND, durable copy inside the
+        // version's own jsonb, with nothing keeping the two in step — and
+        // the copy inside an immutable version would be the one that could
+        // never be corrected. `saveDraftAsV1` reads it off the draft before
+        // calling this.
+        basis: _basis,
         suggestions: _suggestions, ...rest
       } = c;
       const clause: PlaybookClause = { ...rest };

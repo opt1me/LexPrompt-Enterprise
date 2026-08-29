@@ -1,6 +1,7 @@
 import { uid } from '../../lib/uid';
-import type { AuthoringDraft, DraftClause } from '../../lib/authoringDraft';
+import type { AuthoringDraft, DraftClause, DraftClauseBasis } from '../../lib/authoringDraft';
 import type { InferredPosition } from '../../lib/inferPositions';
+import type { RedlineEdit } from '../../types';
 
 /**
  * Turns the positions a person ADOPTED or REWORDED on "What we learned"
@@ -124,6 +125,67 @@ export function learnedFromNames(
  * `DraftForm` gates its own submit on `contractType.trim() !== ''` rather
  * than letting a blank one through to be silently named something generic.
  */
+/**
+ * Where this session's precedent documents are stored, and how each one's
+ * edits were found.
+ *
+ * Supplied by the caller because only it knows both: `App.tsx` holds the
+ * precedent set id it created for the session and `redlinesFilesRef`, which
+ * records per document whether its edits came from tracked changes or from a
+ * PDF diff. Absent for any caller that has no stored set — the clauses then
+ * carry no `basis` at all, rather than an empty one that would claim
+ * evidence was looked for and none found.
+ */
+export interface PrecedentEvidence {
+  precedentSetId: string;
+  /** documentId -> how that document's edits were found. A document missing
+   *  from this map is treated as `'tracked'`, matching the default
+   *  `handleAddRedlinesFiles` records; it is never guessed as `'diff'`,
+   *  because that would understate evidence a person can check. */
+  documentSource: Record<string, 'tracked' | 'diff'>;
+}
+
+/**
+ * The durable copy of one position's redline evidence, per document
+ * (server spec §6.5, `position_basis`).
+ *
+ * Only SUPPORTING entries, and the reason is the same one `learnedFromNames`
+ * gives: this becomes the answer to "where did this house rule come from?",
+ * and an opposing document listed among a rule's evidence would read as
+ * having supported it. `TheWorkings` still shows both sides during the
+ * session, from `InferredPosition.basis`, which is the screen for deciding;
+ * this is the record of what was decided.
+ *
+ * `diffDerivedOnly` is the POSITION's flag, computed by `inferPositions.ts`
+ * — never a per-document recomputation here, which would be a second
+ * implementation of the same judgement. No strength, no counts: `strength.ts`
+ * computes those from a basis, every time it is read.
+ */
+function basisFor(
+  position: InferredPosition, evidence: PrecedentEvidence,
+): DraftClauseBasis[] {
+  return position.basis
+    .filter((entry) => entry.supports && entry.edits.length > 0)
+    .map((entry) => ({
+      precedentSetId: evidence.precedentSetId,
+      documentId: entry.documentId,
+      edits: entry.edits.map((edit): RedlineEdit => ({
+        documentId: entry.documentId,
+        kind: edit.kind,
+        text: edit.text,
+        context: edit.context,
+        source: evidence.documentSource[entry.documentId] ?? 'tracked',
+        // ABSENT, never `author: undefined` — `structuredClone` and jsonb
+        // treat the two differently, and an author key present but empty
+        // reads as "the edit records no author" rather than "we did not
+        // capture one".
+        ...(edit.author === undefined ? {} : { author: edit.author }),
+        ...(edit.at === undefined ? {} : { at: edit.at }),
+      })),
+      diffDerivedOnly: position.diffDerivedOnly,
+    }));
+}
+
 export function positionsToDraft(
   positions: InferredPosition[],
   documentNames: Record<string, string>,
@@ -131,6 +193,10 @@ export function positionsToDraft(
    *  NAME, never the allowlist alias. See `AuthoringDraft.modelId`. */
   modelId: string,
   contractType: string,
+  /** Present once the session's documents are stored (§11.1). Omitted, the
+   *  clauses carry no basis and the workings panel says nothing was
+   *  recorded — which is the truth for a session that stored nothing. */
+  evidence?: PrecedentEvidence,
 ): AuthoringDraft {
   const included = includedPositions(positions);
   const clauses: DraftClause[] = included.map((position) => {
@@ -140,9 +206,15 @@ export function positionsToDraft(
     // are OR'd forward by `applyEdits`, so a reword here survives a clause
     // the person then keeps unchanged.
     const reworded = position.disposition === 'reworded';
+    const basis = evidence ? basisFor(position, evidence) : [];
     return {
       id: uid(),
       title: position.clauseTitle,
+      // ABSENT when there is nothing to record — a position with no
+      // supporting edits, or a session that stored no documents. An empty
+      // array would claim evidence was gathered and was empty, which is the
+      // "silence wearing a position's clothes" shape one layer along.
+      ...(basis.length > 0 ? { basis } : {}),
       extractPrompt: defaultExtractPrompt(position.clauseTitle),
       standardPosition: {
         text: positionText(position),
