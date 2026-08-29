@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildRegistry, PENDING } from '../src/adapters/registry.ts';
-import { PROVIDER_IDS } from '@lexprompt/core';
+import { PROVIDER_IDS, isRetryableStatus } from '@lexprompt/core';
 
 // One built registry for the whole file. Two adapters take configuration,
 // so the registry is a factory rather than a constant (S25: an adapter is
@@ -163,7 +163,15 @@ describe('OpenAI-compatible readResponse', () => {
     expect(a.readResponse({
       choices: [{ message: { content: 'Answer.' } }],
       usage: { prompt_tokens: 10, completion_tokens: 4 },
-    })).toEqual({ content: 'Answer.', usage: { promptTokens: 10, completionTokens: 4 } });
+    })).toEqual({
+      content: 'Answer.',
+      usage: { promptTokens: 10, completionTokens: 4 },
+      // Absent `finish_reason` is `unknown`, NOT `stop`. A provider that
+      // said nothing has told us nothing, and recording silence as "the
+      // model chose to end" is the shape of failure this gateway exists to
+      // refuse.
+      stopReason: 'unknown',
+    });
   });
 
   it('reports zero usage rather than NaN when a provider omits it', () => {
@@ -180,29 +188,92 @@ describe('OpenAI-compatible readResponse', () => {
 describe('OpenAI-compatible decodeEvent (pure, no network)', () => {
   const a = adapter('openai');
 
+  // `decodeEvent` returns an ARRAY — zero or more events per raw event —
+  // because one OpenAI chunk may carry both the last content delta and
+  // `finish_reason`, and neither may be dropped in favour of the other.
   it('reads a content delta', () => {
     expect(a.decodeEvent('data: {"choices":[{"delta":{"content":"Hi"}}]}'))
-      .toEqual({ kind: 'delta', text: 'Hi' });
+      .toEqual([{ kind: 'delta', text: 'Hi' }]);
   });
 
   it('reads a usage-only chunk', () => {
     expect(a.decodeEvent('data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":2}}'))
-      .toEqual({ kind: 'usage', usage: { promptTokens: 9, completionTokens: 2 } });
+      .toEqual([{ kind: 'usage', usage: { promptTokens: 9, completionTokens: 2 } }]);
   });
 
   it('reads the [DONE] sentinel as the end of the stream', () => {
-    expect(a.decodeEvent('data: [DONE]')).toEqual({ kind: 'end' });
+    expect(a.decodeEvent('data: [DONE]')).toEqual([{ kind: 'end' }]);
   });
 
   it('reads a mid-stream error object as an error, not as content', () => {
     expect(a.decodeEvent('data: {"error":{"message":"upstream exploded","code":500}}'))
-      .toEqual({ kind: 'error', status: 500, message: 'upstream exploded' });
+      .toEqual([{ kind: 'error', status: 500, message: 'upstream exploded' }]);
   });
 
-  it('returns null for a keepalive, an empty delta and malformed JSON', () => {
-    expect(a.decodeEvent(': ping')).toBe(null);
-    expect(a.decodeEvent('data: {"choices":[{"delta":{}}]}')).toBe(null);
-    expect(a.decodeEvent('data: {not json')).toBe(null);
+  it('returns nothing for a keepalive, an empty delta and malformed JSON', () => {
+    expect(a.decodeEvent(': ping')).toEqual([]);
+    expect(a.decodeEvent('data: {"choices":[{"delta":{}}]}')).toEqual([]);
+    expect(a.decodeEvent('data: {not json')).toEqual([]);
+  });
+
+  // ==================================================================
+  // C1. The provider cut the answer off at the token ceiling, and the
+  // gateway has to be able to KNOW that. Without a `stop` event the fact
+  // never leaves this function, and half a clause analysis ending
+  // mid-sentence is served as a complete one.
+  // ==================================================================
+  it('reads finish_reason: "length" as a length stop, not as the end of a good answer', () => {
+    expect(a.decodeEvent('data: {"choices":[{"delta":{},"finish_reason":"length"}]}'))
+      .toEqual([{ kind: 'stop', reason: 'length' }]);
+  });
+
+  it('reads finish_reason: "stop" as a clean stop', () => {
+    expect(a.decodeEvent('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}'))
+      .toEqual([{ kind: 'stop', reason: 'stop' }]);
+  });
+
+  // The case a single-event return could not express, and the reason this
+  // function returns an array. Dropping the delta loses the last token of
+  // the answer; dropping the finish_reason serves a cut-off answer as a
+  // whole one. Both are defects this project has already shipped once.
+  it('keeps BOTH the delta and the stop when one chunk carries them together', () => {
+    expect(a.decodeEvent('data: {"choices":[{"delta":{"content":"…and fin"},"finish_reason":"length"}]}'))
+      .toEqual([
+        { kind: 'delta', text: '…and fin' },
+        { kind: 'stop', reason: 'length' },
+      ]);
+  });
+
+  it('reads a content_filter stop as `other`, never as `stop`', () => {
+    expect(a.decodeEvent('data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}'))
+      .toEqual([{ kind: 'stop', reason: 'other' }]);
+  });
+
+  // M2, same line. OpenAI's `error.code` is normally a STRING
+  // ("invalid_api_key"), which `Number(...)` turned into NaN and the old
+  // fallback turned into 502 — a retryable status for a permanently
+  // rejected credential, retried three times and then reported as a
+  // transient blip.
+  it('maps a STRING error code to its real status rather than a retryable 502', () => {
+    expect(a.decodeEvent('data: {"error":{"message":"bad key","code":"invalid_api_key"}}'))
+      .toEqual([{ kind: 'error', status: 401, message: 'bad key' }]);
+    expect(a.decodeEvent('data: {"error":{"message":"no","type":"authentication_error"}}'))
+      .toEqual([{ kind: 'error', status: 401, message: 'no' }]);
+    expect(isRetryableStatus(401)).toBe(false);
+  });
+
+  it('still falls back to 502 for an error it genuinely cannot classify', () => {
+    expect(a.decodeEvent('data: {"error":{"message":"?","code":"something_new"}}'))
+      .toEqual([{ kind: 'error', status: 502, message: '?' }]);
+  });
+
+  // An object literal would resolve inherited keys and hand back a truthy
+  // *function* as the status.
+  it('does not resolve a prototype key as a status or a stop reason', () => {
+    expect(a.decodeEvent('data: {"error":{"message":"m","code":"constructor"}}'))
+      .toEqual([{ kind: 'error', status: 502, message: 'm' }]);
+    expect(a.decodeEvent('data: {"choices":[{"delta":{},"finish_reason":"toString"}]}'))
+      .toEqual([{ kind: 'stop', reason: 'other' }]);
   });
 });
 
@@ -264,6 +335,6 @@ describe('streamed and non-streamed usage agreement', () => {
     const streamed = a.decodeEvent(
       'data: {"choices":[],"usage":{"prompt_tokens":42,"completion_tokens":7}}',
     );
-    expect(streamed).toEqual({ kind: 'usage', usage: nonStreamed.usage });
+    expect(streamed).toEqual([{ kind: 'usage', usage: nonStreamed.usage }]);
   });
 });

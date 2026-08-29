@@ -1,6 +1,7 @@
 import {
-  ModelError,
+  ModelError, isModelErrorCode, truncationRefusal,
   type ModelErrorCode, type InferUsage, type Jurisdiction, type ProviderId,
+  type StopReason,
 } from './protocol.ts';
 
 /**
@@ -115,6 +116,23 @@ export type Frame =
       callId: string;
       provider: ProviderId;
       jurisdiction: Jurisdiction;
+      /**
+       * Why the model stopped — REQUIRED, for the same reason `provider`
+       * and `jurisdiction` are.
+       *
+       * Without it on the wire, a completion the provider cut off at
+       * `max_tokens` is indistinguishable, everywhere downstream, from one
+       * the model chose to end: the browser renders the fragment, with no
+       * marker of any kind, and a lawyer acts on a list missing its tail.
+       * `sse.ts` already refuses to let a dropped SOCKET wear a `done`
+       * frame; this is the same rule for the far likelier case, where the
+       * socket is fine and the ANSWER is the thing that stopped.
+       *
+       * A producer that omits it writes a frame that does not decode (see
+       * `decodeFrame`), which `readFrames` reports as a truncated stream —
+       * fail-closed, rather than a fragment resolving as an answer.
+       */
+      stopReason: StopReason;
     }
   | { type: 'error'; code: ModelErrorCode; status: number; message: string; callId: string };
 
@@ -131,8 +149,21 @@ export function decodeFrame(rawEvent: string): Frame | null {
     if (parsed?.type === 'delta' && typeof parsed.text === 'string') return parsed;
     if (parsed?.type === 'done' && parsed.usage && typeof parsed.callId === 'string'
       && typeof parsed.provider === 'string'
+      && typeof parsed.stopReason === 'string'
       && !!parsed.jurisdiction && typeof parsed.jurisdiction.bloc === 'string') return parsed;
-    if (parsed?.type === 'error' && typeof parsed.message === 'string') return parsed;
+    // As strict as `done`, and for the same reason it took a review to
+    // notice was missing here. An `error` frame accepted on its `message`
+    // alone decoded to `new ModelError(msg, undefined, undefined)`, whose
+    // `retryable`, `isSignInError` and `isServiceConfigError` were all
+    // false by accident — a firm-configuration fault reaching a lawyer as
+    // an ordinary one, which is exactly what M3/M2's wording rules exist to
+    // prevent one layer up. A frame that fails this is refused, and
+    // `readFrames` reports the stream as truncated: still loud, and
+    // honestly so, since a frame this malformed is not a classification
+    // anyone should act on.
+    if (parsed?.type === 'error' && typeof parsed.message === 'string'
+      && typeof parsed.callId === 'string' && typeof parsed.status === 'number'
+      && isModelErrorCode(parsed.code)) return parsed;
     return null;
   } catch {
     return null;
@@ -158,6 +189,9 @@ export interface StreamEnd {
   callId: string;
   provider: ProviderId;
   jurisdiction: Jurisdiction;
+  /** Why the model stopped. Never `'length'` on a resolved stream —
+   *  `readFrames` throws on that rather than returning. */
+  stopReason: StopReason;
 }
 
 export async function readFrames(
@@ -186,9 +220,19 @@ export async function readFrames(
 
   const end = terminal as Frame | null;
   if (end && end.type === 'done') {
+    // Defence in depth, and the second consumer's own guard: the gateway
+    // refuses a `length` completion before it ever writes a `done` frame,
+    // so this should be unreachable in a matched pair — but the browser is
+    // a separately deployed half of this protocol, and the ONE decision
+    // about a truncated answer is shared rather than trusted to hold at the
+    // far end. `truncationRefusal` is that decision; this is not a second
+    // copy of it.
+    const truncated = truncationRefusal(end.stopReason, end.callId);
+    if (truncated) throw truncated;
     return {
       usage: end.usage, callId: end.callId,
       provider: end.provider, jurisdiction: end.jurisdiction,
+      stopReason: end.stopReason,
     };
   }
   if (end && end.type === 'error') throw new ModelError(end.message, end.code, end.status, end.callId);

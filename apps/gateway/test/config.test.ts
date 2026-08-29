@@ -33,6 +33,18 @@ const BASE = {
   GATEWAY_MTLS_ALLOWED_SUBJECT: 'lexprompt-api',
 };
 
+/** The `entra` fixture. `config.test.ts` never exercised this mode at all,
+ *  which is how an unset `GATEWAY_ENTRA_ALLOWED_OIDS` — an allow-any-oid
+ *  switch — went untested in both this suite and `callerAuth.test.ts`. */
+const ENTRA = {
+  GATEWAY_PORT: '8081',
+  GATEWAY_MODELS_FILE: '/etc/lexprompt/models.json',
+  GATEWAY_ALLOWED_JURISDICTIONS: 'UK,EU',
+  GATEWAY_CALLER_AUTH: 'entra',
+  GATEWAY_ENTRA_TENANT_ID: 'tenant-1',
+  GATEWAY_ENTRA_AUDIENCE: 'api://gateway',
+};
+
 const read = (body: string) => (p: string) => {
   if (p !== '/etc/lexprompt/models.json') throw new Error(`unexpected read of ${p}`);
   return body;
@@ -267,4 +279,59 @@ describe('endpoint scheme — the transport branches on it, so config must guara
     expect(cfg.models[0].provider).toBe('recorded');
   });
 });
+});
+
+describe('loadConfig — GATEWAY_CALLER_AUTH=entra (M4)', () => {
+  // ==================================================================
+  // An empty `allowedObjectIds` used to mean "allow any object id": a
+  // deployment that never set GATEWAY_ENTRA_ALLOWED_OIDS started clean,
+  // printed `caller-auth=entra`, logged nothing, and accepted a call from
+  // ANY principal in the tenant that could get a token for the audience —
+  // then trusted `workspaceId` and the actor straight out of that caller's
+  // request body. It was the only switch in this file that turned a policy
+  // check off by being absent, in a file that three times refuses to
+  // default a policy decision and says why each time.
+  // ==================================================================
+  it('REFUSES to start when GATEWAY_ENTRA_ALLOWED_OIDS is unset', () => {
+    expect(() => loadConfig({ ...ENTRA }, read(file(UK_MODEL))))
+      .toThrow(/GATEWAY_ENTRA_ALLOWED_OIDS/);
+  });
+
+  it('refuses an empty or whitespace-only list for the same reason', () => {
+    for (const value of ['', '  ', ',', ' , , ']) {
+      expect(() => loadConfig(
+        { ...ENTRA, GATEWAY_ENTRA_ALLOWED_OIDS: value }, read(file(UK_MODEL)),
+      )).toThrow(/GATEWAY_ENTRA_ALLOWED_OIDS/);
+    }
+  });
+
+  it('accepts one or several object ids, trimmed', () => {
+    const config = loadConfig(
+      { ...ENTRA, GATEWAY_ENTRA_ALLOWED_OIDS: ' oid-a , oid-b ' }, read(file(UK_MODEL)),
+    );
+    expect(config.caller).toEqual({
+      mode: 'entra', tenantId: 'tenant-1', audience: 'api://gateway',
+      allowedObjectIds: ['oid-a', 'oid-b'],
+    });
+  });
+});
+
+describe('loadConfig — contextLength is validated, not coerced (m2)', () => {
+  // It was the one ModelEntry field that coerced: `Number(m.contextLength ??
+  // 0)` turns "128k" into NaN, which survives `toAllowedModel`, serialises
+  // to null on the wire, and reaches the browser's context budget — where it
+  // silently governs how much of a contract is sent to a model.
+  it('refuses a contextLength that is not a positive number', () => {
+    for (const value of ['128k', 'lots', -1, 0, {}]) {
+      expect(() => loadConfig(
+        { ...BASE }, read(file({ ...UK_MODEL, contextLength: value })),
+      )).toThrow(/contextLength/);
+    }
+  });
+
+  it('still permits an entry that declares none, as it always has', () => {
+    const { contextLength, ...noLength } = UK_MODEL as Record<string, unknown>;
+    expect(contextLength).toBeDefined();
+    expect(loadConfig({ ...BASE }, read(file(noLength))).models[0].contextLength).toBe(0);
+  });
 });

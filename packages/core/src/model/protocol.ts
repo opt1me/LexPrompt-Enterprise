@@ -158,6 +158,30 @@ export interface InferUsage {
   completionTokens: number;
 }
 
+/**
+ * Why the model stopped generating, normalised across providers.
+ *
+ * The providers spell it three ways — OpenAI-shaped ones send
+ * `finish_reason: 'length'`, Anthropic sends `stop_reason: 'max_tokens'`,
+ * and some relays send nothing at all — and every one of those spellings
+ * lives inside `apps/gateway/src/adapters/`. Nothing outside an adapter
+ * reads a provider's own wording; `callModel` and the stream route see only
+ * these four values.
+ *
+ *  - `stop`    the model chose to end (including a stop sequence or a
+ *              completed tool call). The answer is whole.
+ *  - `length`  the provider cut the answer off at a token ceiling. The
+ *              answer is a fragment. See `truncationRefusal`.
+ *  - `other`   a reason that is neither of those — a content filter, a
+ *              refusal, a paused turn. Carried as its own value rather than
+ *              folded into `stop`, so "the model finished" is never claimed
+ *              on this project's behalf about something else.
+ *  - `unknown` the provider said nothing. NOT the same as `stop`: an
+ *              absent reason is silence, and silence reading as success is
+ *              the failure this whole file is written against.
+ */
+export type StopReason = 'stop' | 'length' | 'other' | 'unknown';
+
 export interface InferResponse {
   content: string;
   usage: InferUsage;
@@ -167,6 +191,17 @@ export interface InferResponse {
    *  logged, so the browser can show it rather than assert it. */
   provider: ProviderId;
   jurisdiction: Jurisdiction;
+  /**
+   * Why the model stopped. The gateway ALWAYS sets it on both paths.
+   *
+   * Optional on the type only because `src/lib/model/gatewayModelClient.ts`
+   * rebuilds an `InferResponse` from a `done` frame and is a separate
+   * workspace; `Frame`'s `done` variant and `StreamEnd` both carry it as a
+   * REQUIRED field, so the fact always crosses the wire. Nothing is lost by
+   * the optionality: a `length` stop never reaches an `InferResponse` at
+   * all, because `truncationRefusal` turns it into a `ModelError` first.
+   */
+  stopReason?: StopReason;
 }
 
 // There is deliberately NO `stubbed` flag. `provider === 'recorded'` is the
@@ -175,21 +210,43 @@ export interface InferResponse {
 // would mean the app telling a lawyer an answer came from a model when it
 // came from a file (§5.1).
 
-export type ModelErrorCode =
-  | 'sign_in_required'
-  | 'not_permitted'
-  | 'group_overage'
-  | 'model_not_allowed'
-  | 'jurisdiction_not_allowed'
-  | 'purpose_not_allowed'
-  | 'prompt_too_large'
-  | 'budget_exhausted'
-  | 'rate_limited'
-  | 'service_misconfigured'
-  | 'upstream_failed'
-  | 'stream_truncated'
-  | 'network'
-  | 'unknown';
+/**
+ * The closed set of error codes, as an array rather than a bare union so
+ * the wire boundary can CHECK one at runtime (`isModelErrorCode`). An
+ * `error` frame arriving with a code nothing recognises used to decode into
+ * `new ModelError(msg, undefined, undefined)` — an error whose
+ * `isServiceConfigError`, `isSignInError` and `retryable` all read false by
+ * accident rather than by judgement.
+ */
+export const MODEL_ERROR_CODES = [
+  'sign_in_required',
+  'not_permitted',
+  'group_overage',
+  'model_not_allowed',
+  'jurisdiction_not_allowed',
+  'purpose_not_allowed',
+  'prompt_too_large',
+  'budget_exhausted',
+  'rate_limited',
+  'service_misconfigured',
+  'upstream_failed',
+  'stream_truncated',
+  // The MODEL stopped mid-answer at a token ceiling — as distinct from
+  // `stream_truncated`, where the TRANSPORT stopped. Both mean "what
+  // arrived is a fragment"; they are separate codes because the remedies
+  // differ. A dropped socket is worth asking again for unchanged; a token
+  // ceiling will be hit again by an identical request, so the answer has to
+  // be asked for differently or the ceiling raised.
+  'answer_truncated',
+  'network',
+  'unknown',
+] as const;
+
+export type ModelErrorCode = (typeof MODEL_ERROR_CODES)[number];
+
+export function isModelErrorCode(value: unknown): value is ModelErrorCode {
+  return typeof value === 'string' && (MODEL_ERROR_CODES as readonly string[]).includes(value);
+}
 
 /** Retries only 429 and 5xx, exactly as `openrouter.ts` did. Retrying a
  *  rejected credential or a refused deployment wastes the user's time
@@ -235,6 +292,52 @@ export class ModelError extends Error {
     // transient; everything else follows the status.
     this.retryable = code === 'network' ? true : isRetryableStatus(status);
   }
+}
+
+/**
+ * THE decision about a model-truncated answer, made once, for both paths.
+ *
+ * **A completion cut off at a token ceiling is an ERROR here, not a flagged
+ * result.** That is the deliberate choice, and this comment is where it is
+ * recorded.
+ *
+ * The alternative — return the fragment with `stopReason: 'length'` set and
+ * let the caller decide — was rejected because it is only as good as every
+ * consumer remembering to read a field it did not have yesterday. This
+ * codebase has already paid for that exact shape twice: a CSV that wrote
+ * unreviewed clauses as blank cells (the fact was present, nothing read
+ * it), and a review that recorded schema-valid empty summaries as completed
+ * findings. `readResponse` refuses to return `''` for the same reason, one
+ * layer up: a half-answer about a contract that renders as a whole one is
+ * this project's founding defect, and half a clause analysis ending
+ * mid-sentence is exactly that. An exception cannot be ignored by omission;
+ * an optional boolean can.
+ *
+ * Only `length` refuses. `other` (a content filter, a refusal, a paused
+ * turn) is carried outward as its own value and NOT refused: those reasons
+ * are not necessarily incomplete answers, and inventing a refusal for them
+ * here would be this file guessing. `unknown` is not refused either — every
+ * provider on the allowlist sends a reason, so `unknown` means a relay
+ * omitted one, and refusing every such stream would take a working
+ * deployment down to protect against a case nothing has evidence for. Both
+ * cross the wire as themselves so a later reader can tighten this with the
+ * evidence in hand rather than a schema change.
+ */
+export function truncationRefusal(stopReason: StopReason, callId?: string): ModelError | null {
+  if (stopReason !== 'length') return null;
+  return new ModelError(
+    'The model ran out of room before it finished this answer, so what it produced is a '
+    + 'fragment — it stops mid-thought and has not been returned. Nothing is lost. Ask for a '
+    + 'shorter answer, review fewer clauses at once, or ask an administrator to raise this '
+    + "deployment's token limit.",
+    'answer_truncated',
+    // No HTTP status means "the model hit its ceiling", and 0 is already
+    // this codebase's "there was no meaningful upstream status" (`network`,
+    // `stream_truncated`). It also keeps `retryable` false, which is the
+    // truthful answer: an identical request meets the identical ceiling.
+    0,
+    callId,
+  );
 }
 
 const SIGN_IN_CODES: ReadonlySet<ModelErrorCode> = new Set(['sign_in_required', 'not_permitted']);

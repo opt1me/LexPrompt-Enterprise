@@ -1,6 +1,10 @@
-import { ModelError, createSseEventReader, encodeFrame, type InferUsage } from '@lexprompt/core';
+import {
+  ModelError, createSseEventReader, encodeFrame, truncationRefusal,
+  type InferUsage, type StopReason,
+} from '@lexprompt/core';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { prepare, toModelError, type CallContext } from '../callModel.ts';
+import { modelErrorFor, prepare, toModelError, type CallContext } from '../callModel.ts';
+import { redactCredential } from '../credentials/resolve.ts';
 import { sendModelError, type InferBody } from './infer.ts';
 
 /**
@@ -29,6 +33,12 @@ import { sendModelError, type InferBody } from './infer.ts';
  *     providers report both in one chunk. Max is correct for both, which is
  *     why there is no `if (provider === ...)` anywhere in this file — every
  *     provider difference lives in its adapter's `decodeEvent`.
+ *  5. A stream the MODEL stopped at its token ceiling gets an `error`
+ *     frame, not a `done` frame. Rule 1 keeps a dropped socket from wearing
+ *     a `done`; this is the same rule for the far likelier case, where the
+ *     socket was fine and the ANSWER is what stopped. The decision lives in
+ *     `truncationRefusal` (packages/core), shared with `/v1/infer` and with
+ *     the browser's own `readFrames`.
  */
 export function registerInferStream(
   app: FastifyInstance,
@@ -93,26 +103,37 @@ export function registerInferStream(
     const decoder = new TextDecoder();
     const usage: InferUsage = { promptTokens: 0, completionTokens: 0 };
     let ended = false;
+    // `unknown` until a provider says otherwise — deliberately not `stop`.
+    // A relay that sends no reason has told us nothing, and recording
+    // silence as "the model finished" is the shape of failure this whole
+    // file is written against.
+    let stopReason: StopReason = 'unknown';
     let failure: { status: number; message: string } | null = null;
 
     const handle = (raw: string): void => {
       if (ended || failure) return;
-      const ev = adapter.decodeEvent(raw);
-      if (!ev) return;
-      if (ev.kind === 'delta') {
-        reply.raw.write(encodeFrame({ type: 'delta', text: ev.text }));
-      } else if (ev.kind === 'usage') {
-        // Max-merge, not replace: Anthropic reports input tokens in
-        // message_start and output tokens in message_delta, each leaving
-        // the other at zero. The OpenAI-shaped providers send one complete
-        // chunk. Max is right for both, which is why there is no provider
-        // branch here.
-        usage.promptTokens = Math.max(usage.promptTokens, ev.usage.promptTokens);
-        usage.completionTokens = Math.max(usage.completionTokens, ev.usage.completionTokens);
-      } else if (ev.kind === 'end') {
-        ended = true;
-      } else {
-        failure = { status: ev.status, message: ev.message };
+      // Zero or more events per raw event: an OpenAI-shaped chunk may carry
+      // the last content delta AND `finish_reason` together, and neither
+      // may be dropped in favour of the other.
+      for (const ev of adapter.decodeEvent(raw)) {
+        if (ended || failure) return;
+        if (ev.kind === 'delta') {
+          reply.raw.write(encodeFrame({ type: 'delta', text: ev.text }));
+        } else if (ev.kind === 'usage') {
+          // Max-merge, not replace: Anthropic reports input tokens in
+          // message_start and output tokens in message_delta, each leaving
+          // the other at zero. The OpenAI-shaped providers send one complete
+          // chunk. Max is right for both, which is why there is no provider
+          // branch here.
+          usage.promptTokens = Math.max(usage.promptTokens, ev.usage.promptTokens);
+          usage.completionTokens = Math.max(usage.completionTokens, ev.usage.completionTokens);
+        } else if (ev.kind === 'stop') {
+          stopReason = ev.reason;
+        } else if (ev.kind === 'end') {
+          ended = true;
+        } else {
+          failure = { status: ev.status, message: ev.message };
+        }
       }
     };
 
@@ -128,10 +149,36 @@ export function registerInferStream(
       failure = { status: 502, message: `The stream failed: ${(err as Error).message}` };
     }
 
-    if (failure) {
+    // Classified exactly as a pre-stream failure is, through the same
+    // ladder, and REDACTED for the same reason every sibling path redacts.
+    //
+    // What was here instead: `failure.message` written verbatim, and
+    // `code: 'upstream_failed'` as a literal. The first put whatever the
+    // provider chose to echo — OpenRouter relays upstream error bodies
+    // mid-stream, keys included — into a frame that travels to a browser on
+    // a user's machine, on the one path whose text crosses the trust
+    // boundary furthest. The second flattened `anthropicErrorStatus`'s
+    // careful 401 into a generic retryable provider failure, so a rejected
+    // firm credential reached a lawyer as "try again" rather than "an
+    // administrator has to fix this".
+    const truncated = ended ? truncationRefusal(stopReason, callId) : null;
+    const failed = failure
+      ? modelErrorFor(failure.status, redactCredential(failure.message, credential), callId)
+      : null;
+    if (failed) {
       reply.raw.write(encodeFrame({
-        type: 'error', code: 'upstream_failed',
-        status: failure.status, message: failure.message, callId,
+        type: 'error', code: failed.code, status: failed.status,
+        message: failed.message, callId,
+      }));
+    } else if (truncated) {
+      // Rule 5. The model stopped at its ceiling, so what streamed is a
+      // fragment: an error frame, never a done frame. The deltas already
+      // reached the browser — as they do on a `stream_truncated` too — and
+      // `readFrames` throwing is what stops the caller from treating them
+      // as an answer.
+      reply.raw.write(encodeFrame({
+        type: 'error', code: truncated.code, status: truncated.status,
+        message: truncated.message, callId,
       }));
     } else if (ended) {
       // The ONLY place a done frame is written, and it is written only
@@ -147,6 +194,11 @@ export function registerInferStream(
       reply.raw.write(encodeFrame({
         type: 'done', usage, callId,
         provider: entry.provider, jurisdiction: entry.jurisdiction,
+        // Required on the frame, so a producer cannot omit it and a
+        // consumer never has to assume. `truncated` above has already
+        // ruled out the one value that would mean this answer is a
+        // fragment.
+        stopReason,
       }));
     } else {
       reply.raw.write(encodeFrame({
@@ -156,12 +208,18 @@ export function registerInferStream(
     }
     reply.raw.end();
 
-    const ok = !failure && ended;
+    const ok = !failure && ended && !truncated;
     await ctx.audit.finish(callId, {
-      status: 200,
+      // The provider's own status, not a flat 200. The stream opened with a
+      // 200, but a mid-stream failure carries a 401 or a 529, and "what did
+      // the provider actually say" is the first question a support engineer
+      // asks about one — unanswerable from the record while every streamed
+      // outcome was written as 200.
+      status: failure ? failure.status : 200,
       ok,
-      ...(failure ? { errorCode: 'upstream_failed' as const }
-        : ended ? {} : { errorCode: 'stream_truncated' as const }),
+      ...(failed ? { errorCode: failed.code }
+        : truncated ? { errorCode: 'answer_truncated' as const }
+          : ended ? {} : { errorCode: 'stream_truncated' as const }),
       promptTokens: usage.promptTokens,
       completionTokens: usage.completionTokens,
       latencyMs: Date.now() - startedAt,

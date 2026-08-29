@@ -66,7 +66,12 @@ export function makeCallerAuthHook(config: CallerAuthConfig, verifyEntra: Verify
     }
     try {
       const { oid } = await verifyEntra(token, config.tenantId, config.audience);
-      if (config.allowedObjectIds.length && !config.allowedObjectIds.includes(oid)) {
+      // No `.length &&` guard: an empty list denies everything rather than
+      // admitting everything. `config.ts` already refuses to build one, so
+      // this can only be reached by a `CallerAuthConfig` constructed
+      // directly — and a hand-built config with no ids is a mistake, not a
+      // request to trust the whole tenant.
+      if (!config.allowedObjectIds.includes(oid)) {
         // The oid goes to the log, not to the body: a 401 body that echoes
         // identity details is identity details in every proxy log between
         // here and the caller.

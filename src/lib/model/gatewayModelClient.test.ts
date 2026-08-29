@@ -53,6 +53,10 @@ const DONE = encodeFrame({
   callId: 'call-9',
   provider: 'azure-foundry',
   jurisdiction: UK_SOUTH,
+  // `Frame`'s `done` variant now requires the reason the model stopped, so
+  // a completion cut off at a token ceiling cannot wear a done frame. This
+  // fixture is a healthy stream, so it says so.
+  stopReason: 'stop',
 });
 
 interface Harness {

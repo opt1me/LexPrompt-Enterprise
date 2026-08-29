@@ -67,6 +67,7 @@ describe('POST /v1/infer', () => {
       callId: 'call-fixed',
       provider: 'azure-foundry',
       jurisdiction: { bloc: 'UK', region: 'uksouth', label: 'UK South' },
+      stopReason: 'unknown',
     });
     await app.close();
   });

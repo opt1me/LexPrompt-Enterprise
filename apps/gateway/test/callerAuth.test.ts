@@ -142,6 +142,23 @@ describe('makeCallerAuthHook — mode: entra', () => {
     expect(state.hits).toBe(0);
   });
 
+  // M4, the hook's half. `config.ts` already refuses to BUILD an empty
+  // list, so this can only be reached by a config constructed directly —
+  // and a hand-built config naming nobody is a mistake, not a request to
+  // trust the whole tenant. The guard used to read
+  // `config.allowedObjectIds.length && !includes(oid)`, so an empty list
+  // admitted everyone.
+  it('an EMPTY allowedObjectIds denies every caller rather than admitting every caller', async () => {
+    const openConfig: CallerAuthConfig = { ...config, allowedObjectIds: [] };
+    const { app, state } = buildApp(openConfig, async () => ({ oid: 'some-other-principal' }));
+    const res = await app.inject({
+      method: 'POST', url: '/v1/infer',
+      headers: { authorization: 'Bearer a-valid-looking-entra-token' },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(state.hits).toBe(0);
+  });
+
   it('rejects 401 when verifyEntra throws', async () => {
     const throwingVerify: VerifyEntra = async () => { throw new Error('signature invalid'); };
     const { app } = buildApp(config, throwingVerify);

@@ -72,7 +72,12 @@ describe('anthropic readResponse', () => {
     expect(a.readResponse({
       content: [{ type: 'text', text: 'Answer.' }],
       usage: { input_tokens: 10, output_tokens: 4 },
-    })).toEqual({ content: 'Answer.', usage: { promptTokens: 10, completionTokens: 4 } });
+    })).toEqual({
+      content: 'Answer.',
+      usage: { promptTokens: 10, completionTokens: 4 },
+      // No `stop_reason` on the body, so `unknown` — never `stop`.
+      stopReason: 'unknown',
+    });
   });
 
   it('joins several text blocks in order', () => {
@@ -98,34 +103,58 @@ describe('anthropic readResponse', () => {
 });
 
 describe('anthropic decodeEvent (pure, no network)', () => {
+  // Returns an ARRAY: `message_delta` carries the final output-token count
+  // AND `delta.stop_reason` — the only place an Anthropic stream says
+  // whether the answer was cut off at `max_tokens` — so one raw event has
+  // to be able to decode to two.
   it('reads a content_block_delta as a delta', () => {
     expect(a.decodeEvent('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hi"}}'))
-      .toEqual({ kind: 'delta', text: 'Hi' });
+      .toEqual([{ kind: 'delta', text: 'Hi' }]);
   });
 
   it('reads input_json_delta (a streamed tool call) as a delta too', () => {
     expect(a.decodeEvent('event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"input_json_delta","partial_json":"{\\"a\\":"}}'))
-      .toEqual({ kind: 'delta', text: '{"a":' });
+      .toEqual([{ kind: 'delta', text: '{"a":' }]);
   });
 
   it('reads input tokens from message_start', () => {
     expect(a.decodeEvent('event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":91,"output_tokens":0}}}'))
-      .toEqual({ kind: 'usage', usage: { promptTokens: 91, completionTokens: 0 } });
+      .toEqual([{ kind: 'usage', usage: { promptTokens: 91, completionTokens: 0 } }]);
   });
 
   it('reads output tokens from message_delta', () => {
     expect(a.decodeEvent('event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":37}}'))
-      .toEqual({ kind: 'usage', usage: { promptTokens: 0, completionTokens: 37 } });
+      .toEqual([{ kind: 'usage', usage: { promptTokens: 0, completionTokens: 37 } }]);
+  });
+
+  // ==================================================================
+  // C1, Anthropic's spelling of it. `max_tokens` is what `finish_reason:
+  // "length"` is on the OpenAI-shaped providers, and both normalise inside
+  // their own adapter so `truncationRefusal` sees one vocabulary.
+  // ==================================================================
+  it('reads message_delta stop_reason: "max_tokens" as a length stop, alongside the usage', () => {
+    expect(a.decodeEvent('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":4096}}'))
+      .toEqual([
+        { kind: 'usage', usage: { promptTokens: 0, completionTokens: 4096 } },
+        { kind: 'stop', reason: 'length' },
+      ]);
+  });
+
+  it('reads stop_reason: "end_turn" as a clean stop and "refusal" as other', () => {
+    expect(a.decodeEvent('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}')[1])
+      .toEqual({ kind: 'stop', reason: 'stop' });
+    expect(a.decodeEvent('event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"refusal"},"usage":{"output_tokens":3}}')[1])
+      .toEqual({ kind: 'stop', reason: 'other' });
   });
 
   it('reads message_stop as the end of the stream', () => {
     expect(a.decodeEvent('event: message_stop\ndata: {"type":"message_stop"}'))
-      .toEqual({ kind: 'end' });
+      .toEqual([{ kind: 'end' }]);
   });
 
   it('reads an error event as an error, not as content', () => {
     expect(a.decodeEvent('event: error\ndata: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'))
-      .toEqual({ kind: 'error', status: 529, message: 'Overloaded' });
+      .toEqual([{ kind: 'error', status: 529, message: 'Overloaded' }]);
   });
 
   // The status is what `isRetryableStatus` (429 || >= 500) reads, so a
@@ -143,7 +172,7 @@ describe('anthropic decodeEvent (pure, no network)', () => {
     ] as const;
     for (const [type, status] of permanent) {
       const raw = `event: error\ndata: {"type":"error","error":{"type":"${type}","message":"m"}}`;
-      expect(a.decodeEvent(raw)).toEqual({ kind: 'error', status, message: 'm' });
+      expect(a.decodeEvent(raw)).toEqual([{ kind: 'error', status, message: 'm' }]);
       expect(isRetryableStatus(status)).toBe(false);
     }
   });
@@ -156,20 +185,30 @@ describe('anthropic decodeEvent (pure, no network)', () => {
     ] as const;
     for (const [type, status] of transient) {
       const raw = `event: error\ndata: {"type":"error","error":{"type":"${type}","message":"m"}}`;
-      expect(a.decodeEvent(raw)).toEqual({ kind: 'error', status, message: 'm' });
+      expect(a.decodeEvent(raw)).toEqual([{ kind: 'error', status, message: 'm' }]);
       expect(isRetryableStatus(status)).toBe(true);
     }
   });
 
   it('falls back to 502 for an error type it does not recognise', () => {
     const raw = 'event: error\ndata: {"type":"error","error":{"type":"a_new_error","message":"m"}}';
-    expect(a.decodeEvent(raw)).toEqual({ kind: 'error', status: 502, message: 'm' });
+    expect(a.decodeEvent(raw)).toEqual([{ kind: 'error', status: 502, message: 'm' }]);
   });
 
-  it('returns null for ping, for content_block_start and for malformed JSON', () => {
-    expect(a.decodeEvent('event: ping\ndata: {"type":"ping"}')).toBe(null);
-    expect(a.decodeEvent('event: content_block_start\ndata: {"type":"content_block_start"}')).toBe(null);
-    expect(a.decodeEvent('event: content_block_delta\ndata: {not json')).toBe(null);
+  // m3. The status table is a `Map`, not an object literal: an object
+  // literal resolves INHERITED keys, so `error.type === "constructor"`
+  // returned a truthy *function* that travelled onwards as the status.
+  it('does not resolve a prototype key as an error status', () => {
+    for (const type of ['constructor', 'toString', 'hasOwnProperty']) {
+      const raw = `event: error\ndata: {"type":"error","error":{"type":"${type}","message":"m"}}`;
+      expect(a.decodeEvent(raw)).toEqual([{ kind: 'error', status: 502, message: 'm' }]);
+    }
+  });
+
+  it('returns nothing for ping, for content_block_start and for malformed JSON', () => {
+    expect(a.decodeEvent('event: ping\ndata: {"type":"ping"}')).toEqual([]);
+    expect(a.decodeEvent('event: content_block_start\ndata: {"type":"content_block_start"}')).toEqual([]);
+    expect(a.decodeEvent('event: content_block_delta\ndata: {not json')).toEqual([]);
   });
 
   it('never puts the credential anywhere the caller might log — headers only', () => {

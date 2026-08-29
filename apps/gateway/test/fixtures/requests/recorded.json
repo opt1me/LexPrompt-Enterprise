@@ -4,13 +4,20 @@
     "provider": "recorded",
     "model": "recorded",
     "label": "Recorded responses (offline)",
-    "jurisdiction": { "bloc": "other", "region": "local", "label": "this machine — recorded responses, not a model" },
+    "jurisdiction": {
+      "bloc": "other",
+      "region": "local",
+      "label": "this machine \u2014 recorded responses, not a model"
+    },
     "contextLength": 128000,
     "supportsImages": true,
     "supportsStructuredOutput": true,
     "isDefault": true,
     "endpoint": "file:///fixtures/recorded",
-    "credential": { "source": "env", "var": "UNUSED" }
+    "credential": {
+      "source": "env",
+      "var": "UNUSED"
+    }
   },
   "request": {
     "purpose": "review.clause",
@@ -19,6 +26,10 @@
     "maxTokens": 4096,
     "stream": false
   },
-  "credential": { "kind": "api-key", "key": "unused" },
-  "body": {}
+  "credential": {
+    "kind": "api-key",
+    "key": "unused"
+  },
+  "body": {},
+  "url": "apps/gateway/fixtures/recorded/review.clause.json"
 }

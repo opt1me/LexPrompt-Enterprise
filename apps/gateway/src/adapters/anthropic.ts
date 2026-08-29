@@ -1,4 +1,4 @@
-import { sseFields, type InferUsage } from '@lexprompt/core';
+import { sseFields, type InferUsage, type StopReason } from '@lexprompt/core';
 import type { ResolvedCredential } from '../credentials/types.ts';
 import { trimSlash } from './openaiCompatible.ts';
 import type { AdapterCall, AdapterEvent, AdapterRequest, ProviderAdapter } from './types.ts';
@@ -40,20 +40,53 @@ const ANTHROPIC_VERSION = '2023-06-01';
  * string taxonomy instead of a numeric code, so the lookup is how the same
  * rule is expressed for it. An unrecognised type still falls back to 502 —
  * a genuinely unknown provider failure is a bad gateway.
+ *
+ * A `Map`, not an object literal, for one reason worth a line of prose: an
+ * object literal resolves INHERITED keys, so a provider sending
+ * `error.type === "constructor"` or `"toString"` returned a truthy
+ * *function* from the lookup, which then travelled onwards as the status.
+ * `Map` has no prototype chain to walk into.
  */
-const ANTHROPIC_ERROR_STATUS: Readonly<Record<string, number>> = {
-  invalid_request_error: 400,
-  authentication_error: 401,
-  permission_error: 403,
-  not_found_error: 404,
-  request_too_large: 413,
-  rate_limit_error: 429,
-  api_error: 500,
-  overloaded_error: 529,
-};
+const ANTHROPIC_ERROR_STATUS: ReadonlyMap<string, number> = new Map([
+  ['invalid_request_error', 400],
+  ['authentication_error', 401],
+  ['permission_error', 403],
+  ['not_found_error', 404],
+  ['request_too_large', 413],
+  ['rate_limit_error', 429],
+  ['api_error', 500],
+  ['overloaded_error', 529],
+]);
 
 function anthropicErrorStatus(type: string | undefined): number {
-  return (type !== undefined && ANTHROPIC_ERROR_STATUS[type]) || 502;
+  return (type !== undefined ? ANTHROPIC_ERROR_STATUS.get(type) : undefined) ?? 502;
+}
+
+/**
+ * Anthropic's `stop_reason`, normalised to the gateway's `StopReason`.
+ *
+ * DIFFERENCE 5, and the reason this function exists rather than an `if` in
+ * `callModel`: Anthropic spells "I ran out of room" `max_tokens` where the
+ * OpenAI-shaped providers spell it `length`. Both normalise inside their
+ * own adapter, so the one place that DECIDES what a cut-off answer means
+ * (`truncationRefusal`, packages/core) sees one vocabulary.
+ *
+ * `end_turn`, `stop_sequence` and `tool_use` are all "the model finished".
+ * `refusal` and `pause_turn` are `other` — not `stop`, because the model
+ * did not finish answering, and not `length`, because no ceiling was hit.
+ * An absent reason is `unknown`; a `Map` for the same prototype reason as
+ * the status table above.
+ */
+const ANTHROPIC_STOP: ReadonlyMap<string, StopReason> = new Map([
+  ['end_turn', 'stop'],
+  ['stop_sequence', 'stop'],
+  ['tool_use', 'stop'],
+  ['max_tokens', 'length'],
+]);
+
+export function anthropicStopReason(raw: unknown): StopReason {
+  if (typeof raw !== 'string' || !raw) return 'unknown';
+  return ANTHROPIC_STOP.get(raw) ?? 'other';
 }
 
 export const anthropicAdapter: ProviderAdapter = {
@@ -98,10 +131,11 @@ export const anthropicAdapter: ProviderAdapter = {
     };
   },
 
-  readResponse(body: unknown): { content: string; usage: InferUsage } {
+  readResponse(body: unknown): { content: string; usage: InferUsage; stopReason: StopReason } {
     const b = body as {
       content?: { type?: string; text?: string; input?: unknown }[];
       usage?: { input_tokens?: number; output_tokens?: number };
+      stop_reason?: unknown;
     };
     const blocks = b?.content ?? [];
     const text = blocks.filter(x => x.type === 'text').map(x => x.text ?? '').join('');
@@ -125,15 +159,16 @@ export const anthropicAdapter: ProviderAdapter = {
         promptTokens: Number(b?.usage?.input_tokens ?? 0),
         completionTokens: Number(b?.usage?.output_tokens ?? 0),
       },
+      stopReason: anthropicStopReason(b?.stop_reason),
     };
   },
 
-  decodeEvent(rawEvent: string): AdapterEvent | null {
+  decodeEvent(rawEvent: string): AdapterEvent[] {
     const { data } = sseFields(rawEvent);
-    if (!data) return null;
+    if (!data) return [];
     let parsed: {
       type?: string;
-      delta?: { type?: string; text?: string; partial_json?: string };
+      delta?: { type?: string; text?: string; partial_json?: string; stop_reason?: unknown };
       message?: { usage?: { input_tokens?: number; output_tokens?: number } };
       usage?: { input_tokens?: number; output_tokens?: number };
       error?: { type?: string; message?: string };
@@ -141,7 +176,7 @@ export const anthropicAdapter: ProviderAdapter = {
     try {
       parsed = JSON.parse(data);
     } catch {
-      return null;   // a malformed event is skipped, never fails the stream
+      return [];   // a malformed event is skipped, never fails the stream
     }
 
     switch (parsed.type) {
@@ -150,7 +185,7 @@ export const anthropicAdapter: ProviderAdapter = {
         // chunks rather than `text_delta` — both are text the caller
         // accumulates, so both surface as `delta`.
         const text = parsed.delta?.text ?? parsed.delta?.partial_json;
-        return typeof text === 'string' && text ? { kind: 'delta', text } : null;
+        return typeof text === 'string' && text ? [{ kind: 'delta', text }] : [];
       }
       case 'message_start':
         // Anthropic splits usage across two events: input tokens arrive
@@ -159,32 +194,43 @@ export const anthropicAdapter: ProviderAdapter = {
         // `usage` event rather than replacing, which is correct for this
         // split and for the OpenAI-shaped providers' single complete chunk
         // alike.
-        return {
+        return [{
           kind: 'usage',
           usage: {
             promptTokens: Number(parsed.message?.usage?.input_tokens ?? 0),
             completionTokens: Number(parsed.message?.usage?.output_tokens ?? 0),
           },
-        };
+        }];
       case 'message_delta':
-        return {
-          kind: 'usage',
-          usage: {
-            promptTokens: Number(parsed.usage?.input_tokens ?? 0),
-            completionTokens: Number(parsed.usage?.output_tokens ?? 0),
+        // TWO facts in one event, which is why `decodeEvent` returns an
+        // array: `message_delta` carries the final output-token count AND
+        // `delta.stop_reason` — the only place in an Anthropic stream that
+        // says whether the answer was cut off at `max_tokens`. Returning
+        // the usage alone, as this did, is how that fact never reached the
+        // wire.
+        return [
+          {
+            kind: 'usage',
+            usage: {
+              promptTokens: Number(parsed.usage?.input_tokens ?? 0),
+              completionTokens: Number(parsed.usage?.output_tokens ?? 0),
+            },
           },
-        };
+          ...(parsed.delta?.stop_reason !== undefined && parsed.delta.stop_reason !== null
+            ? [{ kind: 'stop' as const, reason: anthropicStopReason(parsed.delta.stop_reason) }]
+            : []),
+        ];
       case 'message_stop':
-        return { kind: 'end' };
+        return [{ kind: 'end' }];
       case 'error':
-        return {
+        return [{
           kind: 'error',
           status: anthropicErrorStatus(parsed.error?.type),
           message: parsed.error?.message ?? 'The provider reported an error mid-stream.',
-        };
+        }];
       default:
         // `ping` and `content_block_start` carry nothing the caller needs.
-        return null;
+        return [];
     }
   },
 };

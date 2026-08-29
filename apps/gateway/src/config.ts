@@ -111,6 +111,32 @@ function str(value: unknown, entryId: string, field: string): string {
   return value;
 }
 
+/**
+ * A positive number, or a refusal — the numeric sibling of `str`.
+ *
+ * `contextLength` was the one `ModelEntry` field that coerced rather than
+ * checked: `Number(m.contextLength ?? 0)` turns an operator's
+ * `"contextLength": "128k"` into `NaN`, which survives `toAllowedModel`,
+ * serialises to `null` on the wire, and reaches the browser's
+ * `contextBudgetChars` — where it silently governs how much of a contract
+ * gets sent to the model. In a validator whose whole character is refusing
+ * malformed entries loudly at startup, that was the one that did not.
+ *
+ * Absent stays 0, as it always has: an entry that never declared one is not
+ * a malformed entry, and making it required is a change to every operator's
+ * `models.json` rather than a bug fix.
+ */
+function num(value: unknown, entryId: string, field: string, fallback: number): number {
+  if (value === undefined || value === null) return fallback;
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new ConfigError(
+      `Model "${entryId}" has ${field} ${JSON.stringify(value)}; expected a positive number.`,
+    );
+  }
+  return n;
+}
+
 function parseJurisdiction(raw: unknown, entryId: string): Jurisdiction {
   const j = raw as Partial<Jurisdiction> | undefined;
   if (!j || typeof j !== 'object') {
@@ -195,12 +221,35 @@ function parseCaller(env: NodeJS.ProcessEnv): CallerAuthConfig {
     };
   }
   if (mode === 'entra') {
+    const allowedObjectIds = (env.GATEWAY_ENTRA_ALLOWED_OIDS ?? '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    // An empty list used to mean "allow any object id" — the only switch in
+    // this file that turned a policy check off by being absent, and it did
+    // it silently: the gateway started clean, printed `caller-auth=entra`,
+    // logged nothing, and accepted a call from ANY principal in the tenant
+    // that could get a token for the audience. It then trusted
+    // `workspaceId`, `actorIssuer` and `actorSubject` out of that caller's
+    // request body, which is the trust `callerAuth.ts` says is earned by
+    // "nothing else can reach this port".
+    //
+    // Refused here for the same reason `GATEWAY_ALLOWED_JURISDICTIONS` has
+    // no default, `GATEWAY_MODELS_FILE` is required, and no
+    // `GATEWAY_CALLER_AUTH` value disables the caller check: a policy
+    // decision this file will not make on an operator's behalf.
+    if (allowedObjectIds.length === 0) {
+      throw new ConfigError(
+        'GATEWAY_ENTRA_ALLOWED_OIDS is not set. GATEWAY_CALLER_AUTH=entra will not start '
+        + 'without the object id of the caller it is meant to admit: an empty list would '
+        + 'mean every principal in the tenant that can obtain a token for '
+        + 'GATEWAY_ENTRA_AUDIENCE, which is not an allowlist. Set it to the API container '
+        + "app's managed-identity principal id (comma-separate several).",
+      );
+    }
     return {
       mode: 'entra',
       tenantId: str(env.GATEWAY_ENTRA_TENANT_ID, 'gateway', 'GATEWAY_ENTRA_TENANT_ID'),
       audience: str(env.GATEWAY_ENTRA_AUDIENCE, 'gateway', 'GATEWAY_ENTRA_AUDIENCE'),
-      allowedObjectIds: (env.GATEWAY_ENTRA_ALLOWED_OIDS ?? '')
-        .split(',').map(s => s.trim()).filter(Boolean),
+      allowedObjectIds,
     };
   }
   throw new ConfigError(
@@ -264,7 +313,7 @@ export function loadConfig(
       model: str(m.model, id, 'model'),
       label: str(m.label, id, 'label'),
       jurisdiction: parseJurisdiction(m.jurisdiction, id),
-      contextLength: Number(m.contextLength ?? 0),
+      contextLength: num(m.contextLength, id, 'contextLength', 0),
       supportsImages: m.supportsImages === true,
       supportsStructuredOutput: m.supportsStructuredOutput === true,
       isDefault: m.isDefault === true,

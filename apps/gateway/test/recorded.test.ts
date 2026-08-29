@@ -52,8 +52,13 @@ describe('the recorded adapter is an adapter (spec Revision 2, §5.1)', () => {
 
   it('decodes an OpenAI-shaped event, so it passes adapterConformance unmodified', () => {
     expect(a.decodeEvent('data: {"choices":[{"delta":{"content":"Hi"}}]}'))
-      .toEqual({ kind: 'delta', text: 'Hi' });
-    expect(a.decodeEvent('data: [DONE]')).toEqual({ kind: 'end' });
+      .toEqual([{ kind: 'delta', text: 'Hi' }]);
+    expect(a.decodeEvent('data: [DONE]')).toEqual([{ kind: 'end' }]);
+    // Including the truncation signal — the recorded provider reuses the
+    // OpenAI-shaped decoder verbatim, so a fixture that ends at a ceiling
+    // is refused exactly as a live provider's answer would be.
+    expect(a.decodeEvent('data: {"choices":[{"delta":{},"finish_reason":"length"}]}'))
+      .toEqual([{ kind: 'stop', reason: 'length' }]);
   });
 
   it('routes buildCall to the fixture chosen by the purpose, and to default otherwise', () => {
@@ -68,9 +73,14 @@ describe('the recorded adapter is an adapter (spec Revision 2, §5.1)', () => {
     expect(JSON.stringify(call.headers)).not.toContain('sk-should-not-appear');
   });
 
-  it('THROWS on a missing fixture rather than answering empty', () => {
+  // Named for `buildCall`, because `buildCall` is what this asserts. It
+  // read `bare.readResponse(bare.buildCall(...))` under the name "THROWS on
+  // a missing fixture", which `buildCall` satisfies before `readResponse` is
+  // ever reached — so the assertion was entirely about the inner call while
+  // the name pointed at the outer one.
+  it('buildCall THROWS on a missing fixture rather than naming one to read', () => {
     const bare = makeRecordedAdapter('fixtures/recorded', () => { throw new Error('ENOENT'); });
-    expect(() => bare.readResponse(bare.buildCall(req(), { kind: 'api-key', key: '' })))
+    expect(() => bare.buildCall(req(), { kind: 'api-key', key: '' }))
       .toThrow(/no recorded fixture/i);
   });
 

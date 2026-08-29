@@ -55,9 +55,9 @@ describe('buildDeps — production wiring (R1)', () => {
     const deps = buildDeps(config, devNull());
 
     deps.limiter.check('ws', 'a');
-    deps.limiter.record('ws', 'a', { promptTokens: 1, completionTokens: 0 });
+    deps.limiter.recordAttempt('ws', 'a');
     deps.limiter.check('ws', 'a');
-    deps.limiter.record('ws', 'a', { promptTokens: 1, completionTokens: 0 });
+    deps.limiter.recordAttempt('ws', 'a');
     // If production wiring were reverted to `unlimitedRateLimiter` (or any
     // other implementation that enforces nothing), this call would not
     // throw and this test would fail — which is the point: it is the guard

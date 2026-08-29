@@ -26,7 +26,25 @@ export interface RateLimiter {
   /** Called before the credential is resolved and before anything is sent.
    *  Throws to refuse. */
   check(workspaceId: string, actorSubject: string): void;
-  /** Called after a successful call, with what it actually cost. */
+  /**
+   * Called immediately after `check` clears, on EVERY attempt — before the
+   * credential is resolved, before the socket opens, and regardless of how
+   * the call then ends.
+   *
+   * It exists because the request budget used to be counted by `record`,
+   * which runs only on success: `requestsPerMinutePerActor` was therefore a
+   * limit on successes, inert in precisely the conditions a request
+   * throttle is for. A failing call is the one that most needs counting —
+   * it still costs three upstream attempts at full prompt-token price on
+   * providers that bill rejected requests.
+   *
+   * Separate from `record` rather than folded into `check` because a method
+   * named `check` that silently mutates is a method the next reader will
+   * call twice.
+   */
+  recordAttempt(workspaceId: string, actorSubject: string): void;
+  /** Called after a successful call, with what it actually cost. Feeds the
+   *  TOKEN budgets only; the request budgets are fed by `recordAttempt`. */
   record(workspaceId: string, actorSubject: string, usage: InferUsage): void;
 }
 
@@ -52,6 +70,7 @@ export interface RateLimiter {
  */
 export const unlimitedRateLimiter: RateLimiter = {
   check(): void { /* Deliberately permissive — see the comment above. */ },
+  recordAttempt(): void { /* Deliberately permissive — see the comment above. */ },
   record(): void { /* Deliberately permissive — see the comment above. */ },
 };
 
@@ -76,14 +95,33 @@ interface WindowRateLimiterOptions {
 
 export class WindowRateLimiter implements RateLimiter {
   #opts: WindowRateLimiterOptions;
-  #events = new Map<string, Window[]>();
+  /**
+   * Two ledgers, not one, and the split is the whole of the M5 fix.
+   *
+   * `#attempts` holds one timestamp per attempt and answers the per-minute
+   * REQUEST budgets. `#tokens` holds what completed calls actually cost and
+   * answers the hourly TOKEN budgets. A single ledger could not do both
+   * once they stopped being written by the same call: counting entries
+   * would double-count a successful call (one attempt + one cost), and
+   * counting only cost entries is the defect — a failing call writes no
+   * cost, so it used to write nothing at all.
+   */
+  #attempts = new Map<string, number[]>();
+  #tokens = new Map<string, Window[]>();
 
   constructor(opts: WindowRateLimiterOptions) { this.#opts = opts; }
 
-  #recent(key: string, windowMs: number): Window[] {
+  #recentAttempts(key: string, windowMs: number): number[] {
     const cutoff = this.#opts.now() - windowMs;
-    const kept = (this.#events.get(key) ?? []).filter(e => e.at > cutoff);
-    this.#events.set(key, kept);
+    const kept = (this.#attempts.get(key) ?? []).filter(at => at > cutoff);
+    this.#attempts.set(key, kept);
+    return kept;
+  }
+
+  #recentTokens(key: string, windowMs: number): Window[] {
+    const cutoff = this.#opts.now() - windowMs;
+    const kept = (this.#tokens.get(key) ?? []).filter(e => e.at > cutoff);
+    this.#tokens.set(key, kept);
     return kept;
   }
 
@@ -95,26 +133,26 @@ export class WindowRateLimiter implements RateLimiter {
     const ws = `w:${workspaceId}`;
     const o = this.#opts;
 
-    if (this.#recent(actor, 60_000).length >= o.requestsPerMinutePerActor) {
+    if (this.#recentAttempts(actor, 60_000).length >= o.requestsPerMinutePerActor) {
       throw new ModelError(
         `You have reached this workspace's limit of ${o.requestsPerMinutePerActor} requests a `
         + 'minute. Nothing is lost — try again shortly.',
         'budget_exhausted', 429);
     }
-    if (this.#recent(ws, 60_000).length >= o.requestsPerMinutePerWorkspace) {
+    if (this.#recentAttempts(ws, 60_000).length >= o.requestsPerMinutePerWorkspace) {
       throw new ModelError(
         `This workspace has reached its limit of ${o.requestsPerMinutePerWorkspace} requests a `
         + 'minute across everyone using it. Nothing is lost — try again shortly.',
         'budget_exhausted', 429);
     }
-    const actorTokens = this.#recent(actor, 3_600_000).reduce((n, e) => n + e.tokens, 0);
+    const actorTokens = this.#recentTokens(actor, 3_600_000).reduce((n, e) => n + e.tokens, 0);
     if (actorTokens >= o.tokensPerHourPerActor) {
       throw new ModelError(
         `You have reached this workspace's hourly token budget (${o.tokensPerHourPerActor}). `
         + 'Nothing is lost — try again later, or ask an administrator to raise it.',
         'budget_exhausted', 429);
     }
-    const wsTokens = this.#recent(ws, 3_600_000).reduce((n, e) => n + e.tokens, 0);
+    const wsTokens = this.#recentTokens(ws, 3_600_000).reduce((n, e) => n + e.tokens, 0);
     if (wsTokens >= o.tokensPerHourPerWorkspace) {
       throw new ModelError(
         `This workspace has reached its hourly token budget (${o.tokensPerHourPerWorkspace}) `
@@ -123,11 +161,18 @@ export class WindowRateLimiter implements RateLimiter {
     }
   }
 
+  recordAttempt(workspaceId: string, actorSubject: string): void {
+    const at = this.#opts.now();
+    for (const key of [`a:${workspaceId}:${actorSubject}`, `w:${workspaceId}`]) {
+      this.#attempts.set(key, [...(this.#attempts.get(key) ?? []), at]);
+    }
+  }
+
   record(workspaceId: string, actorSubject: string, usage: InferUsage): void {
     const at = this.#opts.now();
     const tokens = usage.promptTokens + usage.completionTokens;
     for (const key of [`a:${workspaceId}:${actorSubject}`, `w:${workspaceId}`]) {
-      this.#events.set(key, [...(this.#events.get(key) ?? []), { at, tokens }]);
+      this.#tokens.set(key, [...(this.#tokens.get(key) ?? []), { at, tokens }]);
     }
   }
 }

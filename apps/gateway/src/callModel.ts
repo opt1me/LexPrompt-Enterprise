@@ -1,5 +1,5 @@
 import {
-  ModelError, isPurpose, isRetryableStatus,
+  ModelError, isPurpose, isRetryableStatus, truncationRefusal,
   type InferRequest, type InferResponse, SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import type { GatewayConfig, ModelEntry } from './config.ts';
 import type { Allowlist } from './allowlist.ts';
@@ -152,6 +152,13 @@ export async function prepare(
     );
   }
 
+  // TEXT only, deliberately. `req.images` is not counted here and is not
+  // meant to be: a scanned lease is several MB of base64 by construction,
+  // and folding that into a limit sized for prose would refuse exactly the
+  // reviews this gateway exists to serve. Images are bounded instead by
+  // Fastify's `bodyLimit` (`server.ts`), which refuses with a 413 — loudly,
+  // before anything is sent — so the ceiling is real, it is simply a
+  // different one. `imageCount` is on every audit record either way.
   const promptChars = (req.system ? req.system.length + 2 : 0) + req.user.length;
   if (promptChars > ctx.config.maxPromptChars) {
     throw new ModelError(
@@ -163,6 +170,16 @@ export async function prepare(
   }
 
   ctx.limiter.check(ctx.workspaceId, ctx.actorSubject);
+  // Counted HERE, on every attempt that clears the check, and not in the
+  // success branch — which is where the request budget used to be counted,
+  // by way of `record`. `check` read `record`'s events, `record` ran only
+  // after a call succeeded, so `requestsPerMinutePer*` were limits on
+  // SUCCESSES: under exactly the conditions a request throttle exists for
+  // (a provider returning 500s, a retry storm, a client loop) the budget
+  // read as entirely unspent while each failing call cost three upstream
+  // attempts. The token budget is still counted on success only, and that
+  // half is right — don't bill a caller for an answer they never got.
+  ctx.limiter.recordAttempt(ctx.workspaceId, ctx.actorSubject);
 
   // Order matters and is load-bearing: the credential is resolved BEFORE
   // the audit record is written, so a credential failure never produces a
@@ -233,6 +250,45 @@ export async function prepare(
   }
 }
 
+/**
+ * A provider's status and (already redacted) message, classified.
+ *
+ * THE status -> code ladder, in one place, reachable synchronously. It was
+ * inlined in `toModelError` and therefore reachable only from a path that
+ * had a whole `TransportResponse` to read — which the STREAM route, whose
+ * provider failure arrives as a decoded mid-stream event long after the
+ * response object is done with, does not. That route hardcoded
+ * `code: 'upstream_failed'` instead, so an Anthropic `authentication_error`
+ * mid-stream reached a lawyer as a generic, retryable "the AI provider
+ * failed" — for a rejected firm credential that no retry can ever fix,
+ * while the identical failure on `/v1/infer` correctly said an
+ * administrator has to fix it. Sibling drift with the wire in the middle.
+ *
+ * `message` MUST arrive redacted. This function composes it into outward
+ * text; it is not the place a credential gets scrubbed, and both callers
+ * scrub before calling.
+ */
+export function modelErrorFor(status: number, message: string, callId: string): ModelError {
+  // A provider rejecting OUR credential is the firm's configuration
+  // problem, not the user's sign-in — the distinction openrouter.ts's
+  // isAuthError could not make, because the key was the user's.
+  if (status === 401 || status === 403 || status === 402) {
+    return new ModelError(
+      `The AI provider rejected LexPrompt's credentials (${message}). This is a `
+      + `configuration problem in the firm's deployment, ${SERVICE_CONFIG_HINT}.`,
+      'service_misconfigured', 503, callId,
+    );
+  }
+  if (status === 429) {
+    return new ModelError(`The AI provider is rate-limiting this workspace (${message}).`,
+      'rate_limited', 429, callId);
+  }
+  if (status >= 500) {
+    return new ModelError(`The AI provider failed (${message}).`, 'upstream_failed', 502, callId);
+  }
+  return new ModelError(message, 'unknown', status, callId);
+}
+
 /** Turns a provider's failure response into a ModelError, with the
  *  credential scrubbed out of whatever the provider chose to echo back.
  *  Exported so the stream route (Task 12) can classify a pre-stream failure
@@ -247,26 +303,7 @@ export async function toModelError(
     const body = await response.json() as { error?: { message?: string } };
     if (body?.error?.message) message = body.error.message;
   } catch { /* keep the status */ }
-  message = redactCredential(message, credential);
-
-  // A provider rejecting OUR credential is the firm's configuration
-  // problem, not the user's sign-in — the distinction openrouter.ts's
-  // isAuthError could not make, because the key was the user's.
-  if (response.status === 401 || response.status === 403 || response.status === 402) {
-    return new ModelError(
-      `The AI provider rejected LexPrompt's credentials (${message}). This is a `
-      + `configuration problem in the firm's deployment, ${SERVICE_CONFIG_HINT}.`,
-      'service_misconfigured', 503, callId,
-    );
-  }
-  if (response.status === 429) {
-    return new ModelError(`The AI provider is rate-limiting this workspace (${message}).`,
-      'rate_limited', 429, callId);
-  }
-  if (response.status >= 500) {
-    return new ModelError(`The AI provider failed (${message}).`, 'upstream_failed', 502, callId);
-  }
-  return new ModelError(message, 'unknown', response.status, callId);
+  return modelErrorFor(response.status, redactCredential(message, credential), callId);
 }
 
 export async function callModel(
@@ -325,7 +362,7 @@ export async function callModel(
 
     if (response.ok) {
       const body = await response.json();
-      let read: { content: string; usage: { promptTokens: number; completionTokens: number } };
+      let read: ReturnType<ProviderAdapter['readResponse']>;
       try {
         read = adapter.readResponse(body);
       } catch (err) {
@@ -342,6 +379,27 @@ export async function callModel(
         });
         throw unreadable;
       }
+      // C1. A completion the provider cut off at the token ceiling is a
+      // failed call wearing a 200, exactly as a 200 with no message content
+      // is — and it is refused HERE rather than returned with a flag,
+      // because a flag is only as good as every consumer remembering to
+      // read it. The decision itself lives in `truncationRefusal`
+      // (packages/core) so the stream route and the browser's own
+      // `readFrames` reach the same one rather than each carrying a copy.
+      // Not retried: an identical request meets the identical ceiling.
+      const truncated = truncationRefusal(read.stopReason, callId);
+      if (truncated) {
+        await ctx.audit.finish(callId, {
+          status: response.status, ok: false, errorCode: 'answer_truncated',
+          // The real counts, not zeroes: these tokens were genuinely spent,
+          // and a support engineer asking "what did this cost" should get
+          // the truth from the record even though the answer was refused.
+          promptTokens: read.usage.promptTokens,
+          completionTokens: read.usage.completionTokens,
+          latencyMs: Date.now() - startedAt, retries,
+        });
+        throw truncated;
+      }
       await ctx.audit.finish(callId, {
         status: response.status, ok: true,
         promptTokens: read.usage.promptTokens,
@@ -355,6 +413,7 @@ export async function callModel(
         callId,
         provider: entry.provider,
         jurisdiction: entry.jurisdiction,
+        stopReason: read.stopReason,
       };
     }
 

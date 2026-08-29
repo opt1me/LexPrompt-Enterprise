@@ -26,16 +26,23 @@ function walkIfPresent(dir: string): string[] {
  * definition of it outside the package.
  */
 describe('import boundary (S14)', () => {
-  // EXTEND THIS ARRAY in every task that adds a core export. By the end of
-  // Stage 1 it reads:
-  //   ['parseJsonLoose', 'createSseEventReader', 'sseFields', 'encodeFrame',
-  //    'decodeFrame', 'readFrames', 'isPurpose', 'isProviderId',
-  //    'jurisdictionLabel', 'isRetryableStatus', 'isSignInError',
-  //    'isServiceConfigError']
+  // EXTEND THIS ARRAY in every task that adds a core export.
+  //
+  // It held eight names and omitted the five SSE/frame ones its own comment
+  // said it should carry — the five that are, by this project's own
+  // account, the highest-drift-risk exports in the repository ("five
+  // providers means five event framings, and the naive reading of that is
+  // five parsers — five surfaces for a bug this project has already paid
+  // for twice", `sse.ts`). The scanner built to prevent a second copy was
+  // the one that did not look for them: a second `createSseEventReader`
+  // with subtly different CRLF or flush handling passed silently, and the
+  // file read like coverage.
   const exported = [
     'parseJsonLoose', 'isPurpose', 'isProviderId', 'jurisdictionLabel',
     'isRetryableStatus', 'isSignInError', 'isServiceConfigError',
     'SERVICE_CONFIG_HINT',
+    'createSseEventReader', 'sseFields', 'encodeFrame', 'decodeFrame', 'readFrames',
+    'isModelErrorCode', 'truncationRefusal',
   ];
 
   it('nothing outside packages/core defines an export of packages/core', () => {

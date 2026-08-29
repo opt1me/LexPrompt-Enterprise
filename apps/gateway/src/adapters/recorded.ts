@@ -76,6 +76,26 @@ export function makeRecordedAdapter(
       // would hand the SSE reader a single JSON blob and fail silently.
       const ext = req.stream ? 'txt' : 'json';
       const segments = req.stream ? ['streams'] : [];
+      // A fallback to `default.<ext>`, in a codebase whose credential
+      // module refuses fallbacks on principle — so here is the argument for
+      // why this one is different, since an unargued fallback is the thing
+      // that principle is actually against.
+      //
+      // `resolve.ts` refuses a second source because the two sources hold
+      // DIFFERENT credentials and picking the wrong one silently is a
+      // deployed gateway authenticating as somebody else. Here both
+      // candidates are fixtures in the same directory, chosen by an
+      // operator who wrote `provider: 'recorded'` into their allowlist, and
+      // the answer is marked as recorded in four places regardless of which
+      // file it came from — the reader is never told a fixture is a model.
+      // Without it the offline stack would serve one purpose
+      // (`assistant.chat`, the only streamed fixture that exists) and throw
+      // for the other eight, which would make the fallback's absence the
+      // surprising behaviour rather than its presence.
+      //
+      // What is NOT permitted, and is why this is a fallback between two
+      // fixtures rather than a fallback to nothing: a missing pair still
+      // throws. See below.
       const candidates = [`${purpose}.${ext}`, `default.${ext}`];
       const found = candidates.find((name) => {
         try {

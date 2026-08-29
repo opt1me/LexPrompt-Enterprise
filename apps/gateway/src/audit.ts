@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Writable } from 'node:stream';
 import {
-  ModelError,
+  ModelError, SERVICE_CONFIG_HINT,
   type InferContext, type Jurisdiction, type ModelErrorCode, type ProviderId, type Purpose,
 } from '@lexprompt/core';
 import type { CredentialConfig, ModelEntry } from './config.ts';
@@ -169,9 +169,21 @@ export class AuditLogger {
     try {
       await this.#sink.write(record);
     } catch (err) {
+      // The `SERVICE_CONFIG_HINT` clause is load-bearing, not decoration.
+      // A `ModelError`'s CODE does not survive the findings path —
+      // `extractClause` keeps only `error.message` — so the browser
+      // classifies a firm-configuration fault by matching this sentence
+      // (`protocol.ts`, `ResultsView.tsx`). This was the one
+      // `service_misconfigured` in the gateway that omitted it, which made
+      // the single failure P3 exists to produce the one that rendered as an
+      // ordinary retryable error: the lawyer retries, every retry is
+      // refused for the same reason, and nothing tells them or IT that the
+      // firm's logging is broken.
       throw new ModelError(
         'This request could not be recorded in the call log, so it was not made. '
-        + `LexPrompt does not send anything to a model it cannot log. (${(err as Error).message})`,
+        + 'LexPrompt does not send anything to a model it cannot log. This is a '
+        + `configuration problem in the firm's deployment, ${SERVICE_CONFIG_HINT}. `
+        + `(${(err as Error).message})`,
         'service_misconfigured',
         503,
         callId,

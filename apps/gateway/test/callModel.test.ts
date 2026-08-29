@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import { callModel } from '../src/callModel.ts';
 import { Allowlist } from '../src/allowlist.ts';
 import { AuditLogger, type AuditRecord, type AuditSink } from '../src/audit.ts';
@@ -17,6 +18,17 @@ const entry: ModelEntry = {
 const ok = (content: string): TransportResponse => ({
   status: 200, ok: true, body: null,
   json: async () => ({ choices: [{ message: { content } }], usage: { prompt_tokens: 7, completion_tokens: 2 } }),
+  text: async () => '',
+});
+
+/** A 200 the provider CUT OFF at the token ceiling — a complete-looking
+ *  envelope whose `finish_reason` says the answer is a fragment. */
+const truncated = (content: string): TransportResponse => ({
+  status: 200, ok: true, body: null,
+  json: async () => ({
+    choices: [{ message: { content }, finish_reason: 'length' }],
+    usage: { prompt_tokens: 7, completion_tokens: 4096 },
+  }),
   text: async () => '',
 });
 
@@ -50,7 +62,7 @@ function ctx(transport: Transport, sink = new Sink()) {
     credentials: { resolve: async () => ({ kind: 'bearer' as const, token: 'mi' }) },
     registry: buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' }),
     transport,
-    limiter: { check: () => {}, record: () => {} } as never,
+    limiter: { check: () => {}, recordAttempt: () => {}, record: () => {} } as never,
     sleep: async () => {},
     workspaceId: 'ws-1',
     actorIssuer: 'https://keycloak.local/realms/lexprompt',
@@ -70,6 +82,10 @@ describe('callModel — the one call path', () => {
       callId: 'call-1',
       provider: 'azure-foundry',
       jurisdiction: { bloc: 'UK', region: 'uksouth', label: 'UK South' },
+      // Why the model stopped, carried outward rather than left behind in
+      // the adapter. This fixture's body has no `finish_reason`, so the
+      // honest answer is `unknown` — the provider said nothing.
+      stopReason: 'unknown',
     });
   });
 
@@ -241,6 +257,93 @@ describe('callModel — the one call path', () => {
     expect((sink.records[1] as { retries: number }).retries).toBe(1);
   });
 
+  // ==================================================================
+  // C1, on the non-streamed path. `readResponse` already refuses a 200 with
+  // no message content; this is the same refusal for a 200 whose content is
+  // half an answer. A lawyer receiving a clause analysis that stops
+  // mid-sentence, presented as complete, is what this whole gateway exists
+  // to prevent — and unlike an empty answer, this one reads as fluent and
+  // plausible all the way to the point where it stops.
+  // ==================================================================
+  it('REFUSES a completion the provider cut off at the token ceiling', async () => {
+    const c = ctx({ fetch: async () => truncated('1. Repairs to the structure and exterior, 2. ') });
+    await expect(callModel(c as never, REQ))
+      .rejects.toMatchObject({ code: 'answer_truncated', retryable: false });
+  });
+
+  it('never returns the fragment alongside the refusal', async () => {
+    const c = ctx({ fetch: async () => truncated('half an answer') });
+    const caught = await callModel(c as never, REQ).catch((e: Error) => e);
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).not.toContain('half an answer');
+    expect((caught as Error).message).toMatch(/fragment/i);
+  });
+
+  it('does not retry a truncated answer — an identical request hits the same ceiling', async () => {
+    const fetchSpy = vi.fn(async () => truncated('x'));
+    const c = ctx({ fetch: fetchSpy });
+    await callModel(c as never, REQ).catch(() => {});
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a truncated answer as a FAILURE, with what it actually cost', async () => {
+    const sink = new Sink();
+    const c = ctx({ fetch: async () => truncated('x') }, sink);
+    await callModel(c as never, REQ).catch(() => {});
+    expect(sink.records.find(r => r.kind === 'call.finished')).toMatchObject({
+      ok: false, errorCode: 'answer_truncated', promptTokens: 7, completionTokens: 4096,
+    });
+  });
+
+  it('does not bill the token budget for an answer it refused', async () => {
+    const recorded: unknown[] = [];
+    const c = {
+      ...ctx({ fetch: async () => truncated('x') }),
+      limiter: {
+        check: () => {}, recordAttempt: () => {},
+        record: (...a: unknown[]) => { recorded.push(a); },
+      } as never,
+    };
+    await callModel(c as never, REQ).catch(() => {});
+    expect(recorded).toEqual([]);
+  });
+
+  // A completion that ended cleanly still says so, so the two are
+  // distinguishable at every layer rather than only when one throws.
+  it('carries a clean finish_reason outward as stopReason: stop', async () => {
+    const c = ctx({
+      fetch: async () => ({
+        status: 200, ok: true, body: null,
+        json: async () => ({
+          choices: [{ message: { content: 'Whole.' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }),
+        text: async () => '',
+      }),
+    });
+    expect((await callModel(c as never, REQ)).stopReason).toBe('stop');
+  });
+
+  // ==================================================================
+  // M5. The request budget is counted on every ATTEMPT that clears the
+  // check, not on the successes alone — which is what it used to be, since
+  // `check` read only what `record` appended and `record` runs from the
+  // success branch. A failing call is the one that most needs counting.
+  // ==================================================================
+  it('counts a FAILED call toward the request budget, not just a successful one', async () => {
+    const attempts: unknown[][] = [];
+    const c = {
+      ...ctx({ fetch: async () => err(500) }),
+      limiter: {
+        check: () => {},
+        recordAttempt: (...a: unknown[]) => { attempts.push(a); },
+        record: () => {},
+      } as never,
+    };
+    await callModel(c as never, REQ).catch(() => {});
+    expect(attempts).toEqual([['ws-1', 'oid-1']]);
+  });
+
   // P3, at the route level.
   it('makes NO upstream call when the audit sink fails', async () => {
     const fetchSpy = vi.fn(async () => ok('x'));
@@ -249,6 +352,20 @@ describe('callModel — the one call path', () => {
     await expect(callModel(c as never, REQ))
       .rejects.toMatchObject({ code: 'service_misconfigured', status: 503 });
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // M3. The P3 refusal was the one `service_misconfigured` in the gateway
+  // whose message omitted `SERVICE_CONFIG_HINT` — and a `ModelError`'s CODE
+  // does not survive the findings path, so the browser classifies by
+  // matching that sentence. Without it, the single failure P3 exists to
+  // produce rendered as an ordinary retryable error with a Retry button:
+  // the lawyer retries, every retry is refused for the same reason, and
+  // nothing tells them or IT that the firm's logging is broken.
+  it('names the audit refusal as a firm-configuration fault the browser can recognise', async () => {
+    const failing = { write: async () => { throw new Error('pipe'); } };
+    const c = { ...ctx({ fetch: async () => ok('x') }), audit: new AuditLogger(failing, () => new Date(), () => 'c') };
+    const caught = await callModel(c as never, REQ).catch((e: Error) => e);
+    expect((caught as Error).message).toContain(SERVICE_CONFIG_HINT);
   });
 
   it('makes NO upstream call when the credential cannot be resolved', async () => {
@@ -298,7 +415,10 @@ describe('callModel — the one call path', () => {
 
   it('tells the limiter what a successful call cost, and nothing about a refused one', async () => {
     const recorded: unknown[] = [];
-    const limiter = { check: () => {}, record: (w: string, a: string, u: unknown) => { recorded.push([w, a, u]); } };
+    const limiter = {
+      check: () => {}, recordAttempt: () => {},
+      record: (w: string, a: string, u: unknown) => { recorded.push([w, a, u]); },
+    };
     const good = { ...ctx({ fetch: async () => ok('A') }), limiter: limiter as never };
     await callModel(good as never, REQ);
     expect(recorded).toEqual([['ws-1', 'oid-1', { promptTokens: 7, completionTokens: 2 }]]);
@@ -313,7 +433,10 @@ describe('callModel — the one call path', () => {
     const fetchSpy = vi.fn(async () => ok('x'));
     const c = {
       ...ctx({ fetch: fetchSpy }),
-      limiter: { check: () => { throw new Error('over budget'); }, record: () => {} } as never,
+      limiter: {
+        check: () => { throw new Error('over budget'); },
+        recordAttempt: () => {}, record: () => {},
+      } as never,
     };
     await expect(callModel(c as never, REQ)).rejects.toThrow(/over budget/);
     expect(fetchSpy).not.toHaveBeenCalled();

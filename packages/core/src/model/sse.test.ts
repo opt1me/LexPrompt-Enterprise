@@ -9,15 +9,23 @@ const enc = new TextEncoder();
 /** Every `done` frame carries where the call was processed; these two
  *  constants keep that fact out of the way of what each case is about. */
 const UK_SOUTH: Jurisdiction = { bloc: 'UK', region: 'uksouth', label: 'UK South' };
-const WHERE = { provider: 'openai' as const, jurisdiction: UK_SOUTH };
+const WHERE = {
+  provider: 'openai' as const, jurisdiction: UK_SOUTH, stopReason: 'stop' as const,
+};
 
 /** A `done` frame as an older producer would have written it. Hand-built as
  *  text because `encodeFrame` can no longer produce one: `Frame` requires
- *  both fields, which is the point. */
+ *  all three fields, which is the point. Each carries `stopReason` so the
+ *  refusals below stay about the field each case names. */
 const DONE_NO_WHERE =
-  '{"type":"done","usage":{"promptTokens":1,"completionTokens":1},"callId":"c1"}';
+  '{"type":"done","usage":{"promptTokens":1,"completionTokens":1},"callId":"c1",'
+  + '"stopReason":"stop"}';
 const DONE_NO_JURISDICTION =
-  '{"type":"done","usage":{"promptTokens":1,"completionTokens":1},"callId":"c1","provider":"openai"}';
+  '{"type":"done","usage":{"promptTokens":1,"completionTokens":1},"callId":"c1",'
+  + '"stopReason":"stop","provider":"openai"}';
+const DONE_NO_STOP_REASON =
+  '{"type":"done","usage":{"promptTokens":1,"completionTokens":1},"callId":"c1",'
+  + '"provider":"openai","jurisdiction":{"bloc":"UK","region":"uksouth","label":"UK South"}}';
 
 async function* streamOf(...chunks: string[]): AsyncIterable<Uint8Array> {
   for (const c of chunks) yield enc.encode(c);
@@ -142,6 +150,31 @@ describe('the canonical frame codec', () => {
     expect(decodeFrame('data: ' + DONE_NO_JURISDICTION)).toBe(null);
   });
 
+  // C1. `stopReason` is required for the same reason and against the same
+  // failure: a producer that omits it leaves "the model was cut off at its
+  // token ceiling" indistinguishable from "the model chose to end", and the
+  // browser renders a fragment with no marker of any kind. Refusing to
+  // decode makes the omission a truncated stream rather than a silent one.
+  it('refuses to decode a done frame with no stopReason', () => {
+    expect(decodeFrame('data: ' + DONE_NO_STOP_REASON)).toBe(null);
+  });
+
+  // m1. `done` was strict and `error` was lax: an error frame was accepted
+  // on its `message` alone, decoding to `new ModelError(msg, undefined,
+  // undefined)` — an error whose `retryable`, `isSignInError` and
+  // `isServiceConfigError` all read false by accident rather than by
+  // judgement, which is a firm-configuration fault reaching a lawyer as an
+  // ordinary one.
+  it('refuses an error frame with no code, an unknown code, or no status', () => {
+    const base = '"type":"error","message":"boom","callId":"c1","status":502';
+    expect(decodeFrame(`data: {${base},"code":"upstream_failed"}`))
+      .toMatchObject({ type: 'error', code: 'upstream_failed' });
+    expect(decodeFrame(`data: {${base}}`)).toBe(null);
+    expect(decodeFrame(`data: {${base},"code":"made_up_code"}`)).toBe(null);
+    expect(decodeFrame('data: {"type":"error","message":"boom","callId":"c1","code":"network"}'))
+      .toBe(null);
+  });
+
   it('returns null for a non-frame event rather than throwing', () => {
     expect(decodeFrame(': keepalive')).toBe(null);
     expect(decodeFrame('data: {"type":"nonsense"}')).toBe(null);
@@ -210,6 +243,39 @@ describe('readFrames — a stream is complete or it is an error (P2)', () => {
 
   it('throws stream_truncated on a completely empty stream, never resolving empty', async () => {
     await expect(readFrames(streamOf(), () => {})).rejects.toMatchObject({ code: 'stream_truncated' });
+  });
+
+  // ==================================================================
+  // C1's second consumer. The gateway refuses a `length` completion before
+  // it ever writes a done frame — but the browser is a separately deployed
+  // half of this protocol, and the decision about a truncated answer is
+  // SHARED (`truncationRefusal`) rather than trusted to hold at the far
+  // end. A done frame saying the model ran out of room must not resolve as
+  // an answer here either.
+  // ==================================================================
+  it('throws answer_truncated rather than resolving a done frame the model was cut off in', async () => {
+    const seen: string[] = [];
+    await expect(readFrames(
+      streamOf(
+        encodeFrame({ type: 'delta', text: '1. Repairs to the structure' }),
+        encodeFrame({
+          type: 'done', usage: { promptTokens: 9, completionTokens: 4096 }, callId: 'c1',
+          ...WHERE, stopReason: 'length',
+        }),
+      ),
+      d => seen.push(d),
+    )).rejects.toMatchObject({ name: 'ModelError', code: 'answer_truncated', retryable: false });
+    expect(seen).toEqual(['1. Repairs to the structure']);
+  });
+
+  it('resolves normally, and reports the reason, when the model finished', async () => {
+    const end = await readFrames(
+      streamOf(encodeFrame({
+        type: 'done', usage: { promptTokens: 1, completionTokens: 1 }, callId: 'c1', ...WHERE,
+      })),
+      () => {},
+    );
+    expect(end.stopReason).toBe('stop');
   });
 
   it('throws the error frame\'s own code and message, carrying the call id', async () => {

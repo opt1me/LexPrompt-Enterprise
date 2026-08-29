@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { createSseEventReader } from '@lexprompt/core';
+import { createSseEventReader, type StopReason } from '@lexprompt/core';
 import { buildRegistry, PENDING } from '../src/adapters/registry.ts';
 import type { ProviderAdapter } from '../src/adapters/types.ts';
 
@@ -43,22 +43,28 @@ function drive(adapter: ProviderAdapter, chunks: string[]) {
   let promptTokens = 0;
   let completionTokens = 0;
   let ended = false;
+  let stopReason: StopReason = 'unknown';
   let error: { status: number; message: string } | null = null;
 
   const handle = (raw: string) => {
-    const ev = adapter.decodeEvent(raw);
-    if (!ev) return;
-    if (ev.kind === 'delta') text += ev.text;
-    else if (ev.kind === 'usage') {
-      promptTokens = Math.max(promptTokens, ev.usage.promptTokens);
-      completionTokens = Math.max(completionTokens, ev.usage.completionTokens);
-    } else if (ev.kind === 'end') ended = true;
-    else error = { status: ev.status, message: ev.message };
+    // `decodeEvent` yields ZERO OR MORE events per raw event — one OpenAI
+    // chunk can carry the last content delta and `finish_reason` together —
+    // so this loops rather than reading a single value, exactly as the
+    // stream route does.
+    for (const ev of adapter.decodeEvent(raw)) {
+      if (ev.kind === 'delta') text += ev.text;
+      else if (ev.kind === 'usage') {
+        promptTokens = Math.max(promptTokens, ev.usage.promptTokens);
+        completionTokens = Math.max(completionTokens, ev.usage.completionTokens);
+      } else if (ev.kind === 'stop') stopReason = ev.reason;
+      else if (ev.kind === 'end') ended = true;
+      else error = { status: ev.status, message: ev.message };
+    }
   };
 
   for (const chunk of chunks) for (const raw of reader.push(chunk)) handle(raw);
   for (const raw of reader.flush()) handle(raw);
-  return { text, promptTokens, completionTokens, ended, error };
+  return { text, promptTokens, completionTokens, ended, stopReason, error };
 }
 
 const byBytes = (s: string): string[] => [...s];
@@ -188,18 +194,25 @@ describe.each(registry.all.map(a => [a.id, a] as const))('%s stream conformance'
 
   // §14's request round-trip. This is what `test/fixtures/requests/` in the
   // File Structure is for; without it that directory was a promise.
-  it('builds the request body this provider actually expects', () => {
-    const expectedBody = JSON.parse(
+  it('builds the request this provider actually expects', () => {
+    const fixture = JSON.parse(
       readFileSync(path.join(__dirname, `fixtures/requests/${adapter.id}.json`), 'utf8'),
     ) as {
       entry: Record<string, unknown>; request: Record<string, unknown>;
-      credential: Record<string, unknown>; body: unknown;
+      credential: Record<string, unknown>; body: unknown; url?: string;
     };
     const call = adapter.buildCall(
-      { ...expectedBody.request, entry: expectedBody.entry } as never,
-      expectedBody.credential as never,
+      { ...fixture.request, entry: fixture.entry } as never,
+      fixture.credential as never,
     );
-    expect(call.body).toEqual(expectedBody.body);
+    expect(call.body).toEqual(fixture.body);
+    // `url` is optional in the fixture set because the four OpenAI-shaped
+    // adapters and Anthropic have their URLs asserted in their own suites.
+    // It exists for `recorded`, whose `call.body` is always `{}` — so
+    // without it this parametrisation asserted, for that adapter, that an
+    // empty object equals an empty object. A case that cannot fail is not
+    // coverage, and it read like coverage.
+    if (fixture.url !== undefined) expect(call.url).toBe(fixture.url);
   });
 
   it('is recorded against a live provider, or is marked synthetic', () => {
