@@ -244,6 +244,22 @@ export const MODEL_ERROR_CODES = [
   'no_role',            // 403 — authenticated, in no mapped group. §7's "told plainly", not an empty app.
   'not_found',          // 404 — no such record in this workspace.
   'conflict',           // 409 — a stale write (P9), or an id already owned by another workspace.
+  /**
+   * 409 — a changeset's base version is no longer the playbook's current
+   * one, so publishing it would silently REVERT whatever the newer version
+   * added (`ChangesetStaleBaseError`).
+   *
+   * A code of its own, and that is the whole point of the entry. The refusal
+   * used to be an error CLASS the browser caught by identity, and an
+   * exception's identity dies at the wire. What arrives is a status and a
+   * body — so either the browser matches on the message, which is S1's
+   * defect exactly ("reword any one and the browser silently stops
+   * classifying: no error, no failing test"), or the CODE is the contract.
+   * It is the code. `src/lib/db/changesets.ts` reconstructs the class from
+   * it, so every existing caller keeps catching the class it already
+   * catches, and the wording is free to change without breaking anything.
+   */
+  'changeset_stale_base',
 ] as const;
 
 export type ModelErrorCode = (typeof MODEL_ERROR_CODES)[number];

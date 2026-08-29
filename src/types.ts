@@ -401,6 +401,10 @@ export interface Changeset {
   createdByUserId: string;
   /** Set on publish. */
   publishedVersionId?: string;
+  /** The optimistic-concurrency token (§8) — see `Matter.version`, whose
+   *  note applies word for word. Optional: a changeset `buildChangeset` has
+   *  just minted has none, and that absence is the claim "this is a create". */
+  version?: number;
 }
 
 export interface UserProfile {

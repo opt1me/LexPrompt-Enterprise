@@ -110,6 +110,15 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'POST /v1/playbooks/:id/versions': 'partner',
   'POST /v1/playbooks/import': 'partner',
 
+  // Changesets. A reviewer builds one and records decisions on it (§7);
+  // PUBLISHING one produces a playbook version, so it sits at the same bar
+  // as publishing from the editor — two routes to one act must not have two
+  // different bars (R-E8).
+  'GET /v1/playbooks/:id/changesets': 'reviewer',
+  'GET /v1/changesets/:id': 'reviewer',
+  'PUT /v1/changesets/:id': 'reviewer',
+  'POST /v1/changesets/:id/publish': 'partner',
+
   // Reconciliation (§6.5). ADMIN, not reviewer: the listing names bytes
   // that no record claims — which is a fact about storage rather than about
   // any matter — and the second route destroys them. A reviewer who could

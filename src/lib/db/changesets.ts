@@ -1,103 +1,120 @@
-import { getDb } from './open';
-import { STORES } from './schema';
-import { getPlaybook, publishAndPoint } from './playbooks';
-import { getVersion } from './playbookVersions';
-import { uid } from '../uid';
-import type { Changeset, ChangesetItem, PlaybookClause, PlaybookDraft, PlaybookVersion } from '../../types';
-
-const STORAGE_FULL_MESSAGE =
-  'Could not save — your browser storage is full. Try deleting an old playbook, or exporting and removing some data.';
+import { ModelError } from '@lexprompt/core';
+import { apiGet, apiGetOrNull, apiSend } from '../api/client';
+import type { Changeset, ChangesetItem, PlaybookVersion } from '../../types';
 
 /**
- * Thrown by `publishChangeset` when the playbook has moved on since this
- * changeset was built — `Playbook.currentVersionId` no longer matches
- * `Changeset.fromVersionId`. Someone published a newer version in the
- * meantime (from the playbook editor, or another changeset), and that
- * version's clauses are not in this changeset's `basis` at all: it was
- * built by reading a version that is no longer the live one.
+ * The changesets repository — an HTTP client over `apps/api` since Stage 2.
  *
- * Publishing anyway would build the next version from `fromVersionId`'s
- * OLD clause list (see `publishChangeset`'s docstring) and silently
- * REVERT whatever the newer version added — a lost update dressed as a
- * normal publish, presented with the same confidence as a version anyone
- * actually approved. CLAUDE.md's rule outranks convenience here: refusing
- * is the loud, recoverable failure; reverting a colleague's published
- * work with no trace is the quiet, catastrophic one.
+ * Same file, same exports, same signatures (R3). What moved OUT is the
+ * publish itself: `publishChangeset` is now one route running one Postgres
+ * transaction over `changeset`, `playbook` and `playbook_version`, and the
+ * domain logic underneath it — which items reach the version, whose words
+ * they carry, what the history entry says — moved to
+ * `packages/core/src/playbook/applyChangeset.ts` so the browser and the
+ * server share ONE implementation rather than one each. Two copies of the
+ * code that decides what a published version says, reachable only from two
+ * different processes, is this project's most repeated defect in its worst
+ * available form.
  *
- * A distinguishable type (not a generic `Error`) so `ChangesetReview` — or
- * any future caller — can choose to react to it specifically rather than
- * just display its text; today it is displayed exactly like the generic
- * storage-full message, through the same `publishError` string prop.
+ * The file-local helpers that went with it (`isDecided`, `isPublishable`,
+ * `publishedTextFor`, `provenanceFor`, `newClauseTitle`,
+ * `defaultExtractPrompt`, `applyItem`, `changeSummaryFor`) are re-exported
+ * from `@lexprompt/core` for anything that still reads them.
+ */
+
+/**
+ * Thrown when the playbook has moved on since this changeset was built —
+ * `Playbook.currentVersionId` no longer matches `Changeset.fromVersionId`.
+ * Someone published a newer version in the meantime, and that version's
+ * clauses are not in this changeset's `basis` at all.
+ *
+ * Publishing anyway would build the next version from `fromVersionId`'s OLD
+ * clause list and silently REVERT whatever the newer version added — a lost
+ * update dressed as a normal publish, presented with the same confidence as
+ * a version anyone actually approved. Refusing is the loud, recoverable
+ * failure; reverting a colleague's published work with no trace is the
+ * quiet, catastrophic one.
+ *
+ * UNCHANGED in shape and in meaning; only its PROVENANCE moved. It used to
+ * be thrown here after a local read of the playbook. It is now reconstructed
+ * from the API's `changeset_stale_base` code, so `ChangesetReview.tsx` and
+ * every existing test keep catching exactly the class they already catch.
+ *
+ * **The CODE is the contract and the message is not.** An exception's
+ * identity dies at the wire; what arrives is a status and a body. A browser
+ * matching on the server's wording across a network is a coupling nothing
+ * tests, and this project has already shipped that exact defect (ruling S1):
+ * *"reword any one and the browser silently stops classifying — no error, no
+ * failing test."* So `'changeset_stale_base'` is in `MODEL_ERROR_CODES`, and
+ * the server's message is free to change.
+ *
+ * `serverMessage` carries the API's own words — which name BOTH version
+ * numbers, because "stale" with no numbers tells a person nothing they can
+ * act on — while `message` keeps the sentence this class has always carried,
+ * so a caller rendering `err.message` shows what it always showed.
  */
 export class ChangesetStaleBaseError extends Error {
-  constructor() {
+  /** What the server said, when this was reconstructed from a refusal.
+   *  Absent when the class was constructed directly. */
+  readonly serverMessage?: string;
+
+  constructor(serverMessage?: string) {
     super(
-      'This playbook has moved on since this changeset was built — a newer version has already been published. ' +
-        'The decisions recorded on this changeset are safe and have not been lost, but it needs to be rebuilt ' +
-        'against the current version before it can be published.',
+      'This playbook has moved on since this changeset was built — a newer version has already been published. '
+        + 'The decisions recorded on this changeset are safe and have not been lost, but it needs to be rebuilt '
+        + 'against the current version before it can be published.',
     );
     this.name = 'ChangesetStaleBaseError';
+    if (serverMessage !== undefined) this.serverMessage = serverMessage;
   }
 }
 
 /**
  * Persists a changeset — a create or an update, since `Changeset.id` is
- * minted once by `buildChangeset` and never reused, so `put` is always an
- * upsert of the SAME record rather than a risk of colliding with another
- * one. Callers write through this on every decision (accept/reword/decline)
- * as well as on first build, per CLAUDE.md's "await-then-apply" rule: the
- * UI must not believe a decision was recorded until the store confirms it.
+ * minted once by `buildChangeset` and never reused. Callers write through
+ * this on every decision (accept/reword/decline) as well as on first build,
+ * per CLAUDE.md's "await-then-apply" rule: the UI must not believe a
+ * decision was recorded until the store confirms it.
  *
- * Mirrors `playbookVersions.ts`'s shape: an explicit readwrite transaction
- * with nothing non-IDB awaited inside it, `tx.done` awaited before
- * returning, and a generic storage-full message on any failure — the same
- * idiom every store in this module uses, rather than a second one invented
- * here. There is no sequence number to allocate (a `Changeset` has no
- * monotonic ordering the way a `PlaybookVersion` does — `createdAt` plus its
- * own minted `id` is enough), so this is `publishVersion`'s shape minus the
- * allocation step it exists for.
+ * Returns the SAVED record, carrying the `version` the next save must state,
+ * so a decision recorded against a changeset somebody else has since changed
+ * is refused rather than applied over their work.
  */
 export async function saveChangeset(changeset: Changeset): Promise<Changeset> {
-  const db = await getDb();
-  try {
-    const tx = db.transaction(STORES.changesets, 'readwrite');
-    await tx.store.put(changeset);
-    await tx.done;
-  } catch {
-    throw new Error(STORAGE_FULL_MESSAGE);
-  }
-  return changeset;
+  return apiSend<Changeset>(
+    'PUT', `/v1/changesets/${encodeURIComponent(changeset.id)}`, changeset);
 }
 
+/** `null` for "there is no such changeset", and ONLY for that. */
 export async function getChangeset(id: string): Promise<Changeset | null> {
-  const db = await getDb();
-  return (await db.get(STORES.changesets, id)) ?? null;
+  return apiGetOrNull<Changeset>(`/v1/changesets/${encodeURIComponent(id)}`);
 }
 
-/** A playbook's changesets, most recently created first. */
+/** A playbook's changesets, most recently created first. The order is the
+ *  server's and is not re-derived here. Rejects rather than resolving to
+ *  `[]` on a failure: "no changesets yet" and "the server failed" look
+ *  identical on screen and only the first is a fact. */
 export async function listChangesets(playbookId: string): Promise<Changeset[]> {
-  const db = await getDb();
-  const all = await db.getAllFromIndex(STORES.changesets, 'byPlaybook', playbookId);
-  return all.sort((a, b) => b.createdAt - a.createdAt);
+  return apiGet<Changeset[]>(
+    `/v1/playbooks/${encodeURIComponent(playbookId)}/changesets`);
 }
 
 /**
  * Records a person's decision on one item and persists the whole changeset —
- * the write every accept/reword/decline control in `ChangesetReview` goes
- * through, per CLAUDE.md's "await-then-apply" rule: the screen must not show
- * a decision as recorded until the store has actually confirmed it.
+ * the write every accept/reword/decline control goes through, per CLAUDE.md's
+ * "await-then-apply" rule.
  *
- * Takes the whole `changeset` as a value rather than an id, the same shape
- * `authoringDraft.ts`'s `editClause`/`keepClause` use: the caller already
- * holds the current object (there is no server copy to race against), and a
- * second read here would only be a chance for it to be stale against an
- * in-flight edit the caller has not saved yet.
+ * Takes the whole `changeset` as a value rather than an id: the caller
+ * already holds the current object, and a second read here would only be a
+ * chance for it to be stale against an in-flight edit the caller has not
+ * saved yet.
  *
  * `rewordedText` is stamped ONLY when `decision` is `'reworded'`, and
- * deleted — never set to `undefined` — otherwise: `structuredClone` (how
- * IndexedDB writes every record) PRESERVES an `undefined`-valued key, so an
- * item accepted after once being reworded must not still carry stale reword
- * text a reader could mistake for what was actually decided.
+ * deleted — never set to `undefined` — otherwise: `structuredClone`
+ * PRESERVES an `undefined`-valued key, so an item accepted after once being
+ * reworded must not still carry stale reword text a reader could mistake for
+ * what was actually decided. JSON drops such a key instead, which is the
+ * OTHER half of the same trap and the reason this stays a delete.
  */
 export async function recordDecision(
   changeset: Changeset,
@@ -118,212 +135,48 @@ export async function recordDecision(
   return saveChangeset({ ...changeset, items });
 }
 
-/** A decision that has actually been made, one way or the other — the
- *  complement of `'open'`. Distinguishing this from "truthy decision string"
- *  matters because `'declined'` is exactly as decided as `'accepted'`; both
- *  are excluded from `isPublishable` below for different reasons. */
-function isDecided(item: ChangesetItem): boolean {
-  return item.decision !== 'open';
-}
-
-/**
- * The publish filter (spec §7, §9 — mutation-tested). ONLY an `accepted` or
- * `reworded` item may reach a published version. A `declined` item is a
- * person's explicit "no" and an `open` one has no decision at all yet —
- * "not yet decided" and "decided no" are different claims, and neither
- * belongs in the instrument every future review measures documents against.
- */
-function isPublishable(item: ChangesetItem): boolean {
-  return item.decision === 'accepted' || item.decision === 'reworded';
-}
-
-/** The text to publish for an accepted/reworded item. A `reworded` item
- *  publishes the HUMAN's rewording, never the model's original proposal —
- *  rewording is itself the decision, and publishing the untouched proposal
- *  instead would put words into the playbook that nobody actually
- *  approved. Falls back to `proposedText` only if `rewordedText` is somehow
- *  absent (should not happen — `ChangesetReview`'s reword control always
- *  supplies one — but a missing field is not license to publish nothing). */
-function publishedTextFor(item: ChangesetItem): string {
-  return item.decision === 'reworded' ? (item.rewordedText ?? item.proposedText) : item.proposedText;
-}
-
-/** `StandardPosition.provenance` for a position that reached the playbook
- *  through a changeset — the same honesty rule `authoringDraft.ts`'s
- *  `positionProvenance` follows for E, drawn here because a changeset's
- *  provenance facts (the source deal, whether a person reworded it) live on
- *  the `Changeset`/`ChangesetItem`, not on an `AuthoringDraft`. */
-function provenanceFor(changeset: Changeset, item: ChangesetItem): string {
-  const engagement = item.decision === 'reworded'
-    ? 'reworded and accepted by a person reviewing a changeset'
-    : 'accepted by a person reviewing a changeset';
-  return `Learned from ${changeset.sourceSummary}; ${engagement}.`;
-}
-
-/**
- * The title for a brand-new clause a `new_clause` item proposes.
- *
- * Reads `item.title` — `buildChangeset.ts`'s `resolveItem` sets it directly
- * now (`matched?.title ?? clauseTitle`). Falls back to `basis[0]?.clauseRef`
- * only for a changeset saved before that field existed: `resolveItem` never
- * returns an item with an empty `basis` — an item resting on zero resolvable
- * edits is dropped entirely rather than kept with no evidence — so the
- * fallback is always available for such a record. `ChangesetReview.tsx`'s
- * `itemTitle` makes the identical read, for the identical reason.
- */
-function newClauseTitle(item: ChangesetItem): string {
-  const title = item.title?.trim() || item.basis[0]?.clauseRef?.trim();
-  if (!title) throw new Error('This new-clause proposal has no title recorded to publish it under.');
-  return title;
-}
-
-/** A visible placeholder, not a guess — the same choice `generateDraft.ts`'s
- *  `repairClause` makes for a clause with a title but no instruction: an
- *  empty or generic extraction prompt is a gap someone can see and fill in
- *  from the playbook editor, which is honester than fabricating a specific
- *  instruction a changeset never actually reasoned about. */
-function defaultExtractPrompt(title: string): string {
-  return `Extract the clause on ${title}.`;
-}
-
-/** Applies ONE accepted/reworded item onto a working clause list, returning
- *  a new array. A matched item (`clauseId` set) updates that clause's
- *  `standardPosition` in place, keeping its id and title — the clause is
- *  unchanged if the caller never reaches this function for it (a declined or
- *  open item never does). An unmatched (`new_clause`) item appends a fresh
- *  clause. Applied uniformly regardless of `kind`: a `confirm` item's
- *  `proposedText` is by construction identical to the clause's current text
- *  (`buildChangeset`'s own classification rule), so applying it is a
- *  content no-op that still records the reconfirmation's provenance — one
- *  code path rather than a `confirm` special case that could itself drift
- *  from the other two. */
-function applyItem(clauses: PlaybookClause[], changeset: Changeset, item: ChangesetItem): PlaybookClause[] {
-  const standardPosition = {
-    text: publishedTextFor(item),
-    origin: 'learned' as const,
-    reviewedByHuman: true,
-    provenance: provenanceFor(changeset, item),
-  };
-
-  if (item.clauseId) {
-    const idx = clauses.findIndex((c) => c.id === item.clauseId);
-    if (idx === -1) {
-      throw new Error(
-        'This changeset refers to a clause that no longer exists in the playbook — publish it against a fresh ' +
-          'changeset instead.',
-      );
-    }
-    const next = [...clauses];
-    next[idx] = { ...next[idx], standardPosition };
-    return next;
-  }
-
-  const title = newClauseTitle(item);
-  const newClause: PlaybookClause = {
-    id: uid(),
-    title,
-    extractPrompt: defaultExtractPrompt(title),
-    standardPosition,
-  };
-  return [...clauses, newClause];
-}
-
-/** The change summary D's `publishVersionIn` requires on every version after
- *  v1 — composed here, not left blank, because a version history whose
- *  entries do not say what changed is a list of dates (CLAUDE.md). Names the
- *  deal the changeset came from and what was decided, never invents detail
- *  the changeset does not actually record. */
-function changeSummaryFor(changeset: Changeset, applied: ChangesetItem[]): string {
-  const accepted = applied.filter((i) => i.decision === 'accepted').length;
-  const reworded = applied.filter((i) => i.decision === 'reworded').length;
-  const parts: string[] = [];
-  if (accepted > 0) parts.push(`${accepted} accepted`);
-  if (reworded > 0) parts.push(`${reworded} reworded`);
-  const decided = parts.length > 0 ? parts.join(', ') : 'no changes accepted';
-  return `Changeset from ${changeset.sourceSummary} — ${decided}.`;
-}
-
 /**
  * Publishes a changeset's ACCEPTED and REWORDED items as the playbook's next
- * version, through D's existing atomic publish path (`publishAndPoint` in
- * `./playbooks`) — spanning both the `playbooks` and `playbookVersions`
- * stores in one transaction, so there is no window in which a version is
- * durable and the identity record is not. This function does not reimplement
- * any part of that sequence: sub-project E's `saveDraftAsV1` already had
- * this exact ruling superseded once (see its docstring) after an earlier
- * two-write version of the same idea reopened the orphan window D closed.
+ * version.
  *
- * Refuses outright if any item is still `'open'` — "not yet decided" and
- * "decided no" are different claims, and publishing while either is present
- * would either drop a proposal nobody actually rejected or (if open items
- * were silently skipped) let a triager believe skipping review is the same
- * as declining. A `declined` item is fine to publish alongside others: it
- * simply contributes nothing (`isPublishable` below).
+ * One request, one Postgres transaction. Everything the IndexedDB version
+ * did in sequence — check every item is decided, read the playbook, refuse a
+ * stale base, build the clause list, publish, point the playbook at it,
+ * stamp the changeset — now happens together or not at all. The last step is
+ * the one that gained a guarantee: stamping `publishedVersionId` used to be
+ * a SECOND write after the publish returned, and a failure between them left
+ * a version published with no changeset pointing at it.
  *
- * The new version's clause list starts from `fromVersionId`'s clauses,
- * UNCHANGED except where an accepted/reworded item names a clause: that
- * clause's `standardPosition` is replaced, or (for a `new_clause` item) a
- * new clause is appended. Every clause the changeset never proposed
- * anything for — including one whose item was declined — carries forward
- * exactly as `fromVersionId` had it; `buildChangeset` never proposes an item
- * for a clause the deal did not address, so "carried forward unchanged"
- * covers the rest of a real playbook, not a hypothetical (spec §6's "never
- * guess a position from silence", applied here to publishing rather than
- * inference).
+ * The refusals keep their meanings:
  *
- * On success, the changeset is updated with `publishedVersionId` so a
- * reviewer can see it was acted on — but ONLY after `publishAndPoint` has
- * actually returned, and this function does not touch the `changesets`
- * store at all before that. If `publishAndPoint` throws, the error
- * propagates immediately: every decision already recorded on the changeset
- * (via `recordDecision`, before this call) is left exactly as it was (spec
- * §8 — "the review work is the expensive part and must not be lost to a
- * write failure").
+ *  - An item still `'open'` refuses the publish. "Not yet decided" and
+ *    "decided no" are different claims, and publishing while either is
+ *    present would either drop a proposal nobody rejected or let a triager
+ *    believe skipping review is the same as declining.
+ *  - A stale base throws `ChangesetStaleBaseError`, RECONSTRUCTED FROM THE
+ *    SERVER'S CODE. See that class's own note.
  *
- * REFUSES if the playbook's `currentVersionId` no longer matches
- * `changeset.fromVersionId` — throwing `ChangesetStaleBaseError` before
- * touching `playbookVersions` or `changesets` at all, for the same
- * "decisions are never lost to a write failure" reason above. This is not
- * a write failure; it is a diagnosed conflict caught before any write is
- * attempted, but the guarantee it must uphold is identical. Without this
- * check, the draft built below would start from `fromVersionId`'s clause
- * list even though a newer version is live — silently REVERTING whichever
- * clauses that newer version added or changed, with nothing on screen to
- * say so (ruling, `docs/superpowers/redesign/rulings.md`). Reconciling the
- * two instead of refusing is deliberately NOT attempted: merging a
- * changeset's proposals against clauses it never saw would produce a
- * version no human actually reviewed, which is worse than making someone
- * rebuild it.
+ * Every decision already recorded on the changeset is left exactly as it was
+ * when a publish fails — the review work is the expensive part and must not
+ * be lost to a write failure. That is now the transaction's guarantee rather
+ * than an ordering this function has to get right.
  */
-export async function publishChangeset(changeset: Changeset, byUserId: string): Promise<PlaybookVersion> {
-  if (changeset.items.some((item) => !isDecided(item))) {
-    throw new Error(
-      'This changeset still has undecided items — every item must be accepted, reworded or declined before it ' +
-        'can be published.',
-    );
+export async function publishChangeset(
+  changeset: Changeset,
+  byUserId: string,
+): Promise<PlaybookVersion> {
+  void byUserId;
+  try {
+    return await apiSend<PlaybookVersion>(
+      'POST', `/v1/changesets/${encodeURIComponent(changeset.id)}/publish`, {});
+  } catch (err) {
+    // ON THE CODE, never on the message. A `ModelError` carries the code
+    // through `toModelError`, which reads it out of `body.error.code` and
+    // checks it against `MODEL_ERROR_CODES` — so an unrecognised string
+    // falls through rather than being cast into the union.
+    if (err instanceof ModelError && err.code === 'changeset_stale_base') {
+      throw new ChangesetStaleBaseError(err.message);
+    }
+    throw err;
   }
-
-  const playbook = await getPlaybook(changeset.playbookId);
-  if (!playbook) throw new Error('The playbook this changeset belongs to no longer exists.');
-  if (playbook.currentVersionId !== changeset.fromVersionId) throw new ChangesetStaleBaseError();
-  const base = await getVersion(changeset.fromVersionId);
-  if (!base) throw new Error('The version this changeset was built against no longer exists.');
-
-  const applied = changeset.items.filter(isPublishable);
-  let clauses = structuredClone(base.clauses);
-  for (const item of applied) clauses = applyItem(clauses, changeset, item);
-
-  const draft: PlaybookDraft = {
-    name: base.name,
-    contractType: base.contractType,
-    systemPrompt: base.systemPrompt,
-    formatPrompt: base.formatPrompt,
-    clauses,
-    changeSummary: changeSummaryFor(changeset, applied),
-  };
-  if (base.riskTolerance !== undefined) draft.riskTolerance = base.riskTolerance;
-
-  const { version } = await publishAndPoint(playbook, draft, byUserId);
-  await saveChangeset({ ...changeset, publishedVersionId: version.id });
-  return version;
 }

@@ -174,6 +174,8 @@ export interface Changeset {
   createdAt: number;
   createdByUserId: string;
   publishedVersionId?: string;
+  /** The optimistic-concurrency token — see `Matter.version`. */
+  version?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +585,8 @@ export interface ChangesetRow {
   created_at: Date;
   created_by_user_id: string | null;
   published_version_id: string | null;
+  /** `bigint`, which `pg` hands back as a STRING — see `bigintOf`. */
+  version?: string | number | null;
 }
 
 export function toChangesetRow(x: Changeset, workspaceId: string): ChangesetRow {
@@ -609,5 +613,6 @@ export function fromChangesetRow(row: ChangesetRow): Changeset {
     createdAt: epochOf(row.created_at),
     createdByUserId: useridFromColumn(row.created_by_user_id),
     ...absentUnless('publishedVersionId', row.published_version_id),
+    ...absentUnless('version', bigintOf(row.version)),
   };
 }
