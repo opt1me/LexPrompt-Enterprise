@@ -142,6 +142,21 @@ describe('the standard positions route', () => {
   });
 });
 
+describe('the local-data uploader route', () => {
+  it('parses /upload-local-data', () => {
+    expect(parseRoute('/upload-local-data')).toEqual({ name: 'upload-local-data' });
+  });
+
+  it('round-trips', () => {
+    expect(buildPath(parseRoute('/upload-local-data'))).toBe('/upload-local-data');
+  });
+
+  it('does not swallow a deeper path', () => {
+    expect(parseRoute('/upload-local-data/x'))
+      .toEqual({ name: 'not-found', path: '/upload-local-data/x' });
+  });
+});
+
 describe('useRoute', () => {
   let container: HTMLDivElement;
   let root: Root;

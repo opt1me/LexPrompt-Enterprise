@@ -106,6 +106,10 @@ import { SignInScreen } from './features/auth/SignInScreen';
 import { AccessRefusedPanel } from './features/auth/AccessRefusedPanel';
 import { useRole } from './lib/role';
 import { isAccessRefusedError } from './lib/model/authFailure';
+import { UploadLocalData } from './features/upload/UploadLocalData';
+import { LocalDataBanner, type LocalDataBannerState } from './features/upload/LocalDataBanner';
+import { countLocalData } from './lib/upload/scan';
+import { STORE_LABELS } from './lib/upload/report';
 
 /** `authoring-form` and `authoring-review` are sub-project E's two
  *  session-only screens. They deliberately have **no `Route`**: a draft
@@ -116,7 +120,9 @@ type View =
   | 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter' | 'not-found'
   | 'authoring-form' | 'authoring-review'
   | 'redlines-intake' | 'redlines-learned' | 'redlines-workings'
-  | 'positions';
+  | 'positions'
+  /** Stage 2 §13.1's uploader, available for one release. */
+  | 'upload-local-data';
 
 /** The two views that hold a session-only `AuthoringDraft`. Leaving either
  *  of them, by any path, destroys it (see the effect that clears the
@@ -407,6 +413,7 @@ function viewForRoute(route: Route): View {
     case 'playbook': return 'editor';
     case 'settings': return 'settings';
     case 'positions': return 'positions';
+    case 'upload-local-data': return 'upload-local-data';
     case 'not-found': return 'not-found';
     default: return 'matters';
   }
@@ -426,6 +433,7 @@ const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
   library: { name: 'playbooks' },
   settings: { name: 'settings' },
   positions: { name: 'positions' },
+  'upload-local-data': { name: 'upload-local-data' },
 };
 
 /**
@@ -643,6 +651,46 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
    *  nothing there to fix it. Set by `handleModelError`'s default branch;
    *  cleared by the panel's own Retry. */
   const [serviceConfigError, setServiceConfigError] = useState<ModelError | null>(null);
+
+  /**
+   * Whether this browser is still holding data that has not been moved to
+   * the server (Stage 2 §13.1), and what the banner should therefore say.
+   *
+   * `null` means "not asked yet" and renders nothing. Every other value —
+   * INCLUDING the failure — renders. That asymmetry is the point: a local
+   * database that will not open is precisely the situation `CLAUDE.md`'s
+   * opening list names ("a failed storage migration rendering an empty
+   * library, indistinguishable from a fresh install"), and hiding the banner
+   * would be the app deciding on no evidence that there is nothing to move.
+   *
+   * `countLocalData` is the cheap read (`count` per store, not `getAll`), so
+   * this costs one indexed count per store on a cold load rather than
+   * pulling every document's extracted text into memory to answer a
+   * yes/no question.
+   */
+  const [localData, setLocalData] = useState<LocalDataBannerState | null>(null);
+  const loadLocalDataPresence = useCallback(() => {
+    countLocalData().then(
+      ({ total, unreadable }) => {
+        if (unreadable.length > 0) {
+          setLocalData({
+            kind: 'partial',
+            total,
+            message: unreadable.map(store => STORE_LABELS[store].many).join(', '),
+          });
+        } else if (total > 0) {
+          setLocalData({ kind: 'present', total });
+        } else {
+          setLocalData(null);
+        }
+      },
+      (e: unknown) => setLocalData({
+        kind: 'unknown',
+        message: describeLoadError(e, 'Reload the page to try again.'),
+      }),
+    );
+  }, []);
+  useEffect(() => { loadLocalDataPresence(); }, [loadLocalDataPresence]);
 
   /**
    * The `modelChoiceId` the last successful allowlist read could not find,
@@ -3784,6 +3832,21 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     <div className="h-screen flex flex-col bg-paper">
       <Toast toast={toast} />
 
+      {/* Stage 2 §13.1. A BANNER, never a modal (P15): a modal that can be
+          dismissed once is a migration a person can lose, and one that
+          cannot be dismissed is an app they cannot use while a library of
+          any size is moving. It stays up until there is nothing left in this
+          browser to say anything about — and it is shown for a database that
+          could not be READ as loudly as for one holding records, because
+          those two must never look alike. */}
+      {localData && (
+        <LocalDataBanner
+          state={localData}
+          onOpen={() => requestView('upload-local-data')}
+          onRetry={loadLocalDataPresence}
+        />
+      )}
+
       {/* Task 23: a `service_misconfigured`-class failure, wherever it came
           from (a run, the chat panel, a suggested field, drafting or
           publishing a playbook, redlines) — rendered here, once, so it
@@ -3969,6 +4032,9 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
             // one is not something this task invents — it only reads what
             // D's derivation already produces.
           />
+        )}
+        {view === 'upload-local-data' && (
+          <UploadLocalData onClose={() => requestView('matters')} />
         )}
         {/* Sub-project E's two session-only screens. Neither has a URL: a
             deep link would promise a draft that cannot be restored. */}

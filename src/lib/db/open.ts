@@ -39,6 +39,59 @@ export class DbOpenTimeoutError extends Error {
   }
 }
 
+/**
+ * Creates every object store and index this app has ever added, additively.
+ *
+ * EXPORTED so a test can open the same database WITHOUT going through
+ * `getDb()`. From Stage 2 Task 23 `getDb()` hands back a READ-ONLY handle,
+ * and a test that needs to seed local data (the uploader's tests, and only
+ * those) has to be able to write it. The alternative — a second copy of the
+ * schema in a test helper — is this project's most repeated defect, and this
+ * particular copy would drift silently: a store added here and missed there
+ * would make the uploader's tests pass against a database shaped unlike the
+ * one a user has.
+ *
+ * `src/test/seedLocalData.ts` is its only non-`getDb` caller.
+ */
+export function upgradeSchema(db: IDBPDatabase<LexPromptDB>): void {
+  if (!db.objectStoreNames.contains(STORES.matters)) {
+    db.createObjectStore(STORES.matters, { keyPath: 'id' });
+  }
+  if (!db.objectStoreNames.contains(STORES.documents)) {
+    const s = db.createObjectStore(STORES.documents, { keyPath: 'id' });
+    s.createIndex('byMatter', 'matterId');
+  }
+  if (!db.objectStoreNames.contains(STORES.blobs)) {
+    db.createObjectStore(STORES.blobs, { keyPath: 'documentId' });
+  }
+  if (!db.objectStoreNames.contains(STORES.reviews)) {
+    const s = db.createObjectStore(STORES.reviews, { keyPath: 'id' });
+    s.createIndex('byMatter', 'matterId');
+  }
+  if (!db.objectStoreNames.contains(STORES.playbooks)) {
+    db.createObjectStore(STORES.playbooks, { keyPath: 'id' });
+  }
+  if (!db.objectStoreNames.contains(STORES.profile)) {
+    db.createObjectStore(STORES.profile);
+  }
+  if (!db.objectStoreNames.contains(STORES.collections)) {
+    const s = db.createObjectStore(STORES.collections, { keyPath: 'id' });
+    s.createIndex('byMatter', 'matterId');
+  }
+  if (!db.objectStoreNames.contains(STORES.playbookVersions)) {
+    const s = db.createObjectStore(STORES.playbookVersions, { keyPath: 'id' });
+    s.createIndex('byPlaybook', 'playbookId');
+  }
+  // DB_VERSION 3 -> 4 (sub-project F, Task 8): additive only. Every
+  // branch above is untouched — no existing store is modified,
+  // reindexed, or cleared, so a database already at version 3 keeps
+  // every record it had.
+  if (!db.objectStoreNames.contains(STORES.changesets)) {
+    const s = db.createObjectStore(STORES.changesets, { keyPath: 'id' });
+    s.createIndex('byPlaybook', 'playbookId');
+  }
+}
+
 let dbPromise: Promise<IDBPDatabase<LexPromptDB>> | null = null;
 
 export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
@@ -51,42 +104,7 @@ export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
 
     const openPromise = openDB<LexPromptDB>(DB_NAME, DB_VERSION, {
       upgrade(db) {
-        if (!db.objectStoreNames.contains(STORES.matters)) {
-          db.createObjectStore(STORES.matters, { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains(STORES.documents)) {
-          const s = db.createObjectStore(STORES.documents, { keyPath: 'id' });
-          s.createIndex('byMatter', 'matterId');
-        }
-        if (!db.objectStoreNames.contains(STORES.blobs)) {
-          db.createObjectStore(STORES.blobs, { keyPath: 'documentId' });
-        }
-        if (!db.objectStoreNames.contains(STORES.reviews)) {
-          const s = db.createObjectStore(STORES.reviews, { keyPath: 'id' });
-          s.createIndex('byMatter', 'matterId');
-        }
-        if (!db.objectStoreNames.contains(STORES.playbooks)) {
-          db.createObjectStore(STORES.playbooks, { keyPath: 'id' });
-        }
-        if (!db.objectStoreNames.contains(STORES.profile)) {
-          db.createObjectStore(STORES.profile);
-        }
-        if (!db.objectStoreNames.contains(STORES.collections)) {
-          const s = db.createObjectStore(STORES.collections, { keyPath: 'id' });
-          s.createIndex('byMatter', 'matterId');
-        }
-        if (!db.objectStoreNames.contains(STORES.playbookVersions)) {
-          const s = db.createObjectStore(STORES.playbookVersions, { keyPath: 'id' });
-          s.createIndex('byPlaybook', 'playbookId');
-        }
-        // DB_VERSION 3 -> 4 (sub-project F, Task 8): additive only. Every
-        // branch above is untouched — no existing store is modified,
-        // reindexed, or cleared, so a database already at version 3 keeps
-        // every record it had.
-        if (!db.objectStoreNames.contains(STORES.changesets)) {
-          const s = db.createObjectStore(STORES.changesets, { keyPath: 'id' });
-          s.createIndex('byPlaybook', 'playbookId');
-        }
+        upgradeSchema(db);
       },
       blocked() {
         // Another tab holds an older version open. Without this the open hangs

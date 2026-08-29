@@ -2,7 +2,7 @@
  * Hand-rolled History-API router for matters, reviews, playbooks and settings.
  *
  * Deliberately narrow: this is not a general-purpose router, it encodes
- * exactly the seven routes the app needs. See
+ * exactly the routes the app needs. See
  * docs/superpowers/specs/2026-08-26-redesign-a-persistence-and-matters.md
  * for the route list this mirrors.
  *
@@ -20,6 +20,11 @@ export type Route =
   | { name: 'playbook'; playbookId: string }
   | { name: 'settings' }
   | { name: 'positions' }
+  /** The uploader (Stage 2 §13.1), available for ONE release. It has a real
+   *  URL rather than being a modal because a person interrupted half way
+   *  through moving a firm's working history has to be able to come back to
+   *  it, and because `LocalDataBanner` needs somewhere to send them. */
+  | { name: 'upload-local-data' }
   | { name: 'not-found'; path: string };
 
 /** Parses a pathname into a Route. Never throws — an unparseable or unknown
@@ -59,6 +64,8 @@ function parsePath(pathname: string): Route {
     return { name: 'settings' };
   } else if (segments[0] === 'positions' && segments.length === 1) {
     return { name: 'positions' };
+  } else if (segments[0] === 'upload-local-data' && segments.length === 1) {
+    return { name: 'upload-local-data' };
   }
 
   return { name: 'not-found', path: pathname };
@@ -84,6 +91,8 @@ export function buildPath(route: Route): string {
       return '/settings';
     case 'positions':
       return '/positions';
+    case 'upload-local-data':
+      return '/upload-local-data';
     case 'not-found':
       return route.path;
   }
