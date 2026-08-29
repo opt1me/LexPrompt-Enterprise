@@ -3,12 +3,36 @@ import { Agent, request } from 'undici';
 import { ConfigError, type ApiConfig } from './config.ts';
 
 /**
- * The ONLY outbound client in this service (S1: `api` may not egress).
+ * The only client in this service that calls the GATEWAY. It is not the only
+ * outbound client, and the paragraph that used to say so was wrong three
+ * times over (M3).
  *
- * Everything that leaves `apps/api` goes through here, which is what makes
- * "the API cannot reach a model" checkable by reading one file as well as
- * by reading the network policy. A second `fetch` anywhere in `apps/api` is
- * a defect, and Task 24's egress test is what catches it if review does not.
+ * There are exactly THREE outbound clients in `apps/api`, and they are three
+ * because identity cannot be reached through the gateway:
+ *
+ *   1. this module — every call to the gateway;
+ *   2. `oidc.ts`'s `discoverJwks`, one `fetch` of the issuer's discovery
+ *      document, at startup;
+ *   3. jose's `createRemoteJWKSet`, which fetches the `jwks_uri` that
+ *      document named, on its own schedule, for the life of the process —
+ *      at a URL chosen by the ISSUER rather than by configuration.
+ *
+ * The claim S1 actually supports is narrower than "the API cannot egress",
+ * and it is worth stating exactly because it is what a future reviewer will
+ * lean on: `apps/api` has no route to a MODEL PROVIDER. In compose that is a
+ * network fact — `api` sits on the `internal` network alone, which has no
+ * default route, so all three clients above can reach only what is on that
+ * network — and `egress.compose.test.ts` proves it by probing the container.
+ * That test measures REACHABILITY, so it cannot tell one outbound client
+ * from four and would pass unchanged if someone added a fifth; the count
+ * above is held by `egressSurface.test.ts` instead, which is a source scan
+ * and names each of the three.
+ *
+ * In Azure the network fact is weaker still: `apps/api` MUST reach
+ * `login.microsoftonline.com`, so "no route to the public internet" is true
+ * in compose and false in a tenant. `divergence.json` row 7 says the Azure
+ * egress rules are Spike 2 and not done; this file used to contradict that
+ * disclosure while sounding more certain than it.
  */
 /**
  * What `registerInferStream` (Task 18) actually needs from a stream
@@ -77,6 +101,44 @@ export function assertCanAuthenticateToGateway(
   );
 }
 
+/**
+ * The gateway ANSWERED, and its reply was not JSON.
+ *
+ * A distinct type because "could not reach it" and "reached it and could not
+ * read the reply" are different diagnoses and an administrator acts on them
+ * differently (m7). Without this, both arrived at the route as a bare
+ * `Error` and both were reported as "could not reach", which is a confident
+ * wrong answer about the one thing the operator would go and look at.
+ */
+export class GatewayUnreadableError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'GatewayUnreadableError';
+    this.status = status;
+  }
+}
+
+async function readJson(status: number, read: () => Promise<unknown>): Promise<unknown> {
+  try {
+    return await read();
+  } catch (err) {
+    throw new GatewayUnreadableError(status, (err as Error).message);
+  }
+}
+
+/**
+ * How long a call to the gateway may wait for response headers.
+ *
+ * This is undici's own default, written down rather than changed: the point
+ * of naming it is that "this client sets no timeout" was a fair reading of
+ * the code and is not a fair description of the behaviour. A hung gateway
+ * fails this hop loudly after five minutes; it does not hold a request open
+ * forever. The BODY timeout is left at undici's default too, and must stay
+ * generous — `stream` holds an SSE body open for the length of an answer.
+ */
+const GATEWAY_HEADERS_TIMEOUT_MS = 300_000;
+
 export function makeGatewayClient(config: ApiConfig, getGatewayToken?: () => Promise<string>) {
   assertCanAuthenticateToGateway(config, getGatewayToken);
 
@@ -97,19 +159,22 @@ export function makeGatewayClient(config: ApiConfig, getGatewayToken?: () => Pro
     async infer(body: unknown) {
       const res = await request(`${config.gatewayUrl}/v1/infer`, {
         method: 'POST', dispatcher, headers: await headers(), body: JSON.stringify(body),
+        headersTimeout: GATEWAY_HEADERS_TIMEOUT_MS,
       });
-      return { status: res.statusCode, json: await res.body.json() };
+      return { status: res.statusCode, json: await readJson(res.statusCode, () => res.body.json()) };
     },
     async models() {
       const res = await request(`${config.gatewayUrl}/v1/models`, {
         method: 'GET', dispatcher, headers: await headers(),
+        headersTimeout: GATEWAY_HEADERS_TIMEOUT_MS,
       });
-      return { status: res.statusCode, json: await res.body.json() };
+      return { status: res.statusCode, json: await readJson(res.statusCode, () => res.body.json()) };
     },
     async stream(body: unknown, signal: AbortSignal): Promise<StreamResponse> {
       const res = await request(`${config.gatewayUrl}/v1/infer/stream`, {
         method: 'POST', dispatcher, headers: await headers(),
         body: JSON.stringify(body), signal,
+        headersTimeout: GATEWAY_HEADERS_TIMEOUT_MS,
       });
       return {
         status: res.statusCode,

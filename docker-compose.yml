@@ -50,6 +50,28 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HEALTH_ENABLED: "true"
+      # ONE issuer, whatever host a request arrives on.
+      #
+      # Without this, `start-dev` derives the frontend URL — and therefore the
+      # `iss` claim it stamps into every token — from the incoming request's
+      # Host header. A browser signing in through the published port got
+      # `iss: http://localhost:8088/realms/lexprompt`; `api`, reaching the
+      # same Keycloak over the `internal` network, was configured to demand
+      # `http://keycloak:8080/realms/lexprompt`. jose compares `iss` as an
+      # exact string, so the signature verified and the issuer did not: every
+      # locally issued token returned 401 `sign_in_required`, and the only
+      # action the message offered was to sign in again, which produced the
+      # same 401 forever. Verified by reading the discovery document from both
+      # hosts before this line existed; they disagreed exactly here.
+      KC_HOSTNAME: http://localhost:8088
+      # …but the BACKCHANNEL must stay dynamic, or the discovery document
+      # served on `internal` would name `localhost:8088` as its `jwks_uri` —
+      # an address that does not resolve from inside another container, so
+      # `api` could no longer fetch the keys it validates with. Frontend URLs
+      # (and `iss`) come from KC_HOSTNAME above; endpoint URLs are resolved
+      # per request. That split IS the fix: one issuer string, two reachable
+      # addresses, said out loud instead of collapsed into one value.
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
     volumes:
       - "./infra/keycloak:/opt/keycloak/data/import:ro"
     healthcheck:
@@ -75,7 +97,8 @@ services:
         # and a same-origin path also means no CORS policy exists to widen.
         VITE_API_BASE_URL: /api
         # The issuer the BROWSER redirects to, so it is the published host
-        # address rather than the compose service name.
+        # address rather than the compose service name. `api` validates this
+        # SAME string — see its own comment below.
         VITE_OIDC_ISSUER: ${OIDC_ISSUER_BROWSER}
         VITE_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
         VITE_OIDC_SCOPE: ${OIDC_SCOPE}
@@ -108,12 +131,30 @@ services:
     environment:
       API_PORT: "8080"
       # §5.1 row 1: the ONLY thing that differs from a firm deployment is
-      # these five values. There is no local auth mode and no bypass (S29).
+      # these values. There is no local auth mode and no bypass (S29).
+      # API_DISCOVERY_URL is the one key here a firm deployment does not set
+      # at all, and it is not a bypass by another name: it moves WHERE the
+      # keys are fetched, never WHICH issuer is trusted or how a token is
+      # checked. One `jwtVerify` call, same options, both environments.
       # NOTE: apps/api/src/config.ts reads API_ISSUER / API_AUDIENCE /
       # API_SUBJECT_CLAIM / API_GROUPS_CLAIM / API_REQUIRED_CLAIMS — there is
       # no "_OIDC_" infix in the real variable names, only in the .env.example
       # names chosen to group them for a reader.
-      API_ISSUER: ${OIDC_ISSUER_API}
+      # THE SAME VALUE THE BROWSER GETS, deliberately, and this is the whole
+      # of C1's fix. Keycloak stamps `iss` from the host the token was
+      # obtained through, so the string `api` must demand is the published
+      # one; demanding the container-network name rejected every token this
+      # stack minted. Do NOT "fix" a mismatch here by relaxing the issuer
+      # comparison in oidc.ts — that comparison is what stops a development
+      # issuer's token being accepted by a firm's deployment (S29).
+      API_ISSUER: ${OIDC_ISSUER_BROWSER}
+      # …and the address `api` can actually REACH, which is a different fact.
+      # `localhost:8088` is the host's port mapping and resolves to nothing
+      # from inside the `internal` network, so discovery and JWKS are fetched
+      # over the service name. Unset in Azure, where Entra is publicly
+      # reachable and the two coincide (apps/api/src/config.ts defaults it to
+      # API_ISSUER).
+      API_DISCOVERY_URL: ${OIDC_DISCOVERY_API}
       API_AUDIENCE: ${OIDC_AUDIENCE}
       API_SUBJECT_CLAIM: ${OIDC_SUBJECT_CLAIM}
       API_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM}

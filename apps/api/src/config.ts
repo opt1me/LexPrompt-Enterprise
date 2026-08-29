@@ -22,14 +22,53 @@ export interface ApiConfig {
    *  Absent in a firm deployment, where the gateway trusts this process's
    *  managed identity instead. */
   mtls?: { caFile: string; certFile: string; keyFile: string };
+  /**
+   * The largest request body this hop accepts, DECLARED rather than
+   * inherited (M5).
+   *
+   * Fastify's default is 1 MiB. The gateway declares its own limit from
+   * `GATEWAY_MAX_PROMPT_CHARS` (400,000 chars × 4 = 1,600,000 bytes by
+   * default), so with nothing set here the MIDDLE hop was the tightest one
+   * in the chain — and it was tighter by an amount no administrator was
+   * told about and no `GATEWAY_*` key could raise, because `apps/api` does
+   * not read one and structurally must not.
+   *
+   * What rides in the body is why that mattered. `InferRequest.images`
+   * carries base64 page images, and the gateway's size check counts text
+   * only, so a multi-page SCANNED document — this project's founding defect
+   * lives on that path — passed the limit the operator configured and died
+   * at the one nobody declared, as a raw `FST_ERR_CTP_BODY_TOO_LARGE` in
+   * Fastify's own envelope, which the browser's client cannot even parse
+   * into a code.
+   *
+   * Whether image bytes should count toward the gateway's declared prompt
+   * limit at all is a separate question and an owner's to answer; this
+   * value only stops `apps/api` from being a silent, tighter, unnamed cap.
+   */
+  maxBodyBytes: number;
 }
+
+/**
+ * 16 MiB — ten times the gateway's default text cap, chosen so a scanned
+ * document's page images are not refused by the hop that never counted them.
+ *
+ * Not zero-cost and not arbitrary: a body this size is accepted only from a
+ * caller that has already passed `requireUser`, so it is a signed-in member
+ * of the firm, and the value is named in the refusal when it is exceeded.
+ */
+export const DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024;
 
 function int(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
   const raw = env[name];
   if (raw === undefined || raw === '') return fallback;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) {
-    throw new ConfigError(`${name} must be a positive number; got ${JSON.stringify(raw)}.`);
+  // `Number.isInteger`, not `Number.isFinite`: a port of 1.5 is finite and
+  // positive, so it passed this check and failed later inside `listen` —
+  // past the startup banner this loader exists to fail in front of.
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new ConfigError(
+      `${name} must be a positive whole number; got ${JSON.stringify(raw)}.`,
+    );
   }
   return n;
 }
@@ -79,8 +118,20 @@ function parseAuth(env: NodeJS.ProcessEnv): AuthConfig {
   // development issuer is a startup failure rather than a system that runs
   // and mostly works.
   assertIssuerUsable(issuer);
+  // Defaults to the issuer, so Azure — where Entra is publicly reachable and
+  // the two addresses coincide — configures nothing extra, and so this key
+  // being absent means exactly what it meant before the key existed.
+  //
+  // Held to the SAME S29 refusal as the issuer, and that is not tidiness: it
+  // is the address the SIGNING KEYS are fetched from, so an operator who
+  // could point it anywhere could point it at a key set of their own and
+  // sign a token carrying any `iss` they liked. It is at least as
+  // security-relevant as the issuer string it is allowed to differ from.
+  const discoveryUrl = env.API_DISCOVERY_URL || issuer;
+  assertIssuerUsable(discoveryUrl, 'discovery URL');
   return {
     issuer,
+    discoveryUrl,
     audience: required(env, 'API_AUDIENCE'),
     subjectClaim: env.API_SUBJECT_CLAIM || 'sub',
     groupsClaim: env.API_GROUPS_CLAIM || 'groups',
@@ -107,6 +158,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     gatewayUrl: required(env, 'API_GATEWAY_URL'),
     workspaceId: required(env, 'API_WORKSPACE_ID'),
     mtls: parseMtls(env),
+    maxBodyBytes: int(env, 'API_MAX_BODY_BYTES', DEFAULT_MAX_BODY_BYTES),
   };
 }
 
@@ -115,8 +167,16 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
 export function describeConfig(cfg: ApiConfig): string {
   return [
     `LexPrompt api — issuer=${cfg.auth.issuer}`,
+    // Printed only when it DIFFERS, and printed at all because C1's symptom
+    // was invisible: the issuer this process demands and the address it
+    // fetches keys from were one line of configuration pretending to be one
+    // fact. A reader of these four lines can now see both.
+    ...(cfg.auth.discoveryUrl === cfg.auth.issuer
+      ? []
+      : [`Keys discovered at: ${cfg.auth.discoveryUrl} (same issuer, reachable address)`]),
     `Audience: ${cfg.auth.audience}`,
     `Workspace: ${cfg.workspaceId}`,
     `Gateway: ${cfg.gatewayUrl}${cfg.mtls ? ' (mTLS)' : ''}`,
+    `Max request body: ${cfg.maxBodyBytes} bytes`,
   ].join('\n');
 }

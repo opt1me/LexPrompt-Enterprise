@@ -1,13 +1,49 @@
-import { jwtVerify, createRemoteJWKSet, type JWTVerifyGetKey } from 'jose';
-import { ModelError } from '@lexprompt/core';
+import { jwtVerify, createRemoteJWKSet, errors, type JWTVerifyGetKey } from 'jose';
+import { ModelError, SERVICE_CONFIG_HINT } from '@lexprompt/core';
 
 /**
  * The whole of what varies between the two environments (§7, §5.1 row 1).
- * Entra ID and Keycloak differ in these five values and in nothing else —
- * no branch, no flag, no second module.
+ * Entra ID and Keycloak differ in these values and in nothing else — no
+ * branch, no flag, no second module.
+ *
+ * `discoveryUrl` is the sixth field and the only one that is not a property
+ * of the ISSUER: it is a property of where this process sits on the network.
+ * It defaults to `issuer`, so a firm deployment still configures five
+ * values; see its own comment for why the two cannot be one string.
  */
 export interface AuthConfig {
+  /**
+   * The issuer string a token must CARRY, compared byte for byte by jose.
+   *
+   * This is the address the BROWSER saw when it obtained the token, because
+   * that is the host the issuer stamped into `iss`.
+   */
   issuer: string;
+  /**
+   * Where THIS PROCESS fetches that issuer's discovery document, and through
+   * it its signing keys. `/.well-known/openid-configuration` is appended to
+   * it exactly as it would be to `issuer`.
+   *
+   * TWO FACTS, NOT ONE, and conflating them is what made the compose stack
+   * unable to authenticate anybody. Keycloak is published to the browser on
+   * `http://localhost:8088` and reachable from inside the `internal` network
+   * only as `http://keycloak:8080`; it stamps `iss` from the request host,
+   * so the browser's token said `localhost:8088` while this service was
+   * configured to demand `keycloak:8080`. The signature verified; the
+   * issuer comparison did not, so every call returned 401 `sign_in_required`
+   * and the only action the message offered — sign in again — produced the
+   * same 401 forever.
+   *
+   * The fix is NOT to relax the issuer comparison. That comparison is what
+   * stops a token minted by a development issuer being accepted by a firm's
+   * deployment (S29), and it is tested for exactly that (`oidc.test.ts`).
+   * The fix is to stop pretending one string answers both questions.
+   *
+   * In Azure the two coincide, because Entra is publicly reachable from the
+   * container, so `config.ts` defaults this to `issuer` and a firm
+   * deployment configures nothing extra.
+   */
+  discoveryUrl: string;
   audience: string;
   /** 'oid' for Entra (stable across the tenant); 'sub' elsewhere. */
   subjectClaim: string;
@@ -41,10 +77,10 @@ export interface Principal {
  * dotted domain. The rule looks arbitrary without that sentence, which is
  * why the sentence is here.
  */
-export function assertIssuerUsable(issuer: string): void {
+export function assertIssuerUsable(issuer: string, what = 'issuer'): void {
   if (!issuer) {
     throw new Error(
-      'No issuer is configured. The API will not start without one: a misconfiguration '
+      `No ${what} is configured. The API will not start without one: a misconfiguration `
       + 'must not become a system that runs and mostly works.',
     );
   }
@@ -52,7 +88,21 @@ export function assertIssuerUsable(issuer: string): void {
   try {
     url = new URL(issuer);
   } catch {
-    throw new Error(`The configured issuer ${JSON.stringify(issuer)} is not a URL.`);
+    throw new Error(`The configured ${what} ${JSON.stringify(issuer)} is not a URL.`);
+  }
+  // Scheme first, and http/https ONLY.
+  //
+  // The host checks below are all this function used to do, and
+  // `!host.includes('.')` is true of the EMPTY string — so
+  // `file:///etc/passwd`, or a `data:` URL, sailed through the S29 refusal
+  // with a hostname of `''`. It still failed later, at the discovery fetch,
+  // as an unhandled rejection with a stack rather than as the "LexPrompt
+  // api will not start" banner this check exists to produce.
+  if (url.protocol !== 'https:' && url.protocol !== 'http:') {
+    throw new Error(
+      `The configured ${what} ${issuer} uses the ${url.protocol} scheme. An OIDC `
+      + `${what} is fetched over HTTP; nothing else is a ${what} this API can use.`,
+    );
   }
   if (url.protocol === 'https:') return;
   const host = url.hostname;
@@ -78,26 +128,122 @@ export function assertIssuerUsable(issuer: string): void {
     || !host.includes('.');
   if (!plaintextPermitted) {
     throw new Error(
-      `The configured issuer ${issuer} is not https, and its host ${JSON.stringify(host)} `
+      `The configured ${what} ${issuer} is not https, and its host ${JSON.stringify(host)} `
       + 'is neither loopback nor a single-label container-network name. '
       + 'This is the check that makes a deployed environment pointed at a development '
-      + 'issuer a startup failure rather than a silent one.',
+      + `${what} a startup failure rather than a silent one.`,
     );
   }
 }
 
-/** Reads the issuer's own discovery document and builds a key set from the
- *  `jwks_uri` it names — never from a URL template, which would be an
- *  issuer-specific assumption wearing a helper's clothes. */
-export async function discoverJwks(issuer: string): Promise<JWTVerifyGetKey> {
-  const url = `${issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`;
-  const response = await fetch(url);
+/** How long the startup discovery fetch may hang before the process says so.
+ *  Deliberately not configurable: it is a property of "a startup step must
+ *  not hang forever", not of a deployment. */
+export const DISCOVERY_TIMEOUT_MS = 10_000;
+
+/**
+ * Reads the issuer's own discovery document and builds a key set from the
+ * `jwks_uri` it names — never from a URL template, which would be an
+ * issuer-specific assumption wearing a helper's clothes.
+ *
+ * It takes the whole `AuthConfig` and reads `discoveryUrl` ITSELF rather
+ * than taking a string, and that is deliberate. A `string` parameter is a
+ * seam a caller can close by accident — `discoverJwks(config.auth.issuer)`
+ * compiles, reads correctly, and reinstates C1 in full — and `main.ts` is a
+ * composition root with no test standing under it. Taking the config makes
+ * the wrong call a type error instead of a silent regression.
+ *
+ * The fetch is bounded. Without a signal a hung issuer hangs `main()` before
+ * `app.listen`, so the process is alive and answering nothing at all —
+ * including `/healthz`, which is how an orchestrator would otherwise be told
+ * to replace it.
+ */
+export async function discoverJwks(auth: AuthConfig): Promise<JWTVerifyGetKey> {
+  const url = `${auth.discoveryUrl.replace(/\/+$/, '')}/.well-known/openid-configuration`;
+  let response: Response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS) });
+  } catch (err) {
+    throw new Error(
+      `OIDC discovery could not reach ${url}: ${(err as Error).message}. `
+      + 'This API validates tokens against keys it reads from the issuer, so it '
+      + 'will not start until that address answers.',
+    );
+  }
   if (!response.ok) {
-    throw new Error(`OIDC discovery failed for ${issuer}: HTTP ${response.status}.`);
+    throw new Error(`OIDC discovery failed for ${url}: HTTP ${response.status}.`);
   }
   const doc = await response.json() as { jwks_uri?: string };
-  if (!doc.jwks_uri) throw new Error(`OIDC discovery for ${issuer} names no jwks_uri.`);
+  if (!doc.jwks_uri) throw new Error(`OIDC discovery for ${url} names no jwks_uri.`);
   return createRemoteJWKSet(new URL(doc.jwks_uri));
+}
+
+/**
+ * The jose error codes that mean THE TOKEN is bad — as opposed to meaning
+ * the check could not be completed at all.
+ *
+ * `jwtVerify` awaits `createRemoteJWKSet`'s callable INSIDE the same try, so
+ * a JWKS endpoint that is down, a signing key rotated inside jose's
+ * cooldown, a DNS failure inside the container and a malformed JWKS all
+ * arrive in the same catch as an expired token. Answering all of them with
+ * "your sign-in could not be verified, sign in again" tells every user in
+ * the firm, simultaneously, that their own session is the problem — and
+ * signing in again cannot fix any of them. That is the distinction
+ * `server.ts` calls load-bearing: "sign in again" and "ask your admin" are
+ * different instructions.
+ *
+ * This is an ALLOWLIST rather than a denylist, so an error class nobody
+ * anticipated classifies as "could not complete the check". That is the
+ * safe direction: it sends someone to look, rather than looping a user
+ * through a sign-in that will not help.
+ *
+ * `JWKSNoMatchingKey` is deliberately NOT here. A `kid` the key set does not
+ * carry is far more often an issuer that rotated its keys than a forged
+ * token, and jose's own cooldown means a legitimate rotation produces it for
+ * every user at once.
+ */
+const TOKEN_FAULT_CODES: ReadonlySet<string> = new Set([
+  errors.JWTClaimValidationFailed.code,
+  errors.JWTExpired.code,
+  errors.JWTInvalid.code,
+  errors.JWSInvalid.code,
+  errors.JWSSignatureVerificationFailed.code,
+  errors.JOSEAlgNotAllowed.code,
+]);
+
+function isTokenFault(err: unknown): boolean {
+  return err instanceof errors.JOSEError && TOKEN_FAULT_CODES.has(err.code);
+}
+
+/**
+ * Reads the groups claim, and REFUSES a shape it cannot read rather than
+ * reporting it as "in no groups".
+ *
+ * This is the same conflation the overage branch below exists to prevent, on
+ * a different input shape: `Array.isArray(raw) ? … : []` turned every
+ * unreadable claim into an empty membership list. Some issuers emit a single
+ * group as a bare string, which is read here as the one group it is. A
+ * number, an object or anything else is a claim this code does not
+ * understand, and an administrator — not the user — is the person who can do
+ * something about it.
+ *
+ * Nothing reads `Principal.groups` in Stage 1, so this refusal is unreachable
+ * against either supported issuer today. It is written now because the moment
+ * groups gate anything, "unreadable" silently reading as "denied" is a wrong
+ * answer delivered confidently.
+ */
+function readGroups(raw: unknown, claim: string): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw === 'string') return raw ? [raw] : [];
+  if (Array.isArray(raw)) return raw.filter((g): g is string => typeof g === 'string');
+  throw new ModelError(
+    `Your sign-in carries a "${claim}" claim in a shape LexPrompt cannot read, so it `
+    + 'cannot tell which groups you are in. Reading it as "no groups" would deny you '
+    + 'access for a reason that is not true. Signing in again will not change the shape '
+    + `of the claim — ask your administrator to check how "${claim}" is mapped, `
+    + `${SERVICE_CONFIG_HINT}.`,
+    'service_misconfigured', 503,
+  );
 }
 
 /**
@@ -119,6 +265,18 @@ export function makeTokenVerifier(
     } catch (err) {
       // The token never reaches the message: an error string ends up in a
       // log, a browser console and a support ticket.
+      if (!isTokenFault(err)) {
+        // The check could not be COMPLETED. Nothing the person at the
+        // keyboard does resolves this, so it must not be answered with an
+        // instruction addressed to them. See TOKEN_FAULT_CODES.
+        throw new ModelError(
+          'LexPrompt could not check your sign-in, because it could not reach or read '
+          + `the keys your identity provider publishes (${(err as Error).message}). `
+          + 'Your sign-in is not the problem and signing in again will not help. This is '
+          + `a configuration or availability problem in the deployment, ${SERVICE_CONFIG_HINT}.`,
+          'service_misconfigured', 503,
+        );
+      }
       throw new ModelError(
         `Your sign-in could not be verified (${(err as Error).message}). Sign in again.`,
         'sign_in_required', 401,
@@ -171,7 +329,7 @@ export function makeTokenVerifier(
     return {
       issuer: config.issuer,
       subject,
-      groups: Array.isArray(raw) ? raw.filter((g): g is string => typeof g === 'string') : [],
+      groups: readGroups(raw, config.groupsClaim),
       name: typeof payload.name === 'string' ? payload.name : undefined,
       email: typeof payload.email === 'string' ? payload.email
         : typeof payload.preferred_username === 'string' ? payload.preferred_username : undefined,

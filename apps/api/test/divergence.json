@@ -22,7 +22,18 @@
     "API_SUBJECT_CLAIM, API_GROUPS_CLAIM and API_REQUIRED_CLAIMS, with no",
     "_OIDC_ infix. It also tabled the identity keys as divergences when their",
     "NAMES are identical in both environments and only their VALUES differ,",
-    "which is the sameEverywhere kind."
+    "which is the sameEverywhere kind.",
+    "",
+    "CORRECTED AGAIN (C1): .env.example no longer has an OIDC_ISSUER_API. The",
+    "two names it used to carry, OIDC_ISSUER_API and OIDC_ISSUER_BROWSER, were",
+    "two names for what jose compares as ONE string, and the compose stack set",
+    "them to different values — so every token it minted was refused. There is",
+    "now one issuer (OIDC_ISSUER_BROWSER, fed to BOTH the browser's",
+    "VITE_OIDC_ISSUER and the API's API_ISSUER) and a separate",
+    "OIDC_DISCOVERY_API naming where the API fetches that issuer's keys. The",
+    "sentence above about host-side names being interpolation inputs is",
+    "unchanged and is why this file still tables API_DISCOVERY_URL, the name",
+    "the application reads, rather than OIDC_DISCOVERY_API."
   ],
   "rows": [
     {
@@ -31,9 +42,12 @@
       "keys": [
         "KC_BOOTSTRAP_ADMIN_USERNAME",
         "KC_BOOTSTRAP_ADMIN_PASSWORD",
-        "KC_HEALTH_ENABLED"
+        "KC_HEALTH_ENABLED",
+        "KC_HOSTNAME",
+        "KC_HOSTNAME_BACKCHANNEL_DYNAMIC",
+        "API_DISCOVERY_URL"
       ],
-      "why": "The API's and the browser's identity keys are the SAME NAMES in both environments and carry different values — Keycloak's issuer locally, Entra's in a tenant — so they are sameEverywhere, not a divergence. What genuinely exists in only one environment is Keycloak's own bootstrap: locally the issuer is a container this stack runs, and in a tenant it is somebody else's service."
+      "why": "The API's and the browser's identity keys are the SAME NAMES in both environments and carry different values — Keycloak's issuer locally, Entra's in a tenant — so they are sameEverywhere, not a divergence. What genuinely exists in only one environment is Keycloak's own bootstrap and hostname: locally the issuer is a container this stack runs, and in a tenant it is somebody else's service. API_DISCOVERY_URL belongs to the same row and is the one key here that an APPLICATION reads. It exists locally because the local issuer has two addresses and only one of them is reachable from `api`: the browser obtains its token through the published port (localhost:8088), so that is the string stamped into `iss` and the string the API must demand, while discovery and JWKS have to be fetched over the container-network name. In Azure the two coincide — Entra is publicly reachable from the container — so apps/api/src/config.ts defaults it to API_ISSUER and the Azure template sets nothing. It is emphatically NOT an auth mode (S29/S30): it changes where keys are fetched, never which issuer is trusted or how a token is checked, and the same jwtVerify call with the same options runs in both environments."
     },
     {
       "n": 2,
@@ -122,6 +136,7 @@
     "list it either."
   ],
   "defaultedInBothEnvironments": [
+    "API_MAX_BODY_BYTES",
     "GATEWAY_MAX_PROMPT_CHARS",
     "GATEWAY_REQUEST_TIMEOUT_MS",
     "GATEWAY_DEFAULT_MAX_TOKENS",

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { ConfigError } from '../src/config.ts';
+import { ConfigError, DEFAULT_MAX_BODY_BYTES } from '../src/config.ts';
 import { assertCanAuthenticateToGateway, makeGatewayClient } from '../src/gatewayClient.ts';
 import type { ApiConfig } from '../src/config.ts';
 
@@ -21,6 +21,7 @@ const BASE: ApiConfig = {
   port: 8080,
   auth: {
     issuer: 'https://login.microsoftonline.com/tid/v2.0',
+    discoveryUrl: 'https://login.microsoftonline.com/tid/v2.0',
     audience: 'api://lexprompt',
     subjectClaim: 'oid',
     groupsClaim: 'groups',
@@ -28,6 +29,7 @@ const BASE: ApiConfig = {
   },
   gatewayUrl: 'https://gateway.internal',
   workspaceId: 'ws-1',
+  maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
 };
 
 const MTLS = {

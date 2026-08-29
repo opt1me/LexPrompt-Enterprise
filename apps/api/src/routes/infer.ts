@@ -1,8 +1,8 @@
-import { SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import type { FastifyInstance } from 'fastify';
 import type { GatewayClient } from '../gatewayClient.ts';
 import type { Principal } from '../oidc.ts';
 import { withActor } from '../actorBody.ts';
+import { callerAuthRefusal, unreachableGateway } from '../gatewayFailure.ts';
 
 export function registerInfer(
   app: FastifyInstance, gateway: GatewayClient, workspaceId: string,
@@ -16,25 +16,41 @@ export function registerInfer(
     // AFTER the spread.
     const body = withActor(client, workspaceId, principal);
 
+    let status: number;
+    let json: unknown;
     try {
-      const { status, json } = await gateway.infer(body);
-      return await reply.code(status).send(json);
+      ({ status, json } = await gateway.infer(body));
     } catch (err) {
-      return reply.code(503).send({ error: { code: 'service_misconfigured',
-        message: 'LexPrompt could not reach the firm\'s AI service. This is a configuration '
-          + `problem in the deployment, ${SERVICE_CONFIG_HINT}. `
-          + `(${(err as Error).message})` } });
+      const failure = unreachableGateway(err, 'inference');
+      return reply.code(failure.status)
+        .send({ error: { code: failure.code, message: failure.message } });
     }
+    // Everything the gateway says is forwarded verbatim EXCEPT its
+    // caller-auth 401, which is about this service's credentials and not
+    // about the user's session. See `gatewayFailure.ts`.
+    const refusal = callerAuthRefusal(status);
+    if (refusal) {
+      return reply.code(refusal.status)
+        .send({ error: { code: refusal.code, message: refusal.message } });
+    }
+    return await reply.code(status).send(json);
   });
 
   app.get('/v1/models', async (_request, reply) => {
+    let status: number;
+    let json: unknown;
     try {
-      const { status, json } = await gateway.models();
-      return await reply.code(status).send(json);
+      ({ status, json } = await gateway.models());
     } catch (err) {
-      return reply.code(503).send({ error: { code: 'service_misconfigured',
-        message: 'The list of available models could not be loaded from the firm\'s AI service. '
-          + `(${(err as Error).message})` } });
+      const failure = unreachableGateway(err, 'model list');
+      return reply.code(failure.status)
+        .send({ error: { code: failure.code, message: failure.message } });
     }
+    const refusal = callerAuthRefusal(status);
+    if (refusal) {
+      return reply.code(refusal.status)
+        .send({ error: { code: refusal.code, message: refusal.message } });
+    }
+    return await reply.code(status).send(json);
   });
 }

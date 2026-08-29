@@ -5,6 +5,41 @@
   "registrationAllowed": false,
   "clientScopes": [
     {
+      "name": "basic",
+      "description": "Keycloak's built-in basic scope, which carries the `sub` mapper. Declared explicitly like profile below: an import supplying clientScopes REPLACES the built-in set, so without this every token this realm issues has no sub claim and apps/api refuses it.",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "false",
+        "display.on.consent.screen": "false"
+      },
+      "protocolMappers": [
+        {
+          "name": "sub",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "consentRequired": false,
+          "config": {
+            "introspection.token.claim": "true",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "auth_time",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usersessionmodel-note-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.session.note": "AUTH_TIME",
+            "introspection.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "auth_time",
+            "jsonType.label": "long"
+          }
+        }
+      ]
+    },
+    {
       "name": "groups",
       "description": "Group membership, as a claim. Without this scope's mapper, Keycloak issues no `groups` claim at all, and every account looks like one in no group.",
       "protocol": "openid-connect",
@@ -175,6 +210,7 @@
         "pkce.code.challenge.method": "S256"
       },
       "defaultClientScopes": [
+        "basic",
         "profile",
         "email",
         "groups",

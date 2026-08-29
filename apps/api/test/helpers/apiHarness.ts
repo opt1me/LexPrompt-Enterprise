@@ -1,5 +1,6 @@
 import { ModelError, type ModelErrorCode } from '@lexprompt/core';
 import { buildServer } from '../../src/server.ts';
+import { DEFAULT_MAX_BODY_BYTES } from '../../src/config.ts';
 import type { Principal } from '../../src/oidc.ts';
 import type { GatewayClient } from '../../src/gatewayClient.ts';
 
@@ -44,6 +45,19 @@ export interface TestApiOptions {
    *  reads `streamChunks` (joined) as the failure response's JSON body via
    *  `text()` instead. */
   streamStatus?: number;
+  /** Overrides the body limit `buildServer` declares, so a test can prove the
+   *  413 envelope without building a 16 MiB payload. */
+  maxBodyBytes?: number;
+  /** The content-type the fake gateway's stream response carries. Defaults
+   *  to `text/event-stream`. A non-200 pre-stream failure may legitimately
+   *  arrive as something else, and this hop must forward what it got rather
+   *  than assert a label over a body it never read (m14). */
+  streamContentType?: string;
+  /** Makes the fake gateway's stream body THROW after this many chunks, as a
+   *  mid-stream provider or transport failure does. The route must still end
+   *  the response itself, so the browser reads the missing `done` frame as
+   *  `stream_truncated` (m9). */
+  streamThrowsAfter?: number;
 }
 
 export interface CallLog {
@@ -93,18 +107,34 @@ export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof bui
       // `for await` actually consumes it chunk by chunk — exactly the shape
       // undici hands back from `res.body`.
       async function* bytes(): AsyncGenerator<Buffer> {
-        for (const chunk of chunks) yield Buffer.from(chunk, 'utf8');
+        let sent = 0;
+        for (const chunk of chunks) {
+          if (opts.streamThrowsAfter !== undefined && sent >= opts.streamThrowsAfter) {
+            throw new Error('gateway stream failed mid-body');
+          }
+          sent += 1;
+          yield Buffer.from(chunk, 'utf8');
+        }
+        if (opts.streamThrowsAfter !== undefined && sent >= opts.streamThrowsAfter) {
+          throw new Error('gateway stream failed mid-body');
+        }
       }
       return {
         status: opts.streamStatus ?? 200,
-        headers: { 'content-type': 'text/event-stream' } as Record<string, string>,
+        headers: {
+          'content-type': opts.streamContentType ?? 'text/event-stream',
+        } as Record<string, string>,
         body: bytes(),
         text: async () => chunks.join(''),
       };
     },
   } as GatewayClient;
 
-  const app = buildServer({ verify, gateway, workspaceId: WORKSPACE_ID });
+  const app = buildServer({
+    verify, gateway,
+    workspaceId: WORKSPACE_ID,
+    maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+  });
 
   return { app, calls };
 }

@@ -1,4 +1,6 @@
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
+import Fastify, {
+  type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest,
+} from 'fastify';
 import { ModelError } from '@lexprompt/core';
 import type { Principal } from './oidc.ts';
 import type { GatewayClient } from './gatewayClient.ts';
@@ -55,6 +57,64 @@ export interface ServerDeps {
   gateway: GatewayClient;
   /** The single workspace §6 seeds — Stage 1 has no workspace resolution. */
   workspaceId: string;
+  /** `ApiConfig.maxBodyBytes` — see there for why this hop declares a limit
+   *  rather than inheriting Fastify's undeclared 1 MiB. */
+  maxBodyBytes: number;
+}
+
+/**
+ * Everything Fastify itself refuses, answered in LexPrompt's envelope.
+ *
+ * Without this, a 413 (a body over `maxBodyBytes`), a 415 (wrong
+ * content-type), a 400 (malformed JSON) and a 404 all come back as
+ * `{statusCode, error, message, code}` — Fastify's own shape, which
+ * `gatewayModelClient` reads as `body.error.code`, finds nothing in, and
+ * renders to a lawyer as the bare string "HTTP 413". A status number with no
+ * cause and no action is the quiet-wrong-answer shape this project's one
+ * rule is about, one layer down.
+ *
+ * A `ModelError` thrown out of a handler keeps its own status and code, for
+ * the same reason `requireUser` answers one verbatim: `group_overage` is a
+ * 403 that must not become a 401.
+ */
+function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number): void {
+  app.setNotFoundHandler(async (request, reply) => reply.code(404).send({
+    error: {
+      code: 'unknown',
+      message: `LexPrompt has no ${request.method} ${request.url} endpoint.`,
+    },
+  }));
+
+  app.setErrorHandler(async (err: FastifyError, request, reply) => {
+    if (err instanceof ModelError) {
+      return reply.code(err.status).send({ error: { code: err.code, message: err.message } });
+    }
+    const status = typeof err.statusCode === 'number' ? err.statusCode : 500;
+    if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || status === 413) {
+      return reply.code(413).send({ error: {
+        code: 'prompt_too_large',
+        message: 'This request is larger than LexPrompt accepts in one call '
+          + `(the limit is ${maxBodyBytes} bytes, set by API_MAX_BODY_BYTES). A scanned `
+          + 'document sends an image of every page, so a long scan can exceed it; '
+          + 'reviewing fewer documents at once is the thing to try, and an '
+          + 'administrator can raise the limit.',
+      } });
+    }
+    if (status === 415 || status === 400) {
+      return reply.code(status).send({ error: {
+        code: 'unknown',
+        message: `LexPrompt could not read this request (${err.message}).`,
+      } });
+    }
+    // Anything genuinely unexpected. The message is the error's own, not a
+    // reassuring summary: a 500 nobody can describe is worse than a 500 that
+    // says what threw.
+    process.stderr.write(`api: unhandled error on ${request.method} ${request.url}: ${err.stack ?? err.message}\n`);
+    return reply.code(status >= 400 ? status : 500).send({ error: {
+      code: 'unknown',
+      message: `LexPrompt failed to handle this request (${err.message}).`,
+    } });
+  });
 }
 
 /**
@@ -65,7 +125,9 @@ export interface ServerDeps {
  * `app_user` row, both of which stay Stage 2.
  */
 export function buildServer(deps: ServerDeps): FastifyInstance {
-  const app: FastifyInstance = Fastify({ logger: false });
+  const app: FastifyInstance = Fastify({ logger: false, bodyLimit: deps.maxBodyBytes });
+
+  registerErrorEnvelope(app, deps.maxBodyBytes);
 
   const auth = requireUser(deps.verify);
   app.addHook('preHandler', async (req, reply) => {
