@@ -1,10 +1,13 @@
 import {
-  ModelError, isModelErrorCode, parseJsonLoose, readFrames,
+  ModelError, parseJsonLoose, readFrames,
   type AllowedModel, type InferRequest, type InferResponse, type ModelClient,
-  type ModelErrorCode,
 } from '@lexprompt/core';
 import { getAccessToken } from '../auth/oidc';
 import { config } from '../config';
+// Moved to `src/lib/api/client.ts` (Task 7) — the browser's other HTTP
+// transport shares this error vocabulary rather than re-deriving it. See
+// that module's docstrings for the reasoning; it moved verbatim.
+import { toModelError } from '../api/client';
 
 export interface GatewayClientDeps {
   baseUrl: string;
@@ -19,67 +22,6 @@ export interface GatewayClientDeps {
  * reason and this is the same check.
  */
 const isAbort = (e: unknown): boolean => (e as { name?: string } | null)?.name === 'AbortError';
-
-/**
- * The code a refusal carries when its BODY did not name one.
- *
- * `apps/api` is not the only thing that can answer this browser with a 401.
- * A reverse proxy, an ingress, Azure Easy Auth or an expired-token
- * rejection can all emit one with an HTML page or some other envelope
- * entirely, and reading the code only out of `body.error.code` left every
- * one of those as `code: 'unknown'` — which `isSignInError` does not see,
- * so the sign-in gate this whole branch exists to build never fired. The
- * user got "HTTP 401" and a Retry that could only fail again, forever.
- *
- * `openrouter.ts`'s `isAuthError` was `status === 401 || status === 403`,
- * and that half of it is restored here rather than left to the body: 401 is
- * "we do not know who you are" (signing in again is the repair) and 403 is
- * "we know, and no" (`not_permitted`, which does NOT redirect). Both are in
- * `SIGN_IN_CODES`, so both reach `isAuthFailure`.
- *
- * Nothing else is guessed. A 502 from an ingress is not evidence that the
- * firm's deployment is misconfigured, and mapping it to
- * `service_misconfigured` would put a specific wrong reason — and the wrong
- * panel — in front of a reader. Everything but 401/403 stays `unknown`,
- * which is exactly what it is.
- */
-function codeFromStatus(status: number): ModelErrorCode {
-  if (status === 401) return 'sign_in_required';
-  if (status === 403) return 'not_permitted';
-  return 'unknown';
-}
-
-/**
- * A failure response becomes the `ModelError` the gateway meant.
- *
- * The status alone is kept when the body cannot be read: a refusal with an
- * unreadable body is still a refusal, and inventing a code for it would put
- * a specific wrong reason in front of a reader — but the STATUS is not
- * nothing, and `codeFromStatus` above says what it is worth.
- *
- * `body.error.code` is checked against `MODEL_ERROR_CODES` rather than cast
- * into the union. An unrecognised code string used to land outside both
- * classifier sets by accident: `isSignInError` and `isServiceConfigError`
- * would both read false for a refusal that was plainly one or the other.
- * A code nothing recognises now falls through to the status, exactly like a
- * body that could not be read at all.
- */
-async function toModelError(response: Response): Promise<ModelError> {
-  let code: ModelErrorCode | undefined;
-  let message = `HTTP ${response.status}`;
-  let callId: string | undefined;
-  try {
-    const body = await response.json() as {
-      error?: { code?: unknown; message?: string; callId?: string };
-    };
-    if (isModelErrorCode(body?.error?.code)) code = body.error.code;
-    if (body?.error?.message) message = body.error.message;
-    callId = body?.error?.callId;
-  } catch {
-    // keep the status
-  }
-  return new ModelError(message, code ?? codeFromStatus(response.status), response.status, callId);
-}
 
 /**
  * Reads a `ReadableStream` as an async iterable of bytes.

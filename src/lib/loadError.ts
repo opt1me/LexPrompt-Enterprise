@@ -1,3 +1,4 @@
+import { ModelError } from '@lexprompt/core';
 import { DbBlockedError, DbOpenTimeoutError } from './db/open';
 import { UnconvertedPlaybookError } from './db/playbookMigration';
 
@@ -27,12 +28,26 @@ import { UnconvertedPlaybookError } from './db/playbookMigration';
  *  generic fallback cannot, that the data has not been lost. Without this
  *  line the backstop still fails loudly and still offers a Retry, but the
  *  wording that makes a 30-second silence intelligible never reaches the
- *  screen. */
+ *  screen.
+ *
+ *  A `ModelError` joins them, and for the same reason each of the others is
+ *  here: it already carries a specific, user-facing message that the generic
+ *  fallback cannot produce. "This needs the partner role" and "you are not
+ *  signed in" and "LexPrompt could not reach your firm's service" are three
+ *  different instructions, and folding any of them into "the matters could
+ *  not be loaded. Try again." would leave a reader retrying something that
+ *  will keep failing — which is the failure `DbBlockedError` was added here
+ *  to prevent, one transport later.
+ *
+ *  The fourth load state, `stale`, arrives with realtime in Stage 4 and is
+ *  deliberately NOT here: nothing in Stage 2 can be stale, because nothing
+ *  pushes. */
 export function describeLoadError(e: unknown, fallback: string): string {
   if (
     e instanceof DbBlockedError
     || e instanceof UnconvertedPlaybookError
     || e instanceof DbOpenTimeoutError
+    || e instanceof ModelError
   ) return e.message;
   return fallback;
 }

@@ -37,6 +37,23 @@ vi.mock('oidc-client-ts', async (importOriginal) => {
   return { ...actual, UserManager: DefaultSignedInUserManager };
 });
 
+// `src/lib/api/client.ts` and `src/lib/model/gatewayModelClient.ts` each
+// build a module-level singleton bound to the REAL `globalThis.fetch` at
+// import time (Task 7). Without a default double, any test that merely
+// imports something on either path — without mocking `fetch` itself —
+// would make a genuine network call in Node's own `fetch`: in CI that
+// either hangs on a DNS lookup or silently succeeds against nothing this
+// suite controls, exactly the "looks like it passed, proves nothing" shape
+// CLAUDE.md warns about for tests. Stubbed here, exactly as `oidc-client-ts`
+// is above: a default every test gets for free, loudly refusing rather than
+// reaching the network, and overridden by any test that mocks `fetch`
+// itself (a per-file `vi.stubGlobal`/`vi.fn` always wins for that file).
+vi.stubGlobal('fetch', vi.fn(async () => {
+  throw new Error(
+    'fetch was called with no mock in place for this test — see vitest.setup.ts',
+  );
+}));
+
 // jsdom implements no layout engine, so `Element.prototype.scrollIntoView`
 // simply does not exist — calling it throws "is not a function" rather than
 // being a harmless no-op. Three components legitimately scroll: the chat
