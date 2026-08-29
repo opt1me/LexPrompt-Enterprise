@@ -1,17 +1,23 @@
 import React from 'react';
 import { ShieldCheck } from 'lucide-react';
-import type { Settings } from '../../types';
-import { saveSettings } from '../../lib/storage';
-import { ModelPicker } from './ModelPicker';
+import type { WorkspaceSettings } from '@lexprompt/core';
+import type { RoleState } from '../../lib/role';
+import { WorkspaceModelPanel } from './WorkspaceModelPanel';
 import { INFERENCE_PRIVACY, STORAGE_PRIVACY } from '../../lib/privacyCopy';
 
 export interface SettingsPanelProps {
-  settings: Settings;
-  onChange: (settings: Settings) => void;
+  /** §7's role gate for the model picker — see `WorkspaceModelPanel`. */
+  role: RoleState;
+  /** Fires when the workspace's model choice (or concurrency) actually
+   *  changes, so `App.tsx` can fold the new choice into its own
+   *  `WorkspaceSettings` state without a second fetch — the same reason
+   *  `onChange` existed here before Task 18. */
+  onWorkspaceSettingsSaved?: (settings: WorkspaceSettings) => void;
 }
 
 /**
- * Settings, with no API key on it.
+ * Settings, with no API key on it and — since Task 18 — no per-user model
+ * or concurrency preference either.
  *
  * The key section, the "Get an API key" link and `API_KEY_PRIVACY` are gone
  * because the thing they described is gone: the browser holds no provider
@@ -19,16 +25,13 @@ export interface SettingsPanelProps {
  * is a confidently-wrong UI sitting on top of a live secret. `loadSettings`
  * deletes any key an earlier version stored; App raises the one-time notice.
  *
- * The free-text model box went with it (S15). A user cannot name a model, so
- * the only control here is a choice off the operator's own allowlist.
+ * The model choice and the concurrency limit both moved to
+ * `WorkspaceModelPanel` (§6.6): they are workspace configuration an admin
+ * sets now, not something this screen reads or writes for the signed-in
+ * user. `Settings` (`src/types.ts`) is empty as a result — there is no
+ * per-user preference left for this screen to hold state for.
  */
-export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
-  const update = (patch: Partial<Settings>) => {
-    const next = { ...settings, ...patch };
-    saveSettings(next);
-    onChange(next);
-  };
-
+export function SettingsPanel({ role, onWorkspaceSettingsSaved }: SettingsPanelProps) {
   return (
     <div className="p-8 max-w-2xl mx-auto h-full overflow-y-auto bg-paper">
       <h2 className="font-prose text-screen-title text-ink-1 mb-2">Settings</h2>
@@ -39,11 +42,7 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
       <div className="space-y-6">
         <section className="bg-card p-6 rounded-panel border border-rule space-y-4">
           <h3 className="font-prose text-section text-ink-1">Model</h3>
-          {/* The "Where your requests go" block lives inside ModelPicker,
-              which is the only thing here holding the loaded allowlist entry.
-              Lifting it out would mean a second copy of "which model is
-              selected" for the two halves of one screen to disagree over. */}
-          <ModelPicker settings={settings} onChange={update} />
+          <WorkspaceModelPanel role={role} onSaved={onWorkspaceSettingsSaved} />
         </section>
 
         <section className="bg-card p-6 rounded-panel border border-rule space-y-3">
@@ -55,26 +54,6 @@ export function SettingsPanel({ settings, onChange }: SettingsPanelProps) {
               {STORAGE_PRIVACY.map(p => <p key={p}>{p}</p>)}
             </div>
           </div>
-        </section>
-
-        <section className="bg-card p-6 rounded-panel border border-rule space-y-3">
-          <div className="flex items-center justify-between">
-            <label className="font-prose text-section text-ink-1">Parallel requests</label>
-            <span className="font-ui text-ui text-ink-3">{settings.concurrency}</span>
-          </div>
-          <input
-            type="range"
-            min={1}
-            max={10}
-            step={1}
-            value={settings.concurrency}
-            onChange={e => update({ concurrency: Number(e.target.value) })}
-            className="w-full accent-accent"
-          />
-          <p className="font-ui text-ui-sm text-ink-4">
-            How many clauses to extract at once during a review. Higher is faster but more likely
-            to hit rate limits.
-          </p>
         </section>
       </div>
     </div>

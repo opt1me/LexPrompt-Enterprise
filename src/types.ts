@@ -266,44 +266,30 @@ export interface ReviewRun {
   playbookVersionId?: string;
 }
 
-export interface Settings {
-  /** An `AllowedModel.id` from the gateway's `GET /v1/models`. NEVER a
-   *  provider-side model name: a user cannot name a model (S15), so there is
-   *  no free-text box this can come from, only a choice off the operator's
-   *  own allowlist.
-   *
-   *  There is deliberately no `apiKey` beside it. The browser holds no
-   *  provider credential at all — every request carries the signed-in user's
-   *  bearer token to this firm's own LexPrompt service, which holds the
-   *  provider's credentials. `loadSettings` deletes any key an earlier
-   *  version stored. */
-  modelChoiceId: string;
-  /** `AllowedModel.label` and `AllowedModel.model` as they stood when the
-   *  choice was made, recorded because `modelChoiceId` is an operator-defined
-   *  ALIAS: it identifies nothing outside this workspace's allowlist, and an
-   *  administrator may repoint it at a different provider and a different
-   *  model without touching any record that already printed it. Anything
-   *  persisted that names "the model that did this" reads these, through
-   *  `modelProvenanceName` — never the id. Optional because a settings blob
-   *  written before they existed has neither, and "an AI model" is a better
-   *  answer than an unresolvable alias. */
-  modelChoiceLabel?: string;
-  modelChoiceModel?: string;
-  concurrency: number;
-  /** Capabilities of the currently selected model, filled in from the
-   *  gateway's allowlist whenever it's available. `undefined` means
-   *  "unknown" (list not loaded yet, fetch failed, or a stored choice with no
-   *  matching allowlist entry) and is always treated conservatively — the
-   *  same posture `chatContext.ts` already takes for an unresolved model. */
-  modelSupportsImages?: boolean;
-  modelSupportsStructuredOutput?: boolean;
-  modelContextLength?: number;
-}
+/**
+ * Task 18 (§6.6): every field that used to live here — `modelChoiceId`,
+ * `modelChoiceLabel`, `modelChoiceModel`, `concurrency`,
+ * `modelSupportsImages`, `modelSupportsStructuredOutput`,
+ * `modelContextLength` — moved to `WorkspaceSettings`
+ * (`@lexprompt/core`, `packages/core/src/api/records.ts`), fetched from
+ * `GET /v1/workspace/settings` and written only by an admin's `PUT`. The
+ * model choice became workspace configuration an admin sets from the
+ * gateway's allowlist; `concurrency` became a value stored alongside it
+ * (the server-side PER-RUN bound it becomes is Stage 3's — there is no run
+ * on the server yet to bound).
+ *
+ * That was the WHOLE of this interface, so `Settings` is empty now. R6
+ * survives for what it was actually about — genuine per-user UI preferences
+ * read synchronously in a render path — and there are none left to hold
+ * here. It stays, rather than being deleted, because `loadSettings` still
+ * has one job: purging a leftover `apiKey` (Stage 1's DoD) or a stale
+ * `modelChoiceId`/`concurrency`/etc. (this task's) from a blob a pre-Stage-2
+ * browser wrote to `localStorage`. See `storage.ts`.
+ */
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export interface Settings {}
 
-export const DEFAULT_SETTINGS: Settings = {
-  modelChoiceId: '',
-  concurrency: 5,
-};
+export const DEFAULT_SETTINGS: Settings = {};
 
 /** 3 to 4: `Finding.citations` became `Citation[]`, and `Finding` gained
  *  `verification` and `notes` (sub-project B). Reviews written at 3 are

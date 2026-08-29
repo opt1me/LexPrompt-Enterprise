@@ -17,6 +17,7 @@ import { registerDocuments } from './routes/documents.ts';
 import { registerCollections } from './routes/collections.ts';
 import { registerPlaybooks } from './routes/playbooks.ts';
 import { registerChangesets } from './routes/changesets.ts';
+import { registerWorkspaceSettings } from './routes/workspaceSettings.ts';
 import { registerReviews } from './routes/reviews.ts';
 import { ConflictError } from './errors.ts';
 
@@ -239,6 +240,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerPlaybooks(app, deps.db);
   registerChangesets(app, deps.db);
   registerReviews(app, deps.db);
+  registerWorkspaceSettings(app, deps.db, deps.gateway);
 
   return app;
 }

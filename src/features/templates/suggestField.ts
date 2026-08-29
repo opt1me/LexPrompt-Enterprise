@@ -1,5 +1,6 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import type { PlaybookClause, Settings } from '../../types';
+import type { PlaybookClause } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 /** The three by-hand fields the editor can draft AI help for. `standardPosition`
  *  is included for parity with the AI-draft path (`generateDraft.ts` proposes
@@ -55,7 +56,7 @@ export async function suggestField(
   field: SuggestableField,
   clause: Pick<PlaybookClause, 'title' | 'extractPrompt'>,
   contractType: string,
-  settings: Settings,
+  settings: WorkspaceSettings,
 ): Promise<string> {
   const user = [
     `Contract type: ${contractType || 'unspecified'}.`,

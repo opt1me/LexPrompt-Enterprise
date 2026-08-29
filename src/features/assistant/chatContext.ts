@@ -1,4 +1,5 @@
-import type { DocumentFile, Settings } from '../../types';
+import type { DocumentFile } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { extractableText, usableText, contextBudgetChars } from '../../lib/modelContext';
 
@@ -115,7 +116,7 @@ export interface SendChatMessageParams {
   history: ChatMessage[];
   contextLength: number | undefined;
   modelSupportsImages: boolean;
-  settings: Settings;
+  settings: WorkspaceSettings;
   onDelta: (chunk: string) => void;
   /** The matter these documents belong to, if any — carried into the
    *  gateway's audit record (Task 21) so "which matter did this chat serve"

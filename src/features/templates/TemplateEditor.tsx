@@ -3,7 +3,7 @@ import {
   ShieldAlert, Plus, X, UploadCloud, Download, Copy, Save, History, Sparkles, ScanText,
 } from 'lucide-react';
 import type {
-  PlaybookClause, PlaybookDraft, PlaybookVersion, Settings, StandardPosition,
+  PlaybookClause, PlaybookDraft, PlaybookVersion, StandardPosition,
 } from '../../types';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
 import { Button } from '../../components/Button';
@@ -13,6 +13,8 @@ import { StandardPositionField } from './StandardPositionField';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { uid } from '../../lib/uid';
 import { isAuthFailure } from '../../lib/model/authFailure';
+import { canPublish, PUBLISH_NEEDS_PARTNER_TITLE, type RoleState } from '../../lib/role';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { suggestField, FIELD_LABEL, type SuggestableField } from './suggestField';
 import { FieldSuggestion } from './FieldSuggestion';
 import { suggestMissingClauses } from './suggestMissingClauses';
@@ -69,7 +71,7 @@ export interface TemplateEditorProps {
    *  reason `onPersistDraft` and `onShowVersionHistory` are: an optional
    *  dependency is how `suggestField`/`suggestMissingClauses` shipped tested
    *  and wired to nothing for an entire merge. */
-  settings: Settings;
+  settings: WorkspaceSettings;
   /** An auth-class failure on either AI trigger below (spec §7,
    *  `isAuthFailure`'s contract) is reported here, with the real error,
    *  instead of rendered as inline text beside the field — it is not a
@@ -80,6 +82,21 @@ export interface TemplateEditorProps {
    *  `ensureConfigured`, so a user with no model chosen yet meets these
    *  controls before anything has asked them for one. */
   onAuthError?: (error: unknown) => void;
+  /**
+   * Task 17 (§7): publishing a version is one of the two things a reviewer
+   * cannot do — the API already refuses it (`ROUTE_POLICY['POST
+   * /v1/playbooks/:id/versions'] === 'partner'`, Task 13's tests prove it);
+   * this is the courtesy half, a dead button rather than the control.
+   *
+   * Optional, defaulting to `{ status: 'known', role: 'admin' }` — an
+   * UNRESTRICTED default — so every existing caller of this component (its
+   * own test files chief among them) that has no opinion about roles keeps
+   * rendering an enabled Publish button exactly as before. `App.tsx`'s real
+   * render always supplies the caller's actual `useRole()` result; nothing
+   * about the default weakens the server-side gate, which is the actual
+   * enforcement regardless of what this prop is.
+   */
+  role?: RoleState;
 }
 
 /** One in-flight or completed "draft this for me" for one field of one
@@ -195,12 +212,26 @@ export function TemplateEditor({
   unsavedChanges = false, savingDraft = false,
   onPublish, onExport, onShowMegaPrompt, onClose, health, healthError, onRetryHealth,
   settings, onAuthError,
+  role = { status: 'known', role: 'admin' },
 }: TemplateEditorProps) {
   // Memoised: without it this re-CLONES the published version on every
   // render for as long as there is no draft, and the editor's copy drifts
   // from `App`'s `editorContent` as a second, structurally-equal object.
   const working = useMemo(() => workingContent(version, draft), [version, draft]);
   const hasUnpublishedChanges = hasUnpublishedContent(version, draft);
+  // Task 17: while the role is still `unknown`, this renders NO Publish
+  // control at all rather than a disabled one — a disabled button during
+  // loading tells a partner they cannot publish, and "not yet known" is a
+  // third state that must render as one (CLAUDE.md's load-state rule,
+  // applied here to a permission rather than a load).
+  //
+  // `role.status === 'failed'` (the check itself could not complete —
+  // typically a network blip) is treated as PERMISSIVE, not blocking: this
+  // gate is a courtesy, never the control (the API refuses regardless), and
+  // failing closed here would strand a genuine partner over a transient
+  // failure to confirm what the server already knows. A reviewer who is
+  // not actually entitled gets the same clear 403 either way.
+  const publishAllowed = role.status !== 'known' || canPublish(role.role);
 
   /**
    * Which clause the main pane is showing. The editor renders ONE clause at
@@ -551,13 +582,19 @@ export function TemplateEditor({
              cannot explain — a real library already carries one such pair.
              Gating on the draft merely existing left this enabled after an
              edit that was typed and undone (m2). */}
-          <Button
-            onClick={onPublish}
-            disabled={!hasUnpublishedChanges}
-            title={hasUnpublishedChanges ? undefined : 'Nothing to publish — this is the published version.'}
-          >
-            <UploadCloud className="h-4 w-4" /> Publish
-          </Button>
+          {role.status !== 'unknown' && (
+            <Button
+              onClick={onPublish}
+              disabled={!hasUnpublishedChanges || !publishAllowed}
+              title={
+                !publishAllowed
+                  ? PUBLISH_NEEDS_PARTNER_TITLE
+                  : hasUnpublishedChanges ? undefined : 'Nothing to publish — this is the published version.'
+              }
+            >
+              <UploadCloud className="h-4 w-4" /> Publish
+            </Button>
+          )}
           <button onClick={onClose} className="font-ui text-ui-sm text-ink-4 hover:text-ink-1 px-2">Close</button>
         </div>
       </div>

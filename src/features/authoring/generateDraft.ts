@@ -1,7 +1,8 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { uid } from '../../lib/uid';
 import type { AuthoringDraft, DraftClause } from '../../lib/authoringDraft';
-import type { Settings, StandardPosition } from '../../types';
+import type { StandardPosition } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { modelProvenanceName } from '../../lib/model/modelChoice';
 import type { FewShotSource } from './fewShot';
 
@@ -127,7 +128,7 @@ export async function generateDraft(
   form: DraftFormValues,
   fewShot: string,
   sources: FewShotSource[],
-  settings: Settings,
+  settings: WorkspaceSettings,
   signal?: AbortSignal,
 ): Promise<AuthoringDraft> {
   const countGuidance = form.targetClauseCount

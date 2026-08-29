@@ -2,14 +2,15 @@ import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Loader, MessageSquare } from 'lucide-react';
-import type { DocumentFile, Settings } from '../../types';
+import type { DocumentFile } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { isAuthFailure } from '../../lib/model/authFailure';
 import { sendChatMessage, type ChatMessage } from './chatContext';
 
 export interface ChatPanelProps {
   documents: DocumentFile[];
-  settings: Settings;
+  settings: WorkspaceSettings;
   /** An auth-class failure (a rejected sign-in, or the firm's own
    *  configuration) must never be presented as if it were a model's answer
    *  (Important 4) — reported here instead of appearing in the chat

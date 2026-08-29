@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import type { Settings, PlaybookVersion } from '../types';
+import type { PlaybookVersion } from '../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import type { ParsedEdit } from './docxRedlines';
 
 // Same module-mock idiom as `inferPositions.test.ts`.
@@ -14,7 +15,7 @@ const { buildChangeset } = await import('./buildChangeset');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const settings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 type EditEntry = { documentId: string; edit: ParsedEdit; source: 'tracked' | 'diff' };
 

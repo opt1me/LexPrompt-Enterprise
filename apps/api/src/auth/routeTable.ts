@@ -133,4 +133,13 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // upload still in flight.
   'GET /v1/admin/blob-orphans': 'admin',
   'POST /v1/admin/blob-orphans/delete': 'admin',
+
+  // §6.6: the workspace's model choice. GET is `reviewer` — any signed-in
+  // role reads what model runs their reviews, the same "read is everyone,
+  // write is gated" shape `GET /v1/playbooks/:id` already has relative to
+  // publishing. PUT is `admin`: changing which provider the firm's text
+  // goes to sits beside role mapping as the other thing only an
+  // administrator may change (§7).
+  'GET /v1/workspace/settings': 'reviewer',
+  'PUT /v1/workspace/settings': 'admin',
 };

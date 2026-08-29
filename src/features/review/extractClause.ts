@@ -4,7 +4,8 @@ import { assessDocument, contextBudgetChars } from '../../lib/modelContext';
 import { repairCitations } from '../../lib/citationRepair';
 import { unchecked } from '../../lib/verification';
 import { normalisePositionOutcome } from '../../lib/positionOutcome';
-import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, RiskLevel, Settings } from '../../types';
+import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, RiskLevel } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { riskCriteriaBlock } from '../../lib/riskBlock';
 
 const RISK_LEVELS: RiskLevel[] = ['High', 'Medium', 'Low', 'Info'];
@@ -143,7 +144,7 @@ export async function extractClause(
   doc: DocumentFile,
   clause: PlaybookClause,
   template: PlaybookVersion,
-  settings: Settings,
+  settings: WorkspaceSettings,
   // `signal` stays 5th, its original position: `App.verification.test.tsx`'s
   // `extractClauseMock` destructures the 5th positional argument as the
   // abort signal, and reordering it silently would hand that mock a plain

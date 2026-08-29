@@ -506,6 +506,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/playbooks/:id/versions',
       'GET /v1/reviews/:id',
       'GET /v1/versions/:id',
+      'GET /v1/workspace/settings',
       'PATCH /v1/documents/:id/role',
       'POST /v1/admin/blob-orphans/delete',
       'POST /v1/changesets/:id/publish',
@@ -520,6 +521,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'PUT /v1/me',
       'PUT /v1/playbooks/:id',
       'PUT /v1/reviews/:id',
+      'PUT /v1/workspace/settings',
     ]);
   });
 
@@ -547,7 +549,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // every route task: 9 through Task 9, 17 with Task 11's six document
     // routes and two admin ones. A DROP in this number without a route
     // being removed is a route that stopped being registered.
-    expect(checked).toHaveLength(39);
+    expect(checked).toHaveLength(41);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

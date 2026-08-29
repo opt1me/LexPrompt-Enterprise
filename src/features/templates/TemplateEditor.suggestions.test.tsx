@@ -2,7 +2,8 @@ import React from 'react';
 import { act } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, buttonNamed, click } from '../../test/mount';
-import type { PlaybookClause, PlaybookDraft, PlaybookVersion, Settings } from '../../types';
+import type { PlaybookClause, PlaybookDraft, PlaybookVersion } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 // The module-mock idiom used by `suggestField.test.ts` / `generateDraft.test.ts`:
 // `isAuthFailure` must stay real, since the whole point of propagating errors
@@ -33,7 +34,7 @@ const flush = () => act(async () => { await Promise.resolve(); });
 const labelled = (c: HTMLElement, name: string) =>
   c.querySelector(`[aria-label="${name}"]`) as HTMLTextAreaElement;
 
-const testSettings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const testSettings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 function version(overrides: Partial<PlaybookVersion> = {}): PlaybookVersion {
   return {

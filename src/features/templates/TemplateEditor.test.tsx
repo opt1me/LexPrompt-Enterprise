@@ -3,7 +3,8 @@ import { act } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, buttons, click, type } from '../../test/mount';
 import { TemplateEditor } from './TemplateEditor';
-import type { PlaybookClause, PlaybookDraft, PlaybookVersion, Settings } from '../../types';
+import type { PlaybookClause, PlaybookDraft, PlaybookVersion } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { sharedTransport as transport } from '../../test/fakeTransport';
 
 // Stage 2 Task 13 made the playbook repositories HTTP clients. The one case
@@ -82,7 +83,7 @@ function editedDraftOf(v: PlaybookVersion): PlaybookDraft {
 }
 
 const noop = () => {};
-const testSettings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const testSettings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 const wiring = {
   onPersistDraft: noop,
   onShowVersionHistory: noop,
@@ -731,5 +732,61 @@ describe('TemplateEditor — position coverage line (sub-project G, R-G6)', () =
     const v = version({ clauses: structuredClone(twoClauses) });
     const c = mount(<TemplateEditor version={v} draft={undefined} onDraftChange={() => {}} {...wiring} />);
     expect(c.textContent).toContain('0 of 2 clauses have a standard position');
+  });
+});
+
+describe('TemplateEditor — the role gate on Publish (Task 17, §7)', () => {
+  // Real unpublished changes throughout: a role-disabled Publish must read
+  // the same whether or not there is something to publish, and the sibling
+  // "nothing to publish" case is already covered above.
+  const v1 = version();
+  const edited = editedDraftOf(v1);
+
+  it('disables Publish for a reviewer and says why', () => {
+    const c = mount(
+      <TemplateEditor version={v1} draft={edited} onDraftChange={noop} {...wiring}
+        role={{ status: 'known', role: 'reviewer' }} />,
+    );
+    const btn = buttonNamed(c, /^\s*publish\s*$/i);
+    expect(btn?.disabled).toBe(true);
+    expect(btn?.title).toMatch(/partner/i);
+  });
+
+  it('enables it for a partner', () => {
+    const c = mount(
+      <TemplateEditor version={v1} draft={edited} onDraftChange={noop} {...wiring}
+        role={{ status: 'known', role: 'partner' }} />,
+    );
+    expect(buttonNamed(c, /^\s*publish\s*$/i)?.disabled).toBe(false);
+  });
+
+  it('enables it for an admin too (ROUTE_POLICY is a MINIMUM rank)', () => {
+    const c = mount(
+      <TemplateEditor version={v1} draft={edited} onDraftChange={noop} {...wiring}
+        role={{ status: 'known', role: 'admin' }} />,
+    );
+    expect(buttonNamed(c, /^\s*publish\s*$/i)?.disabled).toBe(false);
+  });
+
+  it('does not disable it while the role is still unknown — it hides the whole control instead', () => {
+    // Rendering a DISABLED Publish during loading tells a partner they
+    // cannot publish. "Not yet known" is a third state and must render as
+    // one, not as the lowest-privilege answer.
+    const c = mount(
+      <TemplateEditor version={v1} draft={edited} onDraftChange={noop} {...wiring}
+        role={{ status: 'unknown' }} />,
+    );
+    expect(buttonNamed(c, /^\s*publish\s*$/i)).toBeUndefined();
+  });
+
+  it('is permissive (not blocking) when the role check itself could not complete', () => {
+    // The gate is a courtesy, never the control (the API refuses
+    // regardless) — failing closed here would strand a genuine partner over
+    // a transient failure to confirm what the server already knows.
+    const c = mount(
+      <TemplateEditor version={v1} draft={edited} onDraftChange={noop} {...wiring}
+        role={{ status: 'failed', error: new Error('network blip') }} />,
+    );
+    expect(buttonNamed(c, /^\s*publish\s*$/i)?.disabled).toBe(false);
   });
 });

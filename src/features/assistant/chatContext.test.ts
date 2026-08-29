@@ -8,7 +8,8 @@ import {
   NEEDS_IMAGE_MODEL_MESSAGE,
   type ChatMessage,
 } from './chatContext';
-import type { DocumentFile, Settings } from '../../types';
+import type { DocumentFile } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 vi.mock('../../lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {
@@ -31,7 +32,7 @@ function answer(content: string) {
 }
 
 
-const settings: Settings = { modelChoiceId: 'm', concurrency: 5 };
+const settings: WorkspaceSettings = { modelChoiceId: 'm', concurrency: 5 };
 
 function doc(overrides: Partial<DocumentFile> = {}): DocumentFile {
   return {

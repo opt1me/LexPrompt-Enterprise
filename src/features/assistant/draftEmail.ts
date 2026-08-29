@@ -1,5 +1,6 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import type { ReviewRun, RiskLevel, Settings } from '../../types';
+import type { ReviewRun, RiskLevel } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { buildReportRows } from '../review/exportDocx';
 
 const RISK_ORDER: Record<RiskLevel, number> = { High: 0, Medium: 1, Low: 2, Info: 3 };
@@ -19,7 +20,7 @@ function riskRank(level: RiskLevel | undefined): number {
  * Returns markdown; the caller renders it (in a Modal, not `alert()`).
  */
 export async function draftEmail(
-  run: ReviewRun, docId: string, settings: Settings, matterId?: string,
+  run: ReviewRun, docId: string, settings: WorkspaceSettings, matterId?: string,
 ): Promise<string> {
   const rows = [...buildReportRows(run, docId)].sort((a, b) => riskRank(a.riskLevel) - riskRank(b.riskLevel));
 

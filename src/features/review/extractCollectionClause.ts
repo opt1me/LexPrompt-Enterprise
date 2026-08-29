@@ -8,7 +8,8 @@ import { unchecked } from '../../lib/verification';
 import { unconfirmedPosition } from '../../lib/netPosition';
 import { normalisePositionOutcome } from '../../lib/positionOutcome';
 import type { CollectionMember } from '../../lib/collectionOrder';
-import type { Citation, PlaybookClause, DocumentFile, Finding, Settings, PlaybookVersion, TrailStep } from '../../types';
+import type { Citation, PlaybookClause, DocumentFile, Finding, PlaybookVersion, TrailStep } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 interface RawCitation {
   quote?: unknown;
@@ -399,7 +400,7 @@ export async function extractCollectionClause(
   members: CollectionMember<DocumentFile>[],
   clause: PlaybookClause,
   template: PlaybookVersion,
-  settings: Settings,
+  settings: WorkspaceSettings,
   // `signal` kept 5th, mirroring `extractClause`'s identical positioning —
   // see its comment for why the order matters to an existing mock.
   signal?: AbortSignal,

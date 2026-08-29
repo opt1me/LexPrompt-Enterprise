@@ -1,5 +1,5 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import type { Settings } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 interface RawMissingClauses {
   titles?: unknown;
@@ -40,7 +40,7 @@ function normalise(title: string): string {
 export async function suggestMissingClauses(
   existingTitles: string[],
   contractType: string,
-  settings: Settings,
+  settings: WorkspaceSettings,
 ): Promise<string[]> {
   const user = [
     `Contract type: ${contractType || 'unspecified'}.`,

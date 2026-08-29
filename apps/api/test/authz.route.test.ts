@@ -261,6 +261,7 @@ describe('a reviewer is refused at every route the shipped table puts above them
       'POST /v1/playbooks/import',
       'POST /v1/playbooks/:id/versions',
       'POST /v1/changesets/:id/publish',
+      'PUT /v1/workspace/settings',
     ].sort());
     for (const key of above) {
       const [method, url] = key.split(' ');

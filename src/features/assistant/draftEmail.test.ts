@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { draftEmail } from './draftEmail';
-import type { Finding, ReviewRun, Settings, PlaybookVersion } from '../../types';
+import type { Finding, ReviewRun, PlaybookVersion } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
 
 vi.mock('../../lib/model/gatewayModelClient', () => ({
@@ -26,7 +27,7 @@ function answer(content: string) {
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { modelChoiceId: 'm', concurrency: 5 };
+const settings: WorkspaceSettings = { modelChoiceId: 'm', concurrency: 5 };
 
 const template: PlaybookVersion = {
   id: 't', name: 'T', contractType: 'Lease',

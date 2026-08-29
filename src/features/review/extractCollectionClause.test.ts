@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractCollectionClause, collectionClauseSchema, COLLECTION_CLAUSE_SCHEMA } from './extractCollectionClause';
-import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings, StandardPosition } from '../../types';
+import type { PlaybookClause, PlaybookVersion, DocumentFile, StandardPosition } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import type { CollectionMember } from '../../lib/collectionOrder';
 
 import { ModelError } from '@lexprompt/core';
@@ -15,7 +16,7 @@ const chatJson = gatewayModelClient.chatJson;
 
 // A fully capable model, matching extractClause.test.ts's fixture posture, so
 // the happy-path tests below are unaffected by capability gating.
-const settings: Settings = {
+const settings: WorkspaceSettings = {
   modelChoiceId: 'm', concurrency: 5,
   modelSupportsImages: true, modelSupportsStructuredOutput: true, modelContextLength: 1_000_000,
 };
@@ -358,7 +359,7 @@ describe('extractCollectionClause: scan/image fallback', () => {
 
   it('fails loudly, without calling the model, when a scanned member cannot be read by a text-only model', async () => {
     const scan = docFile('dov', 'DoV.pdf', '', { pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
-    const textOnly: Settings = { ...settings, modelSupportsImages: false };
+    const textOnly: WorkspaceSettings = { ...settings, modelSupportsImages: false };
 
     const finding = await extractCollectionClause(members({ varies: scan }), clause, template, textOnly);
 
@@ -777,7 +778,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
 describe('extractCollectionClause: truncation names the documents it cut', () => {
   // contextLength 100 -> budget = floor(100 * 4 * 0.5) = 200 characters,
   // split across two documents, so both long members are cut short.
-  const tight: Settings = { ...settings, modelContextLength: 100 };
+  const tight: WorkspaceSettings = { ...settings, modelContextLength: 100 };
 
   function longMembers(): CollectionMember<DocumentFile>[] {
     return [

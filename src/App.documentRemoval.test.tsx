@@ -86,6 +86,9 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
+  // See App.authoring.test.tsx's copy of this comment: keeps `useRole()`'s
+  // App-level gate in its harmless `unknown` state for this file's purposes.
+  getCachedRole: () => undefined,
 }));
 
 // listModels would otherwise attempt a real network fetch from the

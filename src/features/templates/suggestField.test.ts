@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import type { Settings } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 // The module-mock idiom used by `generateDraft.test.ts` and
 // `extractClause.test.ts`: `isAuthFailure` must stay real, since the whole
@@ -18,7 +18,7 @@ const { suggestField } = await import('./suggestField');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const settings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 const clause = { title: 'Break', extractPrompt: 'Find it.' };
 
 describe('suggestField', () => {

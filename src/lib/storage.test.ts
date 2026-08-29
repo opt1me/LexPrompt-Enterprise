@@ -5,30 +5,37 @@ const SETTINGS_KEY = 'lexprompt.settings';
 
 beforeEach(() => localStorage.clear());
 
+/**
+ * Task 18 emptied `Settings`: `modelChoiceId`, `modelChoiceLabel`,
+ * `modelChoiceModel`, `concurrency`, `modelSupportsImages`,
+ * `modelSupportsStructuredOutput` and `modelContextLength` all moved to
+ * `WorkspaceSettings`, fetched from `GET /v1/workspace/settings`. What is
+ * left for `storage.ts` to do is the API-key purge (Stage 1's DoD) and,
+ * now, purging the fields that just moved out from under any browser that
+ * still has a pre-Stage-2 blob in `localStorage`.
+ */
+
 describe('settings', () => {
-  it('returns defaults when nothing is stored', () => {
-    expect(loadSettings().settings.concurrency).toBe(5);
-    expect(loadSettings().settings.modelChoiceId).toBe('');
+  it('returns an empty object when nothing is stored', () => {
+    expect(loadSettings().settings).toEqual({});
     expect(loadSettings().purgedApiKey).toBe(false);
   });
 
-  it('persists and reloads', () => {
-    saveSettings({ modelChoiceId: 'uk-sonnet', concurrency: 3 });
-    expect(loadSettings().settings).toEqual({ modelChoiceId: 'uk-sonnet', concurrency: 3 });
+  it('persists and reloads whatever is saved (there is nothing left to default)', () => {
+    saveSettings({});
+    expect(loadSettings().settings).toEqual({});
   });
 
-  it('survives corrupt stored JSON by falling back to defaults', () => {
+  it('survives corrupt stored JSON by falling back to an empty object', () => {
     localStorage.setItem(SETTINGS_KEY, '{broken');
-    expect(loadSettings().settings.concurrency).toBe(5);
+    expect(loadSettings().settings).toEqual({});
     expect(loadSettings().purgedApiKey).toBe(false);
   });
 });
 
 describe('settings — the OpenRouter key is purged from this browser', () => {
   it('returns settings with no apiKey key at all when one was stored', () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      apiKey: 'sk-or-v1-liveandunused', modelChoiceId: 'uk-sonnet', concurrency: 3,
-    }));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ apiKey: 'sk-or-v1-liveandunused' }));
 
     const { settings } = loadSettings();
     // `in`, not `toEqual`: Vitest treats `{ a: 1 }` and `{ a: 1, b: undefined }`
@@ -38,24 +45,18 @@ describe('settings — the OpenRouter key is purged from this browser', () => {
   });
 
   it('rewrites localStorage so a second read finds no key', () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      apiKey: 'sk-or-v1-liveandunused', modelChoiceId: 'uk-sonnet', concurrency: 3,
-    }));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ apiKey: 'sk-or-v1-liveandunused' }));
 
     loadSettings();
 
     const raw = localStorage.getItem(SETTINGS_KEY)!;
     expect(raw).not.toContain('apiKey');
     expect(raw).not.toContain('sk-or-v1-');
-    // The rest of the record survives: this deletes a credential, not the
-    // user's settings.
-    expect(JSON.parse(raw)).toEqual({ modelChoiceId: 'uk-sonnet', concurrency: 3 });
+    expect(JSON.parse(raw)).toEqual({});
   });
 
   it('reports purgedApiKey true on the read that purged and false on the next', () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      apiKey: 'sk-or-v1-liveandunused', modelChoiceId: 'uk-sonnet', concurrency: 3,
-    }));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ apiKey: 'sk-or-v1-liveandunused' }));
 
     expect(loadSettings().purgedApiKey).toBe(true);
     // Told ONCE. A notice that reappears on every load is a notice the user
@@ -65,22 +66,47 @@ describe('settings — the OpenRouter key is purged from this browser', () => {
   });
 
   it('does not claim a purge for a record that stored an empty key', () => {
-    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ apiKey: '', concurrency: 5 }));
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ apiKey: '' }));
     expect(loadSettings().purgedApiKey).toBe(false);
   });
 
   it('drops a stored modelId rather than carrying it over as a modelChoiceId', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({ modelId: 'anthropic/claude-3.5-sonnet' }));
+
+    const { settings } = loadSettings();
+    expect('modelId' in settings).toBe(false);
+    expect('modelChoiceId' in settings).toBe(false);
+    expect(localStorage.getItem(SETTINGS_KEY)).not.toContain('modelId');
+  });
+});
+
+describe('settings — Task 18\'s fields are purged too, now that they are WorkspaceSettings\'s', () => {
+  it('drops every field that moved to WorkspaceSettings, from a pre-Stage-2 blob', () => {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify({
-      modelId: 'anthropic/claude-3.5-sonnet', concurrency: 4,
+      modelChoiceId: 'uk-sonnet', modelChoiceLabel: 'UK Sonnet', modelChoiceModel: 'claude-3-sonnet',
+      concurrency: 7, modelSupportsImages: true, modelSupportsStructuredOutput: true,
+      modelContextLength: 200_000,
     }));
 
     const { settings } = loadSettings();
-    // An OpenRouter model id means nothing against an allowlist. Carried
-    // over it would be a `modelChoiceId` that never resolves — a screen
-    // saying "configured" over a choice the gateway will refuse.
-    expect(settings.modelChoiceId).toBe('');
-    expect('modelId' in settings).toBe(false);
-    expect(settings.concurrency).toBe(4);
-    expect(localStorage.getItem(SETTINGS_KEY)).not.toContain('modelId');
+    for (const field of [
+      'modelChoiceId', 'modelChoiceLabel', 'modelChoiceModel', 'concurrency',
+      'modelSupportsImages', 'modelSupportsStructuredOutput', 'modelContextLength',
+    ]) {
+      expect(field in settings, field).toBe(false);
+    }
+    expect(settings).toEqual({});
+    const raw = localStorage.getItem(SETTINGS_KEY)!;
+    expect(raw).toBe('{}');
+  });
+
+  it('a blob with none of the moved fields is not rewritten needlessly', () => {
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify({}));
+    const before = localStorage.getItem(SETTINGS_KEY);
+    loadSettings();
+    // Not asserting the write NEVER happens (an empty-object rewrite is
+    // harmless either way) — asserting the READ still resolves cleanly.
+    expect(loadSettings().settings).toEqual({});
+    expect(before).toBe('{}');
   });
 });

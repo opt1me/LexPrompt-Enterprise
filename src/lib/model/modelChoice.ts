@@ -1,5 +1,4 @@
-import type { AllowedModel } from '@lexprompt/core';
-import type { Settings } from '../../types';
+import type { AllowedModel, WorkspaceSettings } from '@lexprompt/core';
 
 /**
  * Everything the app has to say about "the model this browser has chosen",
@@ -73,7 +72,7 @@ export const MODEL_CHOICE_STALE_MESSAGE =
  * This composes a model NAME, not a provenance sentence. `positionProvenance`
  * remains the only place that wording is composed.
  */
-export function modelProvenanceName(settings: Settings): string {
+export function modelProvenanceName(settings: WorkspaceSettings): string {
   const label = settings.modelChoiceLabel ?? '';
   const model = settings.modelChoiceModel ?? '';
   if (label && model && label !== model) return `${label} (${model})`;

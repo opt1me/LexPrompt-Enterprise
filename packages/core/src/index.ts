@@ -15,7 +15,7 @@ export {
 } from './model/sse.ts';
 export type { Frame, StreamEnd } from './model/sse.ts';
 export { ROLES, isRole } from './api/records.ts';
-export type { Role, MeResponse } from './api/records.ts';
+export type { Role, MeResponse, WorkspaceSettings } from './api/records.ts';
 // The domain logic that decides what a published playbook version SAYS,
 // needed by the browser that reviews a changeset and by the API that
 // publishes it. Moved out of `src/lib/db/changesets.ts` rather than copied:

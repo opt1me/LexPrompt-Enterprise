@@ -97,6 +97,12 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
+  // Task 16/17: `src/lib/role.ts`'s `useRole()` reads this off the SAME
+  // module — a stub returning `undefined` keeps the new App-level role gate
+  // permanently in its `unknown` state here, which is exactly what a test
+  // that isn't about roles needs: it never trips the `failed` branch, so
+  // `AppShell` renders exactly as it did before this module gained a role.
+  getCachedRole: () => undefined,
 }));
 
 vi.mock('./lib/model/gatewayModelClient', () => ({
@@ -145,7 +151,8 @@ vi.mock('./lib/documents', async (importOriginal) => {
 });
 
 import App from './App';
-import type { DocumentFile, ReviewRun, Settings } from './types';
+import type { DocumentFile, ReviewRun } from './types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 async function flush(times = 8) {
   for (let i = 0; i < times; i++) {
@@ -288,7 +295,7 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
     // App.tsx passed in (this mock's first argument) inspectable — that run
     // is what `retryCellMock.mock.calls[...][0]` checks below.
     retryCellMock.mockReset().mockImplementation(async (
-      retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: Settings, onUpdate: (r: ReviewRun) => void,
+      retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: WorkspaceSettings, onUpdate: (r: ReviewRun) => void,
     ) => {
       const running: ReviewRun = {
         ...retryRun,
@@ -428,7 +435,7 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
       // in-flight — exactly the reviewer's reproduction.
       let resolveC1Retry: (() => void) | undefined;
       retryCellMock.mockReset().mockImplementationOnce(async (
-        retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: Settings, onUpdate: (r: ReviewRun) => void,
+        retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: WorkspaceSettings, onUpdate: (r: ReviewRun) => void,
       ) => {
         const running: ReviewRun = {
           ...retryRun,
@@ -521,7 +528,7 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
 
       let resolveC1Retry: (() => void) | undefined;
       retryCellMock.mockReset().mockImplementationOnce(async (
-        retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: Settings, onUpdate: (r: ReviewRun) => void,
+        retryRun: ReviewRun, doc: DocumentFile, clauseId: string, _settings: WorkspaceSettings, onUpdate: (r: ReviewRun) => void,
       ) => {
         const running: ReviewRun = {
           ...retryRun,

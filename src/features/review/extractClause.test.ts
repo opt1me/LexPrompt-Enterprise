@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractClause, buildClausePrompt, clauseSchema, CLAUSE_SCHEMA } from './extractClause';
-import type { PlaybookClause, PlaybookVersion, DocumentFile, Settings, StandardPosition } from '../../types';
+import type { PlaybookClause, PlaybookVersion, DocumentFile, StandardPosition } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 import { ModelError } from '@lexprompt/core';
 
@@ -16,7 +17,7 @@ const chatJson = gatewayModelClient.chatJson;
 // context window) is the default fixture so the existing happy-path tests
 // below are unaffected by the capability gating added for Critical 1/9 —
 // tests that specifically exercise the gating override these fields.
-const settings: Settings = {
+const settings: WorkspaceSettings = {
   modelChoiceId: 'm', concurrency: 5,
   modelSupportsImages: true, modelSupportsStructuredOutput: true, modelContextLength: 1_000_000,
 };
@@ -282,7 +283,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
       text: '[Page 1]\n\n',
       pageImages: [{ mime: 'image/jpeg', data: 'AAA' }],
     };
-    const textOnly: Settings = { ...settings, modelSupportsImages: false };
+    const textOnly: WorkspaceSettings = { ...settings, modelSupportsImages: false };
 
     const finding = await extractClause(scan, clause, template, textOnly);
 
@@ -306,7 +307,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
       text: '',
       pageImages: [{ mime: 'image/jpeg', data: 'AAA' }],
     };
-    const unknownCapabilities: Settings = { modelChoiceId: 'm', concurrency: 5 };
+    const unknownCapabilities: WorkspaceSettings = { modelChoiceId: 'm', concurrency: 5 };
 
     const finding = await extractClause(scan, clause, template, unknownCapabilities);
 
@@ -360,7 +361,7 @@ describe('extractClause: structured output capability', () => {
 
   it('omits the JSON schema when structured-output support is unknown', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
-    const unknown: Settings = { modelChoiceId: 'm', concurrency: 5 };
+    const unknown: WorkspaceSettings = { modelChoiceId: 'm', concurrency: 5 };
     await extractClause(doc, clause, template, unknown);
     expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBeUndefined();
   });
@@ -371,7 +372,7 @@ describe('extractClause: context budget (Important 9)', () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
     const long: DocumentFile = { ...doc, text: 'x'.repeat(1000) };
     // contextLength 100 -> budget = floor(100 * 4 * 0.5) = 200 characters.
-    const tightBudget: Settings = { ...settings, modelContextLength: 100 };
+    const tightBudget: WorkspaceSettings = { ...settings, modelContextLength: 100 };
 
     const finding = await extractClause(long, clause, template, tightBudget);
 

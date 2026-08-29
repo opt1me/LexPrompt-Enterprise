@@ -89,6 +89,17 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
+  // See App.authoring.test.tsx's copy of this comment: keeps `useRole()`'s
+  // App-level gate in its harmless `unknown` state for this file's purposes.
+  getCachedRole: () => undefined,
+}));
+
+// Task 18: see App.authoring.test.tsx's copy of this comment — the model
+// choice is fetched from the server now, not read from `localStorage`.
+const getWorkspaceSettingsMock = vi.fn().mockResolvedValue({ modelChoiceId: '', concurrency: 5, version: 1, updatedAt: 1 });
+vi.mock('./lib/db/workspaceSettings', () => ({
+  getWorkspaceSettings: (...args: unknown[]) => getWorkspaceSettingsMock(...args),
+  saveWorkspaceSettings: vi.fn(),
 }));
 
 vi.mock('./lib/model/gatewayModelClient', () => ({
@@ -217,7 +228,9 @@ describe('App — deleting a matter with a run in flight for it (Important 2)', 
 
   beforeEach(() => {
     localStorage.clear();
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockReset().mockResolvedValue({
+      modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1,
+    });
     migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
     listMattersMock.mockReset().mockResolvedValue([makeMatter()]);

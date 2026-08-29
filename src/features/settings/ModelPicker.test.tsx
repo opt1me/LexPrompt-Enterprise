@@ -3,7 +3,6 @@ import React from 'react';
 import { act } from 'react';
 import type { AllowedModel } from '@lexprompt/core';
 import { mountOnce, click, buttonNamed, flushUntil } from '../../test/mount';
-import type { Settings } from '../../types';
 
 const listModelsMock = vi.fn<() => Promise<AllowedModel[]>>();
 
@@ -52,10 +51,13 @@ const RECORDED: AllowedModel = {
   isDefault: false,
 };
 
-const BASE: Settings = { modelChoiceId: '', concurrency: 5 };
+// Task 18: `ModelPicker` takes the id directly now, not a whole `Settings`
+// (which no longer carries one at all — see `types.ts`). `settingsWith` kept
+// as a name, as an identity function, so the diff below this line is nil.
+const BASE = '';
 
-function settingsWith(modelChoiceId: string): Settings {
-  return { ...BASE, modelChoiceId };
+function settingsWith(modelChoiceId: string): string {
+  return modelChoiceId;
 }
 
 function options(container: ParentNode): HTMLOptionElement[] {
@@ -90,7 +92,7 @@ beforeEach(() => {
 describe('ModelPicker — three load states, told apart', () => {
   it('renders a busy element and no select while the list is in flight', () => {
     listModelsMock.mockReturnValue(new Promise<AllowedModel[]>(() => { /* never settles */ }));
-    const { container, unmount } = mountOnce(<ModelPicker settings={BASE} onChange={vi.fn()} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={BASE} onChange={vi.fn()} />);
 
     expect(container.querySelector('[data-busy="true"]')).not.toBe(null);
     expect(selectIn(container)).toBe(null);
@@ -99,7 +101,7 @@ describe('ModelPicker — three load states, told apart', () => {
 
   it('renders the failure and a working Retry when the list cannot be loaded', async () => {
     listModelsMock.mockRejectedValue(new Error('LexPrompt could not reach its server (offline).'));
-    const { container, unmount } = mountOnce(<ModelPicker settings={BASE} onChange={vi.fn()} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={BASE} onChange={vi.fn()} />);
     await flushUntil(() => container.textContent!.includes('could not be loaded'), 'the error panel');
 
     expect(container.textContent).toContain('could not be loaded');
@@ -119,7 +121,7 @@ describe('ModelPicker — three load states, told apart', () => {
 
   it('renders "no model has been configured" for an empty list — not an error panel, not an empty select', async () => {
     listModelsMock.mockResolvedValue([]);
-    const { container, unmount } = mountOnce(<ModelPicker settings={BASE} onChange={vi.fn()} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={BASE} onChange={vi.fn()} />);
     await flushUntil(
       () => container.querySelector('[data-busy="true"]') === null,
       'the empty state',
@@ -135,7 +137,7 @@ describe('ModelPicker — three load states, told apart', () => {
 describe('ModelPicker — the list itself', () => {
   it('renders one option per model', async () => {
     listModelsMock.mockResolvedValue([UK, US]);
-    const { container, unmount } = mountOnce(<ModelPicker settings={BASE} onChange={vi.fn()} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={BASE} onChange={vi.fn()} />);
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
     expect(modelOptions(container).map(o => o.value)).toEqual(['uk-sonnet', 'us-gpt']);
@@ -144,7 +146,7 @@ describe('ModelPicker — the list itself', () => {
 
   it('names the jurisdiction on every option, in the same form, with none unlabelled', async () => {
     listModelsMock.mockResolvedValue([UK, US, RECORDED]);
-    const { container, unmount } = mountOnce(<ModelPicker settings={BASE} onChange={vi.fn()} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={BASE} onChange={vi.fn()} />);
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
     const rendered = modelOptions(container);
@@ -163,7 +165,7 @@ describe('ModelPicker — the list itself', () => {
 
   it('states where processing occurs in words on every option, not only the non-UK ones', async () => {
     listModelsMock.mockResolvedValue([UK, US]);
-    const { container, unmount } = mountOnce(<ModelPicker settings={BASE} onChange={vi.fn()} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={BASE} onChange={vi.fn()} />);
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
     const rendered = modelOptions(container);
@@ -174,7 +176,7 @@ describe('ModelPicker — the list itself', () => {
 
   it('is factual and never evaluative about a jurisdiction', async () => {
     listModelsMock.mockResolvedValue([UK, US]);
-    const { container, unmount } = mountOnce(<ModelPicker settings={settingsWith('us-gpt')} onChange={vi.fn()} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={settingsWith('us-gpt')} onChange={vi.fn()} />);
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
     // Whether a jurisdiction is acceptable was settled by the operator's
@@ -189,7 +191,7 @@ describe('ModelPicker — selection', () => {
   it('calls onChange with the choice id and the three capability fields', async () => {
     listModelsMock.mockResolvedValue([UK, US]);
     const onChange = vi.fn();
-    const { container, unmount } = mountOnce(<ModelPicker settings={settingsWith('uk-sonnet')} onChange={onChange} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={settingsWith('uk-sonnet')} onChange={onChange} />);
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
     choose(selectIn(container)!, 'us-gpt');
@@ -210,7 +212,7 @@ describe('ModelPicker — selection', () => {
   it('preselects the isDefault model when nothing is chosen yet, and commits that choice', async () => {
     listModelsMock.mockResolvedValue([US, UK]);
     const onChange = vi.fn();
-    const { container, unmount } = mountOnce(<ModelPicker settings={BASE} onChange={onChange} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={BASE} onChange={onChange} />);
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
     expect(selectIn(container)!.value).toBe('uk-sonnet');
@@ -232,7 +234,7 @@ describe('ModelPicker — selection', () => {
     listModelsMock.mockResolvedValue([UK, US]);
     const onChange = vi.fn();
     const { container, unmount } = mountOnce(
-      <ModelPicker settings={settingsWith('retired-model')} onChange={onChange} />,
+      <ModelPicker modelChoiceId={settingsWith('retired-model')} onChange={onChange} />,
     );
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
@@ -248,7 +250,7 @@ describe('ModelPicker — the recorded-provider banner', () => {
   it('renders, non-dismissibly, when the selected model is the recorded provider', async () => {
     listModelsMock.mockResolvedValue([RECORDED, UK]);
     const { container, unmount } = mountOnce(
-      <ModelPicker settings={settingsWith('recorded-fixtures')} onChange={vi.fn()} />,
+      <ModelPicker modelChoiceId={settingsWith('recorded-fixtures')} onChange={vi.fn()} />,
     );
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
@@ -261,7 +263,7 @@ describe('ModelPicker — the recorded-provider banner', () => {
   it('renders for no other provider', async () => {
     listModelsMock.mockResolvedValue([RECORDED, UK]);
     const { container, unmount } = mountOnce(
-      <ModelPicker settings={settingsWith('uk-sonnet')} onChange={vi.fn()} />,
+      <ModelPicker modelChoiceId={settingsWith('uk-sonnet')} onChange={vi.fn()} />,
     );
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
@@ -273,13 +275,13 @@ describe('ModelPicker — the recorded-provider banner', () => {
     // Same environment, same build, same everything: only the provider on
     // the selected allowlist entry differs, and that alone decides it.
     listModelsMock.mockResolvedValue([{ ...UK, provider: 'recorded' }]);
-    const first = mountOnce(<ModelPicker settings={settingsWith('uk-sonnet')} onChange={vi.fn()} />);
+    const first = mountOnce(<ModelPicker modelChoiceId={settingsWith('uk-sonnet')} onChange={vi.fn()} />);
     await flushUntil(() => selectIn(first.container) !== null, 'the model list');
     expect(first.container.textContent).toContain(RECORDED_PROVIDER_NOTICE.heading);
     first.unmount();
 
     listModelsMock.mockResolvedValue([UK]);
-    const second = mountOnce(<ModelPicker settings={settingsWith('uk-sonnet')} onChange={vi.fn()} />);
+    const second = mountOnce(<ModelPicker modelChoiceId={settingsWith('uk-sonnet')} onChange={vi.fn()} />);
     await flushUntil(() => selectIn(second.container) !== null, 'the model list');
     expect(second.container.textContent).not.toContain(RECORDED_PROVIDER_NOTICE.heading);
     second.unmount();
@@ -289,7 +291,7 @@ describe('ModelPicker — the recorded-provider banner', () => {
 describe('ModelPicker — where your requests go', () => {
   it('states the provider and the jurisdiction of the selected model as a sentence', async () => {
     listModelsMock.mockResolvedValue([UK, US]);
-    const { container, unmount } = mountOnce(<ModelPicker settings={settingsWith('us-gpt')} onChange={vi.fn()} />);
+    const { container, unmount } = mountOnce(<ModelPicker modelChoiceId={settingsWith('us-gpt')} onChange={vi.fn()} />);
     await flushUntil(() => selectIn(container) !== null, 'the model list');
 
     expect(container.textContent).toContain('Where your requests go');

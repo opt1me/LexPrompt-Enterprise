@@ -30,7 +30,7 @@
 
 import { gatewayModelClient } from './model/gatewayModelClient';
 import { uid } from './uid';
-import type { Settings } from '../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import type { ParsedEdit } from './docxRedlines';
 import { computeStrength, isContradicted, type BasisEntry, type PositionStrength } from './strength';
 
@@ -249,7 +249,7 @@ function resolveGroup(raw: RawGroup, byId: Map<string, EditEntry>): InferredPosi
 export async function inferPositions(
   edits: EditEntry[],
   unamendedClauses: { title: string; documentIds: string[] }[],
-  settings: Settings,
+  settings: WorkspaceSettings,
 ): Promise<{ positions: InferredPosition[]; questions: OpenQuestion[] }> {
   const questions = questionsFor(unamendedClauses);
 

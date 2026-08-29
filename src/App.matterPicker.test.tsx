@@ -71,6 +71,17 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
+  // See App.authoring.test.tsx's copy of this comment: keeps `useRole()`'s
+  // App-level gate in its harmless `unknown` state for this file's purposes.
+  getCachedRole: () => undefined,
+}));
+
+// Task 18: see App.authoring.test.tsx's copy of this comment — the model
+// choice is fetched from the server now, not read from `localStorage`.
+const getWorkspaceSettingsMock = vi.fn().mockResolvedValue({ modelChoiceId: '', concurrency: 5, version: 1, updatedAt: 1 });
+vi.mock('./lib/db/workspaceSettings', () => ({
+  getWorkspaceSettings: (...args: unknown[]) => getWorkspaceSettingsMock(...args),
+  saveWorkspaceSettings: vi.fn(),
 }));
 
 vi.mock('./lib/model/gatewayModelClient', () => ({
@@ -161,7 +172,9 @@ describe('App — running a playbook from the Library goes through a matter pick
     // `handleCreateMatterForRun` both end in) gates on `ensureConfigured()`
     // exactly as the pre-existing Library flow did — an API key is needed
     // here purely to get past that gate, not something this file is testing.
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockReset().mockResolvedValue({
+      modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1,
+    });
     listModelsMock.mockReset().mockResolvedValue([TEST_ALLOWED_MODEL]);
     migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
@@ -288,28 +301,17 @@ describe('App — running a playbook from the Library goes through a matter pick
       expect(container.textContent).toContain('is no longer on the list for this workspace');
     });
 
-    it('drops the retired capability flags rather than reviewing on the previous model', async () => {
-      localStorage.setItem('lexprompt.settings', JSON.stringify({
-        modelChoiceId: 'test/model', concurrency: 5,
-        modelSupportsImages: true, modelContextLength: 200000,
-        modelChoiceLabel: 'Something Retired', modelChoiceModel: 'retired-1',
-      }));
-      listModelsMock.mockResolvedValue([{ ...TEST_ALLOWED_MODEL, id: 'some-other-model' }]);
-      act(() => { root.render(<App />); });
-      await flush();
-
-      const stored = JSON.parse(localStorage.getItem('lexprompt.settings')!);
-      // A scanned PDF must not be sent as images to a choice that no longer
-      // exists, and nothing persisted afterwards may name the retired model.
-      expect('modelSupportsImages' in stored).toBe(false);
-      expect('modelContextLength' in stored).toBe(false);
-      expect('modelChoiceLabel' in stored).toBe(false);
-      expect('modelChoiceModel' in stored).toBe(false);
-      // The id itself STAYS. Clearing it would make `ModelPicker` preselect
-      // and auto-commit the workspace default, telling a reviewer a model
-      // they never picked ran their review.
-      expect(stored.modelChoiceId).toBe('test/model');
-    });
+    // Task 18 retired this file's own "drops the retired capability flags…"
+    // case: the capability fields (`modelSupportsImages` etc.) are never
+    // PERSISTED anywhere any more — not in `localStorage` (Task 18 removed
+    // that write entirely) and not on the server (`WorkspaceSettings`'s own
+    // docstring: `apps/api` never reads or writes them). There is nothing
+    // left for a "drops the stale flags from storage" test to observe; the
+    // behaviour it protected — a scanned PDF must not be sent as images to a
+    // retired model — is still covered by the sibling test above, which
+    // proves the run gate stops the flow before any capability flag would
+    // ever be read. (`ModelPicker`'s own "the id stays, visibly unresolvable"
+    // behaviour is covered directly in `ModelPicker.test.tsx`.)
 
     it('does not lock a working user out when the allowlist read merely FAILED', async () => {
       listModelsMock.mockRejectedValue(new Error('offline'));

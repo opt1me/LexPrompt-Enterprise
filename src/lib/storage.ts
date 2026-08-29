@@ -59,13 +59,26 @@ export function loadSettings(): { settings: Settings; purgedApiKey: boolean } {
     // is still deleted (and still triggers the rewrite below) but raises no
     // notice: there is nothing at openrouter.ai to go and revoke.
     const purgedApiKey = typeof stored.apiKey === 'string' && stored.apiKey.length > 0;
-    const hadLegacyField = 'apiKey' in stored || 'modelId' in stored;
+    // Task 18's own legacy fields, purged the same way `apiKey`/`modelId`
+    // are: `modelChoiceId` and its siblings became `WorkspaceSettings`,
+    // server-side, an admin's to set — a stale copy left in `localStorage`
+    // is a value nothing reads any more, sitting behind a screen that used
+    // to imply it was in use. `MOVED_TO_WORKSPACE_SETTINGS` names every
+    // field `Settings` used to have, so this list and `Settings`'s own
+    // docstring cannot silently drift apart about what left.
+    const MOVED_TO_WORKSPACE_SETTINGS = [
+      'modelChoiceId', 'modelChoiceLabel', 'modelChoiceModel', 'concurrency',
+      'modelSupportsImages', 'modelSupportsStructuredOutput', 'modelContextLength',
+    ] as const;
+    const hadLegacyField = 'apiKey' in stored || 'modelId' in stored
+      || MOVED_TO_WORKSPACE_SETTINGS.some(f => f in stored);
     delete stored.apiKey;
     // `modelId` was an OpenRouter model id. It has no meaning against an
     // operator's allowlist, so it is dropped rather than carried over as a
     // `modelChoiceId` the gateway would refuse — which would leave Settings
     // reporting "configured" over a choice that cannot run.
     delete stored.modelId;
+    for (const field of MOVED_TO_WORKSPACE_SETTINGS) delete stored[field];
 
     const settings = { ...DEFAULT_SETTINGS, ...stored } as Settings;
     // Rewritten whenever either legacy field was present, not only when the

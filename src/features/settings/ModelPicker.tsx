@@ -4,7 +4,6 @@ import { jurisdictionLabel, type AllowedModel } from '@lexprompt/core';
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { isStaleModelChoice, MODEL_CHOICE_STALE } from '../../lib/model/modelChoice';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
-import type { Settings } from '../../types';
 
 /**
  * The banner shown when the selected allowlist entry is the offline
@@ -41,7 +40,12 @@ export interface ModelChoicePatch {
 }
 
 export interface ModelPickerProps {
-  settings: Settings;
+  /** Just the one field this component actually reads. Task 18 moved the
+   *  rest of what used to be `Settings` to `WorkspaceSettings`
+   *  (`@lexprompt/core`) — this component takes the id directly rather than
+   *  either whole type, so it stays usable from `WorkspaceModelPanel`
+   *  without coupling to a shape it does not need. */
+  modelChoiceId: string;
   onChange: (patch: ModelChoicePatch) => void;
 }
 
@@ -102,7 +106,7 @@ function patchFor(m: AllowedModel): ModelChoicePatch {
  * egress destination, so a failed list means no choice can be made — not
  * that the choice falls back to typing one.
  */
-export function ModelPicker({ settings, onChange }: ModelPickerProps) {
+export function ModelPicker({ modelChoiceId, onChange }: ModelPickerProps) {
   const [state, setState] = useState<ModelsState>({ status: 'loading' });
   // At most one automatic commit per mount, so a parent that ignores
   // `onChange` cannot be driven in a loop by its own re-renders.
@@ -134,17 +138,17 @@ export function ModelPicker({ settings, onChange }: ModelPickerProps) {
   }, []);
 
   const models = state.status === 'ready' ? state.models : [];
-  const chosen = models.find(m => m.id === settings.modelChoiceId);
+  const chosen = models.find(m => m.id === modelChoiceId);
   // Only when NOTHING is chosen. A stored choice that is no longer on the
   // list must not quietly resolve to a different model: the reviewer would
   // be told a model they never picked ran their review.
-  const preselect = settings.modelChoiceId ? undefined : models.find(m => m.isDefault);
+  const preselect = modelChoiceId ? undefined : models.find(m => m.isDefault);
   const selected = chosen ?? preselect;
   // Shared with App's own `isConfigured`, through one predicate: the screen
   // saying "nothing is selected" while the shell still waves the user into a
   // review is exactly what two copies of this would produce.
   const staleChoice = state.status === 'ready'
-    && isStaleModelChoice(settings.modelChoiceId, models);
+    && isStaleModelChoice(modelChoiceId, models);
 
   useEffect(() => {
     if (!preselect || committedDefault.current) return;

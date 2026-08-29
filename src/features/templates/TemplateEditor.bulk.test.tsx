@@ -2,7 +2,8 @@ import React from 'react';
 import { act } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { mount, buttonNamed, buttons, click } from '../../test/mount';
-import type { PlaybookClause, PlaybookDraft, PlaybookVersion, Settings } from '../../types';
+import type { PlaybookClause, PlaybookDraft, PlaybookVersion } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 // The module-mock idiom used by `TemplateEditor.suggestions.test.tsx`:
 // `isAuthFailure` must stay real, since the whole point of propagating errors
@@ -45,7 +46,7 @@ const oneClause: PlaybookClause[] = [
 ];
 
 const noop = () => {};
-const testSettings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const testSettings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 const wiring = {
   onPersistDraft: noop,
   onShowVersionHistory: noop,

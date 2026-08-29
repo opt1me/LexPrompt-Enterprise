@@ -1,5 +1,6 @@
 import { mapWithConcurrency } from '../../lib/concurrency';
-import type { DocumentFile, Finding, ReviewRun, ReviewTarget, Settings, PlaybookVersion } from '../../types';
+import type { DocumentFile, Finding, ReviewRun, ReviewTarget, PlaybookVersion } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { extractClause } from './extractClause';
 import { extractCollectionClause } from './extractCollectionClause';
 import { unchecked } from '../../lib/verification';
@@ -157,7 +158,7 @@ export interface CollectionRunInput {
 export async function runReview(
   initial: ReviewRun,
   docs: DocumentFile[],
-  settings: Settings,
+  settings: WorkspaceSettings,
   onUpdate: (run: ReviewRun) => void,
   signal?: AbortSignal,
   collection?: CollectionRunInput,
@@ -245,7 +246,7 @@ export async function retryCell(
   run: ReviewRun,
   doc: DocumentFile,
   clauseId: string,
-  settings: Settings,
+  settings: WorkspaceSettings,
   onUpdate: (run: ReviewRun) => void,
   collection?: CollectionRunInput,
   matterId?: string,

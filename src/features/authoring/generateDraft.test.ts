@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import type { Settings } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import type { DraftFormValues } from './generateDraft';
 import type { FewShotSource } from './fewShot';
 
@@ -21,7 +21,7 @@ const { generateDraft } = await import('./generateDraft');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const settings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 const form: DraftFormValues = { contractType: 'Commercial Lease' };
 

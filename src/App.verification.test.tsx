@@ -91,6 +91,17 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
+  // See App.authoring.test.tsx's copy of this comment: keeps `useRole()`'s
+  // App-level gate in its harmless `unknown` state for this file's purposes.
+  getCachedRole: () => undefined,
+}));
+
+// Task 18: see App.authoring.test.tsx's copy of this comment — the model
+// choice is fetched from the server now, not read from `localStorage`.
+const getWorkspaceSettingsMock = vi.fn().mockResolvedValue({ modelChoiceId: '', concurrency: 5, version: 1, updatedAt: 1 });
+vi.mock('./lib/db/workspaceSettings', () => ({
+  getWorkspaceSettings: (...args: unknown[]) => getWorkspaceSettingsMock(...args),
+  saveWorkspaceSettings: vi.fn(),
 }));
 
 vi.mock('./lib/model/gatewayModelClient', () => ({
@@ -404,7 +415,7 @@ describe('App — persisting a net position (Task 8)', () => {
       return new Promise((resolve) => { resolveC2 = resolve; });
     });
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
 
@@ -523,6 +534,27 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     expect(container.textContent).toContain('Storage quota exceeded');
   });
 
+  it('Task 16: a getProfile() failure refuses the verification and reports it, rather than an unhandled rejection', async () => {
+    // `getProfile()` can now REJECT (it no longer mints a fallback person on
+    // a network failure) and `handleVerify` sat outside any `try` around
+    // this call before the Task 16 fix — an unhandled rejection with
+    // nothing shown, on the exact keyboard-driven path most likely to be
+    // used mid-review. This is the regression test for that fix.
+    getProfileMock.mockReset().mockRejectedValue(new Error('LexPrompt could not reach your firm\'s service'));
+
+    await openReview();
+
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+
+    // Refused, not silently applied: the store is never reached and the
+    // chip stays exactly as it was.
+    expect(saveReviewMock).not.toHaveBeenCalled();
+    const chips = Array.from(container.querySelectorAll('[role="status"]'));
+    expect(chips[0].textContent).toBe('Unverified');
+    expect(container.textContent).toContain('This verification was not saved');
+  });
+
   it('records the local profile id and a timestamp against the verification', async () => {
     getProfileMock.mockResolvedValue({ id: 'u42', name: 'Someone Else', initials: 'SE' });
     saveReviewMock.mockResolvedValue(undefined);
@@ -607,7 +639,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       return new Promise((resolve) => { resolveC2 = resolve; });
     });
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
@@ -682,7 +714,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       return new Promise((resolve) => { resolveC2 = resolve; });
     });
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
@@ -748,7 +780,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       clauses: [...makeTemplate().clauses, { id: 'c3', title: 'Indemnity', extractPrompt: 'Extract the indemnity clause.' }],
     };
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([threeClauseTemplate]);
     listMattersMock.mockResolvedValue([makeMatter()]);
 
@@ -822,7 +854,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       notes: [],
     }));
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
@@ -878,7 +910,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
       },
     );
 
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);

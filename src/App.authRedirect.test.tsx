@@ -81,6 +81,19 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
+  // See App.authoring.test.tsx's copy of this comment: keeps `useRole()`'s
+  // App-level gate in its harmless `unknown` state for this file's purposes.
+  getCachedRole: () => undefined,
+}));
+
+// Task 18: see App.authoring.test.tsx's copy of this comment — the model
+// choice is fetched from the server now, not read from `localStorage`. Every
+// `localStorage.setItem('lexprompt.settings', …)` call below became a
+// `getWorkspaceSettingsMock.mockResolvedValue(…)` call instead.
+const getWorkspaceSettingsMock = vi.fn().mockResolvedValue({ modelChoiceId: '', concurrency: 5, version: 1, updatedAt: 1 });
+vi.mock('./lib/db/workspaceSettings', () => ({
+  getWorkspaceSettings: (...args: unknown[]) => getWorkspaceSettingsMock(...args),
+  saveWorkspaceSettings: vi.fn(),
 }));
 
 // listModels would otherwise attempt a real network fetch from the
@@ -315,7 +328,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     // split's two audiences a per-clause failure is for. It must not guess
     // "Settings": that would be exactly wrong for a configuration-class
     // failure, which is the one thing this whole task exists to stop.
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
     extractClauseMock.mockResolvedValue({
       clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR, authError: true,
@@ -338,7 +351,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     getMatterMock.mockResolvedValue({ id: 'm1', name: 'Acme v Bolt', ownerId: 'u1', createdAt: 1, updatedAt: 1 });
     getReviewMock.mockResolvedValue(makeStaleReview());
     getDocumentMock.mockResolvedValue(makeDocumentRecord());
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
 
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
@@ -374,7 +387,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   // way, in this file's existing harness, to hand that real error through
   // to `handleModelError` without inventing a second mocking seam.
   it('a live sign_in_required during a run shows the sign-in message and does not navigate to Settings', async () => {
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
     extractClauseMock.mockRejectedValue(
       new ModelError('Your sign-in could not be verified. Sign in again.', 'sign_in_required', 401),
@@ -392,7 +405,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   });
 
   it('a live service_misconfigured during a run shows the configuration message in place, does not navigate to Settings, and shows the callId', async () => {
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
     extractClauseMock.mockRejectedValue(
       new ModelError(
@@ -415,7 +428,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   });
 
   it('a live model_not_allowed does navigate to Settings', async () => {
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
     extractClauseMock.mockRejectedValue(
       new ModelError("The model is not on this workspace's allowlist.", 'model_not_allowed', 400),
@@ -432,7 +445,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   });
 
   it('a live jurisdiction_not_allowed navigates to Settings, shows the jurisdiction, and shows that nothing was sent', async () => {
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
     extractClauseMock.mockRejectedValue(
       new ModelError(
@@ -456,7 +469,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   });
 
   it('a live group_overage shows the overage message, does not navigate to Settings, does not offer sign-in, and does not show the not_permitted wording', async () => {
-    localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
     extractClauseMock.mockRejectedValue(
       new ModelError(

@@ -1,5 +1,5 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import type { Settings } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 export interface SuggestRevisionContext {
   matterId?: string;
@@ -18,7 +18,7 @@ export async function suggestRevision(
   clauseTitle: string,
   original: string,
   issue: string,
-  settings: Settings,
+  settings: WorkspaceSettings,
   context: SuggestRevisionContext = {},
 ): Promise<string> {
   const system = 'You are an expert contract drafter.';

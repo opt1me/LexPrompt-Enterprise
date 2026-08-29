@@ -62,6 +62,21 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: async () => ({ id: 'u1', initials: 'AB', name: 'A B' }),
+  // Task 16/17: `src/lib/role.ts`'s `useRole()` reads this off the SAME
+  // module — a stub returning `undefined` keeps the new App-level role gate
+  // permanently in its `unknown` state here, which is exactly what a test
+  // that isn't about roles needs: it never trips the `failed` branch, so
+  // `AppShell` renders exactly as it did before this module gained a role.
+  getCachedRole: () => undefined,
+}));
+
+// Task 18: the model choice is workspace configuration fetched from the
+// server now, not read out of `localStorage` on mount — this replaces the
+// old `localStorage.setItem(SETTINGS_KEY, …)` seed below.
+const getWorkspaceSettingsMock = vi.fn().mockResolvedValue({ modelChoiceId: '', concurrency: 5, version: 1, updatedAt: 1 });
+vi.mock('./lib/db/workspaceSettings', () => ({
+  getWorkspaceSettings: (...args: unknown[]) => getWorkspaceSettingsMock(...args),
+  saveWorkspaceSettings: vi.fn(),
 }));
 
 // The one network call this flow makes. Mocked at the module boundary so
@@ -80,8 +95,6 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
 }));
 
 import App from './App';
-
-const SETTINGS_KEY = 'lexprompt.settings';
 
 function draftWithTwoClauses(): AuthoringDraft {
   return {
@@ -217,7 +230,9 @@ function keepEveryClause() {
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ modelChoiceId: 'test/model' }));
+  getWorkspaceSettingsMock.mockReset().mockResolvedValue({
+    modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1,
+  });
   migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
   listPlaybooksMock.mockReset().mockResolvedValue([]);
   getPlaybookMock.mockReset().mockResolvedValue(publishedPlaybook);
@@ -323,11 +338,13 @@ describe('the draft is session-only (R-E1)', () => {
     expect(publishVersionMock).not.toHaveBeenCalled();
     expect(publishAndPointMock).not.toHaveBeenCalled();
 
-    // And nothing in localStorage beyond the settings blob that was there
-    // before the draft existed — no draft key under any name.
+    // And nothing in localStorage at all — no draft key under any name.
+    // Task 18: the model choice this test configures now comes from the
+    // mocked `getWorkspaceSettings()`, not from a seeded `SETTINGS_KEY`
+    // blob, so there is nothing settings-shaped left in `localStorage` to
+    // exempt any more.
     const keys = Object.keys(localStorage);
-    expect(keys).toEqual([SETTINGS_KEY]);
-    expect(localStorage.getItem(SETTINGS_KEY)).not.toMatch(/Break clause/);
+    expect(keys).toEqual([]);
   });
 
   it('does not put the draft in the URL, so a reload cannot resurrect it', async () => {

@@ -1,8 +1,8 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Mail, FileDown, Loader, FileText, X } from 'lucide-react';
-import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun, Settings } from '../../types';
+import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun } from '../../types';
 import { isAuthFailure } from '../../lib/model/authFailure';
-import { ModelError, SERVICE_CONFIG_HINT } from '@lexprompt/core';
+import { ModelError, SERVICE_CONFIG_HINT, type WorkspaceSettings } from '@lexprompt/core';
 import { findingKey } from '../../lib/verification';
 import type { VerificationChange } from '../../lib/verification';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
@@ -51,7 +51,7 @@ function namesConfigurationFault(errorText: string | undefined): boolean {
 export interface ResultsViewProps {
   run: ReviewRun;
   documents: DocumentFile[];
-  settings: Settings;
+  settings: WorkspaceSettings;
   onRetryCell: (docId: string, clauseId: string) => void;
   /** Optional: wired in Task 17. Renders the "Tabular view" toggle only when supplied. */
   onOpenTabular?: () => void;

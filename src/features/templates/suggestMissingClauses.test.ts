@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import type { Settings } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 // The module-mock idiom used by `suggestField.test.ts` / `generateDraft.test.ts`:
 // `isAuthFailure` must stay real, since the whole point of propagating errors
@@ -18,7 +18,7 @@ const { suggestMissingClauses } = await import('./suggestMissingClauses');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const settings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 describe('suggestMissingClauses', () => {
   it('does not propose a clause the playbook already has', async () => {

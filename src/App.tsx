@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Settings as SettingsIcon, ClipboardList, Briefcase, ShieldCheck } from 'lucide-react';
-import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Settings, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
-import { apiKeyWasPurgedThisSession, loadSettings, saveSettings } from './lib/storage';
+import type { Playbook, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
+import type { WorkspaceSettings } from '@lexprompt/core';
+import { getWorkspaceSettings } from './lib/db/workspaceSettings';
+import { apiKeyWasPurgedThisSession, loadSettings } from './lib/storage';
 import { API_KEY_PURGED_NOTICE } from './lib/privacyCopy';
 import { applyVerification, findingKey, makeNote, resetVerification, unchecked } from './lib/verification';
 import type { VerificationChange } from './lib/verification';
@@ -94,6 +96,9 @@ import { Button } from './components/Button';
 import { StandardPositionsView } from './features/positions/StandardPositionsView';
 import { useAuth } from './lib/auth/useAuth';
 import { SignInScreen } from './features/auth/SignInScreen';
+import { AccessRefusedPanel } from './features/auth/AccessRefusedPanel';
+import { useRole } from './lib/role';
+import { isAccessRefusedError } from './lib/model/authFailure';
 
 /** `authoring-form` and `authoring-review` are sub-project E's two
  *  session-only screens. They deliberately have **no `Route`**: a draft
@@ -413,6 +418,12 @@ const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
  * there is no ordering race to get right here; it's structural.
  */
 function AppShell({ migratedCount, signIn }: { migratedCount: number | null; signIn: () => void }) {
+  // Task 17: the role gate for the two partner-only actions. A second
+  // `useRole()` instance, not a prop threaded down from `App()` — it shares
+  // `getProfile()`'s cache (so this costs no second request once the boot
+  // gate above has already resolved one) without widening `AppShell`'s own
+  // prop surface, which nothing outside this file constructs directly.
+  const roleState = useRole();
   // The inline closure defers the actual `confirmDiscardIfDirty` reference
   // (declared further down, once `view`/`activeTemplate` exist) until the
   // guard is actually invoked — never before this render has finished, so
@@ -537,9 +548,54 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
   // initializer twice and the second call — by then reading a blob with no
   // key in it — correctly reports `false`. Losing the one notice about a
   // live credential to a dev-mode double-invoke is not a trade worth making.
-  const [settings, setSettings] = useState<Settings>(() => loadSettings().settings);
+  // The initializer's RETURN VALUE is no longer read into `settings` below —
+  // Task 18 moved every field `Settings` had to `WorkspaceSettings`, fetched
+  // from the server — but the CALL still has to happen, because purging a
+  // leftover `apiKey` (Stage 1's DoD) is this call's side effect, not its
+  // result.
+  useState(() => loadSettings());
   const [keyPurgeNoticeDismissed, setKeyPurgeNoticeDismissed] = useState(false);
+  /**
+   * §6.6 (Task 18): the model choice and its concurrency limit are workspace
+   * configuration now, fetched from `GET /v1/workspace/settings` rather
+   * than read out of `localStorage` on the very first render. The zeroed
+   * default below is deliberately NOT "configured" — `isConfigured` reads
+   * `modelChoiceId`, and an empty string there is the same "nothing chosen
+   * yet" state a fresh `Settings` blob used to start in, so nothing
+   * downstream has to learn a fourth state for "the fetch hasn't answered
+   * yet". A failed fetch is reported once, below, and otherwise behaves
+   * exactly like "no model configured" — `ensureConfigured` already has
+   * the right sentence for that.
+   */
+  const [settings, setSettings] = useState<WorkspaceSettings>({
+    modelChoiceId: '', concurrency: 5, version: 0, updatedAt: 0,
+  });
   const { notify, toast } = useToast();
+
+  // Task 18: the one fetch that replaces `loadSettings().settings` for
+  // everything that moved to `WorkspaceSettings`. A failure here is NOT
+  // treated as "the app is broken" and is deliberately quiet at THIS layer
+  // — the same "best-effort" posture the capability cross-reference effect
+  // below already takes, for the same reason: `settings.modelChoiceId`
+  // simply stays `''`, which `isConfigured`/`ensureConfigured` already read
+  // as "nothing chosen yet" and refuse to proceed on, with their own
+  // explicit message, the moment anything actually needs a model. Opening
+  // Settings gives the REAL failure its own screen — `WorkspaceModelPanel`
+  // retries independently and reports there — which is a more useful place
+  // for a reviewer to see "why" than a toast fired at an arbitrary moment
+  // during an unrelated screen's mount.
+  useEffect(() => {
+    let cancelled = false;
+    getWorkspaceSettings()
+      .then(ws => {
+        if (cancelled) return;
+        setSettings(prev => ({ ...prev, ...ws }));
+      })
+      .catch(() => { /* best-effort; WorkspaceModelPanel reports this for real */ });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   /** A `service_misconfigured`-class failure (Task 23): shown "in place",
    *  wherever the user already is, and never routed to Settings — there is
    *  nothing there to fix it. Set by `handleModelError`'s default branch;
@@ -1421,11 +1477,15 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
               modelSupportsImages: _images, modelSupportsStructuredOutput: _structured,
               modelContextLength: _context, ...kept
             } = prev;
-            // Nothing to strip — don't rewrite storage on every mount.
+            // Nothing to strip — no re-render needed.
             if (Object.keys(kept).length === Object.keys(prev).length) return prev;
-            const next: Settings = kept;
-            saveSettings(next);
-            return next;
+            // Task 18: these capability fields are never PERSISTED — they
+            // are resolved fresh, client-side, from the allowlist every
+            // session (`WorkspaceSettings`'s own docstring). There is
+            // nothing to write back here any more; the old `saveSettings`
+            // call wrote them to `localStorage`, which no longer holds any
+            // part of this record at all.
+            return kept as WorkspaceSettings;
           });
           return;
         }
@@ -1439,19 +1499,18 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
             prev.modelSupportsStructuredOutput === match.supportsStructuredOutput &&
             prev.modelContextLength === match.contextLength
           ) return prev;
-          const next: Settings = {
+          return {
             ...prev,
-            // Refreshed alongside the capabilities so that anything
-            // persisted afterwards names what this allowlist entry IS now,
-            // not what it was called when it was first chosen.
+            // Refreshed alongside the capabilities so that anything built
+            // from this state names what the allowlist entry IS now, not
+            // what it was called when it was first chosen. In-memory only —
+            // see the comment above.
             modelChoiceLabel: match.label,
             modelChoiceModel: match.model,
             modelSupportsImages: match.supportsImages,
             modelSupportsStructuredOutput: match.supportsStructuredOutput,
             modelContextLength: match.contextLength,
           };
-          saveSettings(next);
-          return next;
         });
       })
       .catch(() => { /* best-effort; keep whatever capabilities we already have */ });
@@ -1786,7 +1845,20 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
   };
 
   const handleCreateMatterForRun = async (params: CreateMatterParams) => {
-    const created = await createMatter(params);
+    // Task 16: `createMatter` "does not notify or swallow errors itself —
+    // both callers have their own thing to do with a failure" (see its own
+    // docstring), but this caller had nothing: `MatterPickerModal.handleCreate`
+    // only wraps the call in `try { … } finally`, with no `catch` — so a
+    // `createMatter` rejection (now routine on a `getProfile()` failure,
+    // where it used to require a `saveMatter` failure) was an unhandled
+    // rejection with no message shown anywhere.
+    let created: Matter;
+    try {
+      created = await createMatter(params);
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not create the matter.', 'error');
+      return;
+    }
     notify('Matter created.');
     await handlePickMatterForRun(created.id);
   };
@@ -2090,7 +2162,21 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
     if (!existing) return;
 
-    const profile = await getProfile();
+    // Task 16: `getProfile()` can now REJECT (it no longer mints a fallback
+    // person on a network failure), and this call sat outside any `try`
+    // before this fix — an unhandled rejection with no message shown, on the
+    // exact keyboard-driven path most likely to be used mid-review. A write
+    // that cannot say who made it must not happen, but it must say so.
+    let profile: UserProfile;
+    try {
+      profile = await getProfile();
+    } catch (e) {
+      notify(
+        e instanceof Error ? `This verification was not saved: ${e.message}` : 'This verification was not saved.',
+        'error',
+      );
+      return;
+    }
 
     let verification: Verification;
     try {
@@ -2161,7 +2247,16 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
     if (!existing) return;
 
-    const profile = await getProfile();
+    // Task 16: same fix as `handleVerify` above — `getProfile()` can now
+    // reject, and this call was outside any `try` (an unhandled rejection,
+    // nothing shown).
+    let profile: UserProfile;
+    try {
+      profile = await getProfile();
+    } catch (e) {
+      notify(e instanceof Error ? `This note was not saved: ${e.message}` : 'This note was not saved.', 'error');
+      return;
+    }
     const note = makeNote(docId, clauseId, text, profile.id, Date.now(), uid());
     const updated = withUpdatedFinding(current, docId, clauseId, {
       ...existing,
@@ -2217,7 +2312,17 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
     if (!existing?.netPosition) return;
 
-    const profile = await getProfile();
+    // Task 16: same fix as `handleVerify` above.
+    let profile: UserProfile;
+    try {
+      profile = await getProfile();
+    } catch (e) {
+      notify(
+        e instanceof Error ? `This confirmation was not saved: ${e.message}` : 'This confirmation was not saved.',
+        'error',
+      );
+      return;
+    }
     const netPosition = confirmPosition(existing.netPosition, profile.id, Date.now());
     const updated = withUpdatedFinding(current, docId, clauseId, { ...existing, netPosition });
 
@@ -2258,7 +2363,17 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
     if (!existing?.netPosition) return;
 
-    const profile = await getProfile();
+    // Task 16: same fix as `handleVerify` above.
+    let profile: UserProfile;
+    try {
+      profile = await getProfile();
+    } catch (e) {
+      notify(
+        e instanceof Error ? `This amendment was not saved: ${e.message}` : 'This amendment was not saved.',
+        'error',
+      );
+      return;
+    }
 
     let netPosition: NetPosition;
     try {
@@ -3817,6 +3932,7 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
               onRetryHealth={() => { if (playbookRouteId) loadPositionHealth(playbookRouteId); }}
               settings={settings}
               onAuthError={handleModelError}
+              role={roleState}
             />
           ) : (
             <div className="p-8 font-ui text-ui text-ink-3">No template selected.</div>
@@ -3933,7 +4049,10 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
           )
         )}
         {view === 'settings' && (
-          <SettingsPanel settings={settings} onChange={setSettings} />
+          <SettingsPanel
+            role={roleState}
+            onWorkspaceSettingsSaved={(saved) => setSettings(prev => ({ ...prev, ...saved }))}
+          />
         )}
       </main>
 
@@ -4026,7 +4145,11 @@ export default function App() {
   // async checks run CONCURRENTLY rather than one blocking the other —
   // deliberately, so adding sign-in here does not double the wait a cold
   // load already had for the migration check alone.
-  const { state: authState, signIn, retry: retryAuth } = useAuth();
+  const { state: authState, signIn, signOut, retry: retryAuth } = useAuth();
+  // Task 17 (§7): a signed-in caller can still be told "no access" by
+  // `GET /v1/me` — a role gate one layer beyond the sign-in gate below,
+  // which only knows the token was accepted, not what it is allowed to do.
+  const roleState = useRole();
   const [migration, setMigration] = useState<MigrationState>({ kind: 'pending' });
   // `migrateIfNeeded()` is async and nothing can cancel it, so its result can
   // arrive after this component is gone — a route change, or a test file
@@ -4079,6 +4202,37 @@ export default function App() {
   // a caller, it introduces no colleagues, and no other screen changes.
   if (authState.status !== 'signed-in') {
     return <SignInScreen state={authState} onSignIn={signIn} onRetry={retryAuth} />;
+  }
+
+  // Task 17 (§7): "a user in no mapped group has no access at all and is
+  // told so plainly — not shown an empty app, which would be the 'empty is
+  // not broken' rule failing at the front door." Checked here, beside the
+  // sign-in gate above and before the migration gate below, so nothing
+  // AppShell mounts (matters list, playbook library, the header itself) can
+  // hint at a working app behind this refusal.
+  //
+  // Scoped to exactly the failures with a definite answer here:
+  //  - `no_role` / `account_disabled` / `group_overage` → told plainly,
+  //    with the API's own message (`isAccessRefusedError`).
+  //  - `service_misconfigured` → the FIRM's problem, not this account's;
+  //    Stage 1's Task 23 split these deliberately, so this must not be
+  //    folded into the panel above.
+  // Anything else — a boot-time network blip, an unrecognised code — falls
+  // through and lets `AppShell` mount. `roleState` reaching `failed` for a
+  // reason nothing here recognises is not evidence the account has no
+  // access; blocking the whole app on it would be exactly the
+  // confidently-wrong failure this file exists not to produce.
+  if (roleState.status === 'failed') {
+    if (isAccessRefusedError(roleState.error)) {
+      return <AccessRefusedPanel error={roleState.error} onSignOut={signOut} />;
+    }
+    if (roleState.error instanceof ModelError && roleState.error.code === 'service_misconfigured') {
+      return (
+        <div className="min-h-screen bg-paper flex items-center justify-center p-6">
+          <ServiceConfigError error={roleState.error} />
+        </div>
+      );
+    }
   }
 
   if (migration.kind === 'pending') {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import type { Settings } from '../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import type { ParsedEdit } from './docxRedlines';
 
 // The module-mock idiom used elsewhere in this codebase (e.g.
@@ -17,7 +17,7 @@ const { inferPositions } = await import('./inferPositions');
 
 beforeEach(() => vi.clearAllMocks());
 
-const settings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const settings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 
 type EditEntry = { documentId: string; edit: ParsedEdit; source: 'tracked' | 'diff' };
 

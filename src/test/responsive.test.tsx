@@ -8,7 +8,8 @@ import { TabularReview } from '../features/tabular/TabularReview';
 import { ResultsView } from '../features/review/ResultsView';
 import { PdfCanvas } from '../features/review/PdfCanvas';
 import { Modal } from '../components/Modal';
-import type { Finding, ReviewRun, DocumentFile, Settings } from '../types';
+import type { Finding, ReviewRun, DocumentFile } from '../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 // pdf.js, faked just enough to render one page. `getViewport` reports a
 // US Letter page (612pt wide) at whatever scale the component asks for, so
@@ -131,7 +132,7 @@ function documentPaneWidth(view: HTMLElement, viewport: number): number {
   return viewport - rail - findings - BORDERS;
 }
 
-const settings: Settings = { modelChoiceId: 'test/model', concurrency: 2 };
+const settings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 2 };
 
 /** Mounts the review screen only long enough to read the pane widths off it,
  *  then unmounts: `ResultsView` binds `useVerifyKeys` to `window`, and this

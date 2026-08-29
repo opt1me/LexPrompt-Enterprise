@@ -30,7 +30,8 @@
 
 import { gatewayModelClient } from './model/gatewayModelClient';
 import { uid } from './uid';
-import type { Settings, PlaybookVersion, PlaybookClause, Changeset, ChangesetItem, ChangeKind, RedlineEdit } from '../types';
+import type { PlaybookVersion, PlaybookClause, Changeset, ChangesetItem, ChangeKind, RedlineEdit } from '../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import type { ParsedEdit } from './docxRedlines';
 
 export type { ChangeKind };
@@ -233,7 +234,7 @@ export async function buildChangeset(
   version: PlaybookVersion,
   edits: EditEntry[],
   sourceSummary: string,
-  settings: Settings,
+  settings: WorkspaceSettings,
 ): Promise<Changeset> {
   const items: ChangesetItem[] = [];
 

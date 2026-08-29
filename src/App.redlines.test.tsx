@@ -79,6 +79,17 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: async () => ({ id: 'u1', initials: 'AB', name: 'A B' }),
+  // See App.authoring.test.tsx's copy of this comment: keeps `useRole()`'s
+  // App-level gate in its harmless `unknown` state for this file's purposes.
+  getCachedRole: () => undefined,
+}));
+
+// Task 18: see App.authoring.test.tsx's copy of this comment — the model
+// choice is fetched from the server now, not read from `localStorage`.
+const getWorkspaceSettingsMock = vi.fn().mockResolvedValue({ modelChoiceId: '', concurrency: 5, version: 1, updatedAt: 1 });
+vi.mock('./lib/db/workspaceSettings', () => ({
+  getWorkspaceSettings: (...args: unknown[]) => getWorkspaceSettingsMock(...args),
+  saveWorkspaceSettings: vi.fn(),
 }));
 
 vi.mock('./lib/model/gatewayModelClient', () => ({
@@ -138,8 +149,6 @@ vi.mock('./lib/db/changesets', async (importOriginal) => ({
 }));
 
 import App from './App';
-
-const SETTINGS_KEY = 'lexprompt.settings';
 
 function edit(overrides: Partial<ParsedEdit> = {}): ParsedEdit {
   return {
@@ -274,7 +283,9 @@ async function reachTheDraftReview() {
 
 beforeEach(() => {
   localStorage.clear();
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify({ modelChoiceId: 'test/model' }));
+  getWorkspaceSettingsMock.mockReset().mockResolvedValue({
+    modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1,
+  });
   migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
   listPlaybooksMock.mockReset().mockResolvedValue([]);
   getPlaybookMock.mockReset().mockResolvedValue(null);
@@ -589,13 +600,12 @@ describe('a precedent document is read and never stored (spec §4, §11)', () =>
     expect(addDocumentMock).not.toHaveBeenCalled();
     expect(getDocumentBlobMock).not.toHaveBeenCalled();
 
-    // Only the settings blob that was there before the session started —
-    // no key holding a document's name or extracted text under any name.
+    // Nothing at all — no key holding a document's name or extracted text
+    // under any name. Task 18: the model choice this test configures comes
+    // from the mocked `getWorkspaceSettings()` now, so there is no settings
+    // blob in `localStorage` to exempt any more.
     const keys = Object.keys(localStorage);
-    expect(keys).toEqual([SETTINGS_KEY]);
-    for (const key of keys) {
-      expect(localStorage.getItem(key)).not.toMatch(/Brookvale|TEXT OF/);
-    }
+    expect(keys).toEqual([]);
   });
 });
 

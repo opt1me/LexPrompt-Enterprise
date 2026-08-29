@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Button } from '../../components/Button';
 import type { ChangeKind, Changeset, ChangesetItem, PlaybookVersion } from '../../types';
+import { canPublish as roleCanPublish, PUBLISH_NEEDS_PARTNER_TITLE, type RoleState } from '../../lib/role';
 
 /**
  * "The changeset" — spec §7. `WhatWeLearned`'s sibling: where that screen
@@ -54,6 +55,19 @@ export interface ChangesetReviewProps {
   onPublish: () => void;
   publishing?: boolean;
   publishError?: string;
+  /** Task 17 (§7): publishing a changeset sits at the same bar as publishing
+   *  from the editor (`ROUTE_POLICY['POST /v1/changesets/:id/publish'] ===
+   *  'partner'`) — two routes to one act must not carry two different bars
+   *  (R-E8). This component is currently unreached from `App.tsx` (spec §9's
+   *  changeset mechanism is built and tested but has no screen that opens
+   *  it yet — see `App.tsx`'s own comment beside `handleLearnFromRedlines`),
+   *  so this gate has no live caller today; it exists so the control is
+   *  correct on the day a screen reaches it, rather than needing this exact
+   *  fix again then.
+   *
+   *  Same default as `TemplateEditor.role` and for the same reason: every
+   *  existing test of this component has no opinion about roles. */
+  role?: RoleState;
 }
 
 function itemTitle(item: ChangesetItem): string {
@@ -118,11 +132,16 @@ export function ChangesetReview({
   onPublish,
   publishing = false,
   publishError,
+  role = { status: 'known', role: 'admin' },
 }: ChangesetReviewProps) {
   const counts = decisionCounts(changeset.items);
   const kinds = kindCounts(changeset.items);
   const published = Boolean(changeset.publishedVersionId);
-  const canPublish = !published && !publishing && counts.open === 0 && changeset.items.length > 0;
+  const readyToPublish = !published && !publishing && counts.open === 0 && changeset.items.length > 0;
+  // See `TemplateEditor`'s identical note: this gate is a courtesy, never
+  // the control, so a role check that could not complete (`'failed'`) is
+  // treated as permissive rather than blocking.
+  const publishAllowed = role.status !== 'known' || roleCanPublish(role.role);
 
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6 bg-paper">
@@ -170,11 +189,18 @@ export function ChangesetReview({
             {counts.open > 0 ? ` · ${counts.open} still open` : ''}
           </p>
           {publishError && <p className="font-ui text-ui text-risk-high">{publishError}</p>}
-          <Button onClick={onPublish} disabled={!canPublish} loading={publishing}>
-            {counts.open > 0
-              ? `Decide ${counts.open} more item${counts.open === 1 ? '' : 's'} before publishing`
-              : `Publish v${fromVersion.version + 1}`}
-          </Button>
+          {role.status !== 'unknown' && (
+            <Button
+              onClick={onPublish}
+              disabled={!readyToPublish || !publishAllowed}
+              loading={publishing}
+              title={!publishAllowed && readyToPublish ? PUBLISH_NEEDS_PARTNER_TITLE : undefined}
+            >
+              {counts.open > 0
+                ? `Decide ${counts.open} more item${counts.open === 1 ? '' : 's'} before publishing`
+                : `Publish v${fromVersion.version + 1}`}
+            </Button>
+          )}
         </div>
       )}
     </div>

@@ -98,16 +98,28 @@ describe('Stage 1 definition of done (§18.2)', () => {
     expect(code).not.toMatch(/return[^\n]*\bapiKey\b/);
   });
 
-  it('Settings carries no apiKey field', () => {
+  it('Settings carries no apiKey field, and (Stage 2 Task 18) no longer carries modelChoiceId either', () => {
+    // Non-greedy up to the FIRST `}` rather than a `\n}` on its own line:
+    // Task 18 emptied `Settings` down to `export interface Settings {}`,
+    // written on one line, which the old two-line-only pattern would not
+    // match at all — a `block` of `null` reads as "the interface was not
+    // found", which is the loud failure this scan wants on a rewrite that
+    // moves it, not a silent false negative.
     const types = readFileSync(path.join(ROOT, 'src/types.ts'), 'utf8');
-    const block = /export interface Settings \{([\s\S]*?)\n\}/.exec(types);
+    const block = /export interface Settings \{([\s\S]*?)\}/.exec(types);
     expect(block, 'the Settings interface was not found — this scan proves nothing').toBeTruthy();
-    const code = codeOf(path.join(ROOT, 'src/types.ts'));
-    const start = types.indexOf('export interface Settings {');
-    const end = types.indexOf('\n}', start);
-    expect(code.slice(start, end)).not.toMatch(/\bapiKey\b/);
-    // …and the scan really was looking at the interface.
-    expect(code.slice(start, end)).toContain('modelChoiceId');
+    expect(block![1]).not.toMatch(/\bapiKey\b/);
+    // Task 18 moved every field `Settings` had — `modelChoiceId` chief among
+    // them — to `WorkspaceSettings` (`packages/core/src/api/records.ts`),
+    // server-side configuration an admin sets, not a per-browser preference.
+    // The interface stays (rather than being deleted) for the one purge job
+    // `storage.ts` still has, but it is EMPTY now — this is the sanity check
+    // that it stayed that way rather than silently reacquiring the fields
+    // that moved, replacing the old "scan really looked at the interface"
+    // check now that there is nothing left inside it to look for.
+    expect(block![1].trim()).toBe('');
+    const core = readFileSync(path.join(ROOT, 'packages/core/src/api/records.ts'), 'utf8');
+    expect(core).toContain('modelChoiceId');
   });
 
   /**

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { AllowedModel } from '@lexprompt/core';
-import type { Settings } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import {
   isStaleModelChoice, modelProvenanceName,
   MODEL_CHOICE_STALE, MODEL_CHOICE_STALE_MESSAGE,
@@ -19,7 +19,7 @@ const model = (id: string, over: Partial<AllowedModel> = {}): AllowedModel => ({
   ...over,
 });
 
-const settings = (over: Partial<Settings>): Settings =>
+const settings = (over: Partial<WorkspaceSettings>): WorkspaceSettings =>
   ({ modelChoiceId: '', concurrency: 5, ...over });
 
 describe('isStaleModelChoice', () => {

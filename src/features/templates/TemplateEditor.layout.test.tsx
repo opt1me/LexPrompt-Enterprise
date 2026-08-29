@@ -2,7 +2,8 @@ import React from 'react';
 import { describe, it, expect } from 'vitest';
 import { mount, buttonNamed, click } from '../../test/mount';
 import { TemplateEditor } from './TemplateEditor';
-import type { PlaybookClause, PlaybookVersion, Settings } from '../../types';
+import type { PlaybookClause, PlaybookVersion } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 /**
  * The relayout (handoff 1g/2b): a clause LIST in the left rail, ONE clause
@@ -55,7 +56,7 @@ const threeClauses: PlaybookClause[] = [
 ];
 
 const noop = () => {};
-const testSettings: Settings = { modelChoiceId: 'test/model', concurrency: 5 };
+const testSettings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 5 };
 const wiring = {
   onPersistDraft: noop,
   onShowVersionHistory: noop,

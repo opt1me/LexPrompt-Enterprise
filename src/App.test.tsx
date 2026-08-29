@@ -74,6 +74,35 @@ vi.mock('./lib/db/playbookVersions', () => ({
   listVersions: (...args: unknown[]) => listVersionsMock(...args),
 }));
 
+// Task 16: `profile.ts` is an HTTP client now — every write path
+// (`handlePublishTemplate` chief among the flows this file exercises)
+// awaits `getProfile()` for real, so a file that never mocked it before
+// (profile used to be a synchronous local IndexedDB read that never failed)
+// now sends every one of those calls at the global `fetch` stub, which
+// always throws. A resolved default here is what every OTHER App-mounting
+// test file in this project already has.
+// `getCachedRole` resolves to `'admin'` (not `undefined`, unlike most other
+// App-mounting test files) — this file is the primary suite that exercises
+// PUBLISHING end to end, and Task 17's role gate hides the Publish control
+// entirely while unresolved. An admin can always publish (§7), so this
+// keeps every existing publish-flow assertion here testing what it always
+// tested, rather than a permission check this file was never about.
+vi.mock('./lib/db/profile', () => ({
+  getProfile: async () => ({ id: 'u1', initials: 'AB', name: 'A B' }),
+  getCachedRole: () => 'admin' as const,
+}));
+
+// Task 18: see the note above — `WorkspaceSettings` is fetched from the
+// server now too. Failing this quietly (App.tsx's own `.catch(() => {})`)
+// would be enough on its own, but a resolved default avoids leaving
+// `isConfigured` permanently false for every test in this file.
+vi.mock('./lib/db/workspaceSettings', () => ({
+  getWorkspaceSettings: async () => (
+    { modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 }
+  ),
+  saveWorkspaceSettings: vi.fn(),
+}));
+
 import App from './App';
 import { UnconvertedPlaybookError } from './lib/db/playbookMigration';
 

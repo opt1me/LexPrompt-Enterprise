@@ -4,7 +4,8 @@ import { mount, keyDown, click, buttonNamed } from '../../test/mount';
 import { SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import { ResultsView } from './ResultsView';
 import { TRACKED_CHANGES_NOTICE } from '../../lib/docxMarkup';
-import type { DocumentFile, Finding, ReviewRun, Settings, PlaybookVersion } from '../../types';
+import type { DocumentFile, Finding, ReviewRun, PlaybookVersion } from '../../types';
+import type { WorkspaceSettings } from '@lexprompt/core';
 
 // Critical 2 (final whole-branch review, redesign sub-project B): the
 // keyboard verify loop (`useVerifyKeys`, wired here) acted on any clause
@@ -71,7 +72,7 @@ function makeRun(): ReviewRun {
 }
 
 const documents: DocumentFile[] = [];
-const settings: Settings = { modelChoiceId: 'test/model', concurrency: 2 };
+const settings: WorkspaceSettings = { modelChoiceId: 'test/model', concurrency: 2 };
 
 function renderResultsView(onVerify: ReturnType<typeof vi.fn>, run: ReviewRun = makeRun()) {
   return mount(
