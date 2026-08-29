@@ -42,6 +42,17 @@ param oidcGroupsClaim string
 // which wrote this value as `{"tid":"<tenant>"}` — see the Task 25 report.)
 param oidcRequiredClaims string
 
+// §6.5's group -> role table, as comma-separated `issuer|group|role` triples.
+// NO DEFAULT here or in main.bicep, for the same reason allowedJurisdictions
+// has none: apps/api refuses to start unset, and a default would be this
+// template deciding which of a firm's groups may publish a playbook.
+//
+// Under Entra the group values are security-group OBJECT IDS, and the issuer
+// is the tenant's v2.0 issuer — the same string as oidcIssuer above, which
+// apps/api compares byte for byte. Locally the same key carries Keycloak
+// group NAMES. One table, one lookup, no branch (S28).
+param oidcRoleMappings string
+
 // The web SPA's own Entra App Registration (public client) and the scope
 // it requests. Not named in the brief's "three/five OIDC values" list
 // (those are all API_*-side validation config), but VITE_OIDC_CLIENT_ID and
@@ -307,6 +318,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'API_SUBJECT_CLAIM', value: oidcSubjectClaim }
             { name: 'API_GROUPS_CLAIM', value: oidcGroupsClaim }
             { name: 'API_REQUIRED_CLAIMS', value: oidcRequiredClaims }
+            { name: 'API_ROLE_MAPPINGS', value: oidcRoleMappings }
             { name: 'API_WORKSPACE_ID', value: '00000000-0000-0000-0000-000000000001' }
             { name: 'API_GATEWAY_URL', value: 'https://${gatewayApp.properties.configuration.ingress.fqdn}' }
             // NO API_MTLS_*: apps/api/src/config.ts's own comment says this

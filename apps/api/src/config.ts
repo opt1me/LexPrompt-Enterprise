@@ -1,4 +1,5 @@
 import { assertIssuerUsable, type AuthConfig } from './oidc.ts';
+import { parseRoleMappings, type RoleMapping } from './auth/roles.ts';
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -57,6 +58,21 @@ export interface ApiConfig {
    *  rather than a fact about the code that happens not to write. */
   databaseMigrationUrl: string;
   databasePoolMax: number;
+  /**
+   * The issuer's group claim, mapped to LexPrompt's three roles (§6.5).
+   *
+   * THERE IS NO DEFAULT AND NONE IS SHIPPED. A default would be this
+   * codebase guessing at a firm's directory, and the guess would be wrong in
+   * the direction that grants access. `loadConfig` refuses an empty list for
+   * the mirror-image reason: with no mapping, every user who signs in is
+   * told they have no access, which is a stack that is up, healthy and
+   * useless to the entire firm.
+   *
+   * Seeded into `role_mapping` at startup on the migrator connection, so a
+   * mapping removed here is removed from the database too — see
+   * `seedRoleMappings`.
+   */
+  roleMappings: RoleMapping[];
 }
 
 /**
@@ -162,6 +178,36 @@ function parseMtls(env: NodeJS.ProcessEnv): ApiConfig['mtls'] {
   };
 }
 
+/**
+ * `parseRoleMappings` lives in `auth/roles.ts` next to the lookup that reads
+ * what it produces, and throws a plain `Error` so it does not have to import
+ * the configuration module that imports it. Here is where that becomes the
+ * one error type this process treats as "your configuration is wrong", which
+ * is what `main.ts` turns into the startup banner.
+ */
+function roleMappingsFrom(env: NodeJS.ProcessEnv): RoleMapping[] {
+  let mappings: RoleMapping[];
+  try {
+    mappings = parseRoleMappings(env.API_ROLE_MAPPINGS);
+  } catch (err) {
+    throw new ConfigError((err as Error).message);
+  }
+  // The same posture as the gateway's jurisdiction refusal (P4) and the
+  // API's issuer refusal (S29): a misconfiguration must not become a system
+  // that runs and mostly works.
+  if (mappings.length === 0) {
+    throw new ConfigError(
+      'API_ROLE_MAPPINGS is not set. LexPrompt maps the issuer\'s group claim to its three '
+      + 'roles, and with no mapping every user who signs in is told they have no access — '
+      + 'a deployment that runs and refuses everybody. Set it to a comma-separated list of '
+      + '"issuer|group|role", one per group your directory uses. The issuer in each entry '
+      + 'must be the one this API validates (API_ISSUER), which locally is the address the '
+      + 'BROWSER obtains its token from, not the container-network one.',
+    );
+  }
+  return mappings;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
   return {
     port: int(env, 'API_PORT', 8080),
@@ -173,6 +219,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     databaseUrl: required(env, 'API_DATABASE_URL'),
     databaseMigrationUrl: required(env, 'API_DATABASE_MIGRATION_URL'),
     databasePoolMax: int(env, 'API_DATABASE_POOL_MAX', 10),
+    roleMappings: roleMappingsFrom(env),
   };
 }
 
@@ -207,5 +254,13 @@ export function describeConfig(cfg: ApiConfig): string {
     `Gateway: ${cfg.gatewayUrl}${cfg.mtls ? ' (mTLS)' : ''}`,
     `Max request body: ${cfg.maxBodyBytes} bytes`,
     `Database: ${redactDsn(cfg.databaseUrl)}`,
+    // One line per mapping, printed every start. The answer to "why can
+    // nobody sign in" — a group name that does not match what the issuer
+    // actually emits, or an issuer string that is the container-network
+    // address rather than the one the browser obtained its token from — is
+    // then in the first screen of logs rather than in a database nobody can
+    // reach.
+    `Role mappings (${cfg.roleMappings.length}):`,
+    ...cfg.roleMappings.map(m => `  ${m.issuer} | ${m.groupValue} -> ${m.role}`),
   ].join('\n');
 }

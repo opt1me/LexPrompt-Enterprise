@@ -50,6 +50,9 @@ param oidcGroupsClaim string = 'groups'
 @description('Comma-separated claim=value pairs apps/api additionally requires of every token, e.g. tid=<tenant-guid>. NOT JSON — apps/api/src/config.ts\'s parseRequiredClaims rejects a literal "{}" and anything else that is not "claim=value" pairs.')
 param oidcRequiredClaims string
 
+@description('Which of the directory's groups map to which LexPrompt role, as comma-separated issuer|group|role triples. NO DEFAULT: apps/api refuses to start unset, because a deployment with no mapping comes up healthy and refuses every user. Under Entra the group values are security-group OBJECT IDS, not display names.')
+param oidcRoleMappings string
+
 @description('Client id of the web SPA\'s own Entra App Registration (public client), baked into the web build as VITE_OIDC_CLIENT_ID.')
 param oidcClientId string
 
@@ -137,6 +140,7 @@ module containerApps 'modules/containerApps.bicep' = {
     oidcSubjectClaim: oidcSubjectClaim
     oidcGroupsClaim: oidcGroupsClaim
     oidcRequiredClaims: oidcRequiredClaims
+    oidcRoleMappings: oidcRoleMappings
     oidcClientId: oidcClientId
     oidcScope: oidcScope
     gatewayEntraTenantId: gatewayEntraTenantId

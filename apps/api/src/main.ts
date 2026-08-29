@@ -7,6 +7,7 @@ import { makeGatewayClient, type GatewayClient } from './gatewayClient.ts';
 import { makeDb, makePool, type Db } from './db/pool.ts';
 import { runMigrations } from './db/migrate.ts';
 import { resolveActor, type Actor } from './auth/actor.ts';
+import { roleFor, seedRoleMappings } from './auth/roles.ts';
 
 /** Every startup failure reaches the operator as the same banner, whatever
  *  threw it. `ConfigError` was the only thing caught before, so a missing
@@ -57,7 +58,19 @@ async function main(): Promise<void> {
   try {
     const migrationPool = makePool(config.databaseMigrationUrl, 2);
     try {
-      await runMigrations(makeDb(migrationPool), fileURLToPath(new URL('../migrations/', import.meta.url)));
+      const migrator = makeDb(migrationPool);
+      await runMigrations(migrator, fileURLToPath(new URL('../migrations/', import.meta.url)));
+      // On the MIGRATOR connection, because the app role holds no write grant
+      // on `role_mapping` (001_identity.sql) — which is what makes "no request
+      // can change a role mapping" a fact about the database rather than a
+      // fact about the code that happens not to write.
+      //
+      // In ONE transaction, because this seeding both grants and REVOKES: a
+      // mapping the configuration no longer names is deleted. Split across
+      // statements, a failure between them could leave the deletion applied
+      // and the replacement not, which is an outage; or the grant applied and
+      // the revocation not, which is worse and silent.
+      await migrator.tx(t => seedRoleMappings(t, config.workspaceId, config.roleMappings));
     } finally {
       await migrationPool.end();
     }
@@ -79,13 +92,20 @@ async function main(): Promise<void> {
   }
   const verify = makeTokenVerifier(config.auth, jwks);
 
-  // TEMPORARY: every principal provisions as 'reviewer' until Task 4 wires a
-  // real lookup through `role_mapping` (§6.5) from the token's groups claim.
-  // Task 3's `resolveActor` takes the role as a parameter precisely so this
-  // seam exists — see `auth/actor.ts`'s own comment on why. Nothing in
-  // Stage 2 up to this task can grant `partner` or `admin` outside a test.
+  // The token's group claim becomes a role, and a principal in no mapped
+  // group is refused (`no_role`, 403) rather than provisioned as anything.
+  //
+  // ONE transaction around both reads, so a person cannot be provisioned
+  // with a role that was removed between the lookup and the write.
+  //
+  // `roleFor` runs FIRST, and its failure means no `app_user` row is created
+  // at all: a person the firm has not given a role to is not yet a user of
+  // this system, and a row saying otherwise would show up in an
+  // administrator's list as somebody with access.
   const resolveActorForRequest = async (principal: Principal): Promise<Actor> =>
-    db.tx(t => resolveActor(t, principal, 'reviewer', config.workspaceId));
+    db.tx(async t => resolveActor(
+      t, principal, await roleFor(t, principal.issuer, principal.groups), config.workspaceId,
+    ));
 
   const app = buildServer({
     verify, gateway, db,

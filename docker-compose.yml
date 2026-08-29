@@ -160,6 +160,25 @@ services:
       API_GROUPS_CLAIM: ${OIDC_GROUPS_CLAIM}
       API_REQUIRED_CLAIMS: ${OIDC_REQUIRED_CLAIMS}
       API_WORKSPACE_ID: 00000000-0000-0000-0000-000000000001
+      # The group claim -> role table (§6.5). THERE IS NO DEFAULT in the code:
+      # `api` refuses to start with this unset, because a deployment with no
+      # mapping runs, is healthy, and tells every user in the firm that they
+      # have no access.
+      #
+      # The issuer in each entry is INTERPOLATED FROM ${OIDC_ISSUER_BROWSER},
+      # never retyped. It has to be the string this API validates — the
+      # address the browser obtained its token from — and repeating that
+      # literal here is precisely the pair-of-strings mistake that made this
+      # stack unable to authenticate anybody (fix 9fde55f, and API_ISSUER's
+      # comment above). Interpolating the same variable makes the two agree
+      # by construction rather than by review.
+      #
+      # The three group NAMES are the ones infra/keycloak/lexprompt-realm.json
+      # seeds, and they are bare names — not "/reviewers" — because that
+      # realm's groups mapper sets `full.path` to false. Verified against a
+      # token the running stack actually minted, not inferred from the file.
+      # Set OIDC_ROLE_MAPPINGS in .env to override the whole table.
+      API_ROLE_MAPPINGS: ${OIDC_ROLE_MAPPINGS:-${OIDC_ISSUER_BROWSER}|reviewers|reviewer,${OIDC_ISSUER_BROWSER}|partners|partner,${OIDC_ISSUER_BROWSER}|admins|admin}
       API_GATEWAY_URL: https://gateway:8081
       API_MTLS_CA_FILE: /certs/ca.pem
       API_MTLS_CERT_FILE: /certs/api.pem

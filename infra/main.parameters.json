@@ -12,6 +12,7 @@
     "oidcSubjectClaim": { "value": "${OIDC_SUBJECT_CLAIM=oid}" },
     "oidcGroupsClaim": { "value": "${OIDC_GROUPS_CLAIM=groups}" },
     "oidcRequiredClaims": { "value": "${OIDC_REQUIRED_CLAIMS}" },
+    "oidcRoleMappings": { "value": "${OIDC_ROLE_MAPPINGS}" },
     "oidcClientId": { "value": "${OIDC_CLIENT_ID}" },
     "oidcScope": { "value": "${OIDC_SCOPE}" },
 

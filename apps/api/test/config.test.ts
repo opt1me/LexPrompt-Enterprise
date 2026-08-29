@@ -15,6 +15,11 @@ const BASE = {
   API_WORKSPACE_ID: 'ws-1',
   API_DATABASE_URL: 'postgres://lexprompt_app:app-dev@postgres:5432/lexprompt',
   API_DATABASE_MIGRATION_URL: 'postgres://lexprompt_migrator:migrator-dev@postgres:5432/lexprompt',
+  // Required, with no default — see `roleMappingsFrom`. It is in BASE rather
+  // than in each case because "the API refuses to start unset" is asserted in
+  // roleMappingConfig.test.ts, where the refusal is the subject; here it is
+  // just another key a complete configuration has to carry.
+  API_ROLE_MAPPINGS: 'https://login.microsoftonline.com/tid/v2.0|reviewers|reviewer',
 } as NodeJS.ProcessEnv;
 
 describe('loadConfig (apps/api)', () => {

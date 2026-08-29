@@ -33,6 +33,9 @@ const BASE: ApiConfig = {
   databaseUrl: 'postgres://lexprompt_app:app-dev@postgres:5432/lexprompt',
   databaseMigrationUrl: 'postgres://lexprompt_migrator:migrator-dev@postgres:5432/lexprompt',
   databasePoolMax: 10,
+  roleMappings: [
+    { issuer: 'https://login.microsoftonline.com/tid/v2.0', groupValue: 'g-1', role: 'reviewer' },
+  ],
 };
 
 const MTLS = {

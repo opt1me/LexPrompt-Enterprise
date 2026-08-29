@@ -62,7 +62,22 @@ describe('001_identity', () => {
            ($1, 'https://login.microsoftonline.com/t/v2.0', '8f2c1a55-0000-4000-8000-000000000002', 'partner')`,
         [WS],
       );
-      const rows = await t.query<{ n: string }>("select count(*)::text n from role_mapping where role = 'partner'");
+      // Counts ITS OWN TWO ROWS, not every partner mapping in the database.
+      //
+      // The unscoped count passed only while nothing ever wrote to
+      // `role_mapping`. Since Task 4 the api container seeds the configured
+      // mappings at startup and commits them, and these suites run against
+      // that same database through `scripts/pg-forward.sh` — so a table-wide
+      // count now reads the live stack's `partners -> partner` row as well
+      // and fails with 3, in a test about primary keys. Scoping it to the
+      // pair of rows this test inserted is what the assertion was always
+      // trying to say.
+      const rows = await t.query<{ n: string }>(
+        `select count(*)::text n from role_mapping
+          where role = 'partner'
+            and (issuer, group_value) in (
+              ('http://keycloak:8080/realms/lexprompt', 'partners'),
+              ('https://login.microsoftonline.com/t/v2.0', '8f2c1a55-0000-4000-8000-000000000002'))`);
       expect(rows[0].n).toBe('2');
     }, migratorDb());
   });
