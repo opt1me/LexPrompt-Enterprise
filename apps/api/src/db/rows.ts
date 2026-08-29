@@ -101,6 +101,10 @@ export interface Collection {
   variesDocumentIds: string[];
   createdAt: number;
   createdByUserId: string;
+  /** The optimistic-concurrency token, exactly as `Matter.version` — see its
+   *  note there and in `src/types.ts`. Never sent back as
+   *  `version: undefined`; `absentUnless` keeps the key off the wire. */
+  version?: number;
 }
 
 export interface Playbook {
@@ -367,6 +371,10 @@ export interface CollectionRow {
   matter_id: string;
   name: string;
   base_document_id: string;
+  /** `bigint`, which `pg` hands back as a STRING — see `bigintOf`. Optional
+   *  on this interface because `toCollectionRow` never sets it: the database
+   *  owns a row's version, exactly as it owns a matter's. */
+  version?: string | number | null;
   /** A jsonb ARRAY. `pg`'s default type parser hands this back already
    *  parsed into a JS array; sending one back is a JSON STRING (`pg` would
    *  otherwise encode a bare JS array as a Postgres native ARRAY literal,
@@ -401,6 +409,7 @@ export function fromCollectionRow(row: CollectionRow): Collection {
     variesDocumentIds: varies,
     createdAt: epochOf(row.created_at),
     createdByUserId: useridFromColumn(row.created_by_user_id),
+    ...absentUnless('version', bigintOf(row.version)),
   };
 }
 

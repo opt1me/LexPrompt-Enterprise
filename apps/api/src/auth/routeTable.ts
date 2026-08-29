@@ -86,6 +86,12 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'PATCH /v1/documents/:id/role': 'reviewer',
   'DELETE /v1/documents/:id': 'reviewer',
 
+  // §7: a reviewer groups and ungroups documents into collections.
+  'GET /v1/matters/:id/collections': 'reviewer',
+  'GET /v1/collections/:id': 'reviewer',
+  'PUT /v1/collections/:id': 'reviewer',
+  'DELETE /v1/collections/:id': 'reviewer',
+
   // Reconciliation (§6.5). ADMIN, not reviewer: the listing names bytes
   // that no record claims — which is a fact about storage rather than about
   // any matter — and the second route destroys them. A reviewer who could

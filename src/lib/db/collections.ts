@@ -1,24 +1,28 @@
-import { getDb } from './open';
-import { STORES } from './schema';
-import { nextSeq, seqOf } from './seq';
+import { ModelError } from '@lexprompt/core';
+import { apiDelete, apiGet, apiGetOrNull, apiSend } from '../api/client';
 import type { Collection } from '../../types';
 import { uid } from '../uid';
 
-/** A collection record as it actually sits in IndexedDB: the public
- *  `Collection` shape plus a write sequence number. `_seq` exists to break
- *  ties when two saves land in the same millisecond (`Date.now()`
- *  resolution) — mirrors `matters.ts`'s `StoredMatter` /
- *  `playbooks.ts`'s `StoredPlaybook`. Never appears on a `Collection`
- *  returned to callers. */
-interface StoredCollection extends Collection {
-  _seq: number;
-}
-
-function stripSeq(record: StoredCollection): Collection {
-  const { _seq, ...collection } = record;
-  void _seq;
-  return collection;
-}
+/**
+ * The collections repository — an HTTP client over `apps/api` since Stage 2.
+ *
+ * Same file, same exports, same signatures (R3). What moved OUT is the
+ * `_seq` tiebreak and the sort: they are `collection.seq` and an
+ * `order by created_at desc, seq desc` in `apps/api/src/routes/collections.ts`,
+ * where a real database can do the ordering and `collections.pg.test.ts` can
+ * prove it. `StoredCollection`/`stripSeq` are gone with them — `_seq` was
+ * only ever the shape a record took inside IndexedDB.
+ *
+ * What stays here is the transport and the rule it must not get wrong:
+ * **a failure is a failure, never an empty result.** `getCollection` answers
+ * `null` for a 404 and for nothing else.
+ *
+ * `variesDocumentIds` is sent and read back in the order it is given, and
+ * nothing in this file sorts it. `orderedMembers` is the only place
+ * collection reading order is decided and `documentDate` never governs it
+ * (R-C3) — a second sort here would be exactly the sibling drift that rule
+ * exists to prevent.
+ */
 
 export function newCollection(
   matterId: string,
@@ -38,52 +42,48 @@ export function newCollection(
 }
 
 /** A matter's collections, most recently created first; tiebreak on write
- *  sequence descending so the collection saved most recently wins a
- *  same-millisecond collision — same reasoning as `listMatters`.
+ *  sequence descending, so the collection saved most recently wins a
+ *  same-millisecond collision. The order is the server's and is not
+ *  re-derived here.
  *
- *  Rejects (rather than resolving to `[]`) on a genuine database failure: a
- *  caller must be able to tell "no collections yet" apart from "the database
- *  failed". Nothing here catches errors from `getDb()`/`getAllFromIndex`, so
- *  they propagate as-is. */
+ *  Rejects (rather than resolving to `[]`) on any failure: a caller must be
+ *  able to tell "no collections yet" apart from "the server failed". */
 export async function listCollections(matterId: string): Promise<Collection[]> {
-  const db = await getDb();
-  const raw = (await db.getAllFromIndex(STORES.collections, 'byMatter', matterId)) as StoredCollection[];
-  const entries = raw.map(r => ({ collection: stripSeq(r), seq: seqOf(r) }));
-  entries.sort((a, b) => {
-    const diff = b.collection.createdAt - a.collection.createdAt;
-    return diff !== 0 ? diff : b.seq - a.seq;
-  });
-  return entries.map(e => e.collection);
+  return apiGet<Collection[]>(`/v1/matters/${encodeURIComponent(matterId)}/collections`);
 }
 
+/** `null` for "there is no such collection", and ONLY for that. */
 export async function getCollection(id: string): Promise<Collection | null> {
-  const db = await getDb();
-  const found = (await db.get(STORES.collections, id)) as StoredCollection | undefined;
-  return found ? stripSeq(found) : null;
+  return apiGetOrNull<Collection>(`/v1/collections/${encodeURIComponent(id)}`);
 }
 
+/**
+ * Still returns the SAVED record, and the caller still renders from it and
+ * from nothing else (await-then-apply). What changed is which store
+ * confirmed the write — and that the returned record carries the `version`
+ * the next save must state, so a save made against a collection somebody
+ * else has since changed is REFUSED with a `conflict` `ModelError` rather
+ * than applied over their work.
+ */
 export async function saveCollection(c: Collection): Promise<Collection> {
-  const db = await getDb();
-  // The read (current max _seq) and the write share ONE readwrite
-  // transaction, so two concurrent saveCollection calls can never both read
-  // the same max before either has written theirs — the race that would let
-  // concurrent saves mis-order a same-millisecond tie. Nothing non-IDB is
-  // awaited between the getAll and the put, which is what keeps IndexedDB
-  // from auto-committing the transaction early. Mirrors
-  // matters.ts/playbooks.ts's save functions exactly.
-  const tx = db.transaction(STORES.collections, 'readwrite');
-  const seq = await nextSeq(tx.store);
-  const record: StoredCollection = { ...c, _seq: seq };
-  await tx.store.put(record);
-  await tx.done;
-  return c;
+  return apiSend<Collection>('PUT', `/v1/collections/${encodeURIComponent(c.id)}`, c);
 }
 
 /** Deletes only the collection record. Member documents are untouched —
  *  clearing their `role`/`collectionId` is a matter-level operation over
- *  documents (Task 7's ungroup), not something this store-scoped delete
- *  does on their behalf. */
+ *  documents (the ungroup path), not something this record-scoped delete
+ *  does on their behalf. Unchanged by the move: the route deletes one row
+ *  and `document.collection_id` deliberately carries no foreign key, so
+ *  nothing cascades from here.
+ *
+ *  A 404 RESOLVES — the caller asked for the collection to be gone and it is
+ *  gone, which is what `db.delete` on a missing key always did. Every other
+ *  failure rejects. */
 export async function deleteCollection(id: string): Promise<void> {
-  const db = await getDb();
-  await db.delete(STORES.collections, id);
+  try {
+    await apiDelete(`/v1/collections/${encodeURIComponent(id)}`);
+  } catch (err) {
+    if (err instanceof ModelError && err.status === 404) return;
+    throw err;
+  }
 }

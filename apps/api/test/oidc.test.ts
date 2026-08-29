@@ -480,14 +480,17 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
   it('discovers the routes it is about to check, so it cannot pass vacuously', () => {
     const urls = routes().map(r => `${r.method} ${r.url}`).sort();
     expect(urls).toEqual([
+      'DELETE /v1/collections/:id',
       'DELETE /v1/documents/:id',
       'DELETE /v1/matters/:id',
       'GET /healthz',
       'GET /v1/admin/blob-orphans',
+      'GET /v1/collections/:id',
       'GET /v1/documents/:id',
       'GET /v1/documents/:id/bytes',
       'GET /v1/matters',
       'GET /v1/matters/:id',
+      'GET /v1/matters/:id/collections',
       'GET /v1/matters/:id/documents',
       'GET /v1/me',
       'GET /v1/models',
@@ -496,6 +499,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'POST /v1/documents',
       'POST /v1/infer',
       'POST /v1/infer/stream',
+      'PUT /v1/collections/:id',
       'PUT /v1/matters/:id',
       'PUT /v1/me',
     ]);
@@ -525,7 +529,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // every route task: 9 through Task 9, 17 with Task 11's six document
     // routes and two admin ones. A DROP in this number without a route
     // being removed is a route that stopped being registered.
-    expect(checked).toHaveLength(17);
+    expect(checked).toHaveLength(21);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

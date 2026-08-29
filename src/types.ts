@@ -470,6 +470,19 @@ export interface Collection {
   variesDocumentIds: string[];
   createdAt: number;
   createdByUserId: string;
+  /**
+   * The optimistic-concurrency token (§8) — see `Matter.version` for the full
+   * note, which applies here word for word.
+   *
+   * THE SAME FIELD R3'S SEAM COULD NOT ABSORB, recorded a second time rather
+   * than quietly copied. `saveCollection(c): Promise<Collection>` is
+   * unchanged and no caller moved; what changed is the record, because
+   * refusing a stale write needs the client to say what it was looking at.
+   *
+   * Optional, and its absence is the claim "I believe this is a create" —
+   * which is exactly what `newCollection` mints and must keep minting.
+   */
+  version?: number;
 }
 
 export type NetPositionState = 'unconfirmed' | 'confirmed';

@@ -4,10 +4,6 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Matter, Review, DocumentRecord, PlaybookVersion, TrailStep, Collection } from './types';
 import { unconfirmedPosition, confirmPosition } from './lib/netPosition';
-// Deliberately UNMOCKED: Task 8A's App-level collection-retry tests (bottom
-// of this file) need `getCollection` to run for real against fake-indexeddb
-// (this project's standard test setup — `vitest.setup.ts`), exercising the
-// actual `openReview` reconstruction path rather than a stand-in for it.
 import { saveCollection } from './lib/db/collections';
 import { closeDb } from './lib/db/open';
 import { flushUntil } from './test/mount';
@@ -16,6 +12,26 @@ import { flushUntil } from './test/mount';
 // for the precedent this follows: drive a real react-dom root directly,
 // mocking App.tsx's repository/module boundaries.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+// `db/collections` is an HTTP client since Stage 2 Task 12, so leaving it
+// unmocked no longer means "runs for real against fake-indexeddb" — it means
+// "reaches for a bearer token and a network". Replaced with an in-memory
+// store that keeps the repository's OWN semantics (`saveCollection` writes,
+// `getCollection` answers the record or `null`, `listCollections` filters by
+// matter), which is a stand-in for the STORAGE and not for the thing these
+// tests are about: `openReview`'s collection reconstruction still runs for
+// real, exactly as before.
+const collectionStore = new Map<string, Collection>();
+vi.mock('./lib/db/collections', async (importOriginal) => ({
+  // `newCollection` is pure and comes from the real module.
+  ...(await importOriginal<typeof import('./lib/db/collections')>()),
+  saveCollection: async (c: Collection) => { collectionStore.set(c.id, c); return c; },
+  getCollection: async (id: string) => collectionStore.get(id) ?? null,
+  listCollections: async (matterId: string) =>
+    [...collectionStore.values()].filter(c => c.matterId === matterId),
+  deleteCollection: async (id: string) => { collectionStore.delete(id); },
+}));
+
 
 const listPlaybooksMock = vi.fn();
 const listMattersMock = vi.fn();
@@ -722,6 +738,10 @@ describe('App — retrying a collection clause calls the collection extractor (T
     closeDb();
     indexedDB.deleteDatabase('lexprompt');
     localStorage.clear();
+    // The in-memory collection store stands where `indexedDB.deleteDatabase`
+    // used to: without this, the "collection is gone" case below reads a
+    // collection an earlier test saved and proves nothing.
+    collectionStore.clear();
     migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([]);
     listMattersMock.mockReset().mockResolvedValue([]);

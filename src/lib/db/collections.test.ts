@@ -1,133 +1,162 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import {
-  listCollections,
-  getCollection,
-  saveCollection,
-  deleteCollection,
-  newCollection,
-} from './collections';
-import { getDb, closeDb } from './open';
-import { STORES } from './schema';
-import type { DocumentRecord, Review, PlaybookVersion } from '../../types';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ModelError } from '@lexprompt/core';
+import type { Collection } from '../../types';
 
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+/**
+ * The collections repository, now a TRANSPORT.
+ *
+ * The sort, the `_seq` tiebreak and the member-order round trip moved to
+ * `apps/api/test/collections.pg.test.ts`, where a real Postgres proves them.
+ * The `newCollection` cases below are kept VERBATIM: it is pure, still
+ * client-side, and its needing no edit is the evidence R3's seam held for it.
+ *
+ * What stays here is which request each export makes, that member order is
+ * sent exactly as given, and that a failure stays a failure.
+ */
 
-function makeDocument(matterId: string, overrides: Partial<DocumentRecord> = {}): DocumentRecord {
-  return {
-    id: uid(),
-    matterId,
-    name: 'contract.pdf',
-    kind: 'pdf',
-    text: 'Some extracted text.',
-    byteSize: 1234,
-    addedAt: Date.now(),
-    addedByUserId: 'owner-1',
-    role: 'standalone',
-    ...overrides,
-  };
-}
+const apiGet = vi.fn();
+const apiGetOrNull = vi.fn();
+const apiSend = vi.fn();
+const apiDelete = vi.fn();
 
-const playbookSnapshot: PlaybookVersion = {
-  id: 'pb-1-v1',
-  playbookId: 'pb-1',
-  version: 1,
-  name: 'NDA',
-  contractType: 'NDA',
-  systemPrompt: '',
-  formatPrompt: '',
-  clauses: [],
-  changeSummary: '',
-  publishedAt: Date.now(),
-  publishedByUserId: 'owner-1',
-  schemaVersion: 6,
+vi.mock('../api/client', () => ({
+  apiGet: (...args: unknown[]) => apiGet(...args),
+  apiGetOrNull: (...args: unknown[]) => apiGetOrNull(...args),
+  apiSend: (...args: unknown[]) => apiSend(...args),
+  apiDelete: (...args: unknown[]) => apiDelete(...args),
+}));
+
+const { newCollection, listCollections, getCollection, saveCollection, deleteCollection } =
+  await import('./collections');
+
+const COLLECTION: Collection = {
+  id: 'c1', matterId: 'm1', name: 'Lease + two DoVs', baseDocumentId: 'd-base',
+  variesDocumentIds: ['d-a', 'd-b'], createdAt: 1_700_000_000_000, createdByUserId: 'u1',
+  version: 3,
 };
 
-function makeReview(matterId: string, documentIds: string[]): Review {
-  return {
-    id: uid(),
-    matterId,
-    playbookSnapshot,
-    documentIds,
-    target: { kind: 'documents', documentIds },
-    findings: {},
-    modelId: 'test-model',
-    startedAt: Date.now(),
-    createdByUserId: 'owner-1',
-  };
-}
-
-beforeEach(async () => {
-  const db = await getDb();
-  await Promise.all([
-    db.clear(STORES.collections),
-    db.clear(STORES.documents),
-    db.clear(STORES.blobs),
-    db.clear(STORES.reviews),
-    db.clear(STORES.matters),
-  ]);
+beforeEach(() => {
+  apiGet.mockReset().mockResolvedValue([]);
+  apiGetOrNull.mockReset().mockResolvedValue(null);
+  apiSend.mockReset().mockResolvedValue(COLLECTION);
+  apiDelete.mockReset().mockResolvedValue(undefined);
 });
 
-afterEach(() => closeDb());
-
-describe('collections repository', () => {
-  it('saves and reads a collection back', async () => {
-    const c = newCollection('matter-1', 'Lease + DoV', 'doc-base', 'owner-1');
-    await saveCollection(c);
-    expect(await getCollection(c.id)).toEqual(c);
+describe('newCollection', () => {
+  // KEPT VERBATIM from the IndexedDB version of this file.
+  it('creates a collection with no amendments and the given author', () => {
+    const c = newCollection('m1', 'Lease', 'd-base', 'owner-1');
+    expect(c.matterId).toBe('m1');
+    expect(c.name).toBe('Lease');
+    expect(c.baseDocumentId).toBe('d-base');
+    expect(c.variesDocumentIds).toEqual([]);
+    expect(c.createdByUserId).toBe('owner-1');
+    expect(c.id).toBeTruthy();
+    expect(c.createdAt).toBeGreaterThan(0);
   });
 
-  it("lists a matter's collections, most recent first", async () => {
-    const older = newCollection('matter-1', 'Older', 'doc-a', 'owner-1');
-    const newer = newCollection('matter-1', 'Newer', 'doc-b', 'owner-1');
-    await saveCollection({ ...older, createdAt: 1 });
-    await saveCollection({ ...newer, createdAt: 2 });
+  it('mints no version, because a new collection has none to state', () => {
+    // The absence is the claim "I believe this is a create" — a create that
+    // carried a version would be a stale write dressed as a new record.
+    expect('version' in newCollection('m1', 'L', 'd', 'u')).toBe(false);
+  });
+});
 
-    expect((await listCollections('matter-1')).map(c => c.name)).toEqual(['Newer', 'Older']);
+describe('the requests each export makes', () => {
+  it('lists a matter s collections from /v1/matters/:id/collections, in the server s order', async () => {
+    const list = [{ ...COLLECTION, id: 'b' }, { ...COLLECTION, id: 'a' }];
+    apiGet.mockResolvedValue(list);
+    expect((await listCollections('m1')).map(c => c.id)).toEqual(['b', 'a']);
+    expect(apiGet).toHaveBeenCalledWith('/v1/matters/m1/collections');
   });
 
-  it('rejects rather than resolving to [] when the database fails', async () => {
-    const db = await getDb();
-    const spy = vi.spyOn(db, 'getAllFromIndex').mockRejectedValue(new Error('db is down'));
-    try {
-      await expect(listCollections('matter-1')).rejects.toThrow(/db is down/);
-    } finally {
-      spy.mockRestore();
-    }
+  it('reads one from /v1/collections/:id', async () => {
+    apiGetOrNull.mockResolvedValue(COLLECTION);
+    expect(await getCollection('c1')).toEqual(COLLECTION);
+    expect(apiGetOrNull).toHaveBeenCalledWith('/v1/collections/c1');
   });
 
-  it('deleting a collection leaves its member documents intact', async () => {
-    const db = await getDb();
-    const base = makeDocument('matter-1', { role: 'base' });
-    const varies = makeDocument('matter-1', { role: 'varies' });
-    const c = newCollection('matter-1', 'Lease + DoV', base.id, 'owner-1');
-    const withVaries = { ...c, variesDocumentIds: [varies.id] };
-    await db.put(STORES.documents, { ...base, collectionId: c.id });
-    await db.put(STORES.documents, { ...varies, collectionId: c.id });
-    await saveCollection(withVaries);
-
-    await deleteCollection(c.id);
-
-    expect(await getCollection(c.id)).toBeNull();
-    const remainingBase = await db.get(STORES.documents, base.id);
-    const remainingVaries = await db.get(STORES.documents, varies.id);
-    expect(remainingBase).toEqual({ ...base, collectionId: c.id });
-    expect(remainingVaries).toEqual({ ...varies, collectionId: c.id });
+  it('PUTs the WHOLE record and returns what the server saved', async () => {
+    const saved = { ...COLLECTION, name: 'Renamed', version: 4 };
+    apiSend.mockResolvedValue(saved);
+    expect(await saveCollection({ ...COLLECTION, name: 'Renamed' })).toEqual(saved);
+    expect(apiSend).toHaveBeenCalledWith(
+      'PUT', '/v1/collections/c1', { ...COLLECTION, name: 'Renamed' });
   });
 
-  // The two `deleteMatter` cascade cases that stood here moved to
-  // `apps/api/test/matters.pg.test.ts` with the matters repository itself
-  // (Stage 2, Task 9). `deleteMatter` is an HTTP call now, and the cascade
-  // it triggers is `on delete cascade` in `002_records.sql` — a real
-  // database enforcing it rather than a hand-written transaction, proven
-  // there against a real Postgres and in `records.pg.test.ts` at the schema
-  // level. Keeping a fake-IndexedDB version here would assert a mechanism
-  // that no longer exists.
-  //
-  // WHAT IS NOT YET PROVEN ANYWHERE, and is a finding rather than an
-  // omission: this file's own store is still IndexedDB until Task 12, so
-  // between these two tasks a deleted matter's collections, documents and
-  // blobs survive in the browser with nothing left that can reach them.
-  // Task 12 closes it by moving this repository too.
+  it('sends member order exactly as given, and sorts nothing', async () => {
+    // `orderedMembers` is the only place collection reading order is decided
+    // and `documentDate` never governs it (R-C3). A second sort here — even
+    // a helpful one — is the sibling drift that rule exists to prevent.
+    const shuffled = { ...COLLECTION, variesDocumentIds: ['d3', 'd1', 'd2'] };
+    await saveCollection(shuffled);
+    expect((apiSend.mock.calls[0][2] as Collection).variesDocumentIds)
+      .toEqual(['d3', 'd1', 'd2']);
+  });
+
+  it('returns member order exactly as the server sent it', async () => {
+    apiGetOrNull.mockResolvedValue({ ...COLLECTION, variesDocumentIds: ['d3', 'd1', 'd2'] });
+    expect((await getCollection('c1'))!.variesDocumentIds).toEqual(['d3', 'd1', 'd2']);
+  });
+
+  it('sends the version it read, so a stale write can be refused', async () => {
+    await saveCollection(COLLECTION);
+    expect((apiSend.mock.calls[0][2] as Collection).version).toBe(3);
+  });
+
+  it('DELETEs /v1/collections/:id', async () => {
+    await deleteCollection('c1');
+    expect(apiDelete).toHaveBeenCalledWith('/v1/collections/c1');
+  });
+
+  it('escapes an id in every path segment it builds', async () => {
+    const id = 'a/b c?d';
+    await getCollection(id);
+    await saveCollection({ ...COLLECTION, id });
+    await deleteCollection(id);
+    expect(apiGetOrNull.mock.calls[0][0]).toBe('/v1/collections/a%2Fb%20c%3Fd');
+    expect(apiSend.mock.calls[0][1]).toBe('/v1/collections/a%2Fb%20c%3Fd');
+    expect(apiDelete.mock.calls[0][0]).toBe('/v1/collections/a%2Fb%20c%3Fd');
+    await listCollections(id);
+    expect(apiGet.mock.calls[0][0]).toBe('/v1/matters/a%2Fb%20c%3Fd/collections');
+  });
+});
+
+describe('a failure is a failure, never an empty result', () => {
+  it('returns null for a collection the server does not have', async () => {
+    expect(await getCollection('nope')).toBeNull();
+  });
+
+  it('propagates a 500 from a read rather than swallowing it into null', async () => {
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    apiGetOrNull.mockRejectedValue(boom);
+    await expect(getCollection('c1')).rejects.toBe(boom);
+  });
+
+  it('propagates a 500 from the list rather than answering with no collections', async () => {
+    // "This matter has no collections" and "the server is broken" look
+    // identical on screen, and the first is a fact a reader would act on.
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    apiGet.mockRejectedValue(boom);
+    await expect(listCollections('m1')).rejects.toBe(boom);
+  });
+
+  it('propagates a conflict from a save rather than reporting it as written', async () => {
+    const stale = new ModelError('This was changed since you opened it.', 'conflict', 409);
+    apiSend.mockRejectedValue(stale);
+    await expect(saveCollection(COLLECTION)).rejects.toBe(stale);
+  });
+
+  it('resolves quietly when the collection to delete does not exist', async () => {
+    // KEPT from the IndexedDB version: `db.delete` on a missing key always
+    // resolved, and the caller asked for the collection to be gone.
+    apiDelete.mockRejectedValue(new ModelError('There is no such collection.', 'not_found', 404));
+    await expect(deleteCollection('gone')).resolves.toBeUndefined();
+  });
+
+  it('propagates any other delete failure', async () => {
+    const denied = new ModelError('This needs a LexPrompt role.', 'not_permitted', 403);
+    apiDelete.mockRejectedValue(denied);
+    await expect(deleteCollection('c1')).rejects.toBe(denied);
+  });
 });

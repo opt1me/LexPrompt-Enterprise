@@ -56,6 +56,19 @@ vi.mock('./lib/db/documents', () => ({
   deleteDocument: (...args: unknown[]) => deleteDocumentMock(...args),
 }));
 
+// Stage 2 Task 12 made `db/collections` an HTTP client, so an unmocked one
+// reaches for a token and a network on every matter load — and the load-error
+// branch that produced would render this screen's error state instead of its
+// document list, which is the load path working correctly and this file
+// testing nothing.
+vi.mock('./lib/db/collections', () => ({
+  listCollections: async () => [],
+  getCollection: async () => null,
+  saveCollection: vi.fn(),
+  deleteCollection: vi.fn(),
+  newCollection: vi.fn(),
+}));
+
 vi.mock('./lib/db/blobs', () => ({
   getDocumentBlob: (...args: unknown[]) => getDocumentBlobMock(...args),
 }));
