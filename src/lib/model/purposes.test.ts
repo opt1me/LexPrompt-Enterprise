@@ -82,8 +82,11 @@ const EXPECTED_CONTEXT_KEYS: Record<string, string[]> = {
   'src/features/authoring/generateDraft.ts': [],
   'src/features/templates/suggestField.ts': [],
   'src/features/templates/suggestMissingClauses.ts': [],
-  'src/lib/inferPositions.ts': ['documentIds'],
-  'src/lib/buildChangeset.ts': ['documentIds'],
+  // `[]`, not `['documentIds']`: both read redlines documents that are never
+  // persisted, so an id sent here would name nothing anywhere. See the
+  // comment at each call site.
+  'src/lib/inferPositions.ts': [],
+  'src/lib/buildChangeset.ts': [],
   'src/features/assistant/draftEmail.ts': ['matterId', 'reviewId'],
   'src/features/assistant/suggestRevision.ts': ['matterId', 'reviewId', 'clauseId'],
 };
@@ -150,6 +153,15 @@ function findChatCalls(sourceFile: ts.SourceFile): FoundCall[] {
       let methodName: string | undefined;
       if (ts.isPropertyAccessExpression(expr)) {
         methodName = expr.name.text;
+      } else if (ts.isIdentifier(expr)) {
+        // A BARE call, e.g. `chatJson({...})`. `gatewayModelClient.ts`
+        // returns plain closures precisely so that
+        // `const { chatJson } = client` works, and its own suite tests that
+        // — so this is a usage the client documents as supported, and a
+        // walk that only recognised `x.chatJson(...)` would let an
+        // eleventh call site written that way go untracked while this
+        // forever-guard reported green.
+        methodName = expr.text;
       }
       if (methodName && CHAT_METHODS.has(methodName)) {
         // The request object is always the call's first argument in this
@@ -208,8 +220,29 @@ function listSourceFiles(dir: string): string[] {
   return out;
 }
 
+/**
+ * The client ITSELF, which defines `chat`/`chatJson`/`chatStream` and calls
+ * `chat` from inside `chatJson`. Those are the implementation, not call
+ * sites, and they carry no `purpose` because the purpose is their caller's.
+ *
+ * ONE named file, asserted below to be exactly that file, for the reason
+ * `stage1DoD.test.ts` gives about its own single exemption: a guard whose
+ * exemption list can grow silently is a guard that reports whatever is
+ * convenient. (The guard exempts the definition site precisely so it can
+ * recognise BARE calls everywhere else — see `findChatCalls`.)
+ */
+const CLIENT_DEFINITION = 'src/lib/model/gatewayModelClient.ts';
+
 describe('every chat/chatJson/chatStream call in src/ carries a valid purpose', () => {
-  const files = listSourceFiles(path.join(ROOT, 'src'));
+  const files = listSourceFiles(path.join(ROOT, 'src'))
+    .filter(f => path.relative(ROOT, f).replace(/\\/g, '/') !== CLIENT_DEFINITION);
+
+  it('exempts exactly one file, and it is the client that defines the methods', () => {
+    const all = listSourceFiles(path.join(ROOT, 'src'))
+      .map(f => path.relative(ROOT, f).replace(/\\/g, '/'));
+    expect(all).toContain(CLIENT_DEFINITION);
+    expect(all.length - files.length).toBe(1);
+  });
 
   it('finds at least the ten known call sites (sanity check on the AST walk itself)', () => {
     let total = 0;
@@ -236,5 +269,44 @@ describe('every chat/chatJson/chatStream call in src/ carries a valid purpose', 
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The walk itself, exercised against synthetic source.
+ *
+ * `findChatCalls` used to recognise only `x.chatJson(...)`. But
+ * `gatewayModelClient.ts` returns plain closures explicitly so that
+ * `const { chatJson } = client` works, and its own suite tests that — so a
+ * future eleventh call site written the supported way would have been
+ * invisible to the "every call in `src/` carries a valid purpose" guard,
+ * which would have gone on reporting green over an untracked call.
+ */
+describe('the AST walk recognises the call shapes this codebase supports', () => {
+  function parse(text: string): ts.SourceFile {
+    return ts.createSourceFile('synthetic.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  }
+
+  it('finds a method call on the client', () => {
+    const calls = findChatCalls(parse(
+      "await gatewayModelClient.chatJson({ purpose: 'review.clause', context: { matterId: 'm' } });",
+    ));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].purposeLiteral).toBe('review.clause');
+    expect(calls[0].contextKeys).toEqual(['matterId']);
+  });
+
+  it('finds a DESTRUCTURED call, which the client documents as supported', () => {
+    const calls = findChatCalls(parse(
+      "const { chatJson } = gatewayModelClient;\nawait chatJson({ purpose: 'review.clause', context: {} });",
+    ));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].purposeLiteral).toBe('review.clause');
+  });
+
+  it('reports a destructured call with no purpose, which is the shape a forgotten one takes', () => {
+    const calls = findChatCalls(parse("await chat({ user: 'hello' });"));
+    expect(calls).toHaveLength(1);
+    expect(calls[0].purposeLiteral).toBeUndefined();
   });
 });

@@ -34,6 +34,15 @@ export function SignInScreen({ state, onSignIn, onRetry }: SignInScreenProps) {
             message={`${state.message} (tenant: ${config.oidcIssuer})`}
             onRetry={onRetry}
           />
+          {/* Retry alone was a trap. This screen is reached with the
+             provider's answer still in the address bar, and Retry re-reads
+             the same URL — so a refusal Retried is the same refusal, and
+             the loop had no exit from inside the app: only hand-editing the
+             URL or a new tab recovered. `useAuth` now clears the query the
+             moment the callback settles, which makes Retry a real
+             re-check; this is the other half, for the case where the check
+             is right and there genuinely is no session to find. */}
+          <Button onClick={onSignIn} className="mx-auto">Sign in again</Button>
         </div>
       </div>
     );

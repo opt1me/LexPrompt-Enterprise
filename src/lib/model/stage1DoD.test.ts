@@ -129,15 +129,66 @@ describe('Stage 1 definition of done (§18.2)', () => {
     expect(notice).toMatch(/href:\s*'https:\/\/openrouter\.ai\/keys'/);
   });
 
+  /**
+   * A request to any host outside the app's own API is an egress path the
+   * gateway does not see — and `fetch` is not the only way to make one.
+   *
+   * This scanner used to be a single `fetch(` pattern under a sentence that
+   * claimed to cover every direct call to an external host. It did not:
+   * `new EventSource(...)`, `new WebSocket(...)`,
+   * `navigator.sendBeacon(...)`, `new Image().src = ...`, a bare
+   * `XMLHttpRequest` and an `<img src="https://...">` all reach a third
+   * party and none of them matched. That gap is the "correct mechanism with
+   * no path to it" defect: a guard reporting green over a sentence wider
+   * than the check underneath it.
+   *
+   * Each pattern is self-tested below against a string it MUST bite, so a
+   * regex edited into uselessness fails here rather than passing silently.
+   */
+  const EGRESS_PATTERNS: { name: string; re: RegExp; bitesOn: string }[] = [
+    {
+      name: 'fetch to a literal external URL',
+      re: /fetch\(\s*(?:new URL\(\s*)?['"`]https?:\/\/[^'"`]+/g,
+      bitesOn: 'await fetch("https://api.openai.com/v1")',
+    },
+    {
+      name: 'EventSource / WebSocket',
+      re: /new\s+(?:EventSource|WebSocket)\s*\(/g,
+      bitesOn: 'const es = new EventSource("https://example.com/stream")',
+    },
+    {
+      name: 'navigator.sendBeacon',
+      re: /sendBeacon\s*\(/g,
+      bitesOn: 'navigator.sendBeacon(url, blob)',
+    },
+    {
+      name: 'XMLHttpRequest',
+      re: /XMLHttpRequest/g,
+      bitesOn: 'const xhr = new XMLHttpRequest()',
+    },
+    {
+      name: 'an element pointed at an external URL (src/href/action)',
+      re: /(?:src|action)\s*[=:]\s*\{?\s*['"`]https?:\/\/[^'"`]+/g,
+      bitesOn: '<img src="https://tracker.example.com/pixel.gif" />',
+    },
+  ];
+
+  it('every egress pattern this suite scans for actually bites', () => {
+    for (const { name, re, bitesOn } of EGRESS_PATTERNS) {
+      re.lastIndex = 0;
+      expect(bitesOn.match(re), name).toHaveLength(1);
+    }
+  });
+
   it('every model call in the browser goes through the gateway client', () => {
-    // A direct fetch to any host outside the app's own API is an egress path
-    // the gateway does not see.
-    const external = /fetch\(\s*(?:new URL\(\s*)?['"`]https?:\/\/[^'"`]+/g;
-    expect('await fetch("https://api.openai.com/v1")'.match(external)).toHaveLength(1);
     const offenders: string[] = [];
     for (const file of CLIENT_FILES) {
-      const m = codeOf(file).match(external);
-      if (m) offenders.push(`${rel(file)}: ${m.join(', ')}`);
+      const code = codeOf(file);
+      for (const { name, re } of EGRESS_PATTERNS) {
+        re.lastIndex = 0;
+        const m = code.match(re);
+        if (m) offenders.push(`${rel(file)}: ${name} — ${m.join(', ')}`);
+      }
     }
     expect(offenders).toEqual([]);
   });

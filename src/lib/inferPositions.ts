@@ -263,15 +263,22 @@ export async function inferPositions(
   const byId = new Map<string, EditEntry>();
   edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
-  // The precedent documents this call read from, deduped — never `docs`,
-  // which does not exist here: `edits` (already resolved per-document by the
-  // caller) is the only record of which documents contributed.
-  const documentIds = Array.from(new Set(edits.map(e => e.documentId)));
-
+  // No `documentIds`, deliberately.
+  //
+  // The precedent documents this call reads are, by design, NEVER PERSISTED
+  // — not IndexedDB, not localStorage, not the URL (CLAUDE.md). Their ids
+  // are session-only `uid()`s with no referent anywhere, and the audit
+  // record `INFERENCE_PRIVACY` promises the user says it names "which
+  // document or review it was for". Sending an opaque string that nothing
+  // can resolve makes that record claim to answer a question it cannot: a
+  // field that reads as an answer and is not one, which is the shape of
+  // defect this app exists not to produce. No privacy leak — the ids are
+  // opaque — but an empty context is the truthful one here, and `purpose:
+  // 'redlines.infer'` already says what the call was for.
   const raw = await gatewayModelClient.chatJson<RawInferResponse>({
     modelChoiceId: settings.modelChoiceId,
     purpose: 'redlines.infer',
-    context: { documentIds },
+    context: {},
     system:
       "You analyse a law firm's own past negotiated redlines to identify recurring standard positions. " +
       'You only ever group evidence and state the position it implies. You never count documents, never ' +

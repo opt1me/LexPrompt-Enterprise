@@ -36,6 +36,7 @@ import { findingsKeyFor, isCollectionTarget } from './lib/reviewTarget';
 import { useRoute, type Route } from './lib/router';
 import { gatewayModelClient } from './lib/model/gatewayModelClient';
 import { isAuthFailure } from './lib/model/authFailure';
+import { MODEL_CHOICE_STALE_MESSAGE, modelProvenanceName } from './lib/model/modelChoice';
 import { ModelError, isSignInError, isServiceConfigError } from '@lexprompt/core';
 import { useToast, Toast } from './components/Toast';
 import { LoadErrorPanel } from './components/LoadErrorPanel';
@@ -545,6 +546,19 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
    *  cleared by the panel's own Retry. */
   const [serviceConfigError, setServiceConfigError] = useState<ModelError | null>(null);
 
+  /**
+   * The `modelChoiceId` the last successful allowlist read could not find,
+   * or `null`.
+   *
+   * Stored as the ID rather than as a boolean so that choosing a new model
+   * cannot leave a stale `true` behind: `isConfigured` compares the current
+   * choice against this one, so a fresh pick is not stale by construction
+   * and needs no reset. A FAILED read never writes here — a network blip is
+   * not evidence that a model was retired, and treating it as such would
+   * lock a working user out of their own review.
+   */
+  const [staleModelChoiceId, setStaleModelChoiceId] = useState<string | null>(null);
+
   // Render-time profile, for `authorInitials` (a note's placeholder needs a
   // value to render with, and an `await` can't supply one). Write handlers
   // (`handleVerify`, `handleAddNote`, etc.) keep using their own
@@ -724,7 +738,8 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
   // false — `App` renders `SignInScreen` INSTEAD OF this whole shell for
   // every auth status but `signed-in`, so re-deriving it here would add a
   // second source of truth for a question already settled one component up.
-  const isConfigured = Boolean(settings.modelChoiceId);
+  const isConfigured = Boolean(settings.modelChoiceId)
+    && settings.modelChoiceId !== staleModelChoiceId;
 
   // Set only by the initial load below — a failure here must never resolve
   // to an empty library (indistinguishable from "you have no playbooks");
@@ -1381,16 +1396,56 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
       .then(models => {
         if (cancelled) return;
         const match = models.find(m => m.id === settings.modelChoiceId);
-        if (!match) return;
+        if (!match) {
+          // `ModelPicker` already refused to resolve a retired choice and
+          // told the user "nothing is selected". This shell went on
+          // reporting `isConfigured` from the stored id alone, so
+          // `ensureConfigured` waved the same user into a 40-clause run
+          // that failed on every clause with `model_not_allowed` — the
+          // guard that exists to stop a flow that can only fail with an
+          // obscure error not firing at the one moment it was for. The
+          // capability flags left behind were the previous model's, so a
+          // scanned PDF could still be sent as images to a choice that no
+          // longer exists.
+          //
+          // The id itself is deliberately NOT cleared: an empty
+          // `modelChoiceId` makes `ModelPicker` preselect and auto-commit
+          // the workspace default, which would tell a reviewer a model they
+          // never picked ran their review. The choice stays, visibly
+          // unresolvable, and only the derived facts go.
+          setStaleModelChoiceId(settings.modelChoiceId);
+          setSettings(prev => {
+            if (prev.modelChoiceId !== settings.modelChoiceId) return prev;
+            const {
+              modelChoiceLabel: _label, modelChoiceModel: _model,
+              modelSupportsImages: _images, modelSupportsStructuredOutput: _structured,
+              modelContextLength: _context, ...kept
+            } = prev;
+            // Nothing to strip — don't rewrite storage on every mount.
+            if (Object.keys(kept).length === Object.keys(prev).length) return prev;
+            const next: Settings = kept;
+            saveSettings(next);
+            return next;
+          });
+          return;
+        }
+        setStaleModelChoiceId(prev => (prev === match.id ? null : prev));
         setSettings(prev => {
           if (prev.modelChoiceId !== match.id) return prev;
           if (
+            prev.modelChoiceLabel === match.label &&
+            prev.modelChoiceModel === match.model &&
             prev.modelSupportsImages === match.supportsImages &&
             prev.modelSupportsStructuredOutput === match.supportsStructuredOutput &&
             prev.modelContextLength === match.contextLength
           ) return prev;
           const next: Settings = {
             ...prev,
+            // Refreshed alongside the capabilities so that anything
+            // persisted afterwards names what this allowlist entry IS now,
+            // not what it was called when it was first chosen.
+            modelChoiceLabel: match.label,
+            modelChoiceModel: match.model,
             modelSupportsImages: match.supportsImages,
             modelSupportsStructuredOutput: match.supportsStructuredOutput,
             modelContextLength: match.contextLength,
@@ -1486,7 +1541,10 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
    */
   const ensureConfigured = (message = 'Choose a model in Settings to get started.') => {
     if (isConfigured) return true;
-    notify(message, 'error');
+    // A user who never chose a model and a user whose choice was withdrawn
+    // by an administrator are being told two different things, and only one
+    // of them is answered by "choose a model".
+    notify(staleModelChoiceId ? MODEL_CHOICE_STALE_MESSAGE : message, 'error');
     setView('settings');
     return false;
   };
@@ -3216,7 +3274,12 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     // hazard). Leaving the redlines views does clear this session's
     // documents and positions, which is correct — they have been read into
     // the draft, and the `File`s were never to be kept.
-    updateAuthoringDraft(positionsToDraft(included, redlinesDocumentNames, settings.modelChoiceId, contractType));
+    // `modelProvenanceName`, never `modelChoiceId`: the id is an
+    // operator-defined alias an administrator can repoint, and this value is
+    // printed by `positionProvenance` into every export of the playbook.
+    updateAuthoringDraft(
+      positionsToDraft(included, redlinesDocumentNames, modelProvenanceName(settings), contractType),
+    );
     setView('authoring-review');
   };
 
@@ -3366,9 +3429,16 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
           is nothing there that could fix it. */}
       {serviceConfigError && (
         <div className="shrink-0 border-b border-rule bg-card px-6 py-3">
+          {/* `onDismiss`, never `onRetry`: by the time this renders, the
+              run that failed is over, the chat message is gone and the
+              field suggestion was dropped, so there is nothing here to
+              re-attempt. The per-finding instance in `ResultsView` DOES
+              have something (`onRetryCell`), and passes `onRetry` — one
+              component, two call sites, and now two different buttons
+              because they can genuinely do two different things. */}
           <ServiceConfigError
             error={serviceConfigError}
-            onRetry={() => setServiceConfigError(null)}
+            onDismiss={() => setServiceConfigError(null)}
           />
         </div>
       )}

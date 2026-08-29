@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { ModelError, SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import { mount, buttons, buttonNamed, click } from '../test/mount';
-import { ServiceConfigError } from './ServiceConfigError';
+import { ServiceConfigError, DISMISS_RETRIES_NOTHING } from './ServiceConfigError';
 
 function error(callId?: string): ModelError {
   return new ModelError(
@@ -52,5 +52,37 @@ describe('ServiceConfigError', () => {
     // Sanity: the button query itself works (Retry exists), so an absent
     // Settings match above is a real negative, not `buttons()` finding nothing.
     expect(buttons(container).length).toBeGreaterThan(0);
+  });
+
+  /**
+   * Final review M5. This component is mounted at TWO call sites, and only
+   * one of them has anything to re-attempt: `ResultsView` passes
+   * `onRetryCell`, which runs the clause again, while App's shell-level
+   * banner used to pass `() => setServiceConfigError(null)` — a button
+   * labelled Retry that dismissed the panel and re-attempted nothing, above
+   * a screen with no in-place result to check it against. "Banner gone, no
+   * new error" reads as "it worked".
+   */
+  describe('the button says what it actually does', () => {
+    it('renders Dismiss, not Retry, when there is nothing to re-attempt', () => {
+      const onDismiss = vi.fn();
+      const container = mount(<ServiceConfigError error={error('call-1')} onDismiss={onDismiss} />);
+      expect(buttonNamed(container, /retry/i)).toBeUndefined();
+      const dismiss = buttonNamed(container, /dismiss/i);
+      expect(dismiss).toBeTruthy();
+      click(dismiss);
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+    });
+
+    it('says in words that dismissing is not a retry', () => {
+      const container = mount(<ServiceConfigError error={error('call-1')} onDismiss={() => {}} />);
+      expect(container.textContent).toContain(DISMISS_RETRIES_NOTHING);
+    });
+
+    it('says nothing about dismissing when a real retry is wired', () => {
+      const container = mount(<ServiceConfigError error={error('call-1')} onRetry={() => {}} />);
+      expect(container.textContent).not.toContain(DISMISS_RETRIES_NOTHING);
+      expect(buttonNamed(container, /dismiss/i)).toBeUndefined();
+    });
   });
 });

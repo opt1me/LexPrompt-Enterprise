@@ -266,6 +266,17 @@ export interface Settings {
    *  provider's credentials. `loadSettings` deletes any key an earlier
    *  version stored. */
   modelChoiceId: string;
+  /** `AllowedModel.label` and `AllowedModel.model` as they stood when the
+   *  choice was made, recorded because `modelChoiceId` is an operator-defined
+   *  ALIAS: it identifies nothing outside this workspace's allowlist, and an
+   *  administrator may repoint it at a different provider and a different
+   *  model without touching any record that already printed it. Anything
+   *  persisted that names "the model that did this" reads these, through
+   *  `modelProvenanceName` — never the id. Optional because a settings blob
+   *  written before they existed has neither, and "an AI model" is a better
+   *  answer than an unresolvable alias. */
+  modelChoiceLabel?: string;
+  modelChoiceModel?: string;
   concurrency: number;
   /** Capabilities of the currently selected model, filled in from the
    *  gateway's allowlist whenever it's available. `undefined` means

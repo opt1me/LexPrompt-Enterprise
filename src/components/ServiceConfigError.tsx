@@ -11,11 +11,39 @@ export interface ServiceConfigErrorProps {
    *  written for an operator reading a log, not for the person at the
    *  keyboard. */
   error: ModelError;
-  /** Retried in place — this failure genuinely can go away on its own (a
-   *  provider outage clears, a credential gets rotated) and Retry is a real
-   *  repair here, unlike Settings, which holds nothing that could fix it. */
-  onRetry: () => void;
+  /**
+   * A real re-attempt of the thing that failed — the `ResultsView` call
+   * site passes `onRetryCell`, which runs the clause again. This failure
+   * genuinely can go away on its own (a provider outage clears, a
+   * credential gets rotated), so Retry is a real repair *where there is
+   * still something to repair*.
+   *
+   * Optional, because App's shell-level instance had no such thing and
+   * passed `() => setServiceConfigError(null)` anyway: a button labelled
+   * Retry that dismissed the banner and re-attempted nothing, above a
+   * screen with no in-place result to check it against. "Banner gone, no
+   * new error" reads as "it worked" — a confidently-wrong answer produced
+   * by a doc comment that was true of one caller and false of the other.
+   * Omit it and the panel says what it can actually do instead.
+   */
+  onRetry?: () => void;
+  /**
+   * Closes the panel and re-attempts nothing. Rendered as Dismiss, with the
+   * sentence that says so — the run that failed is over, the chat message
+   * is gone, the field suggestion was dropped, and the user's real next
+   * step is to try the action again.
+   */
+  onDismiss?: () => void;
 }
+
+/**
+ * Said where the button closes the panel and does nothing else, so that
+ * "banner gone" cannot be read as "it worked". Exported so a sweep can
+ * assert the exact words, exactly as `RECORDED_PROVIDER_NOTICE` is.
+ */
+export const DISMISS_RETRIES_NOTHING =
+  'Dismissing this does not try again — whatever you were doing has already stopped. '
+  + 'Start it again once your IT team says the service is back.';
 
 /**
  * §7's other audience: a firm-configuration fault only an administrator can
@@ -29,7 +57,7 @@ export interface ServiceConfigErrorProps {
  * negative test guards this). `text-risk-high` for the failure line, per
  * R-G19: failure text never uses `ink-4` or below.
  */
-export function ServiceConfigError({ error, onRetry }: ServiceConfigErrorProps) {
+export function ServiceConfigError({ error, onRetry, onDismiss }: ServiceConfigErrorProps) {
   return (
     <div
       data-service-config-error
@@ -48,7 +76,16 @@ export function ServiceConfigError({ error, onRetry }: ServiceConfigErrorProps) 
           .
         </span>
       </p>
-      <Button variant="ghost" onClick={onRetry}>Retry</Button>
+      {onRetry ? (
+        <Button variant="ghost" onClick={onRetry}>Retry</Button>
+      ) : onDismiss ? (
+        <>
+          <p className="font-ui text-ui-sm text-ink-2 leading-relaxed">
+            {DISMISS_RETRIES_NOTHING}
+          </p>
+          <Button variant="ghost" onClick={onDismiss}>Dismiss</Button>
+        </>
+      ) : null}
     </div>
   );
 }

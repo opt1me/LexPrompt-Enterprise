@@ -2,6 +2,7 @@ import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { uid } from '../../lib/uid';
 import type { AuthoringDraft, DraftClause } from '../../lib/authoringDraft';
 import type { Settings, StandardPosition } from '../../types';
+import { modelProvenanceName } from '../../lib/model/modelChoice';
 import type { FewShotSource } from './fewShot';
 
 /** The AI-draft form's fields (spec §3.2, §5). */
@@ -185,7 +186,14 @@ export async function generateDraft(
     actingFor: form.actingFor,
     context: form.context,
     learnedFrom: sources.map((s) => s.name),
-    modelId: settings.modelChoiceId,
+    // NOT `settings.modelChoiceId`. That is an operator-defined allowlist
+    // alias which identifies nothing outside this workspace, and which an
+    // administrator can repoint at a different provider and a different
+    // model without touching a record that has already printed it — at
+    // which point `positionProvenance`'s sentence is not merely opaque, it
+    // is false, on a published standard position that travels into every
+    // export of the playbook.
+    modelId: modelProvenanceName(settings),
     clauses,
   };
 }

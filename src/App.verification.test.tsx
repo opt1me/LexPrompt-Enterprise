@@ -5,6 +5,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { Matter, Review, DocumentRecord, PlaybookVersion, TrailStep } from './types';
 import { unconfirmedPosition } from './lib/netPosition';
 import { flushUntil } from './test/mount';
+import { TEST_ALLOWED_MODEL } from './test/allowedModel';
 
 // No @testing-library/react in this project — see App.interrupted.test.tsx /
 // App.reviewSaveError.test.tsx for the precedent this follows: drive a real
@@ -95,7 +96,7 @@ vi.mock('./lib/db/profile', () => ({
 vi.mock('./lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {
     chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(),
-    listModels: vi.fn().mockResolvedValue([]),
+    listModels: vi.fn().mockResolvedValue([TEST_ALLOWED_MODEL]),
   },
 }));
 

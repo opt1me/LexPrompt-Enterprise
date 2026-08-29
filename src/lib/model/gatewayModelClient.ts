@@ -1,5 +1,5 @@
 import {
-  ModelError, parseJsonLoose, readFrames,
+  ModelError, isModelErrorCode, parseJsonLoose, readFrames,
   type AllowedModel, type InferRequest, type InferResponse, type ModelClient,
   type ModelErrorCode,
 } from '@lexprompt/core';
@@ -21,27 +21,64 @@ export interface GatewayClientDeps {
 const isAbort = (e: unknown): boolean => (e as { name?: string } | null)?.name === 'AbortError';
 
 /**
+ * The code a refusal carries when its BODY did not name one.
+ *
+ * `apps/api` is not the only thing that can answer this browser with a 401.
+ * A reverse proxy, an ingress, Azure Easy Auth or an expired-token
+ * rejection can all emit one with an HTML page or some other envelope
+ * entirely, and reading the code only out of `body.error.code` left every
+ * one of those as `code: 'unknown'` — which `isSignInError` does not see,
+ * so the sign-in gate this whole branch exists to build never fired. The
+ * user got "HTTP 401" and a Retry that could only fail again, forever.
+ *
+ * `openrouter.ts`'s `isAuthError` was `status === 401 || status === 403`,
+ * and that half of it is restored here rather than left to the body: 401 is
+ * "we do not know who you are" (signing in again is the repair) and 403 is
+ * "we know, and no" (`not_permitted`, which does NOT redirect). Both are in
+ * `SIGN_IN_CODES`, so both reach `isAuthFailure`.
+ *
+ * Nothing else is guessed. A 502 from an ingress is not evidence that the
+ * firm's deployment is misconfigured, and mapping it to
+ * `service_misconfigured` would put a specific wrong reason — and the wrong
+ * panel — in front of a reader. Everything but 401/403 stays `unknown`,
+ * which is exactly what it is.
+ */
+function codeFromStatus(status: number): ModelErrorCode {
+  if (status === 401) return 'sign_in_required';
+  if (status === 403) return 'not_permitted';
+  return 'unknown';
+}
+
+/**
  * A failure response becomes the `ModelError` the gateway meant.
  *
  * The status alone is kept when the body cannot be read: a refusal with an
  * unreadable body is still a refusal, and inventing a code for it would put
- * a specific wrong reason in front of a reader.
+ * a specific wrong reason in front of a reader — but the STATUS is not
+ * nothing, and `codeFromStatus` above says what it is worth.
+ *
+ * `body.error.code` is checked against `MODEL_ERROR_CODES` rather than cast
+ * into the union. An unrecognised code string used to land outside both
+ * classifier sets by accident: `isSignInError` and `isServiceConfigError`
+ * would both read false for a refusal that was plainly one or the other.
+ * A code nothing recognises now falls through to the status, exactly like a
+ * body that could not be read at all.
  */
 async function toModelError(response: Response): Promise<ModelError> {
-  let code: ModelErrorCode = 'unknown';
+  let code: ModelErrorCode | undefined;
   let message = `HTTP ${response.status}`;
   let callId: string | undefined;
   try {
     const body = await response.json() as {
-      error?: { code?: ModelErrorCode; message?: string; callId?: string };
+      error?: { code?: unknown; message?: string; callId?: string };
     };
-    if (body?.error?.code) code = body.error.code;
+    if (isModelErrorCode(body?.error?.code)) code = body.error.code;
     if (body?.error?.message) message = body.error.message;
     callId = body?.error?.callId;
   } catch {
     // keep the status
   }
-  return new ModelError(message, code, response.status, callId);
+  return new ModelError(message, code ?? codeFromStatus(response.status), response.status, callId);
 }
 
 /**
@@ -96,10 +133,19 @@ async function* streamBytes(body: ReadableStream<Uint8Array>): AsyncIterable<Uin
  *
  * A deleted module whose reasoning went with it is how a fixed bug returns.
  *
- * There is deliberately NO retry in this file. The gateway retries 429 and
- * 5xx on the outward call, where it knows the provider's own status; a
- * second retry loop in the browser would multiply every attempt by three
- * and turn one slow provider into a nine-attempt wait.
+ * There is deliberately NO retry in this file, and the reason covers only
+ * ONE of the two hops. The gateway retries 429 and 5xx on the outward call
+ * (gateway -> provider), where it knows the provider's own status; a second
+ * retry loop in the browser would multiply every attempt by three and turn
+ * one slow provider into a nine-attempt wait.
+ *
+ * It says nothing about browser -> `apps/api`, which crosses the firm's
+ * LAN or VPN and an ingress, and which `openrouter.ts` DID retry three
+ * times on a transport failure. Nothing retries it now: a single dropped
+ * connection kills whichever cells were in flight. That is a deliberate
+ * regression in resilience, not in honesty — it fails as an error `Finding`
+ * with a Retry the reader can press — but do not read the paragraph above
+ * as covering it. It does not.
  */
 export function makeGatewayModelClient(deps: GatewayClientDeps): ModelClient {
   /**
@@ -146,10 +192,39 @@ export function makeGatewayModelClient(deps: GatewayClientDeps): ModelClient {
     }
   };
 
+  /**
+   * A 200 is not a contract. `readJson` is a cast, so a body that parses as
+   * JSON but is not an `InferResponse` — an intermediary's interstitial, an
+   * ingress error page served as 200, a future `apps/api` change — arrives
+   * with `content === undefined` and no complaint. `draftEmail` then hands
+   * `setEmailContent(undefined)` to a modal gated on `!== null`, and a
+   * lawyer gets an empty client email with a working Copy button: the
+   * blank-CSV-cell defect, in a new place.
+   *
+   * This is the BROWSER checking the GATEWAY's own envelope, on the side of
+   * the wire that renders it. It is deliberately NOT a restatement of
+   * `openrouter.ts`'s "returned no message content" guard — that one was
+   * about a provider's reply, it has a live successor in the gateway's
+   * `openaiCompatible.readResponse`, and a second provider-shaped copy of it
+   * here is precisely the sibling drift this project has paid for six times.
+   */
+  const readInferResponse = async (response: Response): Promise<InferResponse> => {
+    const body = await readJson<InferResponse>(response);
+    if (typeof body?.content !== 'string') {
+      throw new ModelError(
+        "LexPrompt's server answered without an answer in it. Nothing was returned that could "
+        + 'be shown, so nothing is being shown. Try again, and tell your IT team if it repeats.',
+        'upstream_failed', 502,
+        typeof body?.callId === 'string' ? body.callId : undefined,
+      );
+    }
+    return body;
+  };
+
   const chat = async (req: InferRequest, signal?: AbortSignal): Promise<InferResponse> => {
     const response = await post('/v1/infer', req, signal);
     if (!response.ok) throw await toModelError(response);
-    return await readJson<InferResponse>(response);
+    return await readInferResponse(response);
   };
 
   const chatJson = async <T>(req: InferRequest, signal?: AbortSignal): Promise<T> =>

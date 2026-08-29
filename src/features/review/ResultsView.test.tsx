@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { mount, keyDown, click, buttonNamed } from '../../test/mount';
+import { SERVICE_CONFIG_HINT } from '@lexprompt/core';
 import { ResultsView } from './ResultsView';
 import { TRACKED_CHANGES_NOTICE } from '../../lib/docxMarkup';
 import type { DocumentFile, Finding, ReviewRun, Settings, PlaybookVersion } from '../../types';
@@ -632,5 +633,50 @@ describe('ResultsView — the header names the version this run ran against (R-D
     );
     click(buttonNamed(container, new RegExp(`ran against v${version.version}`, 'i')));
     expect(onShowVersionHistory).toHaveBeenCalled();
+  });
+});
+
+/**
+ * m6. The `service_misconfigured` panel replaces the whole `FindingCard` —
+ * and a card is the only thing on this screen that says WHICH clause it is
+ * about. In a twenty-clause list the reader was left with a wall of
+ * identical panels naming nothing.
+ */
+describe('ResultsView — a per-finding configuration fault names its clause', () => {
+  function runWithConfigFault(): ReviewRun {
+    const run = makeRun();
+    run.findings.d1.c2 = {
+      ...makeFinding('c2', 'error'),
+      error: `The AI provider rejected LexPrompt's credentials — ${SERVICE_CONFIG_HINT}.`,
+      authError: true,
+    };
+    return run;
+  }
+
+  it('renders the panel, and the clause title beside it', () => {
+    const container = renderResultsView(vi.fn(), runWithConfigFault());
+    const panel = container.querySelector('[data-service-config-error]');
+    expect(panel).toBeTruthy();
+    expect(container.textContent).toContain(SERVICE_CONFIG_HINT);
+    // 'Term' is c2's title, and it must be in the CARD the panel replaced —
+    // not merely somewhere on the screen. A whole-container search passes on
+    // the clause rail's own copy of the title and proves nothing about what
+    // the reader sees next to the failure.
+    expect(panel!.parentElement!.textContent).toContain('Term');
+  });
+
+  it('wires the panel to a real per-clause retry, not a dismiss', () => {
+    const onRetryCell = vi.fn();
+    const container = mount(
+      <ResultsView
+        run={runWithConfigFault()}
+        documents={documents}
+        settings={settings}
+        onRetryCell={onRetryCell}
+        onVerify={vi.fn()}
+      />,
+    );
+    click(buttonNamed(container, /^retry$/i));
+    expect(onRetryCell).toHaveBeenCalledWith('d1', 'c2');
   });
 });

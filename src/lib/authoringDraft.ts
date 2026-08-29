@@ -40,6 +40,12 @@ export interface AuthoringDraft {
   context?: string;
   /** Names of the playbooks and matters used as style sources. */
   learnedFrom: string[];
+  /** What the drafting model was CALLED, in words a reader outside this
+   *  workspace can identify — never `Settings.modelChoiceId`, which is an
+   *  operator-defined alias that can be repointed at another model after
+   *  this record is written. Composed by `modelProvenanceName`; the empty
+   *  string when nothing better is known, which `positionProvenance` renders
+   *  as "an AI model" rather than as something unresolvable. */
   modelId: string;
   clauses: DraftClause[];
 }

@@ -138,3 +138,36 @@ describe('generateDraft', () => {
     await expect(generateDraft(form, '', [], settings)).rejects.not.toSatisfy(isAuthFailure);
   });
 });
+
+/**
+ * Final review M6. `AuthoringDraft.modelId` is printed verbatim by
+ * `positionProvenance` as "Drafted by …" onto every published standard
+ * position, and it travels into every export of the playbook. It used to be
+ * `settings.modelChoiceId` — an operator-defined allowlist alias which
+ * identifies nothing outside this workspace and which an administrator may
+ * repoint at a different provider and a different model without touching
+ * the record that already printed it.
+ */
+describe('what a draft records as the model that drafted it', () => {
+  const draftable = { clauses: [{ title: 'Rent', extract_prompt: 'Find the rent.' }] };
+
+  it('never records the allowlist alias', async () => {
+    mockChatJson(draftable);
+    const draft = await generateDraft(form, '', [], {
+      ...settings,
+      modelChoiceId: 'uks-gpt4o',
+      modelChoiceLabel: 'GPT-4o',
+      modelChoiceModel: 'gpt-4o',
+    });
+    expect(draft.modelId).not.toContain('uks-gpt4o');
+    expect(draft.modelId).toContain('gpt-4o');
+  });
+
+  it('records nothing rather than the alias when the model was never named', async () => {
+    mockChatJson(draftable);
+    const draft = await generateDraft(form, '', [], { modelChoiceId: 'uks-gpt4o', concurrency: 5 });
+    // `positionProvenance` renders '' as "an AI model" — vague and true,
+    // rather than specific and unresolvable.
+    expect(draft.modelId).toBe('');
+  });
+});

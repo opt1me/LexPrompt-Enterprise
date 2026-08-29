@@ -243,15 +243,15 @@ export async function buildChangeset(
     const byId = new Map<string, EditEntry>();
     edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
-    // The new deal's documents this call read from, deduped — never `docs`,
-    // which does not exist here: `edits` (already resolved per-document by
-    // the caller) is the only record of which documents contributed.
-    const documentIds = Array.from(new Set(edits.map(e => e.documentId)));
-
+    // No `documentIds` — the same reasoning as `inferPositions.ts`, on the
+    // same session-only documents: a redlines intake's `PrecedentDocument`
+    // ids are never persisted, so sending them makes the audit record claim
+    // to name a document nothing can resolve. `purpose: 'changeset.build'`
+    // already says what the call was for.
     const raw = await gatewayModelClient.chatJson<RawResponse>({
       modelChoiceId: settings.modelChoiceId,
       purpose: 'changeset.build',
-      context: { documentIds },
+      context: {},
       system:
         "You compare a law firm's existing contract playbook against the redlines of a NEW deal, to identify " +
         'where the deal confirms, changes, or raises something outside the standing playbook. You only ever ' +

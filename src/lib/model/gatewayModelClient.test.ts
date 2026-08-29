@@ -426,3 +426,99 @@ describe('listModels', () => {
     });
   });
 });
+
+/**
+ * The browser checking the GATEWAY's own envelope — deliberately NOT a
+ * second copy of `openrouter.ts`'s provider-shaped "returned no message
+ * content" guard, which has a live successor in the gateway's
+ * `openaiCompatible.readResponse` and must not be duplicated here.
+ */
+describe('a 200 that is not an InferResponse', () => {
+  it('refuses a body with no content rather than returning undefined', async () => {
+    const { client } = harness(() => jsonResponse({ callId: 'call-42' }));
+
+    await expect(client.chat(REQ)).rejects.toBeInstanceOf(ModelError);
+    // The blank deliverable this prevents: `draftEmail` returns
+    // `answer.content`, `ResultsView` gates the modal on `!== null`, and
+    // `undefined !== null` is true — so an empty client email opens with a
+    // working Copy button.
+    await expect(client.chat(REQ)).rejects.toMatchObject({ code: 'upstream_failed', status: 502 });
+  });
+
+  it('refuses a non-string content (a JSON interstitial, an object where prose belongs)', async () => {
+    const { client } = harness(() => jsonResponse({ content: { text: 'hi' }, callId: 'c' }));
+    await expect(client.chat(REQ)).rejects.toBeInstanceOf(ModelError);
+  });
+
+  it('quotes the callId when the malformed body still carried one', async () => {
+    const { client } = harness(() => jsonResponse({ callId: 'call-42' }));
+    await expect(client.chat(REQ)).rejects.toMatchObject({ callId: 'call-42' });
+  });
+
+  it('still accepts an empty-string answer, which is a real answer and not a missing one', async () => {
+    const { client } = harness(() => inferResponse(''));
+    await expect(client.chat(REQ)).resolves.toMatchObject({ content: '' });
+  });
+});
+
+describe('a refusal whose body does not carry the gateway envelope', () => {
+  /** Anything in front of `apps/api` — a reverse proxy, Container Apps
+   *  ingress, Azure Easy Auth — can emit one of these. */
+  function htmlResponse(status: number): Response {
+    return new Response('<html><body>401 Unauthorized</body></html>', {
+      status, headers: { 'content-type': 'text/html' },
+    });
+  }
+
+  it('classifies a 401 with an unreadable body as a sign-in failure, not "unknown"', async () => {
+    const { client } = harness(() => htmlResponse(401));
+    const err = await client.chat(REQ).catch((e: unknown) => e);
+    expect(isSignInError(err)).toBe(true);
+    expect((err as ModelError).code).toBe('sign_in_required');
+  });
+
+  it('classifies a 403 with an unreadable body as not_permitted', async () => {
+    const { client } = harness(() => htmlResponse(403));
+    const err = await client.chat(REQ).catch((e: unknown) => e);
+    expect(isSignInError(err)).toBe(true);
+    expect((err as ModelError).code).toBe('not_permitted');
+  });
+
+  it('classifies a 401 whose JSON body is some other shape entirely', async () => {
+    const { client } = harness(() => jsonResponse({ message: 'token expired' }, 401));
+    const err = await client.chat(REQ).catch((e: unknown) => e);
+    expect(isSignInError(err)).toBe(true);
+  });
+
+  it('falls back on the status when the code is a string nothing recognises', async () => {
+    const { client } = harness(
+      () => jsonResponse({ error: { code: 'token_expired', message: 'Token expired' } }, 401),
+    );
+    const err = await client.chat(REQ).catch((e: unknown) => e);
+    // An unrecognised code used to be cast straight into the union and land
+    // outside BOTH classifier sets — a refusal that was plainly one of them,
+    // read as neither.
+    expect(isSignInError(err)).toBe(true);
+    expect((err as ModelError).message).toBe('Token expired');
+  });
+
+  it('still prefers a recognised code in the body over the status', async () => {
+    const { client } = harness(
+      () => jsonResponse({ error: { code: 'group_overage', message: 'too many groups' } }, 403),
+    );
+    const err = await client.chat(REQ).catch((e: unknown) => e);
+    expect((err as ModelError).code).toBe('group_overage');
+    expect(isServiceConfigError(err)).toBe(true);
+    expect(isSignInError(err)).toBe(false);
+  });
+
+  it('invents nothing for a status it has no reading of', async () => {
+    const { client } = harness(() => htmlResponse(502));
+    const err = await client.chat(REQ).catch((e: unknown) => e);
+    // A 502 from an ingress is not evidence the firm's deployment is
+    // misconfigured, and guessing `service_misconfigured` would put a
+    // specific wrong reason, and the wrong panel, in front of a reader.
+    expect((err as ModelError).code).toBe('unknown');
+    expect(isServiceConfigError(err)).toBe(false);
+  });
+});

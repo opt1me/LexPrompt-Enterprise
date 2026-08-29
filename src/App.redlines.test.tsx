@@ -6,6 +6,7 @@ import type { Playbook, PlaybookDraft, PlaybookVersion } from './types';
 import type { InferredPosition } from './lib/inferPositions';
 import type { ParsedEdit } from './lib/docxRedlines';
 import { type as typeInto } from './test/mount';
+import { TEST_ALLOWED_MODEL } from './test/allowedModel';
 
 // No @testing-library/react in this project — a real react-dom root, driven
 // directly, exactly as App.authoring.test.tsx does for sub-project E's own
@@ -305,7 +306,7 @@ beforeEach(() => {
   );
   listMattersMock.mockReset().mockResolvedValue([]);
   listReviewsMock.mockReset().mockResolvedValue([]);
-  listModelsMock.mockReset().mockResolvedValue([]);
+  listModelsMock.mockReset().mockResolvedValue([TEST_ALLOWED_MODEL]);
 
   parseFileMock.mockReset().mockImplementation(async (file: File) => ({
     id: 'df1', name: file.name, text: `TEXT OF ${file.name}`, file, kind: 'docx' as const,

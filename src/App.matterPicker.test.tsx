@@ -1,4 +1,5 @@
 import React from 'react';
+import { TEST_ALLOWED_MODEL } from './test/allowedModel';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -16,6 +17,7 @@ const saveMatterMock = vi.fn();
 const newMatterMock = vi.fn();
 const getProfileMock = vi.fn();
 const migrateIfNeededMock = vi.fn();
+const listModelsMock = vi.fn();
 
 vi.mock('./lib/db/migrate', () => ({
   migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
@@ -74,7 +76,7 @@ vi.mock('./lib/db/profile', () => ({
 vi.mock('./lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {
     chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(),
-    listModels: vi.fn().mockResolvedValue([]),
+    listModels: (...args: unknown[]) => listModelsMock(...args),
   },
 }));
 
@@ -160,6 +162,7 @@ describe('App — running a playbook from the Library goes through a matter pick
     // exactly as the pre-existing Library flow did — an API key is needed
     // here purely to get past that gate, not something this file is testing.
     localStorage.setItem('lexprompt.settings', JSON.stringify({ modelChoiceId: 'test/model', concurrency: 5 }));
+    listModelsMock.mockReset().mockResolvedValue([TEST_ALLOWED_MODEL]);
     migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
     listMattersMock.mockReset().mockResolvedValue([makeMatter('m1', 'Acme v Bolt')]);
@@ -247,5 +250,72 @@ describe('App — running a playbook from the Library goes through a matter pick
 
     expect(container.textContent).not.toContain('run-panel-stub');
     expect(container.textContent).not.toContain('against a matter');
+  });
+
+  /**
+   * Final review M4. `ModelPicker` already refused to resolve a stored
+   * choice that is no longer on the allowlist and told the user "nothing is
+   * selected" — but `isConfigured` read the stored id alone, so this shell
+   * went on waving the same user into a run that would fail on every clause
+   * with the gateway's `model_not_allowed`. The guard that exists to stop
+   * "a flow that can only fail with an obscure error" did not fire, in the
+   * one case it was written for.
+   */
+  describe('a model choice the allowlist no longer serves', () => {
+    it('stops the run at the gate and says which of the two things is wrong', async () => {
+      listModelsMock.mockResolvedValue([{ ...TEST_ALLOWED_MODEL, id: 'some-other-model' }]);
+      act(() => { root.render(<App />); });
+      await flush();
+      clickNav(container, 'Playbooks');
+      await flush();
+      clickByText(container, /^Run Basic Contract Review$/);
+      await flush();
+      clickByText(container, /^Acme v Bolt$/);
+      await flush();
+
+      // `ensureConfigured` is what stands between the matter picker and the
+      // run panel; the run must not start.
+      expect(container.textContent).not.toContain('run-panel-stub');
+      expect(container.textContent).toContain('is no longer on the list for this workspace');
+    });
+
+    it('drops the retired capability flags rather than reviewing on the previous model', async () => {
+      localStorage.setItem('lexprompt.settings', JSON.stringify({
+        modelChoiceId: 'test/model', concurrency: 5,
+        modelSupportsImages: true, modelContextLength: 200000,
+        modelChoiceLabel: 'Something Retired', modelChoiceModel: 'retired-1',
+      }));
+      listModelsMock.mockResolvedValue([{ ...TEST_ALLOWED_MODEL, id: 'some-other-model' }]);
+      act(() => { root.render(<App />); });
+      await flush();
+
+      const stored = JSON.parse(localStorage.getItem('lexprompt.settings')!);
+      // A scanned PDF must not be sent as images to a choice that no longer
+      // exists, and nothing persisted afterwards may name the retired model.
+      expect('modelSupportsImages' in stored).toBe(false);
+      expect('modelContextLength' in stored).toBe(false);
+      expect('modelChoiceLabel' in stored).toBe(false);
+      expect('modelChoiceModel' in stored).toBe(false);
+      // The id itself STAYS. Clearing it would make `ModelPicker` preselect
+      // and auto-commit the workspace default, telling a reviewer a model
+      // they never picked ran their review.
+      expect(stored.modelChoiceId).toBe('test/model');
+    });
+
+    it('does not lock a working user out when the allowlist read merely FAILED', async () => {
+      listModelsMock.mockRejectedValue(new Error('offline'));
+      act(() => { root.render(<App />); });
+      await flush();
+      clickNav(container, 'Playbooks');
+      await flush();
+      clickByText(container, /^Run Basic Contract Review$/);
+      await flush();
+      clickByText(container, /^Acme v Bolt$/);
+      await flush();
+
+      // A network blip is not evidence that a model was retired.
+      expect(container.textContent).toContain('run-panel-stub');
+      expect(container.textContent).not.toContain('is no longer on the list for this workspace');
+    });
   });
 });

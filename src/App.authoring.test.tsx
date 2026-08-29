@@ -1,4 +1,5 @@
 import React from 'react';
+import { TEST_ALLOWED_MODEL } from './test/allowedModel';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -230,7 +231,7 @@ beforeEach(() => {
   listMattersMock.mockReset().mockResolvedValue([]);
   listReviewsMock.mockReset().mockResolvedValue([]);
   generateDraftMock.mockReset().mockResolvedValue(draftWithTwoClauses());
-  listModelsMock.mockReset().mockResolvedValue([]);
+  listModelsMock.mockReset().mockResolvedValue([TEST_ALLOWED_MODEL]);
   container = document.createElement('div');
   document.body.appendChild(container);
   root = createRoot(container);

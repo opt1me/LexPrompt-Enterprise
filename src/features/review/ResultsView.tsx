@@ -643,14 +643,25 @@ export function ResultsView({
                   className={`rounded-card transition-shadow ${focusIndex === i ? 'ring-1 ring-accent-edge' : ''}`}
                 >
                   {showServiceConfigError ? (
-                    <ServiceConfigError
-                      error={new ModelError(
-                        finding!.error ?? 'LexPrompt could not reach the model service.',
-                        'service_misconfigured',
-                        503,
-                      )}
-                      onRetry={() => onRetryCell(activeDocId, clause.id)}
-                    />
+                    <>
+                      {/* The panel stands in for a whole `FindingCard`, and
+                         a card is the only thing on this screen that says
+                         WHICH clause it is about. In a twenty-clause list
+                         the reader could not tell which one failed — a
+                         wall of identical panels naming nothing. The title
+                         is rendered here rather than inside
+                         `ServiceConfigError`, which is also mounted at the
+                         shell level where there is no clause. */}
+                      <h4 className="font-prose text-section text-ink-1 mb-2">{clause.title}</h4>
+                      <ServiceConfigError
+                        error={new ModelError(
+                          finding!.error ?? 'LexPrompt could not reach the model service.',
+                          'service_misconfigured',
+                          503,
+                        )}
+                        onRetry={() => onRetryCell(activeDocId, clause.id)}
+                      />
+                    </>
                   ) : (
                     <FindingCard
                       clause={clause}

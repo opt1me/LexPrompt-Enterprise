@@ -223,6 +223,7 @@ describe.each([
     signinSilentMock.mockResolvedValue(FRESH_USER(profile));
     await expect(getAccessToken()).resolves.toBe('fresh-access-token');
   });
+});
 
 describe('an identity provider that REFUSES the redirect', () => {
   // A provider answers a redirect in TWO shapes: `?code=` on success and
@@ -259,4 +260,81 @@ describe('an identity provider that REFUSES the redirect', () => {
     unmount();
   });
 });
+
+/**
+ * The reload trap (final review M1).
+ *
+ * `redirect_uri` is `window.location.origin`, so a successful sign-in lands
+ * on `/?code=…&state=…`. Nothing else cleans that: `useRoute` rewrites the
+ * URL only on a `navigate()` call and never pushes on mount, so the query
+ * survived until the user's first in-app click. A signed-in user who
+ * pressed F5 before clicking anything re-ran `signinRedirectCallback` on a
+ * consumed code, was told "LexPrompt couldn't sign you in", and had a Retry
+ * that re-read the same URL and failed identically — a loop with no exit
+ * from inside the app.
+ */
+describe('the redirect query is consumed, not left in the address bar', () => {
+  it('clears ?code= once the callback succeeds', async () => {
+    window.history.replaceState(null, '', '/?code=abc&state=xyz');
+    signinRedirectCallbackMock.mockResolvedValue(
+      FRESH_USER({ sub: 's', name: 'A. Gray', email: 'a@example.com' }),
+    );
+
+    const { container, unmount } = mountProbe();
+    await flushUntil(() => statusOf(container) === 'signed-in', 'useAuth to reach signed-in');
+    expect(window.location.search).toBe('');
+    expect(window.location.pathname).toBe('/');
+    unmount();
+  });
+
+  it('clears ?error= too, so Retry on the refusal screen is a real re-check', async () => {
+    window.history.replaceState(null, '', '/?error=invalid_scope&error_description=Nope&state=abc');
+    signinRedirectCallbackMock.mockRejectedValue(new Error('Invalid scopes'));
+    getUserMock.mockResolvedValue(null);
+
+    const { container, unmount, latest } = mountProbe();
+    await flushUntil(() => statusOf(container) === 'failed', 'useAuth to settle on failed');
+    // Cleared on the FAILING branch as well — leaving it there is the half
+    // that made the loop inescapable.
+    expect(window.location.search).toBe('');
+
+    await act(async () => { latest().retry(); });
+    await flushUntil(() => statusOf(container) !== 'signing-in', 'the retry to settle');
+    // Retry now asks `getUser()` instead of replaying the consumed refusal.
+    expect(getUserMock).toHaveBeenCalled();
+    expect(statusOf(container)).toBe('signed-out');
+    unmount();
+  });
+
+  it('lets a reload after a successful sign-in find the session instead of failing', async () => {
+    // First load: the callback runs and consumes the code.
+    window.history.replaceState(null, '', '/?code=abc&state=xyz');
+    const user = FRESH_USER({ sub: 's', name: 'A. Gray', email: 'a@example.com' });
+    signinRedirectCallbackMock.mockResolvedValue(user);
+    const first = mountProbe();
+    await flushUntil(() => statusOf(first.container) === 'signed-in', 'the first sign-in');
+    first.unmount();
+
+    // The reload. `oidc-client-ts` has already deleted the state entry, so a
+    // second callback would reject — the URL must no longer ask for one.
+    signinRedirectCallbackMock.mockRejectedValue(new Error('No matching state found in storage'));
+    getUserMock.mockResolvedValue(user);
+    const second = mountProbe();
+    await flushUntil(() => statusOf(second.container) !== 'signing-in', 'the reload to settle');
+    expect(statusOf(second.container)).toBe('signed-in');
+    expect(signinRedirectCallbackMock).toHaveBeenCalledTimes(1);
+    second.unmount();
+  });
+
+  it('preserves a hash while dropping the query', async () => {
+    window.history.replaceState(null, '', '/?code=abc&state=xyz#section');
+    signinRedirectCallbackMock.mockResolvedValue(
+      FRESH_USER({ sub: 's', name: 'A. Gray', email: 'a@example.com' }),
+    );
+    const { container, unmount } = mountProbe();
+    await flushUntil(() => statusOf(container) === 'signed-in', 'useAuth to reach signed-in');
+    expect(window.location.search).toBe('');
+    expect(window.location.hash).toBe('#section');
+    unmount();
+  });
 });

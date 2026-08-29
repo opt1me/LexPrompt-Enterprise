@@ -97,9 +97,33 @@ export function useAuth(): UseAuthResult {
       // because nothing under test ever returned an error-shaped redirect.
       const params = new URLSearchParams(window.location.search);
       const isRedirectCallback = params.has('code') || params.has('error');
-      const user = isRedirectCallback
-        ? await userManager.signinRedirectCallback()
-        : await userManager.getUser();
+      let user: User | null;
+      if (isRedirectCallback) {
+        try {
+          user = await userManager.signinRedirectCallback();
+        } finally {
+          // The authorization code is single-use, and `oidc-client-ts`
+          // consumes and deletes the matching state entry as it reads it.
+          // Nothing else cleaned the query: `useRoute` rewrites the URL only
+          // on a `navigate()` call and never pushes on mount, so `?code=`
+          // survived until the user's first in-app click. A signed-in user
+          // who pressed F5 before clicking anything therefore ran this
+          // callback again, against a state entry that was already gone,
+          // and was shown "LexPrompt couldn't sign you in" — with a Retry
+          // that re-read the same URL and failed identically. There was no
+          // route out of it from inside the app.
+          //
+          // Cleared in a `finally`, on BOTH branches, and ungated by the
+          // generation check below: the query is consumed the moment this
+          // settles, whether it produced a user or a refusal, and leaving it
+          // in place on the failing branch is the half that made the loop
+          // inescapable. `pathname` only — `useRoute` parses the pathname,
+          // and any hash is preserved rather than silently dropped.
+          window.history.replaceState(null, '', window.location.pathname + window.location.hash);
+        }
+      } else {
+        user = await userManager.getUser();
+      }
       if (generationRef.current !== generation) return; // superseded — discard
       if (!user) {
         setState({ status: 'signed-out' });
@@ -124,6 +148,15 @@ export function useAuth(): UseAuthResult {
   return {
     state,
     signIn: () => { void userManager.signinRedirect(); },
+    // Deferred, not forgotten, and named here for the reason `⌘K` and the
+    // Report tab are named in CLAUDE.md rather than left silently missing:
+    // nothing in the app calls this yet. Tokens live in `sessionStorage`, so
+    // closing the tab already ends the session, and the shell has no
+    // account menu to hang a sign-out on — R-G1 resolved every multi-user
+    // affordance in the prototypes down to a single-user substrate and the
+    // header avatar is not a menu. The redirect-based sign-out is written
+    // and tested so that the day a control for it exists, the control is the
+    // only new thing.
     signOut: () => { void userManager.signoutRedirect(); },
     retry: load,
   };

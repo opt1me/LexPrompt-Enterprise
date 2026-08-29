@@ -1,4 +1,5 @@
 import React from 'react';
+import { TEST_ALLOWED_MODEL } from './test/allowedModel';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -92,7 +93,7 @@ vi.mock('./lib/db/profile', () => ({
 vi.mock('./lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {
     chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(),
-    listModels: vi.fn().mockResolvedValue([]),
+    listModels: vi.fn().mockResolvedValue([TEST_ALLOWED_MODEL]),
   },
 }));
 

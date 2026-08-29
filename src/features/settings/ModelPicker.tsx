@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { jurisdictionLabel, type AllowedModel } from '@lexprompt/core';
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
+import { isStaleModelChoice, MODEL_CHOICE_STALE } from '../../lib/model/modelChoice';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import type { Settings } from '../../types';
 
@@ -29,6 +30,11 @@ export const NO_MODELS_CONFIGURED =
 
 export interface ModelChoicePatch {
   modelChoiceId: string;
+  /** Recorded alongside the id so nothing persisted has to name the alias —
+   *  see `modelProvenanceName`. The id says which allowlist entry was
+   *  chosen; these say what it was, on the day it was chosen. */
+  modelChoiceLabel: string;
+  modelChoiceModel: string;
   modelSupportsImages: boolean;
   modelSupportsStructuredOutput: boolean;
   modelContextLength: number;
@@ -73,6 +79,8 @@ function whereRequestsGo(m: AllowedModel): string {
 function patchFor(m: AllowedModel): ModelChoicePatch {
   return {
     modelChoiceId: m.id,
+    modelChoiceLabel: m.label,
+    modelChoiceModel: m.model,
     modelSupportsImages: m.supportsImages,
     modelSupportsStructuredOutput: m.supportsStructuredOutput,
     modelContextLength: m.contextLength,
@@ -132,7 +140,11 @@ export function ModelPicker({ settings, onChange }: ModelPickerProps) {
   // be told a model they never picked ran their review.
   const preselect = settings.modelChoiceId ? undefined : models.find(m => m.isDefault);
   const selected = chosen ?? preselect;
-  const staleChoice = Boolean(settings.modelChoiceId) && !chosen && state.status === 'ready';
+  // Shared with App's own `isConfigured`, through one predicate: the screen
+  // saying "nothing is selected" while the shell still waves the user into a
+  // review is exactly what two copies of this would produce.
+  const staleChoice = state.status === 'ready'
+    && isStaleModelChoice(settings.modelChoiceId, models);
 
   useEffect(() => {
     if (!preselect || committedDefault.current) return;
@@ -182,8 +194,8 @@ export function ModelPicker({ settings, onChange }: ModelPickerProps) {
         <>
           {staleChoice && (
             <p className="font-ui text-ui-sm text-ink-2 leading-relaxed">
-              The model this browser had chosen is no longer on the list for this workspace, so
-              nothing is selected. Pick one below before running a review.
+              {MODEL_CHOICE_STALE}, so nothing is selected. Pick one below before running a
+              review.
             </p>
           )}
           <select

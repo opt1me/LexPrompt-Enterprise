@@ -195,6 +195,11 @@ describe('ModelPicker — selection', () => {
     choose(selectIn(container)!, 'us-gpt');
     expect(onChange).toHaveBeenCalledWith({
       modelChoiceId: 'us-gpt',
+      // The label and the provider-side model name travel with the choice:
+      // `modelChoiceId` is an operator-defined alias that can be repointed,
+      // so nothing persisted may name it. See `modelProvenanceName`.
+      modelChoiceLabel: 'GPT-4o',
+      modelChoiceModel: 'gpt-4o',
       modelSupportsImages: false,
       modelSupportsStructuredOutput: false,
       modelContextLength: 128000,
@@ -214,6 +219,8 @@ describe('ModelPicker — selection', () => {
     // state the store does not have.
     expect(onChange).toHaveBeenCalledWith({
       modelChoiceId: 'uk-sonnet',
+      modelChoiceLabel: 'Claude Sonnet 4',
+      modelChoiceModel: 'claude-sonnet-4',
       modelSupportsImages: true,
       modelSupportsStructuredOutput: true,
       modelContextLength: 200000,

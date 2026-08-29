@@ -127,6 +127,8 @@ export function learnedFromNames(
 export function positionsToDraft(
   positions: InferredPosition[],
   documentNames: Record<string, string>,
+  /** Already resolved by the caller through `modelProvenanceName` — a model
+   *  NAME, never the allowlist alias. See `AuthoringDraft.modelId`. */
   modelId: string,
   contractType: string,
 ): AuthoringDraft {
