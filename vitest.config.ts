@@ -58,7 +58,7 @@ export default defineConfig({
           environment: 'node',
           globals: false,
           include: ['apps/api/test/**/*.test.ts'],
-          exclude: ['apps/api/test/**/*.compose.test.ts'],
+          exclude: ['apps/api/test/**/*.compose.test.ts', 'apps/api/test/**/*.pg.test.ts'],
         },
       },
     ],

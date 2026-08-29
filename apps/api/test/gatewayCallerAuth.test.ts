@@ -30,6 +30,9 @@ const BASE: ApiConfig = {
   gatewayUrl: 'https://gateway.internal',
   workspaceId: 'ws-1',
   maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
+  databaseUrl: 'postgres://lexprompt_app:app-dev@postgres:5432/lexprompt',
+  databaseMigrationUrl: 'postgres://lexprompt_migrator:migrator-dev@postgres:5432/lexprompt',
+  databasePoolMax: 10,
 };
 
 const MTLS = {

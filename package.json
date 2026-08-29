@@ -20,7 +20,8 @@
     "typecheck": "node scripts/typecheck.mjs",
     "compose:up": "docker compose up -d --build && bash scripts/print-local-accounts.sh",
     "compose:down": "docker compose down -v",
-    "test:compose": "vitest run --config vitest.compose.config.ts"
+    "test:compose": "vitest run --config vitest.compose.config.ts",
+    "test:pg": "vitest run --config vitest.pg.config.ts"
   },
   "dependencies": {
     "@lexprompt/core": "*",
@@ -31,6 +32,7 @@
     "mammoth": "^1.12.1",
     "oidc-client-ts": "^3.5.0",
     "pdfjs-dist": "^6.2.108",
+    "pg": "^8.23.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "react-markdown": "^10.1.0",
@@ -39,6 +41,7 @@
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.14.0",
+    "@types/pg": "^8.23.1",
     "@vitejs/plugin-react": "^5.0.0",
     "fake-indexeddb": "^6.2.5",
     "jsdom": "^26.0.0",

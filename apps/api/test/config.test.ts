@@ -13,6 +13,8 @@ const BASE = {
   API_AUDIENCE: 'api://lexprompt',
   API_GATEWAY_URL: 'https://gateway.internal',
   API_WORKSPACE_ID: 'ws-1',
+  API_DATABASE_URL: 'postgres://lexprompt_app:app-dev@postgres:5432/lexprompt',
+  API_DATABASE_MIGRATION_URL: 'postgres://lexprompt_migrator:migrator-dev@postgres:5432/lexprompt',
 } as NodeJS.ProcessEnv;
 
 describe('loadConfig (apps/api)', () => {
@@ -86,6 +88,23 @@ describe('loadConfig (apps/api)', () => {
       const env = { ...BASE }; delete env[key];
       expect(() => loadConfig(env), key).toThrow(ConfigError);
     }
+  });
+
+  // Each new required key refuses BY NAME when unset, exactly like the
+  // existing required keys above — a database DSN that silently defaulted
+  // to nothing would connect to nowhere with no explanation.
+  it('refuses a missing database URL or migration URL, by name', () => {
+    for (const key of ['API_DATABASE_URL', 'API_DATABASE_MIGRATION_URL'] as const) {
+      const env = { ...BASE }; delete env[key];
+      expect(() => loadConfig(env), key).toThrow(ConfigError);
+      expect(() => loadConfig(env), key).toThrow(new RegExp(key));
+    }
+  });
+
+  it('defaults the database pool size, and reads an operator-set one', () => {
+    expect(loadConfig({ ...BASE }).databasePoolMax).toBe(10);
+    expect(loadConfig({ ...BASE, API_DATABASE_POOL_MAX: '25' }).databasePoolMax).toBe(25);
+    expect(() => loadConfig({ ...BASE, API_DATABASE_POOL_MAX: '0' })).toThrow(ConfigError);
   });
 
   it('refuses a non-positive or non-numeric port rather than falling back', () => {
@@ -172,5 +191,14 @@ describe('loadConfig (apps/api)', () => {
 
     const same = describeConfig(loadConfig({ ...BASE }));
     expect(same).not.toMatch(/Keys discovered at/);
+  });
+
+  it('never prints a database password in the boot banner', () => {
+    const cfg = loadConfig({ ...BASE, API_DATABASE_URL: 'postgres://app:hunter2@db:5432/lex' });
+    const banner = describeConfig(cfg);
+    // The positive assertion is what makes the negative one mean something:
+    // without it, a banner that dropped the Database line entirely passes.
+    expect(banner).toContain('postgres://app@db:5432/lex');
+    expect(banner).not.toContain('hunter2');
   });
 });

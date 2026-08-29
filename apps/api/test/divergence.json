@@ -99,6 +99,18 @@
         "NGINX_RESOLVER"
       ],
       "why": "API_UPSTREAM is set in BOTH environments — it is sameEverywhere with different values, exactly like the identity keys in row 1 — because the SPA calls /api on its own origin in both and nginx forwards it. What exists in only one environment is the resolver: Azure sets NGINX_RESOLVER to the platform DNS (168.63.129.16), while compose leaves the image default of Docker's embedded 127.0.0.11. nginx resolves the upstream per request rather than once at config load, so an api revision replacing its address does not leave the proxy pointing at nothing — which is why a resolver has to be named at all."
+    },
+    {
+      "n": 11,
+      "what": "Database (Stage 2 Task 1 — Postgres exists only in compose so far)",
+      "keys": [
+        "API_DATABASE_URL",
+        "API_DATABASE_MIGRATION_URL",
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_DB"
+      ],
+      "why": "This task adds a `postgres` service to docker-compose.yml and the two DSNs apps/api/src/config.ts reads to reach it, and stops there — infra/modules/postgres.bicep and the matching Container Apps env entries are Task 24's work, named in this project's own migration-runner comments and not yet written. Until that lands, these five keys exist ONLY in the local stack, which is a genuine divergence and not a same-everywhere pair the way the identity keys in row 1 are: there is no Azure value yet for either DSN to differ FROM. API_DATABASE_URL and API_DATABASE_MIGRATION_URL are expected to move to sameEverywhere (row 1's pattern) the day Task 24 sets an Azure equivalent under the same names — same key, different value, exactly as apps/api/src/config.ts's own doc comment on `databaseUrl` already says. POSTGRES_USER/PASSWORD/DB are consumed by the postgres image itself at first boot (docker-entrypoint-initdb.d), not read by any application configuration module, so they stay local-only permanently: Azure Postgres Flexible Server provisions its admin credential through Bicep parameters, never through these container-image bootstrap variables."
     }
   ],
   "rowsWithNoKeys": {
@@ -137,6 +149,7 @@
   ],
   "defaultedInBothEnvironments": [
     "API_MAX_BODY_BYTES",
+    "API_DATABASE_POOL_MAX",
     "GATEWAY_MAX_PROMPT_CHARS",
     "GATEWAY_REQUEST_TIMEOUT_MS",
     "GATEWAY_DEFAULT_MAX_TOKENS",
@@ -161,6 +174,7 @@
     "contracts, which the software has no standing to guess at all."
   ],
   "localOnlyServices": [
-    "keycloak"
+    "keycloak",
+    "postgres"
   ]
 }

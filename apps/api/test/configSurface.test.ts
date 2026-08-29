@@ -268,7 +268,7 @@ describe('the configuration diff is exactly §5.1s divergence list (S30)', () =>
   });
 
   it('names every compose service, so a new one cannot arrive unscanned', () => {
-    expect([...local.keys()].sort()).toEqual(['api', 'gateway', 'keycloak', 'web']);
+    expect([...local.keys()].sort()).toEqual(['api', 'gateway', 'keycloak', 'postgres', 'web']);
     for (const service of DIVERGENCE.localOnlyServices) {
       expect(local.has(service), `${service} is named local-only but is not a service`).toBe(true);
     }

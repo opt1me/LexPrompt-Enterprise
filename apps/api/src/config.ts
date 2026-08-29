@@ -46,6 +46,17 @@ export interface ApiConfig {
    * value only stops `apps/api` from being a silent, tighter, unnamed cap.
    */
   maxBodyBytes: number;
+  /** The app role's connection. Every request runs as `lexprompt_app`, which
+   *  by design cannot UPDATE or DELETE a published playbook version (P10).
+   *  Set in BOTH environments — the value differs, the key does not — so
+   *  this is `sameEverywhere` and not a §5.1 divergence. */
+  databaseUrl: string;
+  /** The migrator role's connection, used ONLY by `runMigrations` at startup
+   *  and by nothing else. It owns the schema; the app role does not. Two
+   *  roles is what makes an immutability grant a fact about the database
+   *  rather than a fact about the code that happens not to write. */
+  databaseMigrationUrl: string;
+  databasePoolMax: number;
 }
 
 /**
@@ -159,7 +170,24 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     workspaceId: required(env, 'API_WORKSPACE_ID'),
     mtls: parseMtls(env),
     maxBodyBytes: int(env, 'API_MAX_BODY_BYTES', DEFAULT_MAX_BODY_BYTES),
+    databaseUrl: required(env, 'API_DATABASE_URL'),
+    databaseMigrationUrl: required(env, 'API_DATABASE_MIGRATION_URL'),
+    databasePoolMax: int(env, 'API_DATABASE_POOL_MAX', 10),
   };
+}
+
+/** A DSN in a log line must never carry its password. `postgres://u:p@h/db`
+ *  becomes `postgres://u@h/db`. Returned verbatim when it does not parse,
+ *  because a malformed DSN is worth seeing in full at boot and there is no
+ *  password in it to leak — it is not a DSN. */
+export function redactDsn(dsn: string): string {
+  try {
+    const url = new URL(dsn);
+    url.password = '';
+    return url.toString();
+  } catch {
+    return dsn;
+  }
 }
 
 /** The boot banner — printed every start, mirroring the gateway's, so a
@@ -178,5 +206,6 @@ export function describeConfig(cfg: ApiConfig): string {
     `Workspace: ${cfg.workspaceId}`,
     `Gateway: ${cfg.gatewayUrl}${cfg.mtls ? ' (mTLS)' : ''}`,
     `Max request body: ${cfg.maxBodyBytes} bytes`,
+    `Database: ${redactDsn(cfg.databaseUrl)}`,
   ].join('\n');
 }

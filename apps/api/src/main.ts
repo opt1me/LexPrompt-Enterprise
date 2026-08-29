@@ -1,8 +1,11 @@
+import { fileURLToPath } from 'node:url';
 import type { JWTVerifyGetKey } from 'jose';
 import { loadConfig, describeConfig, type ApiConfig } from './config.ts';
 import { discoverJwks, makeTokenVerifier } from './oidc.ts';
 import { buildServer } from './server.ts';
 import { makeGatewayClient, type GatewayClient } from './gatewayClient.ts';
+import { makeDb, makePool, type Db } from './db/pool.ts';
+import { runMigrations } from './db/migrate.ts';
 
 /** Every startup failure reaches the operator as the same banner, whatever
  *  threw it. `ConfigError` was the only thing caught before, so a missing
@@ -23,6 +26,7 @@ async function main(): Promise<void> {
   // only thing that does.
   let config: ApiConfig;
   let gateway: GatewayClient;
+  let db: Db;
   try {
     config = loadConfig(process.env);
     // Inside the same guard as `loadConfig`, deliberately. `makeGatewayClient`
@@ -32,6 +36,7 @@ async function main(): Promise<void> {
     // that makes serving impossible. It belongs in the same loud startup exit,
     // not in an unhandled rejection.
     gateway = makeGatewayClient(config);
+    db = makeDb(makePool(config.databaseUrl, config.databasePoolMax));
   } catch (err) {
     // Fail loudly, at startup, before a single call can be served — the
     // same discipline as the gateway's config, and for the same reason:
@@ -44,6 +49,20 @@ async function main(): Promise<void> {
     refuseToStart(err);
   }
   process.stdout.write(`${describeConfig(config)}\n`);
+
+  // Migrations run on the MIGRATOR connection, and that pool is closed
+  // immediately: the schema owner's credential must not sit in a live pool
+  // for the process's lifetime, where any later code could reach it.
+  try {
+    const migrationPool = makePool(config.databaseMigrationUrl, 2);
+    try {
+      await runMigrations(makeDb(migrationPool), fileURLToPath(new URL('../migrations/', import.meta.url)));
+    } finally {
+      await migrationPool.end();
+    }
+  } catch (err) {
+    refuseToStart(err);
+  }
 
   // `discoverJwks` reads `discoveryUrl` off the config itself — see its own
   // comment for why it does not take a string. Inside the same banner as
