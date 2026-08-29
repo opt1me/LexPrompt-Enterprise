@@ -139,6 +139,36 @@ export function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number
       if (err instanceof ConflictError && err.current !== undefined) body.current = err.current;
       return reply.code(err.status).send(body);
     }
+    // A FOREIGN KEY VIOLATION, in words a lawyer can act on.
+    //
+    // Postgres answers `insert or update on table "changeset" violates
+    // foreign key constraint "changeset_from_version_id_fkey"`. That is true
+    // and it is useless: it names a constraint, not a thing anybody has ever
+    // seen on a screen, and without this branch it reaches the browser as a
+    // 500 saying "LexPrompt failed to handle this request" with the raw
+    // constraint name attached.
+    //
+    // It matters most for the uploader (§13.1), which is the one caller that
+    // sends records naming ids MINTED BY ANOTHER SYSTEM — this browser's
+    // IndexedDB — and whose whole product is a report saying, by name, what
+    // did not move and why. "This record names something LexPrompt does not
+    // know" is a sentence that goes on that report beside the record's name;
+    // a constraint name is not.
+    //
+    // 409, not 500: nothing here is broken. The request named something that
+    // is not there, which is the caller's to fix by sending it again once it
+    // is — the same shape as every other conflict, and `code: 'conflict'` is
+    // already in `MODEL_ERROR_CODES`, so the browser classifies it through
+    // the vocabulary it shares rather than by matching on this wording.
+    if (err.code === '23503') {
+      const detail = (err as FastifyError & { constraint?: string }).constraint;
+      return reply.code(409).send({ error: {
+        code: 'conflict',
+        message: 'This record names something LexPrompt does not know — a matter, a playbook '
+          + 'version or a person that is not on the server. Nothing was saved. '
+          + (detail ? `(${detail})` : ''),
+      } });
+    }
     const status = typeof err.statusCode === 'number' ? err.statusCode : 500;
     if (err.code === 'FST_ERR_CTP_BODY_TOO_LARGE' || status === 413) {
       return reply.code(413).send({ error: {

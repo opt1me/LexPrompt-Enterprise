@@ -669,9 +669,20 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
    * yes/no question.
    */
   const [localData, setLocalData] = useState<LocalDataBannerState | null>(null);
+  // `countLocalData()` is async and nothing cancels it, so its result can
+  // arrive after this component is gone — a test file finishing, a sign-out.
+  // Applying state then is a write to a component that no longer exists;
+  // under jsdom it surfaces as `ReferenceError: window is not defined` from
+  // React's own `dispatchSetState`, AFTER the environment has been torn
+  // down, which makes the suite exit 1 with every test reporting PASSED.
+  // The migration gate below carries the same guard for the same reason —
+  // and this is the second time this project has paid for its absence.
+  const localDataLive = useRef(true);
+  useEffect(() => () => { localDataLive.current = false; }, []);
   const loadLocalDataPresence = useCallback(() => {
     countLocalData().then(
       ({ total, unreadable }) => {
+        if (!localDataLive.current) return;
         if (unreadable.length > 0) {
           setLocalData({
             kind: 'partial',
@@ -684,10 +695,13 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
           setLocalData(null);
         }
       },
-      (e: unknown) => setLocalData({
-        kind: 'unknown',
-        message: describeLoadError(e, 'Reload the page to try again.'),
-      }),
+      (e: unknown) => {
+        if (!localDataLive.current) return;
+        setLocalData({
+          kind: 'unknown',
+          message: describeLoadError(e, 'Reload the page to try again.'),
+        });
+      },
     );
   }, []);
   useEffect(() => { loadLocalDataPresence(); }, [loadLocalDataPresence]);

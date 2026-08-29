@@ -4,6 +4,7 @@ import { mount, buttonNamed, click, flushUntil } from '../../test/mount';
 import { closeDb } from '../../lib/db/open';
 import { seedLocal } from '../../test/seedLocalData';
 import { UploadLocalData } from './UploadLocalData';
+import { seal, type UploadReport } from '../../lib/upload/report';
 
 /**
  * The screen's whole job in Task 21 is telling a person exactly what is in
@@ -59,18 +60,83 @@ describe('UploadLocalData', () => {
     const el = mount(<UploadLocalData onClose={() => {}} />);
     await flushUntil(() => /Reading this browser/.test(el.textContent ?? '')
       || /nothing stored/.test(el.textContent ?? ''), 'the screen');
-    expect(el.textContent).toContain('Nothing is deleted from this browser by moving it');
+    expect(el.textContent).toContain('Nothing here has been deleted');
   });
 
   it('hands the scan to the uploader when Upload everything is pressed', async () => {
     await seedLocal({
       matters: [{ id: 'm1', name: 'Brookvale Retail Park', ownerId: 'local-abc', createdAt: 1, updatedAt: 1 }],
     });
-    const onUpload = vi.fn();
-    const el = mount(<UploadLocalData onClose={() => {}} onUpload={onUpload} />);
+    const upload = vi.fn(async (_scan: unknown) => complete);
+    const el = mount(<UploadLocalData onClose={() => {}} upload={upload} />);
     await flushUntil(() => !!buttonNamed(el, /upload everything/i), 'the upload button');
     click(buttonNamed(el, /upload everything/i));
-    expect(onUpload).toHaveBeenCalledTimes(1);
-    expect((onUpload.mock.calls[0][0] as { totals: Record<string, number> }).totals.matters).toBe(1);
+    expect(upload).toHaveBeenCalledTimes(1);
+    expect((upload.mock.calls[0][0] as { totals: Record<string, number> }).totals.matters).toBe(1);
+  });
+});
+
+/**
+ * The one sentence this screen must never say: "Everything moved", over
+ * anything less than everything.
+ *
+ * The negative assertion is PAIRED with a positive one on purpose. A
+ * `not.toContain` with no companion passes against a component that renders
+ * nothing at all, which is how Stage 1 shipped two vacuous assertions.
+ */
+const complete: UploadReport = seal({
+  startedAt: 1, expected: { matters: 1 }, unmapped: 0, unreadable: [],
+  outcomes: [{ store: 'matters', id: 'm1', label: 'Brookvale Retail Park', status: 'moved' }],
+});
+
+const incomplete: UploadReport = seal({
+  startedAt: 1, expected: { matters: 2 }, unmapped: 0, unreadable: [],
+  outcomes: [
+    { store: 'matters', id: 'm1', label: 'Brookvale Retail Park', status: 'moved' },
+    { store: 'matters', id: 'm2', label: 'Ashfield Mill', status: 'failed',
+      reason: 'There is no matter m2 to add this to.' },
+  ],
+});
+
+async function reportFor(report: UploadReport): Promise<HTMLDivElement> {
+  await seedLocal({
+    matters: [{ id: 'm1', name: 'Brookvale Retail Park', ownerId: 'local-abc', createdAt: 1, updatedAt: 1 }],
+  });
+  const el = mount(<UploadLocalData onClose={() => {}} upload={async () => report} />);
+  await flushUntil(() => !!buttonNamed(el, /upload everything/i), 'the upload button');
+  click(buttonNamed(el, /upload everything/i));
+  await flushUntil(() => /moved/i.test(el.textContent ?? ''), 'the report');
+  return el;
+}
+
+describe('the finished report', () => {
+  it('says everything moved, and says the word complete, ONLY when it did', async () => {
+    const el = await reportFor(complete);
+    expect(el.textContent).toContain('Everything moved');
+    expect(el.textContent).toMatch(/complete/i);
+    expect(el.textContent).toContain('✓');
+  });
+
+  it('says NEITHER "complete" NOR a tick when one record failed', async () => {
+    const el = await reportFor(incomplete);
+    expect(el.textContent).toContain('Some of your data did not move');
+    expect(el.textContent).not.toMatch(/complete/i);
+    expect(el.textContent).not.toContain('✓');
+  });
+
+  it('names what did not move, with the reason, above the successes', async () => {
+    const el = await reportFor(incomplete);
+    const text = el.textContent ?? '';
+    expect(text).toContain('Ashfield Mill');
+    expect(text).toContain('There is no matter m2 to add this to.');
+    // A person who has to scroll past nine good records to find the one that
+    // did not move will not scroll.
+    expect(text.indexOf('Did not move')).toBeLessThan(text.indexOf('1 of 2 matters'));
+  });
+
+  it('states that the browser copy is still here, on the report itself', async () => {
+    const el = await reportFor(complete);
+    expect(el.textContent).toContain('Your data is still in this browser as well');
+    expect(el.textContent).toContain('Nothing here has been deleted');
   });
 });
