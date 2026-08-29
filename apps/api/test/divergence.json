@@ -43,7 +43,11 @@
     {
       "n": 3,
       "what": "Provider secret source",
-      "keys": ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY"],
+      "keys": [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "OPENROUTER_API_KEY"
+      ],
       "why": "Local only, and deliberately so. In Azure every credential models.json declares resolves through the gateway's managed identity or Key Vault, so no provider key is an environment variable, a parameter or an output — which is the whole of S2's stronger property, expressed as an absence in infra/modules/containerApps.bicep."
     },
     {
@@ -73,6 +77,14 @@
         "GATEWAY_PUBLIC_ORIGIN"
       ],
       "why": "GATEWAY_CALLER_AUTH itself is sameEverywhere — the key is set in both and its VALUE selects the mode — so what diverges is the material each mode needs: certificate paths and an allowed subject locally, a tenant, an audience and an allowed object id in Azure. GATEWAY_PUBLIC_ORIGIN joins them because it is the deployment's own public URL: Azure sets it from the web app's provisioned FQDN, and the compose stack has no provisioned FQDN to set it from."
+    },
+    {
+      "n": 10,
+      "what": "Which DNS resolves web's proxy upstream",
+      "keys": [
+        "NGINX_RESOLVER"
+      ],
+      "why": "API_UPSTREAM is set in BOTH environments — it is sameEverywhere with different values, exactly like the identity keys in row 1 — because the SPA calls /api on its own origin in both and nginx forwards it. What exists in only one environment is the resolver: Azure sets NGINX_RESOLVER to the platform DNS (168.63.129.16), while compose leaves the image default of Docker's embedded 127.0.0.11. nginx resolves the upstream per request rather than once at config load, so an api revision replacing its address does not leave the proxy pointing at nothing — which is why a resolver has to be named at all."
     }
   ],
   "rowsWithNoKeys": {
@@ -96,7 +108,8 @@
     "VITE_API_BASE_URL",
     "VITE_OIDC_ISSUER",
     "VITE_OIDC_CLIENT_ID",
-    "VITE_OIDC_SCOPE"
+    "VITE_OIDC_SCOPE",
+    "API_UPSTREAM"
   ],
   "sameEverywhereNote": [
     "GATEWAY_ALLOWED_JURISDICTIONS is in this list, not in a divergence row,",
@@ -132,5 +145,7 @@
     "about. Which jurisdictions a firm permits is a property of that firm's",
     "contracts, which the software has no standing to guess at all."
   ],
-  "localOnlyServices": ["keycloak"]
+  "localOnlyServices": [
+    "keycloak"
+  ]
 }

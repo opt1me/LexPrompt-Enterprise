@@ -20,7 +20,7 @@ COPY packages/core/package.json packages/core/
 COPY apps/api/package.json apps/api/
 COPY apps/gateway/package.json apps/gateway/
 RUN npm ci --include-workspace-root
-COPY tsconfig.json vite.config.ts index.html ./
+COPY tsconfig.json tsconfig.build.json vite.config.ts index.html ./
 COPY public public
 COPY src src
 COPY packages/core packages/core
@@ -35,5 +35,14 @@ COPY --from=build /app/dist /usr/share/nginx/html
 # Serves the SPA and proxies /api/ to `api` over the internal network, which
 # is how `api` stays off every routable network while a browser can still
 # reach it. See infra/nginx/web.conf.
-COPY infra/nginx/web.conf /etc/nginx/conf.d/default.conf
+# A TEMPLATE, not a finished conf: nginx's entrypoint runs envsubst over
+# /etc/nginx/templates at container start, so one image serves compose and
+# Azure with only ${API_UPSTREAM} differing. envsubst replaces only names
+# that exist in the environment, so nginx's own $host / $scheme / $uri are
+# untouched.
+COPY infra/nginx/web.conf /etc/nginx/templates/default.conf.template
+# Compose defaults; Azure overrides API_UPSTREAM with the api Container App's
+# internal FQDN, and its DNS with the platform resolver.
+ENV API_UPSTREAM=api:8080
+ENV NGINX_RESOLVER=127.0.0.11
 EXPOSE 80

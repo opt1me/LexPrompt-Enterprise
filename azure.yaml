@@ -18,15 +18,20 @@ services:
     # way they reach the built bundle (Vite inlines VITE_* at build time —
     # see Dockerfile.web's own comment). azd substitutes each `${VAR}` from
     # the azd environment's .env, which main.bicep's own outputs populate
-    # after `azd provision` — API_BASE_URL in particular cannot be known
-    # until api's Container App exists and has an FQDN, which is exactly
-    # why this is a build arg sourced from a provisioning OUTPUT rather
-    # than a value typed into this file.
+    # after `azd provision`. The API base URL is deliberately NOT among them:
+    # it is the literal /api below, because `api` has no public ingress and
+    # the browser reaches it through web's own nginx on the same origin. That
+    # also means the bundle needs no value that only exists after
+    # provisioning, so a build cannot bake in a stale or wrong host.
     docker:
       path: ./Dockerfile.web
       context: .
       buildArgs:
-        VITE_API_BASE_URL: ${API_BASE_URL}
+        # Same origin, proxied by web's own nginx to the api Container App over
+        # the environment's internal network. NOT api's public URL: api has no
+        # public ingress, and a cross-origin call would need a CORS policy
+        # apps/api does not implement.
+        VITE_API_BASE_URL: /api
         VITE_OIDC_ISSUER: ${OIDC_ISSUER_BROWSER}
         VITE_OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
         VITE_OIDC_SCOPE: ${OIDC_SCOPE}

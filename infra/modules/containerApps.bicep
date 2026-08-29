@@ -157,6 +157,19 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'web'
           image: !empty(webImageName) ? webImageName : placeholderImage
           resources: { cpu: json('0.25'), memory: '0.5Gi' }
+          env: [
+            // nginx proxies /api/ here. `api` has no public ingress, so this is
+            // the only route to it and the browser stays same-origin — the same
+            // shape compose has, with only this value differing.
+            //
+            // `.internal.` is the environment's private DNS zone: resolvable
+            // from inside this Container Apps environment and nowhere else.
+            { name: 'API_UPSTREAM', value: '${namePrefix}-api.internal.${environment.properties.defaultDomain}' }
+            // Azure DNS, not Docker's embedded 127.0.0.11. nginx resolves the
+            // upstream per request through this, so an api revision replacing
+            // its address does not leave the proxy pointing at nothing.
+            { name: 'NGINX_RESOLVER', value: '168.63.129.16' }
+          ]
         }
       ]
       scale: { minReplicas: 1, maxReplicas: 3 }
@@ -229,15 +242,23 @@ resource gatewayApp 'Microsoft.App/containerApps@2024-03-01' = {
   dependsOn: [ gatewayAcrPull ]
 }
 
-// `api` is externally reachable, not merely "reachable from web": the web
-// app is a static SPA whose JS runs in the USER's browser (see
-// Dockerfile.web's own comment — VITE_* values are inlined at build time),
-// so it is the browser, not the `web` container, that calls `api`, and
-// `main.bicep` bakes api's own FQDN into the bundle as VITE_API_BASE_URL.
-// An internal-only `api` would make every page load in every browser fail
-// to reach it. This is the one place this template resolves an ambiguity in
-// the brief's own wording ("api is reachable from web") rather than
-// encoding it literally — see the Task 25 report.
+// `api` is INTERNAL ONLY, and the reasoning that once made it external is
+// recorded here because it was half right.
+//
+// True: the web app is a static SPA whose JS runs in the USER's browser, so
+// it is the browser, not the `web` container, that issues the API calls.
+// False: the conclusion that `api` therefore needs a public hostname. The
+// `web` container is also an nginx reverse proxy, so the browser calls
+// /api on its OWN origin and nginx forwards over the environment's internal
+// network — the same shape compose has, with only the upstream address
+// differing.
+//
+// The earlier version shipped a public api FQDN baked into the bundle as an
+// absolute cross-origin URL, and `apps/api` implements no CORS at all: every
+// browser request would have failed preflight. The app worked in compose and
+// would have been broken on the first click in Azure, at the one layer local
+// development cannot exercise. Same-origin everywhere removes the CORS
+// question entirely and leaves no public API surface to defend.
 //
 // CORRECTED (Task 26): this comment used to justify itself by saying
 // docker-compose.yml publishes `api` on 8080:8080 "for the same reason".
@@ -259,7 +280,18 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
   properties: {
     managedEnvironmentId: environment.id
     configuration: {
-      ingress: { external: true, targetPort: 8080, transport: 'http', allowInsecure: false }
+      // INTERNAL ONLY, matching compose, where `api` publishes no port at all.
+      // A browser reaches it through `web`'s nginx proxy at /api, so it is
+      // same-origin in both environments.
+      //
+      // It was `external: true`, and that was a real defect rather than a
+      // preference: `apps/api` implements no CORS at all, so a public api
+      // hostname made every browser call cross-origin and every request would
+      // have failed preflight — an app that works in compose and is broken on
+      // the first click in Azure, at the one layer local development cannot
+      // exercise. Same-origin everywhere means there is no CORS policy in this
+      // system to get wrong, and no public API surface to defend.
+      ingress: { external: false, targetPort: 8080, transport: 'http', allowInsecure: false }
       registries: [ { server: registry.properties.loginServer, identity: apiIdentityResourceId } ]
     }
     template: {
@@ -295,6 +327,8 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
 
 output registryLoginServer string = registry.properties.loginServer
 output registryName string = registry.name
-output apiFqdn string = apiApp.properties.configuration.ingress.fqdn
+// Internal FQDN — `api` has no public ingress. Emitted for diagnostics only;
+// nothing outside the Container Apps environment can resolve it.
+output apiInternalFqdn string = apiApp.properties.configuration.ingress.fqdn
 output gatewayFqdn string = gatewayApp.properties.configuration.ingress.fqdn
 output webFqdn string = webApp.properties.configuration.ingress.fqdn

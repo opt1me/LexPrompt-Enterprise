@@ -152,12 +152,16 @@ module containerApps 'modules/containerApps.bicep' = {
 // environment-variable interpolation — every output here lands in
 // `.azure/<env>/.env` under its own name, and `${VAR}` in azure.yaml reads
 // it from there. This is how the web build gets api's real, just-provisioned
-// FQDN baked in as VITE_API_BASE_URL, which cannot be known before
-// `azd provision` has run.
+// These feed `azd`'s build step. The api FQDN is NOT among them: the SPA is
+// built with VITE_API_BASE_URL=/api and reaches the API through web's own
+// nginx, so no cross-origin URL has to be known before `azd provision` runs.
 output AZURE_RESOURCE_GROUP string = rg.name
 output AZURE_CONTAINER_REGISTRY_ENDPOINT string = containerApps.outputs.registryLoginServer
 output AZURE_CONTAINER_REGISTRY_NAME string = containerApps.outputs.registryName
-output API_BASE_URL string = 'https://${containerApps.outputs.apiFqdn}'
+// `api` has no public ingress and the browser calls /api on its OWN origin,
+// so there is no public API base URL to emit. Kept as the internal FQDN for
+// diagnostics; azure.yaml no longer bakes it into the bundle.
+output API_INTERNAL_FQDN string = containerApps.outputs.apiInternalFqdn
 output OIDC_ISSUER_BROWSER string = oidcIssuer
 output OIDC_CLIENT_ID string = oidcClientId
 output OIDC_SCOPE string = oidcScope

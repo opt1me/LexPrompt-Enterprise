@@ -1,0 +1,21 @@
+{
+  // The PRODUCTION build's typecheck, and the only difference from
+  // `tsconfig.json` is that it excludes tests.
+  //
+  // It exists because `Dockerfile.web` copies a deliberately narrow set of
+  // paths — `src`, `packages/core`, and the config files — so that a
+  // developer's `.env` or `certs/` can never end up in an image layer. A
+  // test under `src/` that imports a helper from `apps/api/test/` therefore
+  // compiles locally, where the whole repo is present, and fails inside the
+  // image, where it is not. That is exactly what happened: `npm run build`
+  // was green on this machine while `docker compose build web` could not
+  // compile at all.
+  //
+  // Tests are not shipped, so the shipped build should not typecheck them.
+  // They are still fully typechecked — `npm run typecheck` runs
+  // `tsconfig.json`, which includes them, and that is the project's gate.
+  // Widening the Dockerfile's COPY to make the test compile would have
+  // traded a real safety property for a convenience.
+  "extends": "./tsconfig.json",
+  "exclude": ["**/*.test.ts", "**/*.test.tsx", "src/test", "packages/core/test"]
+}

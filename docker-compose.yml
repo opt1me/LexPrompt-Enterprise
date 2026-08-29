@@ -1,32 +1,40 @@
 name: lexprompt
 
 networks:
-  # `frontend` carries the three services a BROWSER talks to, over published
-  # ports. It is `internal: true` for the same reason `internal` is, and the
-  # reason is not obvious: a container's ability to reach the internet comes
-  # from being attached to ANY non-internal network, not from being attached
-  # to `egress` specifically. Leaving this one routable gave `api` a default
-  # route (`default via 172.21.0.1 dev eth0`) and therefore full outbound
-  # access, while the topology still read as "api is not on egress" — the
-  # claim §5 rests on, quietly false.
+  # Three networks, and which containers join which IS the isolation. There
+  # is no firewall rule here to read past: a container can reach the internet
+  # if and only if it is attached to a network that is not `internal: true`.
   #
-  # Publishing a port still works on an internal network: host->container
-  # DNAT is unaffected: what `internal: true` removes is the default route
-  # and the masquerade rule, i.e. OUTBOUND access. That is exactly the half
-  # we want gone and exactly the half we do not.
+  # That sentence is the whole trap. An earlier version had `api` on
+  # `frontend` as well and reasoned "api is not on `egress`, therefore api
+  # cannot egress". The premise was true and the conclusion did not follow:
+  # `frontend` is routable, so `api` held `default via 172.21.0.1` and had
+  # full outbound access while this file still read as correct. Reading the
+  # topology said it was fine; `npm run test:compose` said it was not.
   #
-  # Found by running `npm run test:compose` against a live stack, not by
-  # reading the file: inspection of the topology said this was already
-  # correct.
-  # Routable, because a published host port needs it: an `internal` network
-  # drops host<->container traffic in BOTH directions, not just outbound, so
-  # marking this one internal removed every port mapping (verified: the PORTS
-  # column went bare) and made the stack unreachable. Only `web` and
-  # `keycloak` sit here, and neither holds a credential or calls a provider.
+  # `frontend` — routable, and it has to be. An `internal` network drops
+  # host<->container traffic in BOTH directions, so marking this one internal
+  # removes every published port (verified: the PORTS column goes bare) and
+  # nothing is reachable from a browser. Only `web` and `keycloak` sit here.
+  # Both therefore DO have outbound internet access; neither holds a provider
+  # credential, and `web` is nginx serving static files plus a proxy hop to
+  # `api`. `npm run test:compose` does not probe either of them, so that is a
+  # documented property rather than a tested one.
   frontend:
+
+  # `internal` — no default route, so nothing attached here can reach the
+  # internet through it. `api` sits on this network ALONE, which is what
+  # makes §5's central claim true: it holds no route out, and reaches the
+  # gateway and Keycloak over this network only. It publishes no port
+  # either; a browser reaches it through `web`'s nginx proxy.
   internal:
-    internal: true    # no default route: this network cannot reach the internet
-  # The ONE network with a route off this machine. Only `gateway` joins it.
+    internal: true
+
+  # `egress` — the network the model providers are reached over. `gateway`
+  # is the only service that joins it, and `gateway` is the only service
+  # holding a provider credential. It is NOT the only routable network in
+  # this file (see `frontend` above) — it is the only one that any
+  # credential-holding service is attached to.
   egress:
 
 services:
@@ -74,6 +82,12 @@ services:
     ports: ["3005:80"]
     # `frontend` for the published port a browser connects to, `internal` to
     # reach `api` — which has no port of its own by design.
+    environment:
+      # Where nginx proxies /api/ to, substituted into the conf template at
+      # container start. Set explicitly rather than left to the image default,
+      # because Azure sets this same variable to the api Container App's
+      # internal FQDN — one image, one seam, two values.
+      API_UPSTREAM: api:8080
     depends_on: [api]
     networks: [frontend, internal]
 
