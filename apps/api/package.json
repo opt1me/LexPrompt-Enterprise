@@ -10,6 +10,7 @@
   "dependencies": {
     "@azure/identity": "^4.5.0",
     "@azure/storage-blob": "^12.32.0",
+    "@fastify/multipart": "^10.1.1",
     "@lexprompt/core": "*",
     "fastify": "^5.2.0",
     "jose": "^6.0.0",

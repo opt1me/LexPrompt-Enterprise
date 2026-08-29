@@ -76,4 +76,21 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'GET /v1/matters/:id': 'reviewer',
   'PUT /v1/matters/:id': 'reviewer',
   'DELETE /v1/matters/:id': 'reviewer',
+
+  // Documents and their bytes. Adding, reading and removing a document is
+  // reviewer work by §7; nothing here publishes anything.
+  'GET /v1/matters/:id/documents': 'reviewer',
+  'POST /v1/documents': 'reviewer',
+  'GET /v1/documents/:id': 'reviewer',
+  'GET /v1/documents/:id/bytes': 'reviewer',
+  'PATCH /v1/documents/:id/role': 'reviewer',
+  'DELETE /v1/documents/:id': 'reviewer',
+
+  // Reconciliation (§6.5). ADMIN, not reviewer: the listing names bytes
+  // that no record claims — which is a fact about storage rather than about
+  // any matter — and the second route destroys them. A reviewer who could
+  // run it could delete bytes whose rows had not yet been written by an
+  // upload still in flight.
+  'GET /v1/admin/blob-orphans': 'admin',
+  'POST /v1/admin/blob-orphans/delete': 'admin',
 };

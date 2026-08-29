@@ -80,8 +80,27 @@ describe('the matters routes scope every statement to the actor s workspace', ()
     const { app, calls } = api();
     const res = await send(app, 'DELETE', '/v1/matters/m1');
     expect(res.statusCode).toBe(404);
-    expect(calls.dbQueries[0].text).toMatch(/delete from matter/);
+    // TWO statements now, and their ORDER is the assertion. Task 11 gave the
+    // cascade its blob half, and the keys have to be read BEFORE the rows go
+    // — after the cascade there is nothing left to derive them from. Both
+    // are workspace-scoped; a blob-key read that was not would list another
+    // firm's document keys and then delete them.
+    expect(calls.dbQueries[0].text).toMatch(/select blob_key from document/);
     expect(calls.dbQueries[0].values).toEqual(['m1', WORKSPACE_ID]);
+    expect(calls.dbQueries[1].text).toMatch(/delete from matter/);
+    expect(calls.dbQueries[1].values).toEqual(['m1', WORKSPACE_ID]);
+    await app.close();
+  });
+
+  it('deletes no bytes when the matter was not this workspace s to delete', async () => {
+    // The 404 above must reach the blob store with NOTHING. A cascade that
+    // ran its deletes before checking whether the row was even here would
+    // destroy bytes on a request it then refused.
+    const { app, blobs } = api();
+    blobs.raw.set('workspace/ws-configured/document/d1', { bytes: Buffer.from([1]), mime: 'application/pdf' });
+    expect((await send(app, 'DELETE', '/v1/matters/m1')).statusCode).toBe(404);
+    expect(blobs.deleteCalls).toEqual([]);
+    expect(blobs.keys()).toEqual(['workspace/ws-configured/document/d1']);
     await app.close();
   });
 });

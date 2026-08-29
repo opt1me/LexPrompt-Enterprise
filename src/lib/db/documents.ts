@@ -1,6 +1,29 @@
-import { getDb } from './open';
-import { STORES } from './schema';
+import { ModelError } from '@lexprompt/core';
+import { apiDelete, apiGet, apiGetOrNull, apiSend, apiSendBlob } from '../api/client';
 import type { DocumentRecord } from '../../types';
+
+/**
+ * The documents repository — an HTTP client over `apps/api` since Stage 2.
+ *
+ * Same file, same exports, same signatures as when this read IndexedDB
+ * (R3). What moved OUT is what the browser no longer owns: the sort (now
+ * `order by added_at asc, id asc` in the route), the two-store transaction
+ * that wrote a record and its bytes together, and the read-modify-write
+ * behind `setDocumentRole` (now an `UPDATE` naming two columns).
+ *
+ * The single-transaction guarantee could not move, because Postgres and
+ * Blob Storage cannot share one. `apps/api/src/routes/documents.ts` explains
+ * at length which way round the two writes go and why — **blob first**, so a
+ * failure between them leaks bytes nobody can see rather than producing a
+ * document record with no content. Read that note before changing anything
+ * about the upload here; from this side the difference is invisible.
+ *
+ * The rule this file must not get wrong is the same one `matters.ts` states:
+ * **a failure is a failure, never an empty result.** `getDocument` answers
+ * `null` for a 404 and for nothing else; a 500, a 401 or an unreachable
+ * server rejects, so a load path renders `describeLoadError`'s message
+ * instead of "no documents yet".
+ */
 
 // This constant is deliberately NOT named "the R word" alone: `packages/core`
 // now exports an unrelated closed set under that exact identifier (Stage 2's
@@ -18,10 +41,12 @@ const DOCUMENT_ROLES: DocumentRecord['role'][] = ['base', 'varies', 'standalone'
  * silently promote an ordinary document into a collection's base. A
  * document that already carries a recognised role keeps it untouched.
  *
- * Applied at every read site (`listDocuments`, `getDocument`) so a document
- * upgrades exactly once, in one place, no matter which screen asked for it
- * — the same funnel discipline `reviewMigration.ts`'s `migrateReviewRecord`
- * follows for reviews.
+ * STILL EXPORTED, and still called on every read here. The server's
+ * `document.role` column has a CHECK constraint, so nothing the API returns
+ * can lack a recognised role — but this function's remaining caller is the
+ * uploader, which builds a record from a file rather than from a response,
+ * and a record on its way IN is exactly where a missing role would come
+ * from. Task 23 decides its fate; this task does not delete it.
  */
 export function migrateDocumentRecord(raw: unknown): DocumentRecord {
   const src = (raw && typeof raw === 'object' ? raw : {}) as Partial<DocumentRecord> & Record<string, unknown>;
@@ -31,111 +56,97 @@ export function migrateDocumentRecord(raw: unknown): DocumentRecord {
   return { ...(src as DocumentRecord), role };
 }
 
-/** All documents belonging to a matter, oldest-added first. Deterministic
- *  regardless of what order the underlying `byMatter` index happens to
- *  return same-key entries in (IndexedDB does not guarantee one for a
- *  non-unique index) — mirrors why `matters.ts`/`playbooks.ts` sort
- *  explicitly rather than trusting store iteration order.
+/** All documents belonging to a matter, oldest-added first. The order is the
+ *  server's (`order by added_at asc, id asc`) and is not re-derived here —
+ *  two sorts that must agree is this project's most repeated defect.
  *
- *  Rejects (rather than resolving to `[]`) on a genuine database failure —
- *  see the Task 4 critical this guards against: a caller must be able to
- *  tell "no documents yet" apart from "the database failed". Nothing here
- *  catches errors from `getDb()`/`getAllFromIndex`, so they propagate as-is. */
+ *  Rejects (rather than resolving to `[]`) on any failure, exactly as it did
+ *  over IndexedDB: a caller must be able to tell "no documents yet" apart
+ *  from "the server failed". */
 export async function listDocuments(matterId: string): Promise<DocumentRecord[]> {
-  const db = await getDb();
-  const docs = await db.getAllFromIndex(STORES.documents, 'byMatter', matterId);
-  return docs.slice().sort((a, b) => a.addedAt - b.addedAt || a.id.localeCompare(b.id)).map(migrateDocumentRecord);
+  const docs = await apiGet<DocumentRecord[]>(
+    `/v1/matters/${encodeURIComponent(matterId)}/documents`);
+  return docs.map(migrateDocumentRecord);
 }
 
+/** `null` for "there is no such document", and ONLY for that. */
 export async function getDocument(id: string): Promise<DocumentRecord | null> {
-  const db = await getDb();
-  const found = await db.get(STORES.documents, id);
+  const found = await apiGetOrNull<DocumentRecord>(`/v1/documents/${encodeURIComponent(id)}`);
   return found ? migrateDocumentRecord(found) : null;
 }
 
-/** Writes the document's metadata record and its original file bytes in one
- *  readwrite transaction spanning both stores, so the two can never observe
- *  a torn write: either both land, or (on any failure) neither does. A
- *  record with no blob renders as permanently unavailable to the user, so
- *  this is the one guarantee this module cannot get wrong.
+/**
+ * Uploads the document's metadata record and its original file bytes as one
+ * multipart request.
  *
- *  Both `put` calls are issued and handed straight to `Promise.all` with
- *  nothing else awaited in between — the only thing this function awaits
- *  before `tx.done` is the pair of IDB requests themselves. Awaiting
- *  anything else (a microtask from other work, a second `await` in
- *  sequence with a non-IDB step between) is what lets IndexedDB
- *  auto-commit the transaction early and is exactly the trap this
- *  docstring exists to warn the next editor away from. */
+ * ONE request, not two, and that is what is left of the old two-store
+ * transaction: the browser can still not observe a torn write, because there
+ * is only one call to fail. What the SERVER does with the two stores behind
+ * it — and which of them it writes first — is documented in the route.
+ *
+ * Still `Promise<void>`. The route answers 201 with the stored record and
+ * the caller has never wanted it; returning it here would be a signature
+ * change for no caller's benefit, and R3's seam is worth more than the
+ * convenience.
+ */
 export async function addDocument(rec: DocumentRecord, bytes: Blob): Promise<void> {
-  const db = await getDb();
-  const tx = db.transaction([STORES.documents, STORES.blobs], 'readwrite');
-  const documentsStore = tx.objectStore(STORES.documents);
-  const blobsStore = tx.objectStore(STORES.blobs);
-  await Promise.all([
-    documentsStore.put(rec),
-    blobsStore.put({ documentId: rec.id, bytes, mime: bytes.type || 'application/octet-stream' }),
-  ]);
-  await tx.done;
+  const form = new FormData();
+  form.append('record', JSON.stringify(rec));
+  // The FILENAME matters: some servers refuse a file part without one, and
+  // the Blob's own `type` is what the server stores as the document's mime
+  // and what `getDocumentBlob` hands back to the viewer.
+  form.append('bytes', bytes, rec.name);
+  await apiSendBlob<void>('/v1/documents', form);
 }
 
 /**
  * Updates a document's collection membership only — its `role` and
- * `collectionId` — leaving its text, its blob and every other field
- * untouched. Grouping and ungrouping (Task 7) are the only callers: a
- * group writes `'base'`/`'varies'` with the new collection's id, an
- * ungroup writes `'standalone'` with no id at all.
+ * `collectionId` — leaving its text, its bytes and every other field
+ * untouched. Grouping and ungrouping are the only callers: a group writes
+ * `'base'`/`'varies'` with the new collection's id, an ungroup writes
+ * `'standalone'` with no id at all.
  *
- * Reads the current record inside the same transaction it writes back
- * into and spreads over it, so a field this function doesn't know about
- * (added by some later change) survives a role update untouched rather
- * than being dropped because this function's own shape went stale.
+ * `collectionId` is left off the request body entirely when omitted — never
+ * sent as `undefined` — and the route writes NULL for it, which `rows.ts`
+ * reads back as an ABSENT key. `structuredClone` preserves an
+ * `undefined`-valued key and `JSON.stringify` drops one, which is exactly
+ * how two stores come to disagree about whether a document is in a
+ * collection.
  *
- * `collectionId` is left off the written record entirely when omitted —
- * never set to `undefined` — because `structuredClone` (how IndexedDB
- * writes every record) PRESERVES an `undefined`-valued key rather than
- * dropping it. A document ungrouped through this function must read back
- * with no `collectionId` key at all, not one holding `undefined`; only
- * destructuring it away, rather than assigning `undefined` to it,
- * guarantees that (see CLAUDE.md's note on `toEqual`/`structuredClone`
- * and absent-vs-undefined keys).
- *
- * Rejects (never resolves silently) when the document doesn't exist — a
- * caller asking to move a document into or out of a collection has a
- * stale id, and swallowing that would leave the collection's own record
- * pointing at a member this write silently never happened for.
+ * Rejects (never resolves silently) when the document doesn't exist — the
+ * route answers 404 and this propagates it, because a caller moving a
+ * document into or out of a collection has a stale id, and swallowing that
+ * would leave the collection's own record pointing at a member this write
+ * silently never happened for.
  */
 export async function setDocumentRole(
   id: string,
   role: DocumentRecord['role'],
   collectionId?: string,
 ): Promise<void> {
-  const db = await getDb();
-  const tx = db.transaction(STORES.documents, 'readwrite');
-  const existing = await tx.store.get(id);
-  if (!existing) {
-    await tx.done;
-    throw new Error(`Document ${id} could not be found.`);
-  }
-  const { collectionId: _drop, ...rest } = migrateDocumentRecord(existing);
-  void _drop;
-  const updated: DocumentRecord = collectionId ? { ...rest, role, collectionId } : { ...rest, role };
-  await tx.store.put(updated);
-  await tx.done;
+  await apiSend<DocumentRecord>('PATCH', `/v1/documents/${encodeURIComponent(id)}/role`, {
+    role,
+    ...(collectionId === undefined ? {} : { collectionId }),
+  });
 }
 
-/** Removes a document's metadata record and its blob together, in one
- *  transaction, for the same reason `addDocument` writes them together: an
- *  orphaned blob is invisible to the UI (nothing references it once its
- *  record is gone), so nobody would discover the leak until storage fills.
- *  Consistent with how `deleteMatter`'s cascade resolves a document's blob
- *  by the document's own id — `blobs` is keyed by `documentId`, which is
- *  the same value as the document's `id`. */
+/** Removes a document's record and its bytes together — the record first,
+ *  then the blob, which is the order the matter cascade uses and for the
+ *  same reason (a blob deleted before a row delete that then rolls back
+ *  leaves a document pointing at bytes that are gone, which is visible and
+ *  worse than a leak).
+ *
+ *  A 404 RESOLVES: the caller asked for the document to be gone and it is
+ *  gone. Every other failure rejects — in particular a 500 saying the bytes
+ *  survived, which the reader needs to see. */
 export async function deleteDocument(id: string): Promise<void> {
-  const db = await getDb();
-  const tx = db.transaction([STORES.documents, STORES.blobs], 'readwrite');
-  await Promise.all([
-    tx.objectStore(STORES.documents).delete(id),
-    tx.objectStore(STORES.blobs).delete(id),
-  ]);
-  await tx.done;
+  try {
+    await apiDelete(`/v1/documents/${encodeURIComponent(id)}`);
+  } catch (err) {
+    // Matched the way `deleteMatter` matches it — on the class and the
+    // status, not on a duck-typed `.status` — so the two siblings cannot
+    // drift into two different ideas of what "not found" looks like.
+    if (err instanceof ModelError && err.status === 404) return;
+    throw err;
+  }
 }

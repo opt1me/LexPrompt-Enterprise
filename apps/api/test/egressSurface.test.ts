@@ -94,14 +94,51 @@ describe('every outbound client in apps/api is declared (M3)', () => {
  * entry in the firm's audit log.
  */
 describe('every route that forwards a body applies the actor overwrite (m13)', () => {
-  it('every app.post under src/routes references withActor', () => {
+  /**
+   * A route module that FORWARDS to the gateway, identified by the client it
+   * has to hold to do so.
+   *
+   * This was `posts.length > 0` until Task 11, when the first `app.post`
+   * that forwards nothing arrived (`POST /v1/documents` stores bytes and
+   * writes a row; it reaches no gateway, so there is no outbound body for
+   * `withActor` to correct). Widening the rule to every POST would have
+   * meant either an exemption list or a `withActor` call on a route with
+   * nothing to overwrite — both of which weaken a guard whose subject is
+   * narrow and real: the actor on a body this API sends ONWARD.
+   *
+   * The rule for the other POSTs is not dropped; it is a different rule and
+   * it is asserted below. Attribution comes from `req.actor`, never from the
+   * body — property 3 of `matters.ts`'s pattern. The two together cover
+   * every route, and neither covers the other's case.
+   */
+  const forwardsToGateway = (code: string): boolean => /\bGatewayClient\b/.test(code);
+
+  it('every gateway-forwarding app.post under src/routes references withActor', () => {
     const offenders: string[] = [];
     for (const file of walk(path.join(SRC, 'routes'))) {
       const code = codeOf(file);
       const posts = [...code.matchAll(/app\.post\(\s*'([^']+)'/g)].map(m => m[1]);
-      if (posts.length === 0) continue;
+      if (posts.length === 0 || !forwardsToGateway(code)) continue;
       if (!/\bwithActor\s*\(/.test(code)) {
         offenders.push(`${rel(file)} registers ${posts.join(', ')} without withActor`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('every route module reads its workspace and its attribution from req.actor', () => {
+    // The companion rule, covering the POSTs the check above deliberately
+    // does not: a route module that never reads `req.actor` scopes nothing
+    // and attributes nothing, and it fails by showing another firm's records
+    // rather than by throwing.
+    const offenders: string[] = [];
+    for (const file of walk(path.join(SRC, 'routes'))) {
+      // Both spellings the codebase actually uses: `req.actor!` in the
+      // repository routes, `request.actor as Actor` in the two forwarding
+      // ones. Matching the property rather than one call site's variable
+      // name, so a rename cannot silently empty this check.
+      if (!/\b(?:req|request)\.actor\b/.test(codeOf(file))) {
+        offenders.push(`${rel(file)} never reads req.actor`);
       }
     }
     expect(offenders).toEqual([]);
@@ -110,7 +147,9 @@ describe('every route that forwards a body applies the actor overwrite (m13)', (
   it('finds the routes it is checking', () => {
     const posts: string[] = [];
     for (const file of walk(path.join(SRC, 'routes'))) {
-      for (const m of codeOf(file).matchAll(/app\.post\(\s*'([^']+)'/g)) posts.push(m[1]);
+      const code = codeOf(file);
+      if (!forwardsToGateway(code)) continue;
+      for (const m of code.matchAll(/app\.post\(\s*'([^']+)'/g)) posts.push(m[1]);
     }
     expect(posts.sort()).toEqual(['/v1/infer', '/v1/infer/stream']);
   });

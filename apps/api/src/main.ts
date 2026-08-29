@@ -133,6 +133,11 @@ async function main(): Promise<void> {
     workspaceId: config.workspaceId,
     maxBodyBytes: config.maxBodyBytes,
     resolveActor: resolveActorForRequest,
+    // The SAME store `ensureContainer` ran against above. One instance for
+    // the upload path and the delete cascade both: two stores built from
+    // one credential would still be two, and a cascade that reached the
+    // wrong one would leave every byte behind and report success.
+    blobs,
   });
   await app.listen({ port: config.port, host: '0.0.0.0' });
 }

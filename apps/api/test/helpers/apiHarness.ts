@@ -6,6 +6,7 @@ import type { Principal } from '../../src/oidc.ts';
 import type { GatewayClient } from '../../src/gatewayClient.ts';
 import type { Db, Tx } from '../../src/db/pool.ts';
 import type { Actor } from '../../src/auth/actor.ts';
+import { memoryBlobStore, type MemoryBlobStore } from './memoryBlobs.ts';
 
 /** The workspace `buildTestApi` wires in, standing in for `API_WORKSPACE_ID`
  *  (§6: Stage 1 has exactly one, configured, never resolved per-request). A
@@ -83,6 +84,15 @@ export interface TestApiOptions {
    * the other's question (Task 9's pattern for every repository route).
    */
   db?: Db;
+  /**
+   * The `BlobStore` the document routes and the matter cascade share.
+   *
+   * Defaults to a fresh in-memory one per server, so a suite that never
+   * mentions blobs still gets a store that behaves — and so no two tests
+   * can see each other's bytes. A test that cares what was written passes
+   * its own and reads `keys()`.
+   */
+  blobs?: MemoryBlobStore;
 }
 
 export interface CallLog {
@@ -103,7 +113,9 @@ export interface CallLog {
  * client-supplied actor" test prove something about `apps/api`'s real
  * routing rather than about a test double standing in for it.
  */
-export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof buildServer>; calls: CallLog } {
+export function buildTestApi(
+  opts: TestApiOptions,
+): { app: ReturnType<typeof buildServer>; calls: CallLog; blobs: MemoryBlobStore } {
   const calls: CallLog = { infer: [], stream: [], dbQueries: [] };
 
   const tx: Tx = {
@@ -188,13 +200,14 @@ export function buildTestApi(opts: TestApiOptions): { app: ReturnType<typeof bui
     },
   } as GatewayClient;
 
+  const blobs = opts.blobs ?? memoryBlobStore();
   const app = buildServer({
-    verify, gateway, db: opts.db ?? db, resolveActor,
+    verify, gateway, db: opts.db ?? db, resolveActor, blobs,
     workspaceId: WORKSPACE_ID,
     maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
   });
 
-  return { app, calls };
+  return { app, calls, blobs };
 }
 
 /**

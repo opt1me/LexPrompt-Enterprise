@@ -1,291 +1,196 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { Blob as NodeBlob } from 'node:buffer';
-import { listDocuments, getDocument, addDocument, deleteDocument, setDocumentRole } from './documents';
-import { getDocumentBlob } from './blobs';
-import { getDb, closeDb } from './open';
-import { STORES } from './schema';
-import { TRACKED_CHANGES_NOTICE } from '../docxMarkup';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ModelError } from '@lexprompt/core';
 import type { DocumentRecord } from '../../types';
 
-// jsdom's `Blob` (the global `Blob` in this test environment) does not
-// survive fake-indexeddb's structured clone: fake-indexeddb clones values
-// with Node's native `structuredClone`, which only recognises Node's own
-// Blob implementation. A jsdom Blob clones down to `{}` — silently, with
-// no thrown error — losing size, type and content. That's a gap between
-// this test environment's two separate Blob shims, not a real-browser bug:
-// a real browser's IndexedDB structured-clones its own native Blob (the
-// same object `File`/`Blob` already are there) correctly. `node:buffer`'s
-// Blob is what this environment's structuredClone actually round-trips, so
-// tests use it to exercise the DB layer meaningfully.
-function makeBlob(parts: string[], type: string): Blob {
-  return new NodeBlob(parts, { type }) as unknown as Blob;
-}
+/**
+ * The documents repository, now a TRANSPORT.
+ *
+ * What this file used to assert about STORAGE — the two-store transaction,
+ * the `byMatter` index, the blob round trip, the read-modify-write inside
+ * `setDocumentRole` — moved to `apps/api/test/documents.pg.test.ts` and
+ * `apps/api/test/cascade.compose.test.ts`, where a real Postgres and a real
+ * Azurite can prove it rather than a fake IndexedDB. The
+ * `migrateDocumentRecord` cases below are kept VERBATIM: it is a pure
+ * function over a record's own shape and has no business changing when its
+ * neighbours' storage does — its needing no edit is the evidence R3's seam
+ * held for it.
+ *
+ * What stays here is what the browser still owns: which request each export
+ * makes, that the upload is ONE multipart request carrying both halves, and
+ * — the one that matters — that a failure stays a failure.
+ */
 
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
+const apiGet = vi.fn();
+const apiGetOrNull = vi.fn();
+const apiSend = vi.fn();
+const apiSendBlob = vi.fn();
+const apiDelete = vi.fn();
 
-function makeRecord(overrides: Partial<DocumentRecord> = {}): DocumentRecord {
-  return {
-    id: uid(),
-    matterId: 'matter-1',
-    name: 'contract.pdf',
-    kind: 'pdf',
-    text: 'Some extracted text.',
-    byteSize: 11,
-    addedAt: Date.now(),
-    addedByUserId: 'owner-1',
-    role: 'standalone',
-    ...overrides,
-  };
-}
+vi.mock('../api/client', () => ({
+  apiGet: (...args: unknown[]) => apiGet(...args),
+  apiGetOrNull: (...args: unknown[]) => apiGetOrNull(...args),
+  apiSend: (...args: unknown[]) => apiSend(...args),
+  apiSendBlob: (...args: unknown[]) => apiSendBlob(...args),
+  apiDelete: (...args: unknown[]) => apiDelete(...args),
+}));
 
-beforeEach(async () => {
-  const db = await getDb();
-  await Promise.all([db.clear(STORES.documents), db.clear(STORES.blobs)]);
+const {
+  migrateDocumentRecord, listDocuments, getDocument, addDocument, setDocumentRole, deleteDocument,
+} = await import('./documents');
+
+const DOC: DocumentRecord = {
+  id: 'd1', matterId: 'm1', name: 'lease.pdf', kind: 'pdf', text: 'Some extracted text.',
+  byteSize: 11, addedAt: 1_700_000_000_000, addedByUserId: 'u1', role: 'standalone',
+};
+
+beforeEach(() => {
+  apiGet.mockReset().mockResolvedValue([]);
+  apiGetOrNull.mockReset().mockResolvedValue(null);
+  apiSend.mockReset().mockResolvedValue(DOC);
+  apiSendBlob.mockReset().mockResolvedValue(undefined);
+  apiDelete.mockReset().mockResolvedValue(undefined);
 });
 
-afterEach(() => closeDb());
-
-describe('addDocument / getDocument / listDocuments', () => {
-  it('starts empty for an unknown matter', async () => {
-    expect(await listDocuments('nope')).toEqual([]);
+describe('migrateDocumentRecord', () => {
+  // KEPT VERBATIM from the IndexedDB version of this file. Still pure, still
+  // client-side, and still the only place a missing role is defaulted.
+  it('defaults a record with no role to standalone, never to base', () => {
+    const upgraded = migrateDocumentRecord({ id: 'd', matterId: 'm', name: 'n' });
+    expect(upgraded.role).toBe('standalone');
   });
 
-  it('returns null for an unknown document id', async () => {
+  it('leaves a recognised role untouched', () => {
+    expect(migrateDocumentRecord({ ...DOC, role: 'base' }).role).toBe('base');
+    expect(migrateDocumentRecord({ ...DOC, role: 'varies' }).role).toBe('varies');
+  });
+
+  it('replaces an unrecognised role rather than passing it through', () => {
+    expect(migrateDocumentRecord({ ...DOC, role: 'primary' }).role).toBe('standalone');
+  });
+
+  it('keeps every other field', () => {
+    expect(migrateDocumentRecord(DOC)).toEqual(DOC);
+  });
+});
+
+describe('the requests each export makes', () => {
+  it('lists a matter s documents from /v1/matters/:id/documents, in the server s order', async () => {
+    const list = [{ ...DOC, id: 'a' }, { ...DOC, id: 'b' }];
+    apiGet.mockResolvedValue(list);
+    expect((await listDocuments('m1')).map(d => d.id)).toEqual(['a', 'b']);
+    expect(apiGet).toHaveBeenCalledWith('/v1/matters/m1/documents');
+  });
+
+  it('reads one from /v1/documents/:id', async () => {
+    apiGetOrNull.mockResolvedValue(DOC);
+    expect(await getDocument('d1')).toEqual(DOC);
+    expect(apiGetOrNull).toHaveBeenCalledWith('/v1/documents/d1');
+  });
+
+  it('uploads the record and the bytes as ONE multipart request', async () => {
+    // One request is what is left of the two-store transaction: the browser
+    // cannot observe a torn write because there is only one call to fail.
+    const bytes = new Blob(['hello world'], { type: 'application/pdf' });
+    await addDocument(DOC, bytes);
+    expect(apiSendBlob).toHaveBeenCalledTimes(1);
+    const [path, form] = apiSendBlob.mock.calls[0] as [string, FormData];
+    expect(path).toBe('/v1/documents');
+    expect(JSON.parse(form.get('record') as string)).toEqual(DOC);
+    const file = form.get('bytes') as File;
+    expect(file.type).toBe('application/pdf');
+    expect(await file.text()).toBe('hello world');
+  });
+
+  it('names the file part, because a part with no filename is refused by some servers', async () => {
+    await addDocument({ ...DOC, name: 'redline.docx' }, new Blob(['x']));
+    const form = apiSendBlob.mock.calls[0][1] as FormData;
+    expect((form.get('bytes') as File).name).toBe('redline.docx');
+  });
+
+  it('PATCHes only role and collectionId when grouping', async () => {
+    await setDocumentRole('d1', 'varies', 'c1');
+    expect(apiSend).toHaveBeenCalledWith(
+      'PATCH', '/v1/documents/d1/role', { role: 'varies', collectionId: 'c1' });
+  });
+
+  it('OMITS collectionId entirely when ungrouping, never sending it as undefined', async () => {
+    // `structuredClone` preserves a `key: undefined` and JSON drops one,
+    // which is how two stores come to disagree about whether a document is
+    // in a collection. The absence is the assertion, so `toEqual` — which
+    // cannot tell an absent key from an undefined one — is not enough.
+    await setDocumentRole('d1', 'standalone');
+    const body = apiSend.mock.calls[0][2] as Record<string, unknown>;
+    expect('collectionId' in body).toBe(false);
+    expect(body).toEqual({ role: 'standalone' });
+  });
+
+  it('DELETEs /v1/documents/:id', async () => {
+    await deleteDocument('d1');
+    expect(apiDelete).toHaveBeenCalledWith('/v1/documents/d1');
+  });
+
+  it('escapes an id in every path segment it builds', async () => {
+    const id = 'a/b c?d';
+    await getDocument(id);
+    await setDocumentRole(id, 'standalone');
+    await deleteDocument(id);
+    expect(apiGetOrNull.mock.calls[0][0]).toBe('/v1/documents/a%2Fb%20c%3Fd');
+    expect(apiSend.mock.calls[0][1]).toBe('/v1/documents/a%2Fb%20c%3Fd/role');
+    expect(apiDelete.mock.calls[0][0]).toBe('/v1/documents/a%2Fb%20c%3Fd');
+    await listDocuments(id);
+    expect(apiGet.mock.calls[0][0]).toBe('/v1/matters/a%2Fb%20c%3Fd/documents');
+  });
+});
+
+describe('a failure is a failure, never an empty result', () => {
+  it('returns null for a document the server does not have', async () => {
     expect(await getDocument('nope')).toBeNull();
   });
 
-  it('writes and reads back a document record', async () => {
-    const rec = makeRecord({ name: 'nda.pdf' });
-    await addDocument(rec, makeBlob(['hello world'], 'application/pdf'));
-    const found = await getDocument(rec.id);
-    expect(found).toEqual(rec);
+  it('propagates a 500 from a read rather than swallowing it into null', async () => {
+    // THE ONE THAT MATTERS. `getDocument` answering `null` over a 500 would
+    // render "no such document" for a server that is simply broken.
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    apiGetOrNull.mockRejectedValue(boom);
+    await expect(getDocument('d1')).rejects.toBe(boom);
   });
 
-  it('round-trips the blob: same size, type and content as written', async () => {
-    const rec = makeRecord();
-    const bytes = makeBlob(['hello world'], 'application/pdf');
-    await addDocument(rec, bytes);
-
-    const back = await getDocumentBlob(rec.id);
-    expect(back).not.toBeNull();
-    expect(back!.size).toBe(bytes.size);
-    expect(back!.type).toBe('application/pdf');
-    expect(await back!.text()).toBe('hello world');
+  it('propagates a 500 from the list rather than answering with no documents', async () => {
+    // The founding defect at its new surface: an empty documents pane over a
+    // broken server is indistinguishable from a matter nobody has uploaded
+    // to, and "Run a review" would offer zero documents with no explanation.
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    apiGet.mockRejectedValue(boom);
+    await expect(listDocuments('m1')).rejects.toBe(boom);
   });
 
-  it('lists only documents for the requested matter', async () => {
-    const a = makeRecord({ matterId: 'matter-a', name: 'a.pdf' });
-    const b = makeRecord({ matterId: 'matter-b', name: 'b.pdf' });
-    await addDocument(a, makeBlob(['a'], 'application/pdf'));
-    await addDocument(b, makeBlob(['b'], 'application/pdf'));
-
-    expect((await listDocuments('matter-a')).map(d => d.name)).toEqual(['a.pdf']);
-    expect((await listDocuments('matter-b')).map(d => d.name)).toEqual(['b.pdf']);
+  it('propagates an upload failure rather than reporting the document as added', async () => {
+    const boom = new ModelError('Storage refused the file.', 'unknown', 500);
+    apiSendBlob.mockRejectedValue(boom);
+    await expect(addDocument(DOC, new Blob(['x']))).rejects.toBe(boom);
   });
 
-  it('lists oldest-added first', async () => {
-    const older = makeRecord({ matterId: 'm', name: 'older.pdf', addedAt: 1 });
-    const newer = makeRecord({ matterId: 'm', name: 'newer.pdf', addedAt: 2 });
-    // Add out of order to prove the list is sorted, not just insertion order.
-    await addDocument(newer, makeBlob(['n'], 'application/pdf'));
-    await addDocument(older, makeBlob(['o'], 'application/pdf'));
-
-    expect((await listDocuments('m')).map(d => d.name)).toEqual(['older.pdf', 'newer.pdf']);
+  it('propagates a 404 from setDocumentRole rather than resolving silently', async () => {
+    // A caller moving a document into a collection has a stale id, and
+    // swallowing that leaves the collection pointing at a member this write
+    // never happened for.
+    const gone = new ModelError('Document d1 could not be found.', 'not_found', 404);
+    apiSend.mockRejectedValue(gone);
+    await expect(setDocumentRole('d1', 'varies', 'c1')).rejects.toBe(gone);
   });
 
-  it('addDocument writes the record and the blob in exactly one transaction', async () => {
-    // Guards the transaction-auto-close trap: if the record write and the
-    // blob write ever moved to two separately-opened transactions (or an
-    // await of something non-IDB slipped between them), this would observe
-    // db.transaction() called more than once, or called for only one store.
-    const db = await getDb();
-    const txSpy = vi.spyOn(db, 'transaction');
-    await addDocument(makeRecord(), makeBlob(['x'], 'text/plain'));
-    expect(txSpy).toHaveBeenCalledTimes(1);
-    expect(txSpy).toHaveBeenCalledWith([STORES.documents, STORES.blobs], 'readwrite');
-    txSpy.mockRestore();
+  it('resolves quietly when the document to delete does not exist', async () => {
+    apiDelete.mockRejectedValue(new ModelError('There is no such document.', 'not_found', 404));
+    await expect(deleteDocument('gone')).resolves.toBeUndefined();
   });
 
-  it("addDocument's rejection is not swallowed when the blob write fails", async () => {
-    // Stubs db.transaction so the blobs-store put rejects (as a genuine
-    // failed IDB request would) and confirms addDocument's own promise
-    // rejects rather than resolving — a caller must not be able to observe
-    // a partially-failed addDocument as a success.
-    const db = await getDb();
-    const rec = makeRecord();
-    const failingTx = {
-      objectStore: (name: string) => ({
-        put:
-          name === STORES.blobs
-            ? () => Promise.reject(new DOMException('boom', 'UnknownError'))
-            : () => Promise.resolve(),
-      }),
-      done: Promise.resolve(),
-    };
-    const spy = vi.spyOn(db, 'transaction').mockReturnValue(failingTx as unknown as ReturnType<typeof db.transaction>);
-    try {
-      await expect(addDocument(rec, makeBlob(['x'], 'text/plain'))).rejects.toThrow();
-    } finally {
-      spy.mockRestore();
-    }
-    expect(await getDocument(rec.id)).toBeNull();
-  });
-});
-
-describe('deleteDocument', () => {
-  it('removes both the record and its blob', async () => {
-    const rec = makeRecord();
-    await addDocument(rec, makeBlob(['x'], 'application/pdf'));
-
-    await deleteDocument(rec.id);
-
-    expect(await getDocument(rec.id)).toBeNull();
-    expect(await getDocumentBlob(rec.id)).toBeNull();
-  });
-
-  it('resolves quietly when the document does not exist', async () => {
-    await expect(deleteDocument('does-not-exist')).resolves.toBeUndefined();
-  });
-
-  it('deletes the record and the blob in exactly one transaction', async () => {
-    const rec = makeRecord();
-    await addDocument(rec, makeBlob(['x'], 'application/pdf'));
-
-    const db = await getDb();
-    const txSpy = vi.spyOn(db, 'transaction');
-    await deleteDocument(rec.id);
-    expect(txSpy).toHaveBeenCalledTimes(1);
-    expect(txSpy).toHaveBeenCalledWith([STORES.documents, STORES.blobs], 'readwrite');
-    txSpy.mockRestore();
-  });
-
-  it("does not touch another document's record or blob", async () => {
-    const keep = makeRecord({ name: 'keep.pdf' });
-    const gone = makeRecord({ name: 'gone.pdf' });
-    await addDocument(keep, makeBlob(['k'], 'application/pdf'));
-    await addDocument(gone, makeBlob(['g'], 'application/pdf'));
-
-    await deleteDocument(gone.id);
-
-    expect(await getDocument(keep.id)).toEqual(keep);
-    expect(await getDocumentBlob(keep.id)).not.toBeNull();
-  });
-});
-
-describe('a document whose blob is missing is still readable (spec §9)', () => {
-  it('getDocument returns the metadata; getDocumentBlob returns null, not a throw', async () => {
-    const db = await getDb();
-    const rec = makeRecord({ name: 'orphaned.pdf' });
-    // Write only the record, simulating a blob lost to a partial failure or
-    // a manual clear of browser storage — never actually possible through
-    // this module's own addDocument, which is exactly the point of the
-    // one-transaction guarantee above, but the record store does not know
-    // *why* a blob might be missing and must stay readable regardless.
-    await db.put(STORES.documents, rec);
-
-    await expect(getDocument(rec.id)).resolves.toEqual(rec);
-    await expect(getDocumentBlob(rec.id)).resolves.toBeNull();
-  });
-});
-
-describe('the tracked-changes notice survives persistence', () => {
-  // The reader of a review is often not the uploader, and may open it weeks
-  // later in a different session. A caveat that lived only on the in-memory
-  // DocumentFile would be gone exactly when someone acts on the findings.
-  it('reads back on the record, alongside the text it qualifies', async () => {
-    const rec = makeRecord({
-      name: 'lease.docx',
-      kind: 'docx',
-      text: 'Consent may be withheld only where it is reasonable to do so.',
-      markupNotice: TRACKED_CHANGES_NOTICE,
-    });
-    await addDocument(rec, makeBlob(['x'], 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'));
-
-    const found = await getDocument(rec.id);
-    expect(found?.markupNotice).toBe(TRACKED_CHANGES_NOTICE);
-    expect(found?.parseError).toBeUndefined();
-    const [listed] = await listDocuments(rec.matterId);
-    expect(listed.markupNotice).toBe(TRACKED_CHANGES_NOTICE);
-  });
-
-  // A document added before this check existed was never checked. It must
-  // read back with the field genuinely ABSENT rather than back-filled with
-  // `undefined` (which structuredClone preserves as a real key) or, worse,
-  // with a notice guessed on its behalf — and `migrateDocumentRecord` must
-  // not invent one.
-  it('leaves a pre-existing record without the field, rather than back-filling it', async () => {
-    const rec = makeRecord({ name: 'old.docx', kind: 'docx' });
-    expect('markupNotice' in rec).toBe(false);
-    await addDocument(rec, makeBlob(['x'], 'application/octet-stream'));
-
-    const found = await getDocument(rec.id);
-    expect(found).not.toBeNull();
-    expect('markupNotice' in found!).toBe(false);
-  });
-});
-
-describe('setDocumentRole (Task 7: grouping/ungrouping)', () => {
-  it('sets role and collectionId, leaving every other field untouched', async () => {
-    const rec = makeRecord({ name: 'lease.pdf', text: 'Some extracted text.' });
-    await addDocument(rec, makeBlob(['x'], 'application/pdf'));
-
-    await setDocumentRole(rec.id, 'base', 'coll-1');
-
-    const found = await getDocument(rec.id);
-    expect(found).toEqual({ ...rec, role: 'base', collectionId: 'coll-1' });
-  });
-
-  it('clears collectionId entirely on ungroup — the key is absent, not undefined', async () => {
-    const rec = makeRecord({ role: 'varies', collectionId: 'coll-1' });
-    await addDocument(rec, makeBlob(['x'], 'application/pdf'));
-
-    await setDocumentRole(rec.id, 'standalone');
-
-    const found = await getDocument(rec.id);
-    expect(found!.role).toBe('standalone');
-    // toEqual would treat { collectionId: undefined } as equal to an
-    // absent key (CLAUDE.md's own warning) — the real risk here is
-    // structuredClone PRESERVING an undefined-valued key, so the
-    // assertion that actually matters checks presence, not equality.
-    expect('collectionId' in found!).toBe(false);
-  });
-
-  it('rejects rather than silently no-op-ing when the document does not exist', async () => {
-    await expect(setDocumentRole('does-not-exist', 'base', 'coll-1')).rejects.toThrow();
-  });
-
-  it('does not touch another document\'s record', async () => {
-    const keep = makeRecord({ name: 'keep.pdf' });
-    const grouped = makeRecord({ name: 'grouped.pdf' });
-    await addDocument(keep, makeBlob(['k'], 'application/pdf'));
-    await addDocument(grouped, makeBlob(['g'], 'application/pdf'));
-
-    await setDocumentRole(grouped.id, 'base', 'coll-1');
-
-    expect(await getDocument(keep.id)).toEqual(keep);
-  });
-});
-
-describe('error propagation (not swallowed into empty results)', () => {
-  it('listDocuments rejects, distinguishably from an empty list, on a database failure', async () => {
-    const db = await getDb();
-    const spy = vi.spyOn(db, 'getAllFromIndex').mockRejectedValue(new Error('db is down'));
-    try {
-      await expect(listDocuments('matter-1')).rejects.toThrow(/db is down/);
-    } finally {
-      spy.mockRestore();
-    }
-  });
-
-  it('getDocument rejects rather than resolving to null on a database failure', async () => {
-    const db = await getDb();
-    const spy = vi.spyOn(db, 'get').mockRejectedValue(new Error('db is down'));
-    try {
-      await expect(getDocument('anything')).rejects.toThrow(/db is down/);
-    } finally {
-      spy.mockRestore();
-    }
+  it('propagates a delete that could not remove the bytes', async () => {
+    // The route answers 500 naming the keys it could not delete. Swallowing
+    // it would make "deleting a document deletes its file" quietly false.
+    const kept = new ModelError(
+      'The records were deleted, but 1 document file could not be deleted from storage.',
+      'unknown', 500);
+    apiDelete.mockRejectedValue(kept);
+    await expect(deleteDocument('d1')).rejects.toBe(kept);
   });
 });

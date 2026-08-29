@@ -1,3 +1,4 @@
+import multipart from '@fastify/multipart';
 import Fastify, {
   type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest,
 } from 'fastify';
@@ -6,11 +7,13 @@ import type { Principal } from './oidc.ts';
 import type { GatewayClient } from './gatewayClient.ts';
 import type { Actor } from './auth/actor.ts';
 import type { Db } from './db/pool.ts';
+import type { BlobStore } from './blob/store.ts';
 import { registerRoleGate } from './auth/requireRole.ts';
 import { registerInfer } from './routes/infer.ts';
 import { registerInferStream } from './routes/inferStream.ts';
 import { registerMe } from './routes/me.ts';
 import { registerMatters } from './routes/matters.ts';
+import { registerDocuments } from './routes/documents.ts';
 import { ConflictError } from './errors.ts';
 
 declare module 'fastify' {
@@ -80,6 +83,12 @@ export interface ServerDeps {
    *  first sight. Injected, so a route test needs no database and so Task
    *  4's role lookup has exactly one place to live. */
   resolveActor(principal: Principal): Promise<Actor>;
+  /** Where the firm's document BYTES live (Task 10). Injected rather than
+   *  constructed here, so a route test needs no Azurite and so there is
+   *  exactly one store for the upload path and the delete cascade to share
+   *  — a cascade that reached a different store from the one the upload
+   *  wrote to would leave every byte behind and report success. */
+  blobs: BlobStore;
 }
 
 /**
@@ -167,6 +176,29 @@ export function registerErrorEnvelope(app: FastifyInstance, maxBodyBytes: number
 export function buildServer(deps: ServerDeps): FastifyInstance {
   const app: FastifyInstance = Fastify({ logger: false, bodyLimit: deps.maxBodyBytes });
 
+  // The DECLARED limit, applied to the multipart path too.
+  //
+  // `bodyLimit` above does not govern a multipart file part — @fastify/multipart
+  // has its OWN default (1 MiB, and an unlimited part count), so with nothing
+  // set here the tightest cap in the chain would once again be an undeclared
+  // one nobody was told about. That is the exact trap Stage 1's final round
+  // found at nginx (`infra/nginx/web.conf` sets `client_max_body_size 0` to
+  // defer to this process), one layer further in, on the path that carries a
+  // scanned lease.
+  //
+  // So four limits agree by construction: nginx defers, Fastify declares
+  // `API_MAX_BODY_BYTES`, multipart declares the same value, and the
+  // gateway's prompt cap stays its own separate, separately-reported number
+  // because it counts characters of PROMPT rather than bytes of upload.
+  //
+  // `throwFileSizeLimit` so an oversized upload is REFUSED rather than
+  // silently truncated: a document stored with its tail missing is bytes
+  // that lie about being the file.
+  void app.register(multipart, {
+    throwFileSizeLimit: true,
+    limits: { fileSize: deps.maxBodyBytes, files: 2, fields: 8 },
+  });
+
   registerErrorEnvelope(app, deps.maxBodyBytes);
 
   const auth = requireUser(deps.verify);
@@ -197,7 +229,8 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerInfer(app, deps.gateway, deps.workspaceId);
   registerInferStream(app, deps.gateway, deps.workspaceId);
   registerMe(app, deps.db);
-  registerMatters(app, deps.db);
+  registerMatters(app, deps.db, deps.blobs);
+  registerDocuments(app, deps.db, deps.blobs);
 
   return app;
 }

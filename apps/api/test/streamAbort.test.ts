@@ -6,6 +6,7 @@ import type { GatewayClient } from '../src/gatewayClient.ts';
 import type { Principal } from '../src/oidc.ts';
 import type { Db } from '../src/db/pool.ts';
 import type { Actor } from '../src/auth/actor.ts';
+import { memoryBlobStore } from './helpers/memoryBlobs.ts';
 
 /**
  * M1: the stream route's abort listener was attached to the WRONG emitter,
@@ -81,6 +82,10 @@ async function listen(gateway: GatewayClient): Promise<number> {
     maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
     db: UNUSED_DB,
     resolveActor: async () => ACTOR,
+    // This suite never touches a document; the store is here because
+    // `buildServer` needs one, and an in-memory one keeps that fact from
+    // becoming a reason to make the dependency optional.
+    blobs: memoryBlobStore(),
   });
   await app.listen({ port: 0, host: '127.0.0.1' });
   const server = app.server;

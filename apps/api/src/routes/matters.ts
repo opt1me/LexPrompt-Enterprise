@@ -3,6 +3,8 @@ import { ModelError } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
 import { fromMatterRow, toMatterRow, type Matter, type MatterRow } from '../db/rows.ts';
+import type { BlobStore } from '../blob/store.ts';
+import { blobDeleteFailure, deleteBlobs } from './documents.ts';
 
 /**
  * The `matters` repository, server side — and the SHAPE every later
@@ -37,7 +39,7 @@ import { fromMatterRow, toMatterRow, type Matter, type MatterRow } from '../db/r
  *     names the field, not a row of NULLs the database accepts and a reader
  *     later reads as fact.
  */
-export function registerMatters(app: FastifyInstance, db: Db): void {
+export function registerMatters(app: FastifyInstance, db: Db, blobs: BlobStore): void {
   app.get('/v1/matters', async (req): Promise<Matter[]> => {
     // `updated_at desc, seq desc` — the tiebreak sub-project A added `_seq`
     // to IndexedDB to get. Two saves in one millisecond ordered by
@@ -120,17 +122,37 @@ export function registerMatters(app: FastifyInstance, db: Db): void {
   });
 
   app.delete('/v1/matters/:id', async (req, reply): Promise<void> => {
+    const ws = req.actor!.workspaceId;
     const { id } = req.params as { id: string };
     // The documents, collections and reviews go with it through
     // `on delete cascade` (002_records.sql), proven in `records.pg.test.ts`.
-    // THE BLOB HALF OF THE CASCADE ARRIVES IN TASK 11 AND BELONGS HERE, not
-    // beside here: "deleting a matter deletes its documents' bytes" is a
-    // promise the README makes, and a cascade split across two call sites is
-    // the half-done cascade that promise exists to prevent.
+    // THE BLOB HALF OF THE CASCADE IS HERE, not beside here: "deleting a
+    // matter deletes its documents' bytes" is a promise the README makes,
+    // and a cascade split across two call sites is the half-done cascade
+    // that promise exists to prevent.
+    //
+    // The keys are read BEFORE the rows go, because after the cascade there
+    // is nothing left to derive them from. Rows first, then blobs: a blob
+    // deleted before a committed row delete rolled back would leave a
+    // document pointing at bytes that no longer exist — visible, and worse
+    // than the leak the other order risks (`documents.ts`'s write-order
+    // note is the same argument in the same direction).
+    const keys = await db.query<{ blob_key: string }>(
+      'select blob_key from document where matter_id = $1 and workspace_id = $2', [id, ws]);
     const rows = await db.query<{ id: string }>(
-      'delete from matter where id = $1 and workspace_id = $2 returning id',
-      [id, req.actor!.workspaceId]);
+      'delete from matter where id = $1 and workspace_id = $2 returning id', [id, ws]);
     if (!rows[0]) throw new ModelError('There is no such matter.', 'not_found', 404);
+    // Every key is attempted even after one fails — `deleteBlobs` does not
+    // stop at the first, because a single throw aborting the rest is the
+    // likeliest way this promise ends up half-kept.
+    const failed = await deleteBlobs(blobs, keys.map(k => k.blob_key));
+    if (failed.length > 0) {
+      // The rows are gone and committed, so this cannot be undone. Saying so
+      // loudly, with the keys, is the only honest answer: a 204 over
+      // surviving bytes would make the README's sentence false with nothing
+      // on any screen to show it.
+      throw blobDeleteFailure(failed);
+    }
     await reply.code(204).send();
   });
 }
