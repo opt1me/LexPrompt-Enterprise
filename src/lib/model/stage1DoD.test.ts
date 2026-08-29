@@ -332,11 +332,14 @@ describe('Stage 1 definition of done (§18.2)', () => {
     // would pass over an empty map.
     expect([...records.keys()].sort()).toEqual(['AuditFinish', 'AuditStart']);
 
+    // Stage 2, Task 6: `actorUserId` joins the record ALONGSIDE
+    // `actorIssuer`/`actorSubject` — an id, never content, and the AST walk
+    // above already resolves it through the `...(x ? {k:v} : {})` shape.
     expect(records.get('AuditStart')!.keys).toEqual([
-      'actorIssuer', 'actorSubject', 'at', 'callId', 'clauseId', 'credentialSource',
-      'documentIds', 'imageCount', 'jurisdiction', 'kind', 'matterId', 'model',
-      'modelChoiceId', 'promptChars', 'promptSha256', 'provider', 'purpose',
-      'reviewId', 'streaming', 'workspaceId',
+      'actorIssuer', 'actorSubject', 'actorUserId', 'at', 'callId', 'clauseId',
+      'credentialSource', 'documentIds', 'imageCount', 'jurisdiction', 'kind',
+      'matterId', 'model', 'modelChoiceId', 'promptChars', 'promptSha256',
+      'provider', 'purpose', 'reviewId', 'streaming', 'workspaceId',
     ]);
     expect(records.get('AuditFinish')!.keys).toEqual([
       'at', 'callId', 'completionTokens', 'errorCode', 'kind', 'latencyMs', 'ok',

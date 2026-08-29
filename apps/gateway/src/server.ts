@@ -55,6 +55,11 @@ function makeContext(deps: ServerDeps): (req: FastifyRequest) => CallContext {
       workspaceId: String(body.workspaceId ?? ''),
       actorIssuer: String(body.actorIssuer ?? ''),
       actorSubject: String(body.actorSubject ?? ''),
+      // ALONGSIDE the pair, never replacing it, and genuinely OPTIONAL
+      // (unlike the two above): a Stage 1 `apps/api` in front of this
+      // gateway during a rolling deploy sends no `actorUserId` at all, and
+      // that call must still be attributable through the pair (§6.5).
+      ...(body.actorUserId ? { actorUserId: String(body.actorUserId) } : {}),
     };
   };
 }

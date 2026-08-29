@@ -28,6 +28,19 @@ export interface AuditStart {
    *  the pair without parsing a composite string back apart. */
   actorIssuer: string;
   actorSubject: string;
+  /**
+   * The `app_user.id` of the person who made this call, from Stage 2 onward.
+   *
+   * ALONGSIDE `actorIssuer`/`actorSubject`, never in place of them (§6.5).
+   * Stage 1 wrote the pair and no id, so a query joining this log to
+   * `app_user` spans both eras only while the pair survives — and a rolling
+   * deploy can put a Stage 1 `api` in front of this gateway for minutes,
+   * which is why the field is OPTIONAL rather than required.
+   *
+   * Optional here does NOT mean optional at the API: `apps/api` always sets
+   * it, and its own route tests assert that.
+   */
+  actorUserId?: string;
   matterId?: string;
   reviewId?: string;
   clauseId?: string;
@@ -93,6 +106,9 @@ export interface AuditStartInput {
   workspaceId: string;
   actorIssuer: string;
   actorSubject: string;
+  /** ALONGSIDE `actorIssuer`/`actorSubject`, never in place of them — see
+   *  `AuditStart.actorUserId`. */
+  actorUserId?: string;
   context: InferContext;
   system?: string;
   user: string;
@@ -156,6 +172,7 @@ export class AuditLogger {
       workspaceId: input.workspaceId,
       actorIssuer: input.actorIssuer,
       actorSubject: input.actorSubject,
+      ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}),
       ...(input.context.matterId ? { matterId: input.context.matterId } : {}),
       ...(input.context.reviewId ? { reviewId: input.context.reviewId } : {}),
       ...(input.context.clauseId ? { clauseId: input.context.clauseId } : {}),

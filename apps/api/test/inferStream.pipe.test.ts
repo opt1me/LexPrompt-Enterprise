@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { buildTestApi } from './helpers/apiHarness.ts';
+import { buildTestApi, WORKSPACE_ID } from './helpers/apiHarness.ts';
 import { walk, codeOf } from './sourceScan.ts';
 
 const BODY =
@@ -71,6 +71,21 @@ describe('POST /v1/infer/stream — a byte pipe (P1)', () => {
     await app.inject({ method: 'POST', url: '/v1/infer/stream', headers: { authorization: 'Bearer t' },
       payload: { modelChoiceId: 'm', purpose: 'assistant.chat', user: 'hi',
                  actorSubject: 'sub-someone-else' } });
+    expect(calls.stream[0].actorSubject).toBe('sub-real');
+    expect(calls.stream[0].actorIssuer).toBe('http://keycloak:8080/realms/lexprompt');
+  });
+
+  // Task 6: the streaming route carries the same three-field actor as
+  // `/v1/infer`, and `actorUserId` goes ALONGSIDE the (issuer, subject)
+  // pair rather than instead of it.
+  it('sends the actor id from the token-derived actor here too, overwriting anything the client sent', async () => {
+    const principal = { issuer: 'http://keycloak:8080/realms/lexprompt', subject: 'sub-real', groups: [] };
+    const { app, calls } = buildTestApi({ principal, streamChunks: [BODY],
+      actor: { id: 'server-side-id', displayName: 'A', initials: 'A', role: 'reviewer', workspaceId: WORKSPACE_ID } });
+    await app.inject({ method: 'POST', url: '/v1/infer/stream', headers: { authorization: 'Bearer t' },
+      payload: { modelChoiceId: 'm', purpose: 'assistant.chat', user: 'hi',
+                 actorUserId: 'i-am-someone-else', actorSubject: 'also-not-me' } });
+    expect(calls.stream[0].actorUserId).toBe('server-side-id');
     expect(calls.stream[0].actorSubject).toBe('sub-real');
     expect(calls.stream[0].actorIssuer).toBe('http://keycloak:8080/realms/lexprompt');
   });

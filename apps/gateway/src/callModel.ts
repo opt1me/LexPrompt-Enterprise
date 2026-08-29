@@ -56,6 +56,10 @@ export interface CallContext {
   workspaceId: string;
   actorIssuer: string;
   actorSubject: string;
+  /** ALONGSIDE `actorIssuer`/`actorSubject`, never in place of them — see
+   *  `AuditStart.actorUserId` (§6.5). Absent for a Stage 1 caller during a
+   *  rolling deploy; `apps/api` always sets it from Stage 2 onward. */
+  actorUserId?: string;
   /** The backoff, injectable for the same reason `AuditLogger` takes its
    *  clock: a test asserting how many attempts a 500 earns should not also
    *  wait three real seconds to find out. Production leaves it unset. */
@@ -193,6 +197,7 @@ export async function prepare(
     workspaceId: ctx.workspaceId,
     actorIssuer: ctx.actorIssuer,
     actorSubject: ctx.actorSubject,
+    ...(ctx.actorUserId ? { actorUserId: ctx.actorUserId } : {}),
     context: req.context ?? {},
     ...(req.system ? { system: req.system } : {}),
     user: req.user,

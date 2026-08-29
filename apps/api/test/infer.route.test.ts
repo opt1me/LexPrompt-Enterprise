@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTestApi } from './helpers/apiHarness.ts';
+import { buildTestApi, WORKSPACE_ID } from './helpers/apiHarness.ts';
 import { GatewayUnreadableError } from '../src/gatewayClient.ts';
 
 const ISSUER = 'http://keycloak:8080/realms/lexprompt';
@@ -40,6 +40,19 @@ describe('POST /v1/infer', () => {
     expect(calls.infer[0].actorSubject).toBe('sub-real');
     expect(calls.infer[0].actorIssuer).toBe(ISSUER);
     expect(calls.infer[0].workspaceId).toBe('ws-configured');
+  });
+
+  // Task 6: `actorUserId` goes ALONGSIDE the (issuer, subject) pair, never
+  // in place of it — the whole of Stage 1's interface note 3 (§6.5).
+  it('sends the actor id from the token-derived actor, overwriting anything the client sent', async () => {
+    const { app, calls } = buildTestApi({ principal: PRINCIPAL,
+      actor: { id: 'server-side-id', displayName: 'A', initials: 'A', role: 'reviewer', workspaceId: WORKSPACE_ID } });
+    await app.inject({ method: 'POST', url: '/v1/infer', headers: { authorization: 'Bearer t' },
+      payload: { modelChoiceId: 'm', purpose: 'review.clause', user: 'hi',
+                 actorUserId: 'i-am-someone-else', actorSubject: 'also-not-me' } });
+    expect(calls.infer[0].actorUserId).toBe('server-side-id');
+    expect(calls.infer[0].actorSubject).toBe('sub-real');
+    expect(calls.infer[0].actorIssuer).toBe(ISSUER);
   });
 
   // The identity is issuer-scoped, and nothing anywhere assumes Entra's

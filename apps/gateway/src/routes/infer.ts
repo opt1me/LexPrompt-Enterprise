@@ -6,6 +6,9 @@ export interface InferBody {
   workspaceId?: string;
   actorIssuer?: string;
   actorSubject?: string;
+  /** ALONGSIDE `actorIssuer`/`actorSubject`, never in place of them (§6.5).
+   *  Absent from a Stage 1 caller during a rolling deploy. */
+  actorUserId?: string;
   [key: string]: unknown;
 }
 

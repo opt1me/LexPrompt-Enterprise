@@ -150,6 +150,30 @@ describe('POST /v1/infer', () => {
     expect(JSON.stringify(sink.records)).not.toContain('cap liability');
     await app.close();
   });
+
+  // Task 6: `actorUserId`, when the body carries one, reaches the audit
+  // record ALONGSIDE the (issuer, subject) pair — end to end through
+  // `server.ts`'s `makeContext`, `callModel.ts`'s `prepare`, and
+  // `audit.ts`'s `AuditLogger.start`.
+  it('carries a body-supplied actorUserId onto the started record, alongside the pair', async () => {
+    const { app, sink } = server({ fetch: async () => ok('It does.') });
+    await app.inject({ method: 'POST', url: '/v1/infer',
+      payload: { ...BODY, actorUserId: '3f1c0f9e-0000-4000-8000-000000000001' } });
+    expect(sink.records[0]).toMatchObject({
+      actorIssuer: 'https://keycloak.local/realms/lexprompt',
+      actorSubject: 'oid-1',
+      actorUserId: '3f1c0f9e-0000-4000-8000-000000000001',
+    });
+    await app.close();
+  });
+
+  it('still writes a complete, attributable record when the body has no actorUserId (a Stage 1 caller)', async () => {
+    const { app, sink } = server({ fetch: async () => ok('It does.') });
+    await app.inject({ method: 'POST', url: '/v1/infer', payload: BODY });
+    const record = sink.records[0] as unknown as Record<string, unknown>;
+    expect(record.actorSubject).toBe('oid-1');
+    expect('actorUserId' in record).toBe(false);
+  });
 });
 
 describe('GET /v1/models', () => {

@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { GatewayClient } from '../gatewayClient.ts';
-import type { Principal } from '../oidc.ts';
+import type { Actor } from '../auth/actor.ts';
 import { withActor } from '../actorBody.ts';
 import { callerAuthRefusal, unreachableGateway } from '../gatewayFailure.ts';
 
@@ -8,13 +8,15 @@ export function registerInfer(
   app: FastifyInstance, gateway: GatewayClient, workspaceId: string,
 ): void {
   app.post('/v1/infer', async (request, reply) => {
-    const principal = request.principal as Principal;
+    const actor = request.actor as Actor;
     const client = (request.body ?? {}) as Record<string, unknown>;
 
     // Actor overwrite shared with the streaming route (Task 18) via
     // `actorBody.ts` — see its docstring for why the overwrite happens
-    // AFTER the spread.
-    const body = withActor(client, workspaceId, principal);
+    // AFTER the spread. Uses the resolved `Actor` (Task 6), not the bare
+    // `Principal`, so `actorUserId` can go alongside `actorIssuer`/
+    // `actorSubject` rather than requiring a second resolution here.
+    const body = withActor(client, workspaceId, actor);
 
     let status: number;
     let json: unknown;

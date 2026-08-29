@@ -109,6 +109,34 @@ describe('the audit record (§10)', () => {
     expect(a).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  // Task 6, §6.5: `actorUserId` goes ALONGSIDE `actorIssuer`/`actorSubject`,
+  // never in place of them — a record written before `app_user` existed had
+  // the pair and no id, and a query joining this log to `app_user` must
+  // span both eras.
+  it('carries actorUserId ALONGSIDE actorIssuer and actorSubject, never instead of them', async () => {
+    const sink = new Collecting();
+    const log = new AuditLogger(sink, () => new Date('2026-08-28T16:41:00Z'), () => 'call-1');
+    await log.start({ ...START, actorIssuer: 'https://iss', actorSubject: 'sub-9',
+      actorUserId: '3f1c0f9e-0000-4000-8000-000000000001' });
+    const record = sink.records[0] as unknown as Record<string, unknown>;
+    expect(record.actorIssuer).toBe('https://iss');
+    expect(record.actorSubject).toBe('sub-9');
+    expect(record.actorUserId).toBe('3f1c0f9e-0000-4000-8000-000000000001');
+  });
+
+  it('still writes a complete record when there is no actorUserId — a Stage 1 caller', async () => {
+    // Not hypothetical: the gateway is versioned separately from the API and
+    // an older api may be in flight during a rolling deploy. A record
+    // missing its user id must still name WHO through the pair, or the call
+    // is unattributable and the log stops being evidence.
+    const sink = new Collecting();
+    const log = new AuditLogger(sink, () => new Date(), () => 'call-2');
+    await log.start({ ...START, actorIssuer: 'https://iss', actorSubject: 'sub-9' });
+    const record = sink.records[0] as unknown as Record<string, unknown>;
+    expect(record.actorSubject).toBe('sub-9');
+    expect('actorUserId' in record).toBe(false);
+  });
+
   it('omits an absent context id rather than writing it as null', async () => {
     const sink = new Collecting();
     const log = new AuditLogger(sink, () => new Date(), () => 'c');

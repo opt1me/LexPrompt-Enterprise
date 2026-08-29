@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { GatewayClient } from '../gatewayClient.ts';
-import type { Principal } from '../oidc.ts';
+import type { Actor } from '../auth/actor.ts';
 import { withActor } from '../actorBody.ts';
 import { callerAuthRefusal, unreachableGateway } from '../gatewayFailure.ts';
 
@@ -22,14 +22,14 @@ export function registerInferStream(
   app: FastifyInstance, gateway: GatewayClient, workspaceId: string,
 ): void {
   app.post('/v1/infer/stream', async (request, reply) => {
-    const principal = request.principal as Principal;
+    const actor = request.actor as Actor;
     const client = (request.body ?? {}) as Record<string, unknown>;
 
     // Same actor overwrite as `/v1/infer` (Task 17), reused via
     // `actorBody.ts` rather than rebuilt here: a streaming call is no less
     // an audit record than a non-streamed one, and two copies of this
     // overwrite would be two places only one of which could later be fixed.
-    const body = withActor(client, workspaceId, principal);
+    const body = withActor(client, workspaceId, actor);
 
     const controller = new AbortController();
     // A client that goes away must not leave this hop draining a body
