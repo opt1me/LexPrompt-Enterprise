@@ -5,6 +5,19 @@ import { listVersions } from './playbookVersions';
 import { getDb, closeDb } from './open';
 import * as openModule from './open';
 
+// Stage 2 Task 13 made the playbook repositories HTTP clients, while
+// `migrateIfNeeded`'s pre-D conversion still writes to IndexedDB — so the two
+// now read and write different stores. That gap is real and is Task 23's
+// (the migration story); nothing here closes it. These assertions read the
+// store the migration ACTUALLY writes, so they keep asserting what they
+// always asserted rather than failing for a reason that has nothing to do
+// with the migration. See `src/test/idbPlaybookReads.ts`.
+vi.mock('./playbooks',
+  async () => (await import('../../test/idbPlaybookReads')).idbPlaybookReadsModule());
+vi.mock('./playbookVersions',
+  async () => (await import('../../test/idbPlaybookReads')).idbVersionReadsModule());
+
+
 const V1_KEY = 'lexprompt.templates.v2';
 
 function seedV1(templates: unknown[]) {

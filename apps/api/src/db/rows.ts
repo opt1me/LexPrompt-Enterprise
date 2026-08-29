@@ -116,6 +116,9 @@ export interface Playbook {
   /** `PlaybookDraft` on the wire — opaque jsonb at this layer. */
   draft?: unknown;
   schemaVersion: number;
+  /** The optimistic-concurrency token. NOT `PlaybookVersion.version`, which
+   *  is the version NUMBER — see `src/types.ts`'s note on the pair. */
+  version?: number;
 }
 
 export interface PlaybookVersion {
@@ -426,6 +429,9 @@ export interface PlaybookRow {
   current_version_id: string | null;
   draft: unknown;
   schema_version: number;
+  /** `bigint`, which `pg` hands back as a STRING — see `bigintOf`. Never set
+   *  by `toPlaybookRow`: the database owns a row's version. */
+  version?: string | number | null;
 }
 
 export function toPlaybookRow(x: Playbook, workspaceId: string): PlaybookRow {
@@ -454,6 +460,7 @@ export function fromPlaybookRow(row: PlaybookRow): Playbook {
     ...absentUnless('currentVersionId', row.current_version_id),
     ...absentUnless('draft', draft),
     schemaVersion: row.schema_version,
+    ...absentUnless('version', bigintOf(row.version)),
   };
 }
 

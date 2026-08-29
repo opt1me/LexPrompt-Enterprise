@@ -1,71 +1,98 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { publishVersion, getVersion, listVersions } from './playbookVersions';
-import { getDb, closeDb } from './open';
-import { STORES } from './schema';
-import type { PlaybookDraft } from '../../types';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ModelError } from '@lexprompt/core';
+import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
+import type { PlaybookVersion } from '../../types';
 
-function draft(overrides: Partial<PlaybookDraft> = {}): PlaybookDraft {
-  return {
-    name: 'NDA Playbook',
-    contractType: 'NDA',
-    systemPrompt: 'You are an expert legal contract reviewer.',
-    formatPrompt: 'Answer strictly from the document text. Quote verbatim.',
-    clauses: [],
-    changeSummary: '',
-    ...overrides,
-  };
-}
+/**
+ * `playbookVersions`, now a READ-ONLY TRANSPORT.
+ *
+ * What this file used to assert — monotonic version numbers, the
+ * change-summary rule from v2 onwards, immutability, the one-transaction
+ * allocation — moved to `apps/api/test/playbooks.pg.test.ts`, where a real
+ * Postgres proves each of them against the real route. Three of those are
+ * now properties of the DATABASE rather than of this code: the version
+ * number is allocated inside the publish transaction, and the app role holds
+ * INSERT but not UPDATE or DELETE on `playbook_version`.
+ *
+ * `publishVersion` and `publishVersionIn` are gone from this module
+ * entirely; the second could not survive at all, because its type took an
+ * `idb` object-store handle. See the module's own docstring for where it
+ * went and why that is a finding rather than a tidy-up.
+ */
 
-beforeEach(async () => {
-  const db = await getDb();
-  await db.clear(STORES.playbookVersions);
+const transport = makeFakeTransport();
+vi.mock('../api/client', () => transportModule(transport));
+
+const { getVersion, listVersions } = await import('./playbookVersions');
+
+const V1: PlaybookVersion = {
+  id: 'v1', playbookId: 'p1', version: 1, name: 'NDA', contractType: 'NDA',
+  systemPrompt: 'Be careful.', formatPrompt: 'Quote verbatim.',
+  clauses: [{ id: 'c1', title: 'Term', extractPrompt: 'What is the term?' }],
+  changeSummary: '', publishedAt: 1_700_000_000_000, publishedByUserId: 'u1', schemaVersion: 7,
+};
+
+beforeEach(() => transport.reset());
+
+describe('getVersion', () => {
+  it('reads /v1/versions/:id and returns the version', async () => {
+    transport.responses.set('/v1/versions/v1', V1);
+    expect(await getVersion('v1')).toEqual(V1);
+  });
+
+  it('returns null for a version that is not there', async () => {
+    // R-D15's dangling case: a review keeps its `playbookVersionId` after
+    // the playbook is deleted, so `ReviewVersionLine` can say "deleted"
+    // rather than "never recorded". That distinction rests on this `null`.
+    expect(await getVersion('gone')).toBeNull();
+  });
+
+  it('propagates a 500 rather than swallowing it into null', async () => {
+    // A version read answering `null` over a broken server would render a
+    // review's history as though the version it ran against had been
+    // deleted — a specific, wrong, actionable claim.
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    transport.failures.set('/v1/versions/v1', boom);
+    await expect(getVersion('v1')).rejects.toBe(boom);
+  });
+
+  it('escapes the id rather than losing it', async () => {
+    transport.responses.set('/v1/versions/a%2Fb%20c%3Fd', V1);
+    expect(await getVersion('a/b c?d')).toEqual(V1);
+  });
 });
 
-afterEach(() => closeDb());
-
-describe('playbookVersions repository', () => {
-  it('assigns monotonic version numbers per playbook', async () => {
-    const v1 = await publishVersion('pb1', draft({ changeSummary: '' }), 'u1');
-    const v2 = await publishVersion('pb1', draft({ changeSummary: 'added break clause' }), 'u1');
-    const other = await publishVersion('pb2', draft({ changeSummary: '' }), 'u1');
-    expect(v1.version).toBe(1);
-    expect(v2.version).toBe(2);
-    expect(other.version).toBe(1); // per playbook, not per store
+describe('listVersions', () => {
+  it('reads /v1/playbooks/:id/versions and returns the server order untouched', async () => {
+    // Newest first is the server's `order by version_number desc`. A second
+    // sort here is the sibling drift two orderings that must agree produce.
+    const list = [{ ...V1, id: 'v2', version: 2 }, V1];
+    transport.responses.set('/v1/playbooks/p1/versions', list);
+    expect((await listVersions('p1')).map(v => v.version)).toEqual([2, 1]);
   });
 
-  it('refuses a change summary that is missing after v1', async () => {
-    await publishVersion('pb1', draft({ changeSummary: '' }), 'u1');
-    await expect(publishVersion('pb1', draft({ changeSummary: '  ' }), 'u1'))
-      .rejects.toThrow(/change summary/i);
+  it('propagates a failure rather than answering with no versions', async () => {
+    // An empty version history and a broken server look identical on screen,
+    // and the first is a fact a reader would act on.
+    const boom = new ModelError('Server fell over.', 'unknown', 500);
+    transport.failures.set('/v1/playbooks/p1/versions', boom);
+    await expect(listVersions('p1')).rejects.toBe(boom);
   });
 
-  it('allows an empty change summary on v1 only', async () => {
-    const v1 = await publishVersion('pb1', draft({ changeSummary: '' }), 'u1');
-    expect(v1.changeSummary).toBe('');
+  it('escapes the playbook id', async () => {
+    transport.responses.set('/v1/playbooks/a%2Fb/versions', []);
+    expect(await listVersions('a/b')).toEqual([]);
   });
+});
 
-  it('never overwrites a published version', async () => {
-    const v1 = await publishVersion('pb1', draft({ name: 'original' }), 'u1');
-    await publishVersion('pb1', draft({ name: 'later', changeSummary: 'renamed' }), 'u1');
-    const reread = await getVersion(v1.id);
-    expect(reread!.name).toBe('original');
-    expect(reread!.version).toBe(1);
-  });
-
-  it('lists versions newest first', async () => {
-    await publishVersion('pb1', draft({}), 'u1');
-    await publishVersion('pb1', draft({ changeSummary: 'b' }), 'u1');
-    await publishVersion('pb1', draft({ changeSummary: 'c' }), 'u1');
-    const got = await listVersions('pb1');
-    expect(got.map(v => v.version)).toEqual([3, 2, 1]);
-  });
-
-  it('two concurrent publishes do not collide on a version number', async () => {
-    await publishVersion('pb1', draft({}), 'u1');
-    const [a, b] = await Promise.all([
-      publishVersion('pb1', draft({ changeSummary: 'a' }), 'u1'),
-      publishVersion('pb1', draft({ changeSummary: 'b' }), 'u1'),
-    ]);
-    expect(new Set([a.version, b.version]).size).toBe(2);
+describe('what this module no longer exports', () => {
+  it('has no publish path at all', async () => {
+    // Publishing is one route running one Postgres transaction over both
+    // tables. A browser-side "publish a version" that did not also point the
+    // playbook at it is the orphan `publishAndPoint` exists to prevent,
+    // rebuilt across a network — so there is no way to reach one from here.
+    const mod = await import('./playbookVersions') as Record<string, unknown>;
+    expect('publishVersion' in mod).toBe(false);
+    expect('publishVersionIn' in mod).toBe(false);
   });
 });

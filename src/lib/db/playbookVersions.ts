@@ -1,110 +1,47 @@
-import type { IDBPObjectStore, StoreNames } from 'idb';
-import { getDb } from './open';
-import { STORES, type LexPromptDB } from './schema';
-import { SCHEMA_VERSION, type PlaybookDraft, type PlaybookVersion } from '../../types';
-import { uid } from '../uid';
-
-const STORAGE_FULL_MESSAGE =
-  'Could not save — your browser storage is full. Try deleting an old playbook, or exporting and removing some data.';
+import { apiGet, apiGetOrNull } from '../api/client';
+import type { PlaybookVersion } from '../../types';
 
 /**
- * Freezes a draft into an immutable published version.
+ * Published playbook versions — a read-only HTTP client since Stage 2.
  *
- * NOTE for app code: publishing a version WITHOUT pointing the identity
- * record at it is what left an orphan (Minor 1, fix round 1). Every caller
- * that means "save the user's edits" goes through `playbooks.ts`'s
- * `publishAndPoint`, which does both writes in one transaction. This
- * remains the unit the `playbookVersions` suite exercises for spec 9's
- * immutability, monotonicity and change-summary rules.
+ * ## What is gone from here, and why that is a finding
  *
- * The read of the current max version number and the write of the new
- * record share ONE readwrite transaction — the same discipline
- * `playbooks.ts`'s `savePlaybook` uses for `_seq`, and for the same reason:
- * two concurrent publishes must not both read the same max before either
- * has written. `matters.ts` once reproduced that allocation *without* the
- * transaction scoping while claiming in its docstring to mirror it, which
- * is this project's canonical sibling-drift defect. Nothing non-IDB is
- * awaited between the index read and the put, which is what keeps
- * IndexedDB from auto-committing the transaction early.
+ * `publishVersion` and `publishVersionIn` are no longer in this module.
+ * Publishing is one route (`POST /v1/playbooks/:id/versions`) running one
+ * Postgres transaction over both tables, so a browser-side "publish a
+ * version" that did not also point the playbook at it would be the orphan
+ * `publishAndPoint` exists to prevent, rebuilt across a network.
  *
- * A version id is minted fresh on every call and never reused, so a `put`
- * can never land on an existing version — immutability is a property of how
- * ids are allocated, not a check that could be forgotten.
+ * `publishVersionIn` is the ONE export in this batch whose TYPE could not
+ * survive: it took an `IDBPObjectStore` — a type from the storage layer this
+ * stage removes — so no HTTP shape for it exists at all. Verified before
+ * relying on it: nothing outside `src/lib/db/` imports it, so R3's seam held
+ * for every CALLER and did not hold one level in, on an internal helper.
+ * That distinction is the finding, and it is worth stating rather than
+ * glossing: a seam that holds at the boundary can still be broken inside it.
+ *
+ * It has ONE remaining caller — `migrate.ts`'s startup conversion of pre-D
+ * playbooks, which is IndexedDB-to-IndexedDB and stays so until Task 23
+ * decides the migration's fate. So the function MOVED there rather than
+ * being deleted: leaving it exported here would have meant this module
+ * importing both `idb` and the HTTP client, and copying it into `migrate.ts`
+ * would have been the sibling drift this project's own history is about.
+ *
+ * `getVersion` and `listVersions` keep their names, parameters and return
+ * types exactly.
  */
-export async function publishVersion(
-  playbookId: string,
-  draft: PlaybookDraft,
-  byUserId: string,
-): Promise<PlaybookVersion> {
-  const db = await getDb();
-  try {
-    const tx = db.transaction(STORES.playbookVersions, 'readwrite');
-    const record = await publishVersionIn(tx.store, playbookId, draft, byUserId);
-    await tx.done;
-    return record;
-  } catch (error) {
-    // The change-summary rejection is a caller error, not a storage failure
-    // — rethrowing it as "storage is full" would send the user off to delete
-    // data to fix a missing text field.
-    if (error instanceof Error && /change summary/i.test(error.message)) throw error;
-    throw new Error(STORAGE_FULL_MESSAGE);
-  }
-}
 
-/**
- * The allocation itself, against an object store handle from an ALREADY-OPEN
- * readwrite transaction — the same shape (and the same reason) as `seq.ts`'s
- * `nextSeq`.
- *
- * It exists so the startup conversion in `migrate.ts` can do its version put
- * and its identity write-back inside ONE transaction spanning both stores,
- * without a second copy of the version-number allocation. Two copies of this
- * is precisely the sibling drift that `matters.ts` reproducing
- * `playbooks.ts`'s allocation *without* its transaction scoping produced.
- *
- * The caller owns the transaction and must not await anything non-IDB
- * between calling this and its own put, or IndexedDB auto-commits early and
- * reopens the race the shared transaction exists to close.
- */
-export async function publishVersionIn<TxStores extends ArrayLike<StoreNames<LexPromptDB>>>(
-  store: IDBPObjectStore<LexPromptDB, TxStores, 'playbookVersions', 'readwrite'>,
-  playbookId: string,
-  draft: PlaybookDraft,
-  byUserId: string,
-): Promise<PlaybookVersion> {
-  const existing = await store.index('byPlaybook').getAll(playbookId);
-  const nextVersion = existing.reduce((max, v) => Math.max(max, v.version), 0) + 1;
-
-  // A version history whose entries do not say what changed is a list of
-  // dates (spec §4). v1 is exempt: there is no previous version for it to
-  // have changed from.
-  const summary = draft.changeSummary?.trim() ?? '';
-  if (nextVersion > 1 && summary === '') {
-    throw new Error('A change summary is required when publishing a new version.');
-  }
-
-  const record: PlaybookVersion = {
-    ...draft,
-    changeSummary: summary,
-    id: uid(),
-    playbookId,
-    version: nextVersion,
-    publishedAt: Date.now(),
-    publishedByUserId: byUserId,
-    schemaVersion: SCHEMA_VERSION,
-  };
-  await store.put(record);
-  return record;
-}
-
+/** `null` for "there is no such version", and ONLY for that. A 500 rejects
+ *  — a version read that answered `null` over a broken server would render
+ *  a review's history as though the version it ran against had been
+ *  deleted. */
 export async function getVersion(id: string): Promise<PlaybookVersion | null> {
-  const db = await getDb();
-  return (await db.get(STORES.playbookVersions, id)) ?? null;
+  return apiGetOrNull<PlaybookVersion>(`/v1/versions/${encodeURIComponent(id)}`);
 }
 
-/** Newest first. */
+/** Newest first. The order is the server's (`order by version_number desc`)
+ *  and is not re-derived here. */
 export async function listVersions(playbookId: string): Promise<PlaybookVersion[]> {
-  const db = await getDb();
-  const all = await db.getAllFromIndex(STORES.playbookVersions, 'byPlaybook', playbookId);
-  return all.sort((a, b) => b.version - a.version);
+  return apiGet<PlaybookVersion[]>(
+    `/v1/playbooks/${encodeURIComponent(playbookId)}/versions`);
 }

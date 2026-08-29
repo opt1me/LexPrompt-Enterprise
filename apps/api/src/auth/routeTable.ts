@@ -92,6 +92,24 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'PUT /v1/collections/:id': 'reviewer',
   'DELETE /v1/collections/:id': 'reviewer',
 
+  // Playbooks. §7: a reviewer edits a playbook DRAFT; what a reviewer
+  // cannot do is PUBLISH a version, which is the one `partner` line below.
+  'GET /v1/playbooks': 'reviewer',
+  'GET /v1/playbooks/:id': 'reviewer',
+  'PUT /v1/playbooks/:id': 'reviewer',
+  'DELETE /v1/playbooks/:id': 'reviewer',
+  'DELETE /v1/playbooks/:id/draft': 'reviewer',
+  'GET /v1/playbooks/:id/content': 'reviewer',
+  'GET /v1/playbooks/:id/versions': 'reviewer',
+  'GET /v1/versions/:id': 'reviewer',
+
+  // PARTNER. Publishing a version is one of the two things §7 says a
+  // reviewer cannot do, and an import publishes a v1, so it carries the same
+  // bar — an import that only needed `reviewer` would be a door around the
+  // gate, which is the shape ruling R-E8 deleted rather than left standing.
+  'POST /v1/playbooks/:id/versions': 'partner',
+  'POST /v1/playbooks/import': 'partner',
+
   // Reconciliation (§6.5). ADMIN, not reviewer: the listing names bytes
   // that no record claims — which is a fact about storage rather than about
   // any matter — and the second route destroys them. A reviewer who could

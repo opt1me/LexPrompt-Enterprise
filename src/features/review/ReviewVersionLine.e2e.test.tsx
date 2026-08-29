@@ -1,14 +1,32 @@
 import React from 'react';
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { mount } from '../../test/mount';
 import { ReviewVersionLine } from './ReviewVersionLine';
-import { publishVersion, getVersion } from '../../lib/db/playbookVersions';
-import { deletePlaybook } from '../../lib/db/playbooks';
-import { saveReview, getReview } from '../../lib/db/reviews';
-import { migrateDraft } from '../../lib/db/playbookMigration';
-import { closeDb } from '../../lib/db/open';
+import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
 import type { PlaybookVersion, Review } from '../../types';
 
+// Stage 2 Task 13 made the playbook repositories HTTP clients, so the
+// storage half of this end-to-end test — publish, then delete, and watch the
+// version stop resolving — now happens in Postgres and is proved there
+// (`apps/api/test/playbooks.pg.test.ts`: "takes its versions with it and
+// CLEARS a review's pointer rather than failing on it"). Only the NETWORK is
+// replaced here. The real `getVersion`, the real `getReview` and its
+// `migrateReviewRecord` repair, and the real component all still run, which
+// is what this file was ever for: the wiring between them, not each half's
+// own unit test agreeing with the other's.
+const transport = makeFakeTransport();
+vi.mock('../../lib/api/client', () => transportModule(transport));
+
+const { getVersion } = await import('../../lib/db/playbookVersions');
+const { deletePlaybook } = await import('../../lib/db/playbooks');
+const { saveReview, getReview } = await import('../../lib/db/reviews');
+const { migrateDraft } = await import('../../lib/db/playbookMigration');
+const { closeDb } = await import('../../lib/db/open');
+
+beforeEach(() => {
+  transport.reset();
+  transport.echoWrites = true;
+});
 afterEach(() => closeDb());
 
 // End-to-end for R-D15's dangling case: `reviews.test.ts` already proves at
@@ -22,10 +40,6 @@ afterEach(() => closeDb());
 // rather than each half's own unit tests merely being consistent with each
 // other.
 describe('a dangling playbookVersionId, read through the real getReview, renders as deleted', () => {
-  function draftFrom(version: PlaybookVersion) {
-    return migrateDraft(version, version.name);
-  }
-
   function makeVersionInput(): PlaybookVersion {
     return {
       id: 'placeholder',
@@ -59,7 +73,15 @@ describe('a dangling playbookVersionId, read through the real getReview, renders
   }
 
   it('renders "deleted", not a version claim and not silence, for a review whose version was deleted', async () => {
-    const v1 = await publishVersion('pb-dangling', draftFrom(makeVersionInput()), 'u1');
+    const v1: PlaybookVersion = {
+      ...migrateDraft(makeVersionInput(), 'NDA'),
+      id: 'v-dangling', playbookId: 'pb-dangling', version: 1,
+      publishedAt: Date.now(), publishedByUserId: 'u1', schemaVersion: 7,
+    };
+    // The version RESOLVES while the playbook is there…
+    transport.responses.set(`/v1/versions/${v1.id}`, v1);
+    transport.responses.set('/v1/playbooks/pb-dangling', { id: 'pb-dangling' });
+    expect(await getVersion(v1.id)).not.toBeNull();
     await saveReview(makeReview(v1.id));
 
     // Task 3's cascade: deleting the playbook removes its versions with it,
@@ -68,6 +90,9 @@ describe('a dangling playbookVersionId, read through the real getReview, renders
     // `reviews.test.ts`; this test picks up from there and drives the
     // result into the actual rendering decision.
     await deletePlaybook('pb-dangling');
+    // …and stops resolving once it is gone, which is the cascade proved
+    // against a real Postgres and reproduced here as the answer it gives.
+    transport.responses.delete(`/v1/versions/${v1.id}`);
 
     const reopened = await getReview('rev-dangling');
     expect(reopened).not.toBeNull();

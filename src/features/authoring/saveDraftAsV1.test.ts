@@ -1,18 +1,24 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { saveDraftAsV1 } from './saveDraftAsV1';
-import { getPlaybook, listPlaybooks } from '../../lib/db/playbooks';
-import { listVersions } from '../../lib/db/playbookVersions';
-import { getDb, closeDb } from '../../lib/db/open';
-import { STORES } from '../../lib/db/schema';
+import { memoryPlaybooks } from '../../test/memoryPlaybooks';
 import type { AuthoringDraft, DraftClause } from '../../lib/authoringDraft';
 
-beforeEach(async () => {
-  const db = await getDb();
-  await db.clear(STORES.playbooks);
-  await db.clear(STORES.playbookVersions);
-});
+// Stage 2 Task 13 made publishing one server transaction, so the store here
+// is an in-memory FIXTURE. What this file is about — which clauses reach v1,
+// what provenance a kept AI-drafted position carries, and that the save gate
+// is re-checked inside `saveDraftAsV1` rather than trusted from a disabled
+// button — is unchanged by that, and none of it is a claim about storage.
+vi.mock('../../lib/db/playbooks',
+  async () => (await import('../../test/memoryPlaybooks')).memoryPlaybooksModule());
+vi.mock('../../lib/db/playbookVersions',
+  async () => (await import('../../test/memoryPlaybooks')).memoryVersionsModule());
 
-afterEach(() => closeDb());
+const { getPlaybook, listPlaybooks } = await import('../../lib/db/playbooks');
+const { listVersions } = await import('../../lib/db/playbookVersions');
+
+beforeEach(() => memoryPlaybooks.reset());
+
+afterEach(() => memoryPlaybooks.reset());
 
 const clause = (id: string, over: Partial<DraftClause> = {}): DraftClause => ({
   id,
@@ -72,26 +78,29 @@ describe('saveDraftAsV1', () => {
   // uses for `importPlaybook`'s equivalent claim) rather than asserting an
   // orphan's absence directly, which `playbooks.test.ts` explains cannot be
   // done honestly once the writes are atomic.
-  it('goes through publishAndPoint alone — exactly one transaction, no separate identity write first', async () => {
-    const db = await getDb();
-    const txSpy = vi.spyOn(db, 'transaction');
+  it('goes through publishAndPoint alone — one publish, no separate identity write first', async () => {
+    // The IndexedDB form of this counted `db.transaction` calls. The claim
+    // is the same one and it survived the move intact: the identity and the
+    // version are written by ONE operation, so there is no window between
+    // them for a failure to leave an orphan in. That the operation is now
+    // one Postgres transaction is proved in `apps/api/test/playbooks.pg.test.ts`
+    // ("does both, or neither"); what is provable here is that this caller
+    // reaches it once and writes nothing first.
     const d = draft([clause('a', { disposition: 'kept' })]);
     await saveDraftAsV1(d, 'p', 'u1');
-    expect(txSpy).toHaveBeenCalledTimes(1);
-    expect(txSpy).toHaveBeenCalledWith([STORES.playbooks, STORES.playbookVersions], 'readwrite');
-    txSpy.mockRestore();
+    expect(memoryPlaybooks.calls).toEqual(['publishAndPoint']);
   });
 
-  it('leaves nothing behind when the publish transaction itself fails', async () => {
-    const db = await getDb();
-    const txSpy = vi.spyOn(db, 'transaction').mockImplementation(() => {
-      throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
-    });
+  it('leaves nothing behind when the publish itself fails', async () => {
+    // The message is no longer "storage is full": that was a browser quota,
+    // and a refused server publish is not one. The failure PROPAGATES rather
+    // than being rewritten into a cause the reader could act on wrongly.
+    memoryPlaybooks.failPublish = new Error('The publish was refused.');
     const d = draft([clause('a', { disposition: 'kept' })]);
     try {
-      await expect(saveDraftAsV1(d, 'p', 'u1')).rejects.toThrow(/storage is full/i);
+      await expect(saveDraftAsV1(d, 'p', 'u1')).rejects.toThrow(/refused/i);
     } finally {
-      txSpy.mockRestore();
+      memoryPlaybooks.failPublish = null;
     }
     expect(await listPlaybooks()).toEqual([]);
   });

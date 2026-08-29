@@ -49,8 +49,8 @@ export function registerCollections(app: FastifyInstance, db: Db): void {
     // `created_at` alone orders such a pair arbitrarily and would lose it
     // SILENTLY, because the list would still render.
     const rows = await db.query<CollectionRow>(
-      'select * from collection where matter_id = $1 and workspace_id = $2'
-      + ' order by created_at desc, seq desc',
+      `select * from collection where matter_id = $1 and workspace_id = $2
+       order by created_at desc, seq desc`,
       [id, req.actor!.workspaceId],
     );
     return rows.map(fromCollectionRow);

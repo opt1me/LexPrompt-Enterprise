@@ -116,11 +116,18 @@ describe('a route with no policy entry cannot be registered at all', () => {
 // is bad design; the API REFUSES it, because a hidden button is not a
 // security control.
 //
-// Stage 2 registers no route above `reviewer` yet — the partner and admin
-// routes arrive with the tasks that write them. So the ranking is exercised
-// on a server built from the REAL gate, the REAL error envelope and the REAL
-// Actor type, over routes that stand in for the ones coming. Everything
-// under test here is production code; only the three URLs are the test's.
+// The RANKING is exercised on a server built from the REAL gate, the REAL
+// error envelope and the REAL Actor type, over three stand-in routes — so
+// the three levels are covered whatever the shipped table happens to hold.
+// Everything under test here is production code; only the URLs are the
+// test's.
+//
+// The SHIPPED table's own partner and admin entries are checked separately,
+// below ("a reviewer is refused at every route the shipped table puts above
+// them"). That second case exists because this fixture cannot catch a
+// shipped route being downgraded: found by mutation — changing
+// `POST /v1/playbooks/:id/versions` to `reviewer` in `routeTable.ts` left
+// every case in this file green.
 // ===================================================================
 const TEST_POLICY: RoutePolicyTable = {
   'GET /v1/anyone': 'reviewer',
@@ -231,6 +238,40 @@ describe('the API refuses, rather than the UI hiding', () => {
     expect(res.statusCode).toBe(404);
     expect(res.json().error.message).toMatch(/no GET \/v1\/mattres endpoint/);
     await app.close();
+  });
+});
+
+describe('a reviewer is refused at every route the shipped table puts above them', () => {
+  it('gets 403 at each partner and admin route, on the real server', async () => {
+    // The mirror of the case below, and the one the fixture-based matrix
+    // above cannot provide: it proves the SHIPPED table, so downgrading a
+    // partner route to `reviewer` fails HERE as well as in the route suite
+    // that exercises the behaviour. Two failures is the right number — the
+    // table and the behaviour are checked separately.
+    const above = Object.keys(ROUTE_POLICY)
+      .filter(k => ROUTE_POLICY[k] !== 'reviewer' && ROUTE_POLICY[k] !== 'public').sort();
+    // The LIST, not a count. A loop over "whatever is above reviewer" cannot
+    // see a route LEAVING that set — downgrade one and the loop simply skips
+    // it, which is how the first version of this case stayed green under
+    // exactly the mutation it was written to catch. Naming them means a
+    // route dropping out of the set has to be a deliberate edit here.
+    expect(above).toEqual([
+      'GET /v1/admin/blob-orphans',
+      'POST /v1/admin/blob-orphans/delete',
+      'POST /v1/playbooks/import',
+      'POST /v1/playbooks/:id/versions',
+    ].sort());
+    for (const key of above) {
+      const [method, url] = key.split(' ');
+      const { app } = buildTestApi({ principal: PRINCIPAL });
+      const res = await app.inject({
+        method: method as 'GET', url,
+        headers: { authorization: 'Bearer t' },
+        ...(method === 'POST' || method === 'PUT' ? { payload: {} } : {}),
+      });
+      expect(res.statusCode, key).toBe(403);
+      await app.close();
+    }
   });
 });
 

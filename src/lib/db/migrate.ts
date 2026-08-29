@@ -1,10 +1,12 @@
-import type { IDBPDatabase } from 'idb';
+import type { IDBPDatabase, IDBPObjectStore, StoreNames } from 'idb';
 import { getDb } from './open';
 import { STORES, type LexPromptDB } from './schema';
 import { seqOf } from './seq';
 import { migratePlaybookRecord } from './playbookMigration';
-import { publishVersionIn } from './playbookVersions';
-import type { Playbook, UserProfile } from '../../types';
+import {
+  SCHEMA_VERSION,
+  type Playbook, type PlaybookDraft, type PlaybookVersion, type UserProfile,
+} from '../../types';
 import { uid } from '../uid';
 
 /** The exact key v1 wrote its templates under (`src/lib/storage.ts`,
@@ -291,4 +293,58 @@ async function migratePlaybooksToVersions(
     progress.count++;
   }
   return progress.count;
+}
+
+
+/**
+ * The version-number allocation, against an object-store handle from an
+ * ALREADY-OPEN readwrite transaction — the same shape (and the same reason)
+ * as `seq.ts`'s `nextSeq`.
+ *
+ * MOVED HERE from `playbookVersions.ts` by Stage 2 Task 13, which made that
+ * module an HTTP client. Its type takes an `IDBPObjectStore`, so there was
+ * no HTTP shape for it; and this — the one-time pre-D conversion, which is
+ * IndexedDB to IndexedDB — is its only remaining caller. Moved rather than
+ * copied: two copies of a version-number allocation is precisely the sibling
+ * drift `matters.ts` reproducing `playbooks.ts`'s allocation *without* its
+ * transaction scoping produced, and this project's canonical example of it.
+ *
+ * File-local on purpose. Nothing outside this conversion should be minting
+ * a version in the browser at all any more: publishing is one route running
+ * one Postgres transaction over both tables, and a second path to it would
+ * be the orphan `publishAndPoint` exists to prevent.
+ *
+ * The caller owns the transaction and must not await anything non-IDB
+ * between calling this and its own put, or IndexedDB auto-commits early and
+ * reopens the race the shared transaction exists to close.
+ */
+async function publishVersionIn<TxStores extends ArrayLike<StoreNames<LexPromptDB>>>(
+  store: IDBPObjectStore<LexPromptDB, TxStores, 'playbookVersions', 'readwrite'>,
+  playbookId: string,
+  draft: PlaybookDraft,
+  byUserId: string,
+): Promise<PlaybookVersion> {
+  const existing = await store.index('byPlaybook').getAll(playbookId);
+  const nextVersion = existing.reduce((max, v) => Math.max(max, v.version), 0) + 1;
+
+  // A version history whose entries do not say what changed is a list of
+  // dates (spec §4). v1 is exempt: there is no previous version for it to
+  // have changed from.
+  const summary = draft.changeSummary?.trim() ?? '';
+  if (nextVersion > 1 && summary === '') {
+    throw new Error('A change summary is required when publishing a new version.');
+  }
+
+  const record: PlaybookVersion = {
+    ...draft,
+    changeSummary: summary,
+    id: uid(),
+    playbookId,
+    version: nextVersion,
+    publishedAt: Date.now(),
+    publishedByUserId: byUserId,
+    schemaVersion: SCHEMA_VERSION,
+  };
+  await store.put(record);
+  return record;
 }

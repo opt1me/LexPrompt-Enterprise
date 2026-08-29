@@ -15,6 +15,7 @@ import { registerMe } from './routes/me.ts';
 import { registerMatters } from './routes/matters.ts';
 import { registerDocuments } from './routes/documents.ts';
 import { registerCollections } from './routes/collections.ts';
+import { registerPlaybooks } from './routes/playbooks.ts';
 import { ConflictError } from './errors.ts';
 
 declare module 'fastify' {
@@ -233,6 +234,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerMatters(app, deps.db, deps.blobs);
   registerDocuments(app, deps.db, deps.blobs);
   registerCollections(app, deps.db);
+  registerPlaybooks(app, deps.db);
 
   return app;
 }

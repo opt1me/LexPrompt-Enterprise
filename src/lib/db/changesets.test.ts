@@ -1,7 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { saveChangeset, getChangeset, listChangesets, recordDecision, publishChangeset, ChangesetStaleBaseError } from './changesets';
-import { newPlaybook, publishAndPoint, getPlaybook } from './playbooks';
-import { listVersions } from './playbookVersions';
+import { memoryPlaybooks } from '../../test/memoryPlaybooks';
+
+// Stage 2 Task 13 made the playbook repositories HTTP clients, and
+// `publishChangeset` publishes THROUGH them. What this file is about is the
+// changeset half — which items reach the version, whose words they carry,
+// and the stale-base refusal — so the playbook store is a FIXTURE here, in
+// memory, and the publish transaction it stands in for is proved against a
+// real Postgres in `apps/api/test/playbooks.pg.test.ts`.
+vi.mock('./playbooks',
+  async () => (await import('../../test/memoryPlaybooks')).memoryPlaybooksModule());
+vi.mock('./playbookVersions',
+  async () => (await import('../../test/memoryPlaybooks')).memoryVersionsModule());
+
+const { newPlaybook, publishAndPoint, getPlaybook } = await import('./playbooks');
+const { listVersions } = await import('./playbookVersions');
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
 import type { Changeset, ChangesetItem, Playbook, PlaybookClause, PlaybookDraft, PlaybookVersion } from '../../types';
@@ -78,6 +91,8 @@ async function seedPlaybook(clauses: PlaybookClause[] = []): Promise<{ playbook:
   };
   return publishAndPoint(identity, draft, 'u1');
 }
+
+beforeEach(() => memoryPlaybooks.reset());
 
 beforeEach(async () => {
   const db = await getDb();
@@ -317,19 +332,16 @@ describe('publishChangeset', () => {
     const cs = changeset({ id: 'cs-fail', playbookId: playbook.id, fromVersionId: version.id, items });
     await saveChangeset(cs);
 
-    const db = await getDb();
-    const original = db.transaction.bind(db);
-    const txSpy = vi.spyOn(db, 'transaction').mockImplementation(((storeNames: unknown, mode?: unknown, ...rest: unknown[]) => {
-      if (Array.isArray(storeNames) && storeNames.includes(STORES.playbookVersions) && mode === 'readwrite') {
-        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
-      }
-      return (original as (...args: unknown[]) => unknown)(storeNames, mode, ...rest);
-    }) as typeof db.transaction);
-
+    // The publish FAILS. What made it fail used to be an IndexedDB quota
+    // error; since Stage 2 Task 13 the publish is one server transaction, so
+    // it is a rejected request instead. Neither cause is this test's
+    // subject: what matters is that `publishChangeset` loses no decision and
+    // marks nothing published when the publish did not happen.
+    memoryPlaybooks.failPublish = new Error('The publish was refused.');
     try {
       await expect(publishChangeset(cs, 'u1')).rejects.toThrow();
     } finally {
-      txSpy.mockRestore();
+      memoryPlaybooks.failPublish = null;
     }
 
     const reloaded = await getChangeset('cs-fail');

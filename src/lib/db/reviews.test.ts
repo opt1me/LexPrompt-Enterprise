@@ -2,16 +2,72 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   listReviews, getReview, saveReview, deleteReview, createDebouncedReviewSaver,
 } from './reviews';
-import { publishVersion, getVersion } from './playbookVersions';
-import { deletePlaybook } from './playbooks';
+import { getVersion } from './playbookVersions';
 import { migrateDraft } from './playbookMigration';
 import { getDb, closeDb } from './open';
 import { STORES } from './schema';
-import type { Review, PlaybookVersion, PlaybookDraft } from '../../types';
+import { sharedTransport as transport } from '../../test/fakeTransport';
+import { SCHEMA_VERSION, type Review, type PlaybookVersion, type PlaybookDraft } from '../../types';
+
+// Stage 2 Task 13 made the playbook repositories HTTP clients, and
+// `buildVersionIndex` below reads `listVersions` to back-fill a pre-D
+// review's `playbookVersionId`. Only the NETWORK is replaced: the real
+// `buildVersionIndex`, `migrateReviewRecord` and `migrateFinding` still run,
+// which is what these cases are about.
+vi.mock('../api/client',
+  async () => (await import('../../test/fakeTransport')).sharedTransportModule());
+
+/**
+ * Publishes a version INTO THE FAKE TRANSPORT, in the shape the server
+ * answers with.
+ *
+ * A fixture, not a copy of the route: the version-number allocation, the
+ * change-summary rule and the one-transaction publish are proved against a
+ * real Postgres in `apps/api/test/playbooks.pg.test.ts`, and reproducing any
+ * of them here would be asserting against this helper. What these tests
+ * need is only that `getVersion` and `listVersions` answer with a version.
+ */
+let versionSeq = 0;
+async function publishVersion(
+  playbookId: string, draft: PlaybookDraft, byUserId: string,
+): Promise<PlaybookVersion> {
+  const listPath = `/v1/playbooks/${encodeURIComponent(playbookId)}/versions`;
+  const existing = (transport.responses.get(listPath) as PlaybookVersion[] | undefined) ?? [];
+  const record: PlaybookVersion = {
+    ...draft,
+    changeSummary: draft.changeSummary?.trim() ?? '',
+    id: `v-${++versionSeq}`,
+    playbookId,
+    version: existing.reduce((max, v) => Math.max(max, v.version), 0) + 1,
+    publishedAt: Date.now(),
+    publishedByUserId: byUserId,
+    schemaVersion: SCHEMA_VERSION,
+  };
+  transport.responses.set(`/v1/versions/${encodeURIComponent(record.id)}`, record);
+  // Newest first, as the route's `order by version_number desc` returns them.
+  transport.responses.set(listPath, [record, ...existing]);
+  return record;
+}
+
+/** The delete cascade's ANSWER — the versions stop resolving. The cascade
+ *  itself is proved against a real Postgres in `playbooks.pg.test.ts`. */
+function deletePlaybookFixture(playbookId: string): void {
+  const listPath = `/v1/playbooks/${encodeURIComponent(playbookId)}/versions`;
+  for (const v of (transport.responses.get(listPath) as PlaybookVersion[] | undefined) ?? []) {
+    transport.responses.delete(`/v1/versions/${encodeURIComponent(v.id)}`);
+  }
+  transport.responses.set(listPath, []);
+}
 
 beforeEach(async () => {
   const db = await getDb();
   await db.clear(STORES.reviews);
+  // A playbook with no published versions answers 200 with an EMPTY LIST,
+  // not 404 — `GET /v1/playbooks/:id/versions` does no existence check, and
+  // `buildVersionIndex` relies on that: it is called for every review with
+  // no `playbookVersionId`, including ones whose snapshot names a playbook
+  // that was never in this workspace at all.
+  transport.fallback = path => (path.endsWith('/versions') ? [] : undefined);
 });
 
 afterEach(() => closeDb());
@@ -222,7 +278,7 @@ describe('Review.playbookVersionId (Task 4)', () => {
     const v1 = await publishVersion(
       'pb-1', { ...draftFrom(makePlaybook()), changeSummary: 'the version this review ran against' }, 'u1');
     const review = await saveReview(makeReview({ playbookVersionId: v1.id }));
-    await deletePlaybook('pb-1'); // cascades to its versions (Task 3, R-D13)
+    deletePlaybookFixture('pb-1'); // cascades to its versions (Task 3, R-D13)
 
     const reopened = await getReview(review.id);
     // The id is still there — it is a record of what ran, not a live handle —

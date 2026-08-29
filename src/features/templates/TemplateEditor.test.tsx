@@ -4,12 +4,20 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, buttons, click, type } from '../../test/mount';
 import { TemplateEditor } from './TemplateEditor';
 import type { PlaybookClause, PlaybookDraft, PlaybookVersion, Settings } from '../../types';
-import { getDb, closeDb } from '../../lib/db/open';
-import { STORES } from '../../lib/db/schema';
-import {
+import { sharedTransport as transport } from '../../test/fakeTransport';
+
+// Stage 2 Task 13 made the playbook repositories HTTP clients. The one case
+// below that goes THROUGH the store does so to prove a draft survives a
+// round trip byte-identically — a property of serialisation, which JSON now
+// provides and IndexedDB's `structuredClone` used to. Only the network is
+// replaced (`fakeTransport`, in its echo mode); the real `savePlaybook`,
+// `saveDraft`, `getPlaybook` and `getPlaybookContent` still run.
+vi.mock('../../lib/api/client',
+  async () => (await import('../../test/fakeTransport')).sharedTransportModule());
+
+const {
   newPlaybook, savePlaybook, saveDraft, getPlaybook, getPlaybookContent, draftFromVersion,
-} from '../../lib/db/playbooks';
-import { publishVersion } from '../../lib/db/playbookVersions';
+} = await import('../../lib/db/playbooks');
 
 // No text()/flush()/fieldMatching() helper exists in `src/test/mount`; these
 // are local selectors, the same way PositionComparison.test.tsx writes its
@@ -668,19 +676,21 @@ describe('TemplateEditor — standard positions', () => {
 // is how a real library ended up with a byte-identical v1/v2 pair.
 describe('TemplateEditor — a draft that has been through the store (Major 1)', () => {
   it('offers no publish for a saved draft reopened byte-identical to its version', async () => {
-    const db = await getDb();
-    await db.clear(STORES.playbooks);
-    await db.clear(STORES.playbookVersions);
+    transport.reset();
+    transport.echoWrites = true;
     try {
       const identity = newPlaybook('Lease Review');
-      const v1 = await publishVersion(identity.id, {
+      const v1: PlaybookVersion = {
         name: 'Lease Review',
         contractType: 'Lease',
         systemPrompt: 'You are a reviewer.',
         formatPrompt: 'Quote verbatim.',
         clauses: structuredClone(twoClauses),
         changeSummary: '',
-      }, 'u1');
+        id: 'v1', playbookId: identity.id, version: 1,
+        publishedAt: Date.now(), publishedByUserId: 'u1', schemaVersion: 7,
+      };
+      transport.responses.set(`/v1/playbooks/${identity.id}/content`, v1);
       const saved = await savePlaybook({ ...identity, currentVersionId: v1.id });
       // Exactly what the editor's "Save draft" writes for an edit typed and
       // then undone: the working copy of the published version, unchanged.
@@ -700,7 +710,7 @@ describe('TemplateEditor — a draft that has been through the store (Major 1)',
       expect(buttonNamed(c, /publish/i)?.disabled).toBe(true);
       expect(c.textContent).not.toMatch(/unpublished changes/i);
     } finally {
-      await closeDb();
+      transport.reset();
     }
   });
 });

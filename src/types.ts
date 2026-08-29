@@ -52,6 +52,18 @@ export interface Playbook {
   /** Present when there are unpublished edits. */
   draft?: PlaybookDraft;
   schemaVersion: number;
+  /** The optimistic-concurrency token (§8) — see `Matter.version`, whose
+   *  note applies here word for word. Optional, and its absence is the claim
+   *  "I believe this is a create", which is what `newPlaybook` mints and
+   *  what an imported identity carries.
+   *
+   *  NOT to be confused with `PlaybookVersion.version`, which is the version
+   *  NUMBER a person reads in the history. Two different facts, and the one
+   *  place they meet is this record: a playbook's `version` counts saves of
+   *  its IDENTITY, and says nothing about how many versions it has
+   *  published. `playbook_version` has no such column at all — it is
+   *  immutable, insert-only, and there is nothing to concurrently overwrite. */
+  version?: number;
 }
 
 /** The content of a playbook at one published moment. Immutable: nothing

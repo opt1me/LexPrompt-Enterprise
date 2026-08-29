@@ -1,10 +1,10 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { buildPositionHealthMap } from './positionHealthMap';
 import { positionHealthLabel } from './positionHealth';
-import { publishVersion } from './db/playbookVersions';
 import { saveReview, getReview, listReviews } from './db/reviews';
 import { closeDb } from './db/open';
-import type { Finding, PlaybookDraft, Review } from '../types';
+import { SCHEMA_VERSION } from '../types';
+import type { Finding, PlaybookDraft, PlaybookVersion, Review } from '../types';
 
 afterEach(() => closeDb());
 
@@ -40,7 +40,21 @@ describe('end to end: a verified meets survives a real save/reopen and is counte
   }
 
   it('reads HELD 1 of 1 after saveReview -> getReview -> buildPositionHealthMap', async () => {
-    const version = await publishVersion('pb-e2e-health', draft(), 'u1');
+    // Built here rather than published through a store. Stage 2 Task 13 made
+    // publishing one route running one Postgres transaction, proved against
+    // a real database in `apps/api/test/playbooks.pg.test.ts`; what this
+    // test is about is the SEAM below it — `saveReview`/`getReview` and the
+    // `migrateReviewRecord`/`migrateFinding` repair they funnel every read
+    // through — and a version is a fixture to that, not a subject.
+    const version: PlaybookVersion = {
+      ...draft(),
+      id: 'v-e2e-health',
+      playbookId: 'pb-e2e-health',
+      version: 1,
+      publishedAt: Date.now(),
+      publishedByUserId: 'u1',
+      schemaVersion: SCHEMA_VERSION,
+    };
 
     const finding: Finding = {
       clauseId: 'c1',
