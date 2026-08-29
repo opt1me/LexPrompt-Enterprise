@@ -1,49 +1,82 @@
-import { getDb } from './open';
-import { PROFILE_KEY, STORES } from './schema';
+import type { MeResponse, Role } from '@lexprompt/core';
+import { apiGet, apiSend } from '../api/client';
 import type { UserProfile } from '../../types';
-import { uid } from '../uid';
 
-function defaultProfile(): UserProfile {
-  return {
-    id: uid(),
-    name: 'Me',
-    initials: 'ME',
-  };
+/**
+ * The one local profile becomes the signed-in `app_user` (Stage 2, §6.5).
+ *
+ * `getProfile()` no longer MINTS a person. The old implementation created a
+ * default on first call — `{ id: uid(), name: 'Me', initials: 'ME' }` — so
+ * nothing was blocked on a user naming themselves before the app was
+ * useful. There is a real person behind a real token now, and a browser
+ * that invents one while a server knows one is exactly the drift this
+ * stage exists to end (Task 9 made `ownerId` server-authoritative for the
+ * same reason; this does not re-litigate that). A minted id would go
+ * straight into `ownerId`, `addedByUserId` and `Verification.byUserId` as
+ * an attribution to somebody who does not exist — worse than an empty
+ * field, because it reads as answered.
+ *
+ * `getProfile()` therefore resolves `GET /v1/me` and rejects with whatever
+ * `ModelError` the request failed with. It does not swallow a failure into
+ * a fallback profile: the write paths in `App.tsx` await this directly, and
+ * a write that cannot say who made it must not happen.
+ *
+ * The in-flight memoisation the old `creating` promise provided survives
+ * for the reason it existed: `getProfile()` is called from roughly a dozen
+ * sites in `App.tsx`, several on write paths, and a round trip per call is
+ * not a design. What replaces `creating` is a cache of the resolved
+ * response, since there is no longer a creation to dedupe — only a read.
+ * Cleared on failure, so one rejection does not poison every later call
+ * (the same rule `open.ts`'s `getDb` follows); cleared by `saveProfile`, so
+ * the header shows a renamed user without a reload; and exposed via
+ * `forgetProfile()` for sign-out and for tests.
+ */
+let inFlight: Promise<UserProfile> | null = null;
+let cached: UserProfile | null = null;
+let cachedRole: Role | undefined;
+
+function fromMe(me: MeResponse): UserProfile {
+  return { id: me.id, name: me.displayName, initials: me.initials };
 }
 
-// Two concurrent first-callers can both see the store empty and both mint a
-// distinct default profile; without deduping, the last `put` wins the store
-// but the loser is left holding an in-memory profile whose id was never
-// persisted — a silent divergence that later shows up as an `ownerId` value
-// nothing references. Memoising the in-flight creation so every concurrent
-// caller awaits the same one closes that window. Cleared once the attempt
-// settles (success or failure) — on failure so one rejection doesn't poison
-// every future call (the same rule `open.ts`'s `getDb` follows), and on
-// success too so a later call (e.g. after a test clears the store) does the
-// real read instead of replaying a stale in-memory result.
-let creating: Promise<UserProfile> | null = null;
-
-/** Returns the one local profile, creating and persisting a sensible
- *  default on first call. Nothing in the app is ever blocked on the user
- *  naming themselves first. */
 export async function getProfile(): Promise<UserProfile> {
-  const db = await getDb();
-  const existing = await db.get(STORES.profile, PROFILE_KEY);
-  if (existing) return existing;
-
-  if (!creating) {
-    creating = (async () => {
-      const created = defaultProfile();
-      await db.put(STORES.profile, created, PROFILE_KEY);
-      return created;
-    })().finally(() => {
-      creating = null;
-    });
-  }
-  return creating;
+  if (cached) return cached;
+  inFlight ??= apiGet<MeResponse>('/v1/me')
+    .then(me => {
+      cachedRole = me.role;
+      cached = fromMe(me);
+      return cached;
+    })
+    .finally(() => { inFlight = null; });
+  return inFlight;
 }
 
+/**
+ * Writes only the display name. `id` and `role` are not the user's to set
+ * — the signature keeps taking a whole `UserProfile` because every caller
+ * already has one, but the route ignores everything except `displayName`
+ * and this never sends the rest: a route that accepted an id would accept
+ * a request to become somebody else, and one that accepted initials would
+ * let the two disagree.
+ */
 export async function saveProfile(p: UserProfile): Promise<void> {
-  const db = await getDb();
-  await db.put(STORES.profile, p, PROFILE_KEY);
+  const me = await apiSend<MeResponse>('PUT', '/v1/me', { displayName: p.name });
+  cachedRole = me.role;
+  cached = fromMe(me);
+}
+
+/** Clears the cache. Called on sign-out and by tests — not by anything in
+ *  a write path, which must never see a stale identity replaced silently
+ *  mid-render. */
+export function forgetProfile(): void {
+  cached = null;
+  inFlight = null;
+  cachedRole = undefined;
+}
+
+/** The signed-in user's role, once `getProfile()` has resolved at least
+ *  once. `undefined` before that — see `src/lib/role.ts`, which is the
+ *  only other reader of this cache. */
+export function getCachedRole(): Role | undefined {
+  return cachedRole;
 }
