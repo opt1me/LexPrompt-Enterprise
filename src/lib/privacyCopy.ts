@@ -78,8 +78,19 @@ export const STORAGE_PRIVACY = [
   'Matters, documents (including the original file bytes), and reviews are stored by '
   + "your firm's own LexPrompt service — the records and their text in its database, the "
   + "original files in its object storage, both inside your firm's own cloud tenant. "
-  + 'Your colleagues with access to a matter can see it; nothing about it is kept in this '
+  + 'Your colleagues with access to a matter can see it; nothing new is kept in this '
   + 'browser.',
+  // Added by Task 23, and NOT optional. The sentence above used to end
+  // "nothing about it is kept in this browser", which was true of everything
+  // written from Stage 2 onwards and false of everything written before it:
+  // that data is still in this browser's IndexedDB, deliberately — the
+  // uploader moves it and deletes nothing, and "never delete what you cannot
+  // read" is why. A disclosure that is true of new work and silently false
+  // of old work is worse than no disclosure, because it is the half a reader
+  // would rely on.
+  'Anything you created before this release is still in this browser as well, and is '
+  + 'not deleted by moving it to the server. Until a later release removes that copy, '
+  + 'clearing this browser’s site data is what removes it.',
   'Deleting a matter deletes its documents and their stored bytes, not just its entry '
   + "in a list. Your firm's administrator decides how long everything else is kept, and "
   + "its backups are your firm's rather than this app's.",

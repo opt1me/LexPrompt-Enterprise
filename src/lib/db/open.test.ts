@@ -3,6 +3,7 @@ import { openDB } from 'idb';
 import { getDb, closeDb } from './open';
 import { DB_NAME, STORES, type LexPromptDB } from './schema';
 import type { Matter, Playbook } from '../../types';
+import { seedLocal } from '../../test/seedLocalData';
 
 beforeEach(() => {
   closeDb();
@@ -90,5 +91,62 @@ describe('getDb', () => {
     expect(await upgraded.get(STORES.playbooks, 'p1')).toEqual(playbook);
     expect((await upgraded.getAll(STORES.matters)).length).toBe(1);
     expect((await upgraded.getAll(STORES.playbooks)).length).toBe(1);
+  });
+});
+
+/**
+ * The local database is READ-ONLY from Stage 2 (Task 23).
+ *
+ * Enforced rather than agreed. `migrateIfNeeded` spent the whole of Part 2A
+ * writing converted playbooks into a store the app had already stopped
+ * reading, and nothing anywhere said so — a write to a store nothing reads is
+ * work silently lost, and a convention lasts until the first person who needs
+ * a quick write.
+ */
+describe('the local database is read-only', () => {
+  it('refuses a readwrite transaction, naming the reason', async () => {
+    const db = await getDb();
+    expect(() => db.transaction(STORES.matters, 'readwrite'))
+      .toThrow(/read-only/i);
+    expect(() => db.transaction(STORES.matters, 'readwrite'))
+      .toThrow(/server/i);
+  });
+
+  it('refuses a readwrite transaction spanning several stores', async () => {
+    const db = await getDb();
+    expect(() => db.transaction([STORES.playbooks, STORES.playbookVersions], 'readwrite'))
+      .toThrow(/read-only/i);
+  });
+
+  it("refuses idb's convenience writes, which open their own transaction", async () => {
+    // Guarding `transaction` alone would leave every one of these live —
+    // they do not go through the method the proxy intercepts.
+    const db = await getDb();
+    // Synchronously, not as a rejected promise: the write never starts, so
+    // there is nothing to await.
+    expect(() => db.put(STORES.matters, { id: 'm1' } as never)).toThrow(/read-only/i);
+    expect(() => db.add(STORES.matters, { id: 'm1' } as never)).toThrow(/read-only/i);
+    expect(() => db.delete(STORES.matters, 'm1')).toThrow(/read-only/i);
+    expect(() => db.clear(STORES.matters)).toThrow(/read-only/i);
+  });
+
+  it('still READS — the uploader has to be able to', async () => {
+    // Paired with the refusals above on purpose: a guard that broke reading
+    // would satisfy every assertion in this block and leave a firm unable to
+    // move its data at all.
+    await seedLocal({
+      matters: [{ id: 'm1', name: 'Brookvale Retail Park', ownerId: 'u1', createdAt: 1, updatedAt: 1 }],
+    });
+
+    const db = await getDb();
+    expect((await db.get(STORES.matters, 'm1'))!.name).toBe('Brookvale Retail Park');
+    expect(await db.getAll(STORES.matters)).toHaveLength(1);
+    expect(await db.count(STORES.matters)).toBe(1);
+    expect(await db.getAllKeys(STORES.matters)).toEqual(['m1']);
+    // …and an explicit readonly transaction, which is what a multi-store read
+    // needs and must keep working.
+    const tx = db.transaction([STORES.matters, STORES.documents], 'readonly');
+    expect(await tx.objectStore(STORES.matters).get('m1')).toBeTruthy();
+    await tx.done;
   });
 });

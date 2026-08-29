@@ -14,7 +14,6 @@ const listMattersMock = vi.fn();
 const listReviewsMock = vi.fn();
 const listDocumentsMock = vi.fn();
 const getProfileMock = vi.fn();
-const migrateIfNeededMock = vi.fn();
 
 // Captures the `onError` callback App.tsx passes to `createDebouncedReviewSaver`
 // (Minor fix: this used to be called with no second argument at all, so a
@@ -30,9 +29,6 @@ const createDebouncedReviewSaverMock = vi.fn((..._args: unknown[]) => {
   };
 });
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
@@ -184,7 +180,6 @@ describe('App — a failed debounced mid-run save is surfaced, not just debug()-
   beforeEach(() => {
     localStorage.clear();
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
     listMattersMock.mockReset().mockResolvedValue([makeMatter()]);
     listReviewsMock.mockReset().mockResolvedValue([]);

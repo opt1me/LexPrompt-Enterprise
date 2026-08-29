@@ -33,6 +33,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/**
+ * `getDb()` hands back a READ-ONLY PROXY over the opened connection from
+ * Stage 2 Task 23, so the resolved value is no longer `===` the object
+ * `openDB` returned. These cases were never about object identity — they are
+ * about WHICH open a caller ends up holding — so each fake now carries a
+ * marker and the assertions read that through the proxy. `mockOpenDB`'s call
+ * count is what proves no extra connection was opened.
+ */
+
 describe('getDb blocked-upgrade guard', () => {
   it('rejects with DbBlockedError instead of hanging when blocked fires and the open never settles', async () => {
     vi.useFakeTimers();
@@ -69,20 +78,20 @@ describe('getDb blocked-upgrade guard', () => {
     await firstAssertion;
 
     // Now the "other tab" has gone away and a real open can succeed.
-    const fakeDb = { close: vi.fn() };
+    const fakeDb = { close: vi.fn(), marker: 'second-open' };
     mockOpenDB.mockImplementation(() => Promise.resolve(fakeDb as never));
-    const second = await getDb();
-    expect(second).toBe(fakeDb);
+    const second = await getDb() as unknown as { marker: string };
+    expect(second.marker).toBe('second-open');
   });
 
   it('never fires DbBlockedError if the open settles before the timeout', async () => {
     vi.useFakeTimers();
-    const fakeDb = { close: vi.fn() };
+    const fakeDb = { close: vi.fn(), marker: 'settled-open' };
     mockOpenDB.mockResolvedValue(fakeDb as never);
 
     const promise = getDb();
     await vi.advanceTimersByTimeAsync(3000);
-    await expect(promise).resolves.toBe(fakeDb);
+    expect(((await promise) as unknown as { marker: string }).marker).toBe('settled-open');
   });
 
   it('does not let a stale blocked open null a fresher, already-resolved memo', async () => {
@@ -113,10 +122,10 @@ describe('getDb blocked-upgrade guard', () => {
     closeDb();
 
     // A fresh open starts and succeeds while O1 is still hanging.
-    const fakeDb2 = { close: vi.fn() };
+    const fakeDb2 = { close: vi.fn(), marker: 'O2' };
     mockOpenDB.mockImplementationOnce(() => Promise.resolve(fakeDb2 as never));
-    const second = await getDb(); // O2
-    expect(second).toBe(fakeDb2);
+    const second = await getDb() as unknown as { marker: string }; // O2
+    expect(second.marker).toBe('O2');
 
     // Now let O1's 3s timeout finally fire and reject.
     const firstAssertion = expect(first).rejects.toBeInstanceOf(DbBlockedError);
@@ -125,8 +134,8 @@ describe('getDb blocked-upgrade guard', () => {
 
     // The live memo must still be O2's connection, not nulled by O1's
     // stale rejection, and getDb() must not open a third connection.
-    const third = await getDb();
-    expect(third).toBe(fakeDb2);
+    const third = await getDb() as unknown as { marker: string };
+    expect(third.marker).toBe('O2');
     expect(mockOpenDB).toHaveBeenCalledTimes(2);
   });
 });

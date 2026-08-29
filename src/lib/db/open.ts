@@ -92,6 +92,77 @@ export function upgradeSchema(db: IDBPDatabase<LexPromptDB>): void {
   }
 }
 
+/**
+ * Raised by the READ-ONLY handle `getDb()` hands out, when something tries to
+ * write to the browser-local database.
+ *
+ * See `readOnly` below for why the local database is read-only from Stage 2,
+ * and why that is enforced here rather than agreed in a comment.
+ */
+export class LocalDatabaseIsReadOnlyError extends Error {
+  constructor(what: string) {
+    super(
+      `LexPrompt's local database is read-only (a "${what}" was attempted). Your firm's server `
+      + 'is where everything is stored now; the copy in this browser is kept only so the '
+      + '"Move this browser’s data to the server" screen can read it, and a later release '
+      + 'removes it.',
+    );
+    this.name = 'LocalDatabaseIsReadOnlyError';
+  }
+}
+
+/** `idb`'s convenience writes. Each opens its own `'readwrite'` transaction
+ *  internally, on the WRAPPED database rather than through the `transaction`
+ *  method this proxy intercepts, so guarding the transaction alone would
+ *  leave every one of these live. */
+const WRITE_METHODS = new Set(['put', 'add', 'delete', 'clear']);
+
+/**
+ * The local database is READ-ONLY from Stage 2.
+ *
+ * It is not deleted (S13, and "never delete what you cannot read"): it is the
+ * owner's only copy until the uploader has run and they have confirmed the
+ * server copy is good, and a later release removes it. Until then it is
+ * readable by exactly one screen and writable by nothing.
+ *
+ * Enforced rather than agreed. A `'readwrite'` transaction throws here,
+ * naming the rule, because a convention lasts until the first person who
+ * needs a quick write — and a write to a store nothing reads is work
+ * silently lost. That is not hypothetical: `migrateIfNeeded` spent the whole
+ * of Part 2A writing converted playbooks into a store the app had already
+ * stopped reading, and nothing anywhere said so.
+ *
+ * `src/test/seedLocalData.ts` opens the same database directly, through
+ * `upgradeSchema` above, for the uploader's own fixtures — a test that has to
+ * put a firm's data into the browser cannot go through a handle that refuses
+ * to write. That is the ONE way past this guard and it is not reachable from
+ * `src/lib` or `src/features`.
+ */
+function readOnly(db: IDBPDatabase<LexPromptDB>): IDBPDatabase<LexPromptDB> {
+  return new Proxy(db, {
+    get(target, prop) {
+      if (prop === 'transaction') {
+        return (stores: unknown, mode?: IDBTransactionMode, ...rest: unknown[]) => {
+          // `undefined` means `'readonly'` in the IndexedDB API, so only an
+          // explicit non-readonly mode is refused.
+          if (mode !== undefined && mode !== 'readonly') {
+            throw new LocalDatabaseIsReadOnlyError(`${mode} transaction`);
+          }
+          return (target.transaction as (...a: unknown[]) => unknown)(stores, mode, ...rest);
+        };
+      }
+      if (typeof prop === 'string' && WRITE_METHODS.has(prop)) {
+        return () => { throw new LocalDatabaseIsReadOnlyError(prop); };
+      }
+      const value = (target as unknown as Record<string | symbol, unknown>)[prop];
+      // Bound to the REAL database, never to the proxy: `idb`'s own internals
+      // read private state off the instance, and handing them the proxy sends
+      // every internal access back through this trap.
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as IDBPDatabase<LexPromptDB>;
+}
+
 let dbPromise: Promise<IDBPDatabase<LexPromptDB>> | null = null;
 
 export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
@@ -150,7 +221,9 @@ export function getDb(): Promise<IDBPDatabase<LexPromptDB>> {
         db => {
           clearTimeout(blockedTimer);
           clearTimeout(openTimer);
-          resolve(db);
+          // READ-ONLY from here on. Wrapped at the one place every caller
+          // comes through, so there is no handle in the app that is not.
+          resolve(readOnly(db));
         },
         err => {
           clearTimeout(blockedTimer);

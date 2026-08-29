@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { IDBPDatabase } from 'idb';
-import { scanLocalData } from './scan';
+import { countLocalData, scanLocalData } from './scan';
 import { DbBlockedError, closeDb, getDb } from '../db/open';
 import { describeLoadError } from '../loadError';
 import type { LexPromptDB } from '../db/schema';
@@ -91,6 +91,7 @@ async function seedEverything(): Promise<void> {
 beforeEach(() => {
   closeDb();
   indexedDB.deleteDatabase('lexprompt');
+  localStorage.clear();
 });
 
 describe('scanLocalData', () => {
@@ -179,5 +180,54 @@ describe('scanLocalData', () => {
   it('does not count the bytes of a document whose file is not here', async () => {
     await seedLocal({ documents: DOCS, blobsFor: ['d1'] });
     expect((await scanLocalData()).totalBytes).toBe(1000);
+  });
+});
+
+/**
+ * v1's `localStorage` templates.
+ *
+ * Sub-project A's startup migration used to copy these into the `playbooks`
+ * object store and never delete the source. Task 23 deletes that migration —
+ * it was writing into a store the app stopped reading in Part 2A — so this
+ * scan is now the only thing that will ever look at v1's key again. Missing
+ * them would orphan the playbooks of anyone whose browser never ran a post-A
+ * build: an empty library, and a screen telling them there is nothing here
+ * to move.
+ */
+describe('scanLocalData and v1 localStorage templates', () => {
+  const V1_KEY = 'lexprompt.templates.v2';
+
+  beforeEach(() => localStorage.clear());
+
+  it('finds a template that only ever existed in localStorage', async () => {
+    localStorage.setItem(V1_KEY, JSON.stringify([
+      { id: 't1', name: 'Old lease playbook', clauses: [{ id: 'c1', title: 'Rent', prompt: 'p' }] },
+    ]));
+    const scan = await scanLocalData();
+    expect(scan.isEmpty).toBe(false);
+    expect(scan.totals.playbooks).toBe(1);
+    expect(scan.records.playbooks[0].label).toBe('Old lease playbook');
+  });
+
+  it('does NOT list one twice when the same id is already in the object store', async () => {
+    // For almost everybody these are the same playbooks, copied by A's
+    // migration years ago and left here as the backup it promised.
+    await seedLocal({ playbooks: [{ id: 't1', name: 'Old lease playbook', createdAt: 1, updatedAt: 1, schemaVersion: 1 }] });
+    localStorage.setItem(V1_KEY, JSON.stringify([{ id: 't1', name: 'Old lease playbook', clauses: [] }]));
+    const scan = await scanLocalData();
+    expect(scan.totals.playbooks).toBe(1);
+  });
+
+  it('reports an unreadable v1 blob as a record that could not be read, never as none', async () => {
+    localStorage.setItem(V1_KEY, '{not json');
+    const scan = await scanLocalData();
+    expect(scan.isEmpty).toBe(false);
+    expect(scan.records.playbooks[0].unreadable).toBe(true);
+    expect(scan.records.playbooks[0].warning).toMatch(/could not be read/i);
+  });
+
+  it('counts them for the banner, so a browser holding only these still says so', async () => {
+    localStorage.setItem(V1_KEY, JSON.stringify([{ id: 't1', name: 'Old lease playbook' }]));
+    expect((await countLocalData()).total).toBe(1);
   });
 });

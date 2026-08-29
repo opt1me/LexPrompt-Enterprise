@@ -39,11 +39,14 @@ describe('getDb open-timeout backstop', () => {
 
   it('does not reject if the open settles before the 30s backstop, and leaves no timer pending', async () => {
     vi.useFakeTimers();
-    const fakeDb = { close: vi.fn() };
+    const fakeDb = { close: vi.fn(), marker: 'settled-open' };
     mockOpenDB.mockResolvedValue(fakeDb as never);
 
+    // `.marker` rather than `toBe(fakeDb)`: `getDb()` hands back a read-only
+    // proxy over the connection from Task 23, so identity is no longer
+    // preserved — and identity was never what this case was about.
     const promise = getDb();
-    await expect(promise).resolves.toBe(fakeDb);
+    expect(((await promise) as unknown as { marker: string }).marker).toBe('settled-open');
 
     // A resolved native Promise ignores a later reject() call silently, so
     // asserting on `promise` alone would not catch a backstop timer left
@@ -54,7 +57,7 @@ describe('getDb open-timeout backstop', () => {
     expect(vi.getTimerCount()).toBe(0);
 
     await vi.advanceTimersByTimeAsync(30000);
-    await expect(getDb()).resolves.toBe(fakeDb);
+    expect(((await getDb()) as unknown as { marker: string }).marker).toBe('settled-open');
   });
 
   it('a blocked open still rejects with DbBlockedError well before the 30s backstop, unchanged', async () => {

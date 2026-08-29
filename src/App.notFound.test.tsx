@@ -7,11 +7,7 @@ import { createRoot, type Root } from 'react-dom/client';
 // precedent this follows: drive a real react-dom root directly.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const migrateIfNeededMock = vi.fn();
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
@@ -67,7 +63,6 @@ describe('App — an unrecognised route (Minor fix)', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);

@@ -30,7 +30,6 @@ import {
   listReviews, getReview, saveReview, createDebouncedReviewSaver, type DebouncedReviewSaver,
 } from './lib/db/reviews';
 import { getProfile } from './lib/db/profile';
-import { migrateIfNeeded, type MigrationPhase } from './lib/db/migrate';
 import { describeLoadError } from './lib/loadError';
 import { getVersion, listVersions } from './lib/db/playbookVersions';
 import { scanPlaybookAcrossMatters } from './lib/playbookScan';
@@ -110,6 +109,7 @@ import { UploadLocalData } from './features/upload/UploadLocalData';
 import { LocalDataBanner, type LocalDataBannerState } from './features/upload/LocalDataBanner';
 import { countLocalData } from './lib/upload/scan';
 import { STORE_LABELS } from './lib/upload/report';
+import { markUploadComplete, wasUploadComplete } from './lib/upload/uploaded';
 
 /** `authoring-form` and `authoring-review` are sub-project E's two
  *  session-only screens. They deliberately have **no `Route`**: a draft
@@ -333,62 +333,6 @@ const PER_CLAUSE_MODEL_FAILURE_MESSAGE =
   'This review stopped: a clause failed for a reason a retry will not fix. '
   + 'See the affected finding below for what the model reported.';
 
-/** Where the user's playbooks still are, per failed step.
- *
- *  The reassurance was always true; before this it named the wrong place.
- *  Step 1 moves v1's localStorage templates into IndexedDB and is safe
- *  because that localStorage source is never deleted on any path. Step 2
- *  converts records that are ALREADY in IndexedDB and is safe for a
- *  different reason — each playbook's conversion is one all-or-nothing
- *  transaction — so telling that user to look in "the browser's older
- *  storage" points them at a place their playbooks may not be. With no
- *  phase (the defensive catch around a rejecting `migrateIfNeeded`) neither
- *  claim can be made, so the wording names no store at all. */
-function reassuranceFor(phase: MigrationPhase | undefined): string {
-  if (phase === 'v1') {
-    return "Nothing has been lost. Your existing playbooks are still safely stored in the browser's " +
-      'older storage and were not deleted — moving them to the new storage just didn’t succeed ' +
-      'this time.';
-  }
-  if (phase === 'versions') {
-    return 'Nothing has been lost. Your playbooks are still in the browser’s storage exactly as ' +
-      'they were — each one is upgraded in a single all-or-nothing step, so a failure part-way ' +
-      'through changes none of them.';
-  }
-  return 'Nothing has been lost. Your playbooks are still stored exactly as they were, and nothing ' +
-    'was deleted — the upgrade simply did not finish.';
-}
-
-/** Rendered INSTEAD OF the entire app when the one-time playbook migration
- *  fails (see `App`'s gate below) — never alongside a library that would
- *  otherwise render empty and be mistaken for a fresh install with nothing
- *  in it. The reassurance is a fact about the implementation, not a guess:
- *  see `reassuranceFor` for why it depends on which step failed. */
-function MigrationBlockedScreen(
-  { error, phase, onRetry }: { error: string; phase?: MigrationPhase; onRetry: () => void },
-) {
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-paper p-8">
-      <div className="max-w-md text-center space-y-4">
-        <h1 className="font-prose text-screen-title text-ink-1">Your playbook library couldn't be set up</h1>
-        <p className="font-ui text-ui text-ink-2">{reassuranceFor(phase)}</p>
-        <p className="text-risk-high text-sm break-words">{error}</p>
-        <button
-          onClick={onRetry}
-          className="px-4 py-2 rounded-control bg-accent text-page hover:bg-accent-strong"
-        >
-          Retry
-        </button>
-      </div>
-    </div>
-  );
-}
-
-type MigrationState =
-  | { kind: 'pending' }
-  | { kind: 'ok'; migratedCount: number | null }
-  | { kind: 'failed'; error: string; phase?: MigrationPhase };
-
 /** Maps a URL route to the `view` it corresponds to today. `matter` now has
  * its own screen (Task 11): `MatterHome`. `review` also renders — reusing
  * the existing results/tabular views scoped to a matter (see
@@ -437,14 +381,18 @@ const ROUTE_FOR_VIEW: Partial<Record<View, Route>> = {
 };
 
 /**
- * The real app. Split out from the default-exported `App` below so that
- * none of its mount effects — `loadLibrary` foremost among them, since it's
- * the one reading the very store the migration writes into — can run until
- * the one-time v1→IndexedDB playbook migration has resolved. `App` doesn't
- * mount this component at all while migration is pending or failed, so
- * there is no ordering race to get right here; it's structural.
+ * The real app. Still split out from the default-exported `App` below, which
+ * is now purely the sign-in and role gate: `AppShell` does not mount at all
+ * until a caller has been authenticated and found to have access, so no
+ * screen it renders can hint at a working app behind a refusal.
+ *
+ * It used to be split out for a second reason as well — the one-time
+ * v1→IndexedDB playbook migration had to resolve before `loadLibrary` could
+ * read the store it wrote into. That migration is gone (Task 23): the store
+ * it wrote is one the app stopped reading in Part 2A, and what it converted
+ * is now converted by the UPLOADER, on the way out of this browser.
  */
-function AppShell({ migratedCount, signIn }: { migratedCount: number | null; signIn: () => void }) {
+function AppShell({ signIn }: { signIn: () => void }) {
   // Task 17: the role gate for the two partner-only actions. A second
   // `useRole()` instance, not a prop threaded down from `App()` — it shares
   // `getProfile()`'s cache (so this costs no second request once the boot
@@ -683,7 +631,14 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     countLocalData().then(
       ({ total, unreadable }) => {
         if (!localDataLive.current) return;
-        if (unreadable.length > 0) {
+        // A COMPLETE upload changes what the banner says; it does not remove
+        // it (§13.1, Task 23). The copy is still in this browser — nothing
+        // was deleted — and a banner that vanished would be a person who
+        // never learns that. Checked before the counts, because after a
+        // complete run those counts describe a copy, not a backlog.
+        if (total > 0 && wasUploadComplete()) {
+          setLocalData({ kind: 'moved' });
+        } else if (unreadable.length > 0) {
           setLocalData({
             kind: 'partial',
             total,
@@ -727,20 +682,6 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
   const [profile, setProfile] = useState<UserProfile | null>(null);
   useEffect(() => {
     getProfile().then(setProfile).catch(() => { /* display-only; initials falls back to 'ME' */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Fires exactly once, on the render where the migration gate first hands
-  // control to this component — `migratedCount` is a mount-time prop, not a
-  // value that changes again for the lifetime of this component instance
-  // (`App` unmounts and remounts a fresh `AppShell` on retry instead of
-  // reusing this one). `null` means `not-needed`: proceed silently, per
-  // spec — the whole point of the flag `migrateIfNeeded` writes is that a
-  // returning user hits this path on every load after their first.
-  useEffect(() => {
-    if (migratedCount !== null) {
-      notify(`Migrated ${migratedCount} playbook${migratedCount === 1 ? '' : 's'}.`);
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -2876,14 +2817,12 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
 
   /**
    * Groups the chosen standalone documents into a new collection (Task 7).
-   * Two separate writes, not one transaction — `saveCollection`'s `_seq`
-   * allocation is scoped to a single-store transaction on `collections`
-   * (`nextSeq`'s own type pins it there, see `seq.ts`), so it cannot share
-   * a transaction with the `documents` store's role updates. The order
-   * matters for the failure case: the collection is saved FIRST, so if a
-   * member's role update then fails partway, retrying this action (or
-   * ungrouping) still has a real collection record to work from rather
-   * than orphaned document roles pointing at nothing.
+   * Two separate writes, not one transaction — a collection and its members'
+   * roles are written by two different routes, so nothing here can make them
+   * atomic. The order matters for the failure case: the collection is saved
+   * FIRST, so if a member's role update then fails partway, retrying this
+   * action (or ungrouping) still has a real collection record to work from
+   * rather than orphaned document roles pointing at nothing.
    *
    * Document role updates run in parallel via `setDocumentRole` — never a
    * hand-rolled write here, so grouping and ungrouping can't drift on how
@@ -4048,7 +3987,18 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
           />
         )}
         {view === 'upload-local-data' && (
-          <UploadLocalData onClose={() => requestView('matters')} />
+          <UploadLocalData
+            onClose={() => requestView('matters')}
+            onUploaded={(report) => {
+              // Only a COMPLETE run. A browser with records that did not move
+              // must go on saying so — switching the banner to "your data is
+              // on the server" over a partial upload is the sentence §13.1
+              // exists to forbid, one screen removed from the report that
+              // refuses to say it.
+              if (report.complete) markUploadComplete();
+              loadLocalDataPresence();
+            }}
+          />
         )}
         {/* Sub-project E's two session-only screens. Neither has a URL: a
             deep link would promise a draft that cannot be restored. */}
@@ -4463,88 +4413,35 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
 }
 
 /**
- * Startup gate for the one-time v1→IndexedDB playbook migration (Task 14).
- * Runs `migrateIfNeeded()` once, before `AppShell` — and with it, every
- * effect that could read the `playbooks` store, `loadLibrary` foremost —
- * is even mounted. That ordering is structural, not timing-dependent:
- * `AppShell` only appears in the tree once `migration.kind === 'ok'`.
+ * The sign-in and role gate, and nothing else.
  *
- * - `not-needed` (`migratedCount: null`) → `AppShell` mounts silently.
- * - `migrated` → `AppShell` mounts and toasts the count once, from the
- *   `migratedCount` prop (see the effect near the top of `AppShell`).
- * - `failed` → `AppShell` never mounts. `MigrationBlockedScreen` renders
- *   instead, for as long as the failure persists — the exact "empty
- *   library" failure this project exists to design out, at its last and
- *   most visible possible occurrence: an app that has never rendered
- *   anything yet.
+ * This function used to also run the one-time v1→IndexedDB playbook
+ * migration before `AppShell` was allowed to mount. Task 23 removed it: the
+ * migration wrote into the `playbooks` object store, which the app stopped
+ * reading in Part 2A when every repository became an HTTP client, so from
+ * that point it was converting records nothing would ever look at — work
+ * silently lost, which is the shape `open.ts`'s read-only guard now makes
+ * impossible rather than merely unlikely.
  *
- * `migrateIfNeeded()` is contractually documented to never reject — every
- * failure path resolves to `{ status: 'failed' }` — but the `.catch` below
- * is kept anyway: it is the one moment a user's existing playbooks are
- * being moved, and an unhandled rejection there must never be able to
- * regress into a white screen, whatever a future change to `migrate.ts`
- * does.
+ * Nothing it protected is orphaned. A pre-D playbook, and a v1 template that
+ * is still only in `localStorage`, are BOTH read by the uploader
+ * (`scanLocalData`) and converted on their way to the server by the same
+ * `migratePlaybookRecord` this gate used to call — so the conversion happens
+ * once, at the moment the record moves somewhere that will actually be read.
+ * `LocalDataBanner` says there is data here until it has moved, and says the
+ * copy is still here afterwards.
  */
 export default function App() {
-  // Task 19: the sign-in gate. `useAuth`'s own effect and the migration
-  // effect just below both fire from this same first render, so the two
-  // async checks run CONCURRENTLY rather than one blocking the other —
-  // deliberately, so adding sign-in here does not double the wait a cold
-  // load already had for the migration check alone.
+  // Task 19: the sign-in gate.
   const { state: authState, signIn, signOut, retry: retryAuth } = useAuth();
   // Task 17 (§7): a signed-in caller can still be told "no access" by
   // `GET /v1/me` — a role gate one layer beyond the sign-in gate below,
   // which only knows the token was accepted, not what it is allowed to do.
   const roleState = useRole();
-  const [migration, setMigration] = useState<MigrationState>({ kind: 'pending' });
-  // `migrateIfNeeded()` is async and nothing can cancel it, so its result can
-  // arrive after this component is gone — a route change, or a test file
-  // finishing. Applying state then is a write to a component that no longer
-  // exists; under jsdom it surfaces as
-  // `ReferenceError: window is not defined` from React's own
-  // `dispatchSetState`, AFTER the environment has been torn down.
-  //
-  // That made the suite intermittently exit 1 with every test reporting
-  // PASSED, because an unhandled rejection is not a failed test and the
-  // summary line does not mention it. A flaky gate is worse than a red one:
-  // it teaches whoever sees it to run the command again rather than look.
-  const migrationLive = useRef(true);
-
-  const runMigration = () => {
-    migrationLive.current = true;
-    setMigration({ kind: 'pending' });
-    migrateIfNeeded()
-      .then((result) => {
-        if (!migrationLive.current) return;
-        if (result.status === 'failed') {
-          setMigration({
-            kind: 'failed',
-            error: result.error || 'The playbook migration failed for an unknown reason.',
-            phase: result.phase,
-          });
-        } else {
-          setMigration({
-            kind: 'ok',
-            migratedCount: result.status === 'migrated' ? result.count : null,
-          });
-        }
-      })
-      .catch((e) => {
-        if (!migrationLive.current) return;
-        setMigration({ kind: 'failed', error: e instanceof Error ? e.message : String(e) });
-      });
-  };
-
-  useEffect(() => {
-    runMigration();
-    return () => { migrationLive.current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Rendered INSTEAD OF the app for every status but `signed-in` — never
-  // behind a modal, and checked BEFORE the migration gate below, so a
-  // failed or absent sign-in never lets a screen hint at whether this
-  // browser has any existing playbooks. R-G1 still binds: this authenticates
+  // behind a modal, so a failed or absent sign-in never lets a screen hint
+  // at whether this browser has any existing playbooks. R-G1 still binds: this authenticates
   // a caller, it introduces no colleagues, and no other screen changes.
   if (authState.status !== 'signed-in') {
     return <SignInScreen state={authState} onSignIn={signIn} onRetry={retryAuth} />;
@@ -4553,7 +4450,7 @@ export default function App() {
   // Task 17 (§7): "a user in no mapped group has no access at all and is
   // told so plainly — not shown an empty app, which would be the 'empty is
   // not broken' rule failing at the front door." Checked here, beside the
-  // sign-in gate above and before the migration gate below, so nothing
+  // sign-in gate above, so nothing
   // AppShell mounts (matters list, playbook library, the header itself) can
   // hint at a working app behind this refusal.
   //
@@ -4581,16 +4478,5 @@ export default function App() {
     }
   }
 
-  if (migration.kind === 'pending') {
-    // Deliberately blank rather than a spinner: this resolves in a single
-    // IndexedDB round trip (typically sub-frame), and the fast, common
-    // `not-needed` case shouldn't flash a loading screen ahead of it.
-    return <div className="min-h-screen bg-paper" />;
-  }
-
-  if (migration.kind === 'failed') {
-    return <MigrationBlockedScreen error={migration.error} phase={migration.phase} onRetry={runMigration} />;
-  }
-
-  return <AppShell migratedCount={migration.migratedCount} signIn={signIn} />;
+  return <AppShell signIn={signIn} />;
 }

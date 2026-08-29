@@ -22,16 +22,6 @@ const getDocumentMock = vi.fn();
 const getDocumentBlobMock = vi.fn();
 const getReviewMock = vi.fn();
 const getProfileMock = vi.fn();
-const migrateIfNeededMock = vi.fn();
-
-// App's startup migration gate (Task 14) runs before any of the mocks
-// below are ever reached; mocking it keeps this file's mount sequence
-// deterministic instead of depending on a real (fake-indexeddb) round
-// trip. The migration's own three outcomes are covered separately in
-// App.migration.test.tsx.
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
@@ -279,7 +269,6 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([]);
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);

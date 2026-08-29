@@ -24,8 +24,30 @@ create table matter (
   created_at   timestamptz not null,
   updated_at   timestamptz not null,
   version      bigint not null default 1,
-  -- The tiebreak `_seq` used to provide. IndexedDB's getAll() promised no
-  -- order, so sub-project A persisted a counter; Postgres gives one free.
+  -- The tiebreak `_seq` used to provide, and the reasoning that came with
+  -- it (Stage 2 Task 23, where `src/lib/db/seq.ts` was deleted).
+  --
+  -- Several records sort primarily by a timestamp — `updated_at` here,
+  -- `started_at` on a review — but need a deterministic tiebreak when two
+  -- saves land in the same millisecond, which `Date.now()`'s resolution
+  -- makes ordinary rather than exotic. v1's localStorage array got that
+  -- ordering free from array position; **IndexedDB's `getAll()` makes no
+  -- such promise**, so sub-project A persisted an explicit `_seq` counter
+  -- and allocated it inside the same readwrite transaction as the record,
+  -- because a read-max-then-write-max pair split across transactions lets
+  -- two concurrent savers read the same maximum and collide.
+  --
+  -- `generated always as identity` is that guarantee, given by the database
+  -- rather than reconstructed above it: allocation is atomic with the
+  -- insert by construction, and no caller can forget the rule because there
+  -- is no longer a rule for a caller to keep.
+  --
+  -- `seq.ts` enforced it in the TYPE system, by pinning its parameter to a
+  -- single-store `'readwrite'` object-store handle so a `db`-level
+  -- convenience wrapper (which opens its own transaction) failed to
+  -- compile. That trick has no Postgres equivalent and needs none: what it
+  -- prevented cannot be expressed here.
+  --
   -- The wire type does not carry it, exactly as `stripSeq` did not.
   seq          bigint generated always as identity
 );

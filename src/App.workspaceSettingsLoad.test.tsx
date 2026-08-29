@@ -30,11 +30,7 @@ const listMattersMock = vi.fn();
 const listReviewsMock = vi.fn();
 const listDocumentsMock = vi.fn();
 const getProfileMock = vi.fn();
-const migrateIfNeededMock = vi.fn();
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
@@ -157,7 +153,6 @@ describe('App — a failed workspace-settings load is broken, not empty (Part 2A
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
     listMattersMock.mockReset().mockResolvedValue([MATTER]);
     listReviewsMock.mockReset().mockResolvedValue([]);

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   migratePlaybookRecord,
   migrateDraft,
@@ -7,26 +7,15 @@ import {
   snapshotPlaybookId,
   IMPORTED_SUMMARY,
 } from './playbookMigration';
-import { migrateIfNeeded } from './migrate';
 import { riskCriteriaBlock } from '../riskBlock';
-import { listPlaybooks, getPlaybook } from './playbooks';
-import { listVersions } from './playbookVersions';
-import { getDb, closeDb } from './open';
-import { STORES } from './schema';
 
-// Stage 2 Task 13 made the playbook repositories HTTP clients, while
-// `migrateIfNeeded`'s pre-D conversion still writes to IndexedDB — so the two
-// now read and write different stores. That gap is real and is Task 23's
-// (the migration story); nothing here closes it. These assertions read the
-// store the migration ACTUALLY writes, so they keep asserting what they
-// always asserted rather than failing for a reason that has nothing to do
-// with the migration. See `src/test/idbPlaybookReads.ts`.
-vi.mock('./playbooks',
-  async () => (await import('../../test/idbPlaybookReads')).idbPlaybookReadsModule());
-vi.mock('./playbookVersions',
-  async () => (await import('../../test/idbPlaybookReads')).idbVersionReadsModule());
-
-import type { UserProfile } from '../../types';
+/**
+ * Repair-on-read for playbooks, which from Task 23 is the UPLOADER's reader
+ * and no longer anybody's writer. `migratePlaybookRecord` is what turns a
+ * pre-D record — a v1 template with its clauses on the identity, or a
+ * playbook with no `currentVersionId` — into an identity plus a publishable
+ * v1, at the moment it moves to the server. Everything here is pure.
+ */
 
 /** Deliberately the PRE-D shape, `mode` and all — this is the record the
  *  conversion has to read, so it must not be updated to the new one. */
@@ -37,40 +26,6 @@ const preD = {
   clauses: [{ id: 'c1', title: 'Break', prompt: 'Find the break clause', riskCriteria: 'Must be unconditional' }],
   createdAt: 1000, updatedAt: 2000, schemaVersion: 2,
 };
-
-/** Puts a pre-D shaped record straight into the `playbooks` store. It must
- *  bypass `savePlaybook`, which would migrate the record on the way in and
- *  leave the test proving nothing about the startup conversion. */
-async function savePlaybookRaw(record: unknown): Promise<void> {
-  const db = await getDb();
-  await db.put(STORES.playbooks, record as never);
-}
-
-/** Sets sub-project A's `'migration:v1-templates'` flag, for the test that a
- *  user already migrated by A still runs D's conversion. `migrate.ts`'s own
- *  `writeFlag` is module-private and stays that way; this writes the same
- *  record shape directly rather than widening that module's surface for a
- *  test. */
-async function writeV1Flag(count: number): Promise<void> {
-  const db = await getDb();
-  await db.put(
-    STORES.profile,
-    { done: true, count, migratedAt: Date.now() } as unknown as UserProfile,
-    'migration:v1-templates',
-  );
-}
-
-beforeEach(async () => {
-  localStorage.clear();
-  closeDb();
-  indexedDB.deleteDatabase('lexprompt');
-  const db = await getDb();
-  await db.clear(STORES.playbooks);
-  await db.clear(STORES.playbookVersions);
-  await db.clear(STORES.profile);
-});
-
-afterEach(() => closeDb());
 
 describe('migratePlaybookRecord', () => {
   it('turns a pre-D playbook into an identity plus one published v1', () => {
@@ -361,104 +316,28 @@ describe('migrateDraft', () => {
   });
 });
 
-describe('the startup conversion (R-D7)', () => {
-  it('converts a pre-D playbook exactly once, even if the migration runs twice', async () => {
-    await savePlaybookRaw(preD);
-    await migrateIfNeeded();
-    await migrateIfNeeded();
-    expect((await listVersions('pb1')).map(v => v.version)).toEqual([1]);
-  });
-
-  it('two concurrent migrations still publish exactly one v1', async () => {
-    // Found in a browser, not here: React StrictMode double-invokes App's
-    // mount effect, so `migrateIfNeeded()` ran twice on the same tick. Both
-    // calls read no flag, both saw no `currentVersionId`, and one playbook
-    // came out holding v1 AND v2 with byte-identical content — the exact
-    // corruption R-D7 exists to prevent, reached through the startup path
-    // rather than a read path. The durable flag does not defend this; the
-    // per-playbook transaction does.
-    await savePlaybookRaw(preD);
-    await savePlaybookRaw({ ...preD, id: 'pb2', name: 'Second' });
-    await Promise.all([migrateIfNeeded(), migrateIfNeeded()]);
-    expect((await listVersions('pb1')).map(v => v.version)).toEqual([1]);
-    expect((await listVersions('pb2')).map(v => v.version)).toEqual([1]);
-  });
-
-  it('does not skip D\'s conversion for a user already migrated by sub-project A', async () => {
-    // Sub-project A's flag is set; D's is not. The playbook must still convert.
-    await writeV1Flag(0);
-    await savePlaybookRaw(preD);
-    await migrateIfNeeded();
-    expect((await getPlaybook('pb1'))!.currentVersionId).toBeTruthy();
-  });
-
-  it('two concurrent listPlaybooks calls publish nothing', async () => {
-    // The read path must not write at all — this is the race the lazy design
-    // would have lost.
-    await savePlaybookRaw(preD);
-    await Promise.all([listPlaybooks(), listPlaybooks()]);
-    expect(await listVersions('pb1')).toEqual([]);
-  });
-
-  it('carries the pre-D content into the published v1 verbatim', async () => {
-    await savePlaybookRaw(preD);
-    await migrateIfNeeded();
-    const [v1] = await listVersions('pb1');
-    expect(v1.name).toBe('Commercial Lease');
-    expect(v1.riskTolerance).toBe('We are risk-averse on uncapped liability.');
-    expect(v1.clauses[0].extractPrompt).toBe('Find the break clause');
-    expect(v1.changeSummary).toBe(IMPORTED_SUMMARY);
-  });
-
-  it('does not reorder the library — createdAt and updatedAt survive the conversion', async () => {
-    await savePlaybookRaw(preD);
-    await migrateIfNeeded();
-    const pb = (await getPlaybook('pb1'))!;
-    expect(pb.createdAt).toBe(1000);
-    expect(pb.updatedAt).toBe(2000);
-  });
-
-  it('adopts an orphaned version rather than publishing a duplicate v1', async () => {
-    // A conversion interrupted between `publishVersion` and the identity
-    // write back: the version exists, the pointer does not. Publishing again
-    // would leave v1 and v2 holding identical content.
-    const db = await getDb();
-    await savePlaybookRaw(preD);
-    await db.put(STORES.playbookVersions, {
-      id: 'orphan-v1', playbookId: 'pb1', version: 1, name: 'Commercial Lease',
-      contractType: 'Lease', systemPrompt: 'sys', formatPrompt: 'fmt', clauses: [],
-      changeSummary: IMPORTED_SUMMARY, publishedAt: 1, publishedByUserId: '', schemaVersion: 6,
-    });
-    await migrateIfNeeded();
-    expect((await listVersions('pb1')).map(v => v.version)).toEqual([1]);
-    expect((await getPlaybook('pb1'))!.currentVersionId).toBe('orphan-v1');
-  });
-
-  it('reports a conversion failure loudly, leaves no half-converted playbook, and resumes', async () => {
-    await savePlaybookRaw(preD);
-    const db = await getDb();
-    const realTx = db.transaction.bind(db);
-    const spy = vi.spyOn(db, 'transaction').mockImplementation(((stores: unknown, ...rest: unknown[]) => {
-      if (Array.isArray(stores) && stores.includes(STORES.playbookVersions)) {
-        throw new Error('conversion quota exceeded');
-      }
-      return (realTx as (...a: unknown[]) => unknown)(stores, ...rest);
-    }) as typeof db.transaction);
-    const result = await migrateIfNeeded();
-    expect(result.status).toBe('failed');
-    expect(result.error).toMatch(/quota/i);
-    // Step 2, not step 1 — the blocking screen reassures the user about a
-    // different store for each (Minor 5), so this has to be carried out.
-    expect(result.phase).toBe('versions');
-    // Atomic: the conversion is one transaction over both stores, so a
-    // failure leaves neither a published version nor a pointer to one.
-    expect(await listVersions('pb1')).toEqual([]);
-    expect((await getPlaybook('pb1'))!.currentVersionId).toBeUndefined();
-    spy.mockRestore();
-
-    // And no flag was written, so a later attempt still gets to convert.
-    await migrateIfNeeded();
-    expect((await getPlaybook('pb1'))!.currentVersionId).toBeTruthy();
-    expect((await listVersions('pb1')).map(v => v.version)).toEqual([1]);
-  });
-});
+/**
+ * The startup conversion's own tests are GONE, with the conversion (Task 23).
+ *
+ * Nine cases lived here — converted exactly once, two concurrent calls
+ * publish one v1, a user already migrated by sub-project A still converts,
+ * the read path publishes nothing, content and timestamps survive, an
+ * orphaned version is adopted, a failure is loud and resumable. Every one of
+ * them was about `migrateIfNeeded` writing into the IndexedDB `playbooks`
+ * and `playbookVersions` stores — stores the app stopped reading in Part 2A,
+ * and which `open.ts` now refuses to write to at all.
+ *
+ * What they were protecting has not been dropped, it has MOVED, and the
+ * tests moved with it:
+ *
+ *  - a pre-D playbook is converted by `migratePlaybookRecord` on its way to
+ *    the SERVER (`src/lib/upload/run.ts`), and the content it carries into
+ *    the published v1 is what the cases above this line still assert;
+ *  - "exactly one v1" is now `publishVersion`'s server-side allocation, and
+ *    `apps/api/test/playbooks.pg.test.ts` proves it against a real database
+ *    with a real row lock, which is stronger than an IndexedDB transaction
+ *    ever was;
+ *  - "the read path publishes nothing" is no longer a property anyone has to
+ *    test: `open.test.ts`'s read-only guard makes a write from the browser
+ *    impossible rather than merely absent.
+ */

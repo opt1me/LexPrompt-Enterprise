@@ -27,7 +27,6 @@ import { PRECEDENT_STORAGE_PRIVACY } from './lib/privacyCopy';
 // behind.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const migrateIfNeededMock = vi.fn();
 const listPlaybooksMock = vi.fn();
 const getPlaybookMock = vi.fn();
 const getPlaybookContentMock = vi.fn();
@@ -49,9 +48,6 @@ const createPrecedentSetMock = vi.fn();
 const uploadPrecedentMock = vi.fn();
 const deletePrecedentDocumentMock = vi.fn();
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
@@ -303,7 +299,6 @@ beforeEach(() => {
   getWorkspaceSettingsMock.mockReset().mockResolvedValue({
     modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1,
   });
-  migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
   listPlaybooksMock.mockReset().mockResolvedValue([]);
   getPlaybookMock.mockReset().mockResolvedValue(null);
   getPlaybookContentMock.mockReset().mockResolvedValue(null);

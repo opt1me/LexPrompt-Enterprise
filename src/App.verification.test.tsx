@@ -24,7 +24,6 @@ const getDocumentBlobMock = vi.fn();
 const getReviewMock = vi.fn();
 const saveReviewMock = vi.fn();
 const getProfileMock = vi.fn();
-const migrateIfNeededMock = vi.fn();
 
 // Captures the debounced saver's `scheduleSave` calls for the live-run test
 // below, mirroring App.reviewSaveError.test.tsx's capture of `onError`.
@@ -43,9 +42,6 @@ const createDebouncedReviewSaverMock = vi.fn((..._args: unknown[]) => {
   };
 });
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
@@ -278,7 +274,6 @@ describe('App — persisting a net position (Task 8)', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([]);
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);
@@ -459,7 +454,6 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([]);
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);
@@ -989,7 +983,6 @@ describe('App — reading and writing a collection review\'s findings (Task 8A)'
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([]);
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);

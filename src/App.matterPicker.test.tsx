@@ -16,12 +16,8 @@ const listDocumentsMock = vi.fn();
 const saveMatterMock = vi.fn();
 const newMatterMock = vi.fn();
 const getProfileMock = vi.fn();
-const migrateIfNeededMock = vi.fn();
 const listModelsMock = vi.fn();
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
@@ -176,7 +172,6 @@ describe('App — running a playbook from the Library goes through a matter pick
       modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1,
     });
     listModelsMock.mockReset().mockResolvedValue([TEST_ALLOWED_MODEL]);
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
     listMattersMock.mockReset().mockResolvedValue([makeMatter('m1', 'Acme v Bolt')]);
     listReviewsMock.mockReset().mockResolvedValue([]);

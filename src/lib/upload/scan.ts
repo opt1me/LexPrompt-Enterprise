@@ -66,9 +66,16 @@ export interface ScannedRecord {
   store: StoreName;
   id: string;
   label: string;
-  /** Something a person should know BEFORE pressing Upload — today, only
-   *  that a document's original file is not in this browser. */
+  /** Something a person should know BEFORE pressing Upload — that a
+   *  document's original file is not in this browser, or that a record was
+   *  found but could not be read. */
   warning?: string;
+  /** Set when the record was FOUND but could not be read, so there is
+   *  nothing to send. The uploader reports it as a named failure rather than
+   *  sending whatever it managed to parse — half a playbook uploaded as a
+   *  whole one is the confidently-wrong shape this app exists not to
+   *  produce. */
+  unreadable?: true;
   record: unknown;
 }
 
@@ -116,6 +123,64 @@ function dateLabel(at: unknown): string {
 
 function text(value: unknown, fallback: string): string {
   return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+/** The exact key v1 wrote its templates under (`src/lib/storage.ts`,
+ *  pre-redesign — see `git show 457b6fc:src/lib/storage.ts`). Read directly;
+ *  v1's module is gone, and from Task 23 so is the migration that used to
+ *  copy these into IndexedDB. */
+const V1_TEMPLATES_KEY = 'lexprompt.templates.v2';
+
+/**
+ * v1's `localStorage` templates, as scanned playbook records.
+ *
+ * A value that is present but unparseable, or that is not an array, does NOT
+ * silently read as "there are none": it becomes ONE record marked
+ * `unreadable`, so it appears on this screen by name, fails by name on the
+ * report, and makes the run incomplete. The old migration's answer to the
+ * same situation was to block the entire app, which was right when this was
+ * the only path to a playbook and is too much now that it is a backup of
+ * records almost certainly already in the object store.
+ */
+function readV1Templates(): ScannedRecord[] {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(V1_TEMPLATES_KEY);
+  } catch {
+    // A browser refusing localStorage entirely (private mode, a policy).
+    // Nothing to report: we cannot even tell whether there was a key.
+    return [];
+  }
+  if (raw === null) return [];
+
+  const broken = (why: string): ScannedRecord[] => ([{
+    store: 'playbooks',
+    id: V1_TEMPLATES_KEY,
+    label: 'Playbooks saved by an older version of LexPrompt',
+    warning: `These could not be read (${why}), so they cannot be moved. `
+      + 'They are still in this browser exactly as they were.',
+    unreadable: true,
+    record: null,
+  }]);
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (e) {
+    return broken(e instanceof Error ? e.message : String(e));
+  }
+  if (!Array.isArray(parsed)) return broken('what is stored there is not a list');
+
+  return parsed.map((entry, index) => {
+    const src = (entry ?? {}) as Record<string, unknown>;
+    const id = typeof src.id === 'string' && src.id ? src.id : `${V1_TEMPLATES_KEY}:${index}`;
+    return {
+      store: 'playbooks' as const,
+      id,
+      label: text(src.name, 'Untitled playbook'),
+      record: { ...src, id },
+    };
+  });
 }
 
 export async function scanLocalData(openDb: OpenDb = getDb): Promise<LocalDataScan> {
@@ -203,6 +268,29 @@ export async function scanLocalData(openDb: OpenDb = getDb): Promise<LocalDataSc
       playbookName.set(p.id, label);
       return { store: 'playbooks' as const, id: p.id, label, record: p };
     });
+    // …and the templates v1 left in `localStorage`, which are not in any
+    // object store at all.
+    //
+    // Sub-project A's startup migration used to copy these into the
+    // `playbooks` store, and deliberately never deleted the source — that
+    // backup is disclosed in the README. Task 23 deletes that migration,
+    // because from Part 2A it was writing into a store the app no longer
+    // read. So this is now the ONLY thing that will ever look at v1's key
+    // again, and skipping it would silently orphan the playbooks of anyone
+    // whose browser never ran a post-A build: they would open a signed-in
+    // app with an empty library and be told there was nothing here to move.
+    // That is the founding defect, reached by omission rather than by
+    // failure.
+    //
+    // An id already in the object store is SKIPPED, never uploaded twice —
+    // for almost everybody these are the same playbooks, copied by A's
+    // migration years ago and left behind here as the backup it promised.
+    for (const template of readV1Templates()) {
+      if (playbookName.has(template.id)) continue;
+      records.playbooks.push(template);
+      totals.playbooks = (totals.playbooks ?? 0) + 1;
+      playbookName.set(template.id, template.label);
+    }
   }
 
   const versions = await read(
@@ -312,5 +400,10 @@ export async function countLocalData(openDb: OpenDb = getDb): Promise<{
       unreadable.push(store);
     }
   }
+  // v1's localStorage templates count too. A browser holding ONLY those —
+  // one that never ran a post-sub-project-A build — has an empty IndexedDB
+  // and a library that has never been moved anywhere, and leaving them out
+  // here would drop the banner and orphan them in silence.
+  if (!unreadable.includes('playbooks')) total += readV1Templates().length;
   return { total, unreadable };
 }

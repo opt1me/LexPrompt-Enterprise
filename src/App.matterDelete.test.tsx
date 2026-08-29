@@ -24,7 +24,6 @@ const deleteMatterMock = vi.fn();
 const getDocumentBlobMock = vi.fn();
 const saveReviewMock = vi.fn();
 const getProfileMock = vi.fn();
-const migrateIfNeededMock = vi.fn();
 
 // The debounced saver instance App.tsx gets back from
 // `createDebouncedReviewSaver` — captured here (rather than re-created per
@@ -41,9 +40,6 @@ const createDebouncedReviewSaverMock = vi.fn((..._args: unknown[]) => {
   return currentSaver;
 });
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
@@ -231,7 +227,6 @@ describe('App — deleting a matter with a run in flight for it (Important 2)', 
     getWorkspaceSettingsMock.mockReset().mockResolvedValue({
       modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1,
     });
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([makeTemplate()]);
     listMattersMock.mockReset().mockResolvedValue([makeMatter()]);
     listReviewsMock.mockReset().mockResolvedValue([]);

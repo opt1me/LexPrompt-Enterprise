@@ -8,12 +8,8 @@ import { ModelError } from '@lexprompt/core';
 // the minimal-mocks precedent this file follows.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const migrateIfNeededMock = vi.fn();
 const getProfileMock = vi.fn();
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/db/playbooks')>()),
@@ -77,7 +73,6 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
-  migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
   getProfileMock.mockReset();
   container = document.createElement('div');
   document.body.appendChild(container);

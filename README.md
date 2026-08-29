@@ -106,7 +106,7 @@ There are three services, and none of them is a database.
 - **`api`** — validates the signed-in user's token on every request and forwards the validated call onward. It holds no credential of its own, and it is deliberately unable to reach the internet.
 - **`gateway`** — the only process permitted to call a model provider. It holds the provider credentials, enforces an allowlist of provider+model pairs, and writes one call record per request.
 
-**Your matters, documents, reviews and playbooks are still in your browser's IndexedDB.** Nothing about that changed in this release, and nothing on a server holds a copy. A real database (and with it, sharing a matter with a colleague) is a later stage. See [Privacy](#privacy) for exactly what is stored and where.
+**Your matters, documents, reviews and playbooks are stored by your firm's own service now, not by your browser.** They are rows in its Postgres database and files in its object storage, inside your firm's own cloud tenant. Anything you created before this release is still in this browser's IndexedDB and is *not* deleted by moving it — see [Moving your existing data](#moving-your-existing-data) and [Privacy](#privacy).
 
 There are still no user accounts *in LexPrompt* — it has no user table. It does require you to sign in, against an identity provider your firm already runs, and there is no way to run it without doing so.
 
@@ -151,14 +151,33 @@ Matters, reviews, and templates are addressable by URL: `/matters/:id` opens a m
 
 This matters if you're evaluating LexPrompt for real contract work, so it's stated plainly:
 
-- **Matters, documents, and reviews are stored in this browser's IndexedDB** — on the device and in the browser you're using, and nowhere else. This includes the original file bytes of every document you add to a matter, not just its extracted text, so a document can still be viewed and re-reviewed after a reload.
+- **Matters, documents, and reviews are stored by your firm's own LexPrompt service** — the records and their text in its database, the original file bytes in its object storage, both inside your firm's own cloud tenant. Colleagues with access to a matter can see it.
 - **Nothing is uploaded anywhere except to your firm's own LexPrompt gateway, which forwards it to the model provider your administrator configured.** Which provider that is, and where it processes your text, is shown on every model in Settings. LexPrompt adds no retention of its own on top of whatever terms your firm holds with that provider; see [Choosing a model provider](#choosing-a-model-provider) for where those terms are recorded.
 - **Deleting a matter deletes its documents and their stored bytes**, not just the matter's entry in a list. This cascade is real and covered by tests, not just a UI-level hide.
-- **Data is per-browser**, with no sync and no backup. Clearing this browser's site data (or switching browsers or devices) removes your matters, documents, reviews, and templates permanently. Export a template first (the Library's Export button) if you want to move it or keep an external copy — there is no equivalent export for matters or documents yet.
-- **Page images generated for scanned PDFs are never stored.** When a scanned page needs an image (because it has no usable text layer), it's rendered on demand from the document's stored original bytes and kept only in memory for that session — never written to IndexedDB.
-- Templates now live in IndexedDB alongside everything else above (an existing browser's `localStorage` templates are migrated in automatically, once, the first time you open this version). Migration deliberately never deletes that original `localStorage` copy — it's kept in place, indefinitely, as a safety net in case the new storage ever turns out not to be readable. So if you're upgrading from an earlier version, your original templates remain in `localStorage` in addition to their new copy in IndexedDB, alongside a couple of small settings. (An OpenRouter key stored by an earlier version is deleted from this browser the first time you open this one, and the app says so once — deleting a key is not revoking it, so revoke it at the provider too if you no longer need it.) All of it is still per-browser, and clearing this browser's site data removes every copy — the `localStorage` one included — along with everything else.
+- **Retention and backups are your firm's**, not this app's. LexPrompt adds no retention of its own and takes no backups of its own; your administrator decides how long everything is kept.
+- **Page images generated for scanned PDFs are never stored.** When a scanned page needs an image (because it has no usable text layer), it's rendered on demand from the document's stored original bytes and kept only in memory for that session.
+- **The copy already in this browser is left exactly where it is.** Everything an earlier version of LexPrompt wrote to this browser's IndexedDB — matters, documents and their bytes, collections, reviews with your verifications in them, playbooks, versions, changesets — is still there. The app no longer reads it, no longer writes to it (the database is opened read-only, and a write throws rather than being quietly lost), and does not delete it. A later release removes it, once the server copy has been confirmed good. (An OpenRouter key stored by an earlier version is deleted from this browser the first time you open this one, and the app says so once — deleting a key is not revoking it, so revoke it at the provider too if you no longer need it.)
 
-This is a deliberate reversal of an earlier, stricter position (contract text was never persisted at all). It was made because a matter that can't be returned to isn't a matter — but the reversal is bounded to your own browser, and it's stated here because you shouldn't have to find out otherwise.
+## Moving your existing data
+
+Everything an earlier version of LexPrompt kept in this browser is still in this browser. It is not on the server until you move it, and the app will not move it behind your back.
+
+A banner sits above every screen while there is anything here to move, and **Move it to the server** opens one screen (`/upload-local-data`) that:
+
+- reads the local database and lists, **by name**, every matter, document, collection, review, playbook, version and changeset in it, plus roughly how many bytes of original files that is;
+- says so when it could not read part of it — an unreadable store is reported as *unknown*, never as zero, because "there is nothing here" and "I could not tell" are different facts and only one of them means your data is gone;
+- warns you before you start about any document whose original file is no longer in this browser (a record can outlive its bytes), so nobody reads "3 documents moved" and assumes three files came with them;
+- uploads everything through the same write paths the app itself uses — no bulk-import endpoint, so nothing arrives that the app would have refused;
+- **reports by name what did not move, and why.** The heading only reads "Everything moved" when everything did; a single failure and it reads "Some of your data did not move", with the failures listed above the successes.
+
+Two things are true of it whatever happens:
+
+- **Nothing is deleted from this browser.** Not on success, not on failure. The local copy is your only copy until you have confirmed the server one, and this app does not delete what it cannot read.
+- **Running it twice is safe.** Every record already on the server is confirmed rather than duplicated, so an interrupted or partly-failed run is finished by pressing Upload again.
+
+After a complete run the banner changes rather than disappearing — *"Your data is on the server. A copy is still in this browser and will be removed in a later release."* — because a banner that vanishes is a person who never learns the copy is still there.
+
+Templates written by the very first version of LexPrompt, which lived in `localStorage` rather than IndexedDB, are read by this screen too. The startup migration that used to copy them into IndexedDB has been removed (from the release where every repository became an HTTP client, it was writing into a store the app no longer read), and its `localStorage` source was never deleted — so those templates are picked up here instead, and nothing is orphaned.
 
 ## How it's built
 
@@ -363,7 +382,7 @@ npm test          # runs the full suite once
 npm run test:watch  # watch mode
 ```
 
-The suite is unit and integration tests (Vitest) covering the IndexedDB storage layer (matters, documents, blobs, reviews, playbooks, and the cascade-delete and localStorage-to-IndexedDB migration paths, run against `fake-indexeddb`), the gateway client and the gateway's own provider adapters, PDF/DOCX parsing, citation matching, the review engine, and CSV/DOCX export. It does not include end-to-end browser tests or make real network calls: every provider is faked at the transport, and the stream fixtures the adapter conformance suite runs against are hand-authored from each provider's published wire format rather than captured from a live response. Each fixture says so in its own header, and nothing here has been run against a live provider.
+The suite is unit and integration tests (Vitest) covering the repositories and the API routes behind them (matters, documents, blobs, reviews, playbooks, and the cascade-delete path, the route suites run against a real Postgres), the local-data uploader (still run against `fake-indexeddb`, which stays for exactly as long as that screen does), the gateway client and the gateway's own provider adapters, PDF/DOCX parsing, citation matching, the review engine, and CSV/DOCX export. It does not include end-to-end browser tests or make real network calls: every provider is faked at the transport, and the stream fixtures the adapter conformance suite runs against are hand-authored from each provider's published wire format rather than captured from a live response. Each fixture says so in its own header, and nothing here has been run against a live provider.
 
 At the time of writing that is **1,742 tests across 130 files**, and two of them are guards rather than tests of behaviour: a palette scanner that fails the build if a raw colour is used anywhere instead of a semantic design token, and a contrast test that checks every colour pair in the design system against its assigned legibility floor — so a warning or a disclosure cannot quietly become too faint to read.
 

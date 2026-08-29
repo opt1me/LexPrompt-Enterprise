@@ -34,9 +34,10 @@ import type {
  * path the app reads back.
  *
  * **It never deletes the local copy.** §13.1, S13, and `CLAUDE.md`'s "never
- * delete what you cannot read". Nothing in this module opens a `'readwrite'`
- * transaction; the IndexedDB database is left byte-for-byte as it was, and
- * `run.test.ts` proves it by dumping the database before and after.
+ * delete what you cannot read". Nothing in this module opens a writable
+ * IndexedDB transaction — `getDb()` would refuse one — so the local database
+ * is left byte-for-byte as it was, and `run.test.ts` proves it by dumping the
+ * database before and after.
  *
  * ## The order, and where the brief was wrong
  *
@@ -181,6 +182,18 @@ export async function runUpload(
     write: () => Promise<void>,
     alreadyThere: () => Promise<boolean>,
   ): Promise<boolean> {
+    if (scanned.unreadable) {
+      // Found, but not readable. Sending whatever could be parsed out of it
+      // would put half a record on the server wearing the name of a whole
+      // one; the honest answer is a named failure that keeps the report
+      // incomplete, with the scan's own explanation as the reason.
+      record({
+        store: scanned.store, id: scanned.id, label: scanned.label,
+        status: 'failed',
+        reason: scanned.warning ?? 'This record could not be read, so there was nothing to send.',
+      });
+      return false;
+    }
     try {
       await write();
       record({ store: scanned.store, id: scanned.id, label: scanned.label, status: 'moved' });
@@ -313,6 +326,13 @@ export async function runUpload(
   }
 
   async function uploadPlaybook(scanned: ScannedRecord, versions: ScannedRecord[]): Promise<void> {
+    if (scanned.unreadable) {
+      // `send` refuses it and records the failure; nothing below may run,
+      // because `migratePlaybookRecord` would happily turn an unreadable
+      // record into an "Untitled playbook" with no clauses and upload that.
+      await send(scanned, () => Promise.resolve(), () => Promise.resolve(false));
+      return;
+    }
     const { playbook: identity, version: preD } =
       migratePlaybookRecord(prepared(forCreate(scanned.record as Playbook)));
 

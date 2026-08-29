@@ -18,17 +18,7 @@ const saveDraftMock = vi.fn();
 const discardDraftMock = vi.fn();
 const listMattersMock = vi.fn();
 const listReviewsMock = vi.fn();
-const migrateIfNeededMock = vi.fn();
 const listVersionsMock = vi.fn();
-
-// App's startup migration gate (Task 14) runs before any of the mocks below
-// are ever reached. Mocking it — rather than letting the real
-// `migrateIfNeeded` touch fake-indexeddb here too — keeps this file's mount
-// sequence deterministic and fast; the migration's own three outcomes get
-// dedicated coverage in App.migration.test.tsx.
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 // App.tsx talks to the playbook repository only through these named
 // exports; mocking the module lets the mount effect's very first await
@@ -120,11 +110,12 @@ saveDraftMock.mockImplementation(async (playbook: unknown) => playbook);
 discardDraftMock.mockResolvedValue(undefined);
 
 async function flush() {
-  // App now runs a startup migration gate ahead of everything else (Task
-  // 14) — one extra microtask layer (the mocked `migrateIfNeeded` settling,
-  // then AppShell mounting) sits in front of the turns this already
-  // accounted for: the mocked repository call's resolution/rejection, and
-  // the resulting setState.
+  // Three turns: the mocked repository call's resolution or rejection, the
+  // resulting setState, and the render it produces. The startup migration
+  // gate that used to sit in front of these is gone (Task 23), and the
+  // extra turn it cost is gone with it — the count is deliberately left as
+  // it is, since a flush that waits LONGER than it has to is harmless and
+  // shrinking it buys nothing.
   await act(async () => {
     await Promise.resolve();
     await Promise.resolve();
@@ -146,7 +137,6 @@ describe('App mount — matters list load failure', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([]);
     listMattersMock.mockReset();
     listReviewsMock.mockReset().mockResolvedValue([]);
@@ -262,7 +252,6 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset();
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);
@@ -359,7 +348,6 @@ describe('App — playbook editor route (Task 12)', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);
     listPlaybooksMock.mockReset().mockResolvedValue([playbook]);
@@ -578,7 +566,6 @@ describe('App — unsaved-changes guard on browser Back (Task 12 fix round 1)', 
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);
     listPlaybooksMock.mockReset().mockResolvedValue([playbook]);
@@ -965,7 +952,6 @@ describe('App — editing a draft and publishing a version (Task 9)', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listMattersMock.mockReset().mockResolvedValue([]);
     listReviewsMock.mockReset().mockResolvedValue([]);
     listPlaybooksMock.mockReset().mockResolvedValue([publishedV1]);
@@ -1136,7 +1122,6 @@ describe('App — position health in the playbook editor (Task 9A)', () => {
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     listPlaybooksMock.mockReset().mockResolvedValue([identity]);
     getPlaybookMock.mockReset().mockResolvedValue(identity);
     getPlaybookContentMock.mockImplementation(async () => v1);
@@ -1461,7 +1446,6 @@ describe('App — the standard positions tab does not answer before it has read 
 
   beforeEach(() => {
     localStorage.clear();
-    migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
     getPlaybookMock.mockReset();
     listVersionsMock.mockReset().mockResolvedValue([]);
     listMattersMock.mockReset().mockResolvedValue([]);

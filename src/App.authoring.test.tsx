@@ -10,7 +10,6 @@ import type { AuthoringDraft } from './lib/authoringDraft';
 // directly, exactly as App.test.tsx does.
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-const migrateIfNeededMock = vi.fn();
 const listPlaybooksMock = vi.fn();
 const getPlaybookMock = vi.fn();
 const getPlaybookContentMock = vi.fn();
@@ -22,9 +21,6 @@ const listReviewsMock = vi.fn();
 const generateDraftMock = vi.fn();
 const listModelsMock = vi.fn();
 
-vi.mock('./lib/db/migrate', () => ({
-  migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
-}));
 
 // The pure helpers come from the real module (re-implementing them here
 // would be a second copy of the thing under test); only the store-touching
@@ -233,7 +229,6 @@ beforeEach(() => {
   getWorkspaceSettingsMock.mockReset().mockResolvedValue({
     modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1,
   });
-  migrateIfNeededMock.mockReset().mockResolvedValue({ status: 'not-needed', count: 0 });
   listPlaybooksMock.mockReset().mockResolvedValue([]);
   getPlaybookMock.mockReset().mockResolvedValue(publishedPlaybook);
   getPlaybookContentMock.mockReset().mockResolvedValue(publishedVersion);

@@ -1,4 +1,26 @@
 import { vi } from 'vitest';
+// `fake-indexeddb` is SCOPED, not deleted — and this comment records when it
+// goes.
+//
+// Stage 2 §14 says it is "deleted along with the last IndexedDB test", and so
+// is the `node:buffer` Blob workaround that exists only because Blobs do not
+// round-trip through it. That moment is NOT this release. The browser-local
+// database is read-only from Task 23 but it is still READ, by exactly one
+// screen — the uploader (§13.1), which is available for one release and
+// which a later release removes "once the owner confirms the server copy is
+// good."
+//
+// So the last files that need this are `src/lib/upload/scan.test.ts`,
+// `src/lib/upload/run.test.ts`, `src/lib/db/open.test.ts` and the fixture
+// helper they share, `src/test/seedLocalData.ts`. The release that deletes
+// `src/features/upload` and `src/lib/upload` is the release that deletes
+// this import, the `fake-indexeddb` dependency in `package.json`, and the
+// `node:buffer` Blob note in CLAUDE.md's environment quirks.
+//
+// It is a global rather than a per-file import because `getDb()` is imported
+// transitively by a great deal of `src/` (through `loadError.ts`), and a
+// missing `indexedDB` global turns that into an import-time crash in files
+// that have nothing to do with storage.
 import 'fake-indexeddb/auto';
 
 // Task 19's sign-in gate wraps every screen App.tsx renders. Without this,
