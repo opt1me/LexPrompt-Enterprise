@@ -3939,11 +3939,25 @@ export default function App() {
   // load already had for the migration check alone.
   const { state: authState, signIn, retry: retryAuth } = useAuth();
   const [migration, setMigration] = useState<MigrationState>({ kind: 'pending' });
+  // `migrateIfNeeded()` is async and nothing can cancel it, so its result can
+  // arrive after this component is gone — a route change, or a test file
+  // finishing. Applying state then is a write to a component that no longer
+  // exists; under jsdom it surfaces as
+  // `ReferenceError: window is not defined` from React's own
+  // `dispatchSetState`, AFTER the environment has been torn down.
+  //
+  // That made the suite intermittently exit 1 with every test reporting
+  // PASSED, because an unhandled rejection is not a failed test and the
+  // summary line does not mention it. A flaky gate is worse than a red one:
+  // it teaches whoever sees it to run the command again rather than look.
+  const migrationLive = useRef(true);
 
   const runMigration = () => {
+    migrationLive.current = true;
     setMigration({ kind: 'pending' });
     migrateIfNeeded()
       .then((result) => {
+        if (!migrationLive.current) return;
         if (result.status === 'failed') {
           setMigration({
             kind: 'failed',
@@ -3958,12 +3972,14 @@ export default function App() {
         }
       })
       .catch((e) => {
+        if (!migrationLive.current) return;
         setMigration({ kind: 'failed', error: e instanceof Error ? e.message : String(e) });
       });
   };
 
   useEffect(() => {
     runMigration();
+    return () => { migrationLive.current = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
