@@ -3,6 +3,7 @@ import { ModelError } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
 import { fromReviewRow, toReviewRow, type Review, type ReviewRow } from '../db/rows.ts';
+import { refuseForeignDocuments } from './matterMembership.ts';
 
 /**
  * The `reviews` repository, server side — Task 9's seven properties, plus
@@ -149,8 +150,18 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
       // so a review cannot be walked into another matter and have its ids
       // re-read as native there.
       //
-      // Task 19 adds `and kind = 'matter'` here, with the test that proves a
-      // precedent cannot be a review target.
+      // `and kind = 'matter'` (Task 19, §11.1). A precedent document is
+      // somebody else's deal, and a review naming one would cite the wrong
+      // client's lease with this app's full authority. REFUSED by the API,
+      // not merely absent from a picker: a picker that omits it is a UI
+      // convention, and S23 is explicit that this distinction has to survive
+      // somebody writing a new query.
+      //
+      // The predicate is redundant TODAY — `matter_id` is nullable now, so
+      // joining on it already excludes precedents — and relying on that is
+      // exactly the convention S23 refuses. A predicate that is redundant
+      // today and load-bearing after the next schema change is the cheap
+      // half of the ruling.
       const held = await t.query<{ document_ids: unknown; target: unknown }>(
         'select document_ids, target from review where id = $1 and workspace_id = $2',
         [row.id, ws]);
@@ -159,15 +170,11 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
       if (ids.length > 0) {
         const found = await t.query<{ id: string }>(
           `select id from document
-           where workspace_id = $1 and matter_id = $2 and id = any($3::text[])`,
+           where workspace_id = $1 and matter_id = $2 and kind = 'matter' and id = any($3::text[])`,
           [ws, input.matterId, ids]);
         if (found.length !== ids.length) {
           const missing = ids.filter(docId => !found.some(r => r.id === docId));
-          throw new ModelError(
-            `This review names ${missing.length} document${missing.length === 1 ? '' : 's'} that `
-            + `${missing.length === 1 ? 'is' : 'are'} not in this matter: ${missing.join(', ')}. `
-            + 'A review can only cover documents in the matter it belongs to.',
-            'conflict', 400);
+          throw await refuseForeignDocuments(t, ws, missing, 'review');
         }
       }
 

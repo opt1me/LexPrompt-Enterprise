@@ -137,8 +137,14 @@ export function registerMatters(app: FastifyInstance, db: Db, blobs: BlobStore):
     // document pointing at bytes that no longer exist — visible, and worse
     // than the leak the other order risks (`documents.ts`'s write-order
     // note is the same argument in the same direction).
+    // `and kind = 'matter'` (Task 19, §11.1). Redundant today — a precedent
+    // has no `matter_id` — and kept because the cascade is the one query
+    // where the redundant predicate is also a statement of scope: deleting a
+    // matter must never reach a precedent set's documents, which belong to a
+    // playbook and outlive every matter.
     const keys = await db.query<{ blob_key: string }>(
-      'select blob_key from document where matter_id = $1 and workspace_id = $2', [id, ws]);
+      `select blob_key from document
+       where matter_id = $1 and workspace_id = $2 and kind = 'matter'`, [id, ws]);
     const rows = await db.query<{ id: string }>(
       'delete from matter where id = $1 and workspace_id = $2 returning id', [id, ws]);
     if (!rows[0]) throw new ModelError('There is no such matter.', 'not_found', 404);

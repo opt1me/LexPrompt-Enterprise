@@ -485,6 +485,8 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'DELETE /v1/matters/:id',
       'DELETE /v1/playbooks/:id',
       'DELETE /v1/playbooks/:id/draft',
+      'DELETE /v1/precedent-documents/:id',
+      'DELETE /v1/precedent-sets/:id',
       'DELETE /v1/reviews/:id',
       'GET /healthz',
       'GET /v1/admin/blob-orphans',
@@ -504,6 +506,10 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/playbooks/:id/changesets',
       'GET /v1/playbooks/:id/content',
       'GET /v1/playbooks/:id/versions',
+      'GET /v1/precedent-documents/:id',
+      'GET /v1/precedent-documents/:id/bytes',
+      'GET /v1/precedent-sets/:id',
+      'GET /v1/precedent-sets/:id/documents',
       'GET /v1/reviews/:id',
       'GET /v1/versions/:id',
       'GET /v1/workspace/settings',
@@ -515,6 +521,8 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'POST /v1/infer/stream',
       'POST /v1/playbooks/:id/versions',
       'POST /v1/playbooks/import',
+      'POST /v1/precedent-sets',
+      'POST /v1/precedent-sets/:id/documents',
       'PUT /v1/changesets/:id',
       'PUT /v1/collections/:id',
       'PUT /v1/matters/:id',
@@ -547,9 +555,10 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     }
     // The count is pinned so this cannot pass over an empty sweep. Grown by
     // every route task: 9 through Task 9, 17 with Task 11's six document
-    // routes and two admin ones. A DROP in this number without a route
-    // being removed is a route that stopped being registered.
-    expect(checked).toHaveLength(41);
+    // routes and two admin ones, 49 with Task 19's eight precedent routes. A
+    // DROP in this number without a route being removed is a route that
+    // stopped being registered.
+    expect(checked).toHaveLength(49);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

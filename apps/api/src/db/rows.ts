@@ -93,6 +93,60 @@ export interface DocumentRecord {
   documentDate?: number;
 }
 
+/**
+ * A precedent document on the wire (§11.1) — a document that belongs to a
+ * `PrecedentSet` rather than to a matter.
+ *
+ * **Not a `DocumentRecord` with a nullable `matterId`, and `storedAs` is not
+ * `kind`.** Two separate reasons, and both are the same reason twice:
+ *
+ *  - `DocumentRecord.kind` is already taken, by the FILE type
+ *    (`'pdf' | 'docx' | 'txt'`), which the `document` table calls
+ *    `doc_type`. The `kind` COLUMN this task adds is `'matter' |
+ *    'precedent'`. Two different facts with one word is what
+ *    `002_records.sql`'s own comment refused to allow in the schema, and
+ *    letting them meet on the wire type would undo that — the Task 19 brief
+ *    writes `expect(doc.kind).toBe('precedent')`, which cannot be satisfied
+ *    against the shipped `DocumentRecord`, and the shipped source wins. So
+ *    the wire name for the column is `storedAs`.
+ *  - A precedent has no `matterId` AT ALL — the key is absent, never
+ *    `undefined` — because "this belongs to no matter" and "I forgot to say
+ *    which matter" must not arrive in one shape (`absentUnless`'s rule, and
+ *    `structuredClone` preserves an `undefined`-valued key).
+ *
+ * `storedAs` is a constant `'precedent'` on this type rather than a union it
+ * shares with `DocumentRecord`, so a matter document cannot be assigned to
+ * it and a `PrecedentDocumentRecord` cannot be handed to anything expecting
+ * a matter document without the compiler saying so.
+ */
+export interface PrecedentDocumentRecord {
+  id: string;
+  precedentSetId: string;
+  name: string;
+  /** The FILE type, exactly as `DocumentRecord.kind` is. */
+  kind: 'pdf' | 'docx' | 'txt';
+  text: string;
+  parseError?: string;
+  markupNotice?: string;
+  byteSize: number;
+  addedAt: number;
+  addedByUserId: string;
+  /** The `document.kind` column. Always `'precedent'` on this type. */
+  storedAs: 'precedent';
+}
+
+/** The batch brought in for one "learn from redlines" session (§6.5). */
+export interface PrecedentSet {
+  id: string;
+  name: string;
+  /** Absent until a playbook adopts from it. */
+  playbookId?: string;
+  createdAt: number;
+  createdByUserId: string;
+  /** The optimistic-concurrency token, exactly as `Matter.version`. */
+  version?: number;
+}
+
 export interface Collection {
   id: string;
   matterId: string;
@@ -308,7 +362,16 @@ export interface DocumentRowExtra {
 export interface DocumentRow {
   id: string;
   workspace_id: string;
-  matter_id: string;
+  /** §11.1: `'matter'` or `'precedent'`, NOT NULL and with no default (the
+   *  migration drops the one it needed to backfill with). Optional on this
+   *  interface only so a fixture written before migration 003 still
+   *  typechecks; every statement in `routes/` names the column. */
+  kind?: 'matter' | 'precedent';
+  /** NULLABLE since migration 003 — a precedent document belongs to no
+   *  matter. `document_kind_shape` is what now enforces that a MATTER
+   *  document has one. */
+  matter_id: string | null;
+  precedent_set_id?: string | null;
   name: string;
   doc_type: 'pdf' | 'docx' | 'txt';
   text: string;
@@ -330,7 +393,12 @@ export function toDocumentRow(x: DocumentRecord, workspaceId: string, extra: Doc
   return {
     id: x.id,
     workspace_id: workspaceId,
+    // Named EXPLICITLY, never left to a column default: migration 003 drops
+    // the default precisely so a write that forgets this fails loudly rather
+    // than silently producing a matter document.
+    kind: 'matter',
     matter_id: x.matterId,
+    precedent_set_id: null,
     name: x.name,
     doc_type: x.kind,
     text: x.text,
@@ -352,7 +420,25 @@ export function toDocumentRow(x: DocumentRecord, workspaceId: string, extra: Doc
   };
 }
 
+/**
+ * A MATTER document's row on the wire.
+ *
+ * Refuses a precedent row outright rather than mapping one (§11.1 / S23).
+ * `DocumentRecord.matterId` is a required `string`, so a precedent row —
+ * whose `matter_id` is NULL — would come back through here as a document
+ * claiming to belong to a matter called `null`: a precedent wearing a matter
+ * document's shape, which is the exact failure the `kind` column exists to
+ * prevent, arriving one layer below every route predicate. A query that
+ * forgets `and kind = 'matter'` fails LOUDLY here instead of showing a
+ * lawyer another client's lease in their own matter.
+ */
 export function fromDocumentRow(row: DocumentRow): DocumentRecord {
+  if (row.kind === 'precedent' || row.matter_id === null) {
+    throw new Error(
+      `Document ${row.id} is a precedent document and cannot be read as a matter document. `
+      + 'A matter-context query is missing its `and kind = \'matter\'` predicate.',
+    );
+  }
   return {
     id: row.id,
     matterId: row.matter_id,
@@ -367,6 +453,105 @@ export function fromDocumentRow(row: DocumentRow): DocumentRecord {
     role: row.role,
     ...absentUnless('collectionId', row.collection_id),
     ...absentUnless('documentDate', row.document_date === null ? null : epochOf(row.document_date)),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// precedent (§11.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * The same `document` table, read as a precedent.
+ *
+ * `role`, `collection_id` and `document_date` are written as the values a
+ * precedent can only have — `'standalone'`, NULL, NULL — and are NOT read
+ * back onto the wire type. A precedent is never in a collection (that is
+ * half of what S23 forbids), so surfacing a `collectionId` on it would give
+ * a caller a field to key on that must always be empty.
+ */
+export function toPrecedentDocumentRow(
+  x: PrecedentDocumentRecord, workspaceId: string, extra: DocumentRowExtra,
+): DocumentRow {
+  return {
+    id: x.id,
+    workspace_id: workspaceId,
+    kind: 'precedent',
+    matter_id: null,
+    precedent_set_id: x.precedentSetId,
+    name: x.name,
+    doc_type: x.kind,
+    text: x.text,
+    parse_state: x.parseError ? 'failed' : 'parsed',
+    parse_error: x.parseError ?? null,
+    markup_notice: x.markupNotice ?? null,
+    byte_size: x.byteSize,
+    mime: extra.mime,
+    blob_key: extra.blobKey,
+    content_sha256: extra.contentSha256 ?? null,
+    role: 'standalone',
+    collection_id: null,
+    document_date: null,
+    added_at: dateOf(x.addedAt),
+    added_by_user_id: useridToColumn(x.addedByUserId),
+  };
+}
+
+/** The mirror of `fromDocumentRow`'s guard, in the other direction: a MATTER
+ *  row read through the precedent route would put a client's live deal on
+ *  the playbook side of the app. */
+export function fromPrecedentDocumentRow(row: DocumentRow): PrecedentDocumentRecord {
+  if (row.kind !== 'precedent' || !row.precedent_set_id) {
+    throw new Error(
+      `Document ${row.id} is not a precedent document and cannot be read as one. `
+      + 'A precedent-context query is missing its `and kind = \'precedent\'` predicate.',
+    );
+  }
+  return {
+    id: row.id,
+    precedentSetId: row.precedent_set_id,
+    name: row.name,
+    kind: row.doc_type,
+    text: row.text,
+    ...absentUnless('parseError', row.parse_error),
+    ...absentUnless('markupNotice', row.markup_notice),
+    byteSize: row.byte_size,
+    addedAt: epochOf(row.added_at),
+    addedByUserId: useridFromColumn(row.added_by_user_id),
+    storedAs: 'precedent',
+  };
+}
+
+export interface PrecedentSetRow {
+  id: string;
+  workspace_id: string;
+  name: string;
+  playbook_id: string | null;
+  created_at: Date;
+  created_by_user_id: string | null;
+  /** `bigint`, handed back as a STRING — see `bigintOf`. Never set by
+   *  `toPrecedentSetRow`: the database owns a row's version. */
+  version?: string | number | null;
+}
+
+export function toPrecedentSetRow(x: PrecedentSet, workspaceId: string): PrecedentSetRow {
+  return {
+    id: x.id,
+    workspace_id: workspaceId,
+    name: x.name,
+    playbook_id: x.playbookId ?? null,
+    created_at: dateOf(x.createdAt),
+    created_by_user_id: useridToColumn(x.createdByUserId),
+  };
+}
+
+export function fromPrecedentSetRow(row: PrecedentSetRow): PrecedentSet {
+  return {
+    id: row.id,
+    name: row.name,
+    ...absentUnless('playbookId', row.playbook_id),
+    createdAt: epochOf(row.created_at),
+    createdByUserId: useridFromColumn(row.created_by_user_id),
+    ...absentUnless('version', bigintOf(row.version)),
   };
 }
 

@@ -69,7 +69,7 @@ const withStack = (blobWrap: string, body: string): { code: number; out: string 
   'const MATTER = "cascade-" + Date.now().toString(36);',
   'const keyOf = id => blobKeyFor(WS, id);',
   'const seedDoc = async id => {',
-  '  await db.query("insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state, byte_size, mime, blob_key, role, added_at) values ($1, $2, $3, $4, \'pdf\', \'x\', \'parsed\', 4, \'application/pdf\', $5, \'standalone\', now())",',
+  '  await db.query("insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state, byte_size, mime, blob_key, role, added_at) values ($1, $2, \'matter\', $3, $4, \'pdf\', \'x\', \'parsed\', 4, \'application/pdf\', $5, \'standalone\', now())",',
   '    [id, WS, MATTER, id + ".pdf", keyOf(id)]);',
   '  await store.put(keyOf(id), Buffer.from([0x25, 0x50, 0x44, 0x46]), "application/pdf");',
   '};',

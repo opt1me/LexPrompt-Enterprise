@@ -34,6 +34,7 @@ import { ROOT, walk, rel, codeOf } from './sourceScan.ts';
  */
 const SCOPED_TABLES = [
   'matter', 'document', 'collection', 'playbook', 'playbook_version', 'review', 'changeset',
+  'precedent_set',
 ];
 
 /** `from x` / `into x` / `update x` / `join x`, where x is a scoped table.
@@ -178,5 +179,59 @@ describe('every SQL statement in a route module names workspace_id', () => {
     // filter and must not satisfy the check.
     expect(/workspace_id/.test(predicateRegion(
       'delete from document where id = $1 returning workspace_id'))).toBe(false);
+  });
+});
+
+/**
+ * Every statement reading `document` in a MATTER context also names `kind`.
+ *
+ * §19 names this as the thing to watch when precedent documents arrive:
+ * *"a query that forgets the kind predicate … fails by showing TOO MUCH
+ * rather than too little, and nothing on screen would look wrong."* What it
+ * shows is another client's papers inside a matter, which is the same shape
+ * as the `workspace_id` guard above one step less serious.
+ *
+ * Scoped to statements that already name `matter_id`, deliberately. The
+ * queries that must NOT carry a `kind` predicate are real and there are two
+ * of them: `orphanKeys` (a precedent's bytes are claimed too, and filtering
+ * them out would offer every precedent blob up for deletion) and the
+ * id-collision checks on the upload path (`document.id` is a global primary
+ * key, so an id held by a precedent is taken for a matter document as well).
+ * Neither names `matter_id`, and neither should — so the predicate this
+ * scanner requires is exactly the one a matter context needs.
+ */
+describe('every statement reading `document` in a matter context also names kind', () => {
+  it('has no matter-context document statement without a kind predicate', () => {
+    const offenders: string[] = [];
+    for (const file of walk(ROUTES_DIR)) {
+      for (const statement of statementsIn(codeOf(file))) {
+        if (!/\bfrom document\b|\bjoin document\b|\bupdate document\b|\binto document\b/i.test(statement)) continue;
+        if (!/matter_id/.test(statement)) continue;
+        if (!/\bkind\b/.test(statement)) offenders.push(`${rel(file)}: ${statement.slice(0, 90)}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it('finds matter-context document statements at all (or the check above is decoration)', () => {
+    // A guard whose filter matches nothing passes vacuously — the failure
+    // mode the `workspace_id` scanner's own sanity check exists for, and
+    // this one narrows on two conditions rather than one, so it has twice
+    // as many ways to match nothing.
+    const matched = walk(ROUTES_DIR)
+      .flatMap(f => statementsIn(codeOf(f)))
+      .filter(s => /\bfrom document\b|\bjoin document\b|\bupdate document\b|\binto document\b/i.test(s))
+      .filter(s => /matter_id/.test(s));
+    expect(matched.length).toBeGreaterThan(3);
+    expect(statementsIn(codeOf(path.join(ROUTES_DIR, 'documents.ts'))).length).toBeGreaterThan(3);
+  });
+
+  it('recognises a statement missing the predicate, and one carrying it', () => {
+    // The mutation, spelled out: the same query with and without the clause.
+    const guarded = "select * from document where matter_id = $1 and workspace_id = $2 and kind = 'matter'";
+    const unguarded = 'select * from document where matter_id = $1 and workspace_id = $2';
+    const names = (s: string) => /\bfrom document\b/i.test(s) && /matter_id/.test(s) && /\bkind\b/.test(s);
+    expect(names(guarded)).toBe(true);
+    expect(names(unguarded)).toBe(false);
   });
 });

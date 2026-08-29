@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, click } from '../../test/mount';
 import { IntakeWizard } from './IntakeWizard';
 import type { Matter, Playbook } from '../../types';
+import { STORAGE_PRIVACY } from '../../lib/privacyCopy';
 
 const matter: Matter = { id: 'm1', name: 'Ackroyd v Bell', ownerId: 'me', createdAt: 1, updatedAt: 1 };
 
@@ -26,8 +27,16 @@ describe('IntakeWizard — the tracker and step 1', () => {
   });
 
   it('carries the storage disclosure in its footer, in the shipped words', () => {
+    // The SHIPPED words, read from the one module they live in rather than
+    // transcribed here: this assertion used to quote "this browser's
+    // IndexedDB — on this device, in this browser, and nowhere else", which
+    // Stage 2 made false (the records are in the firm's own service now).
+    // Quoting `privacyCopy.ts` means the next rewrite of the disclosure
+    // cannot leave a test asserting a sentence the app no longer says.
     const c = mount(<IntakeWizard matter={matter} {...wiring} />);
-    expect(c.textContent).toContain("this browser's IndexedDB — on this device, in this browser, and nowhere else");
+    expect(c.textContent).toContain(STORAGE_PRIVACY[0]);
+    expect(STORAGE_PRIVACY[0]).toContain("your firm's own LexPrompt service");
+    expect(c.textContent).not.toContain('IndexedDB');
   });
 
   it('names the model and offers a way to change it', () => {

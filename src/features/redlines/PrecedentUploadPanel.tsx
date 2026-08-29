@@ -12,10 +12,20 @@ import React, { useRef } from 'react';
  * carries no OOXML markup to read at all, so it can only ever be brought in
  * for the diff fallback (spec §3a, §8), never read for tracked changes.
  *
- * Nothing selected here is ever written anywhere: the caller reads each
- * `File` into memory (never `addDocument`/blob storage) and it is gone the
- * moment the tab closes (spec §4, §11 — "precedent documents are read and
- * never stored").
+ * What the caller does with each `File` CHANGED in Stage 2 (spec §11.1).
+ * This docstring used to say nothing selected here is ever written anywhere;
+ * that was true of sub-project F and is false now. `handleAddRedlinesFiles`
+ * uploads each file to a precedent set on the firm's own service AND parses
+ * it in the browser for tracked changes — the parse stays here because
+ * `docxRedlines.ts` reads the OOXML directly from the raw bytes, which are
+ * already in hand. The live `File` still lives only in
+ * `redlinesFilesRef` for the session; what outlives the tab now is the
+ * stored precedent document, not the session.
+ *
+ * The on-screen sentence below is UNCHANGED, and deliberately so: it is
+ * about what is READ and says nothing about storage, so §11.1 leaves it
+ * exactly where it is. The storage promise is said once, by
+ * `PrecedentIntake`'s header, through `PRECEDENT_STORAGE_PRIVACY`.
  */
 export interface PrecedentUploadPanelProps {
   onFilesSelected: (files: File[]) => void;
@@ -39,15 +49,14 @@ export function PrecedentUploadPanel({ onFilesSelected, busy = false }: Preceden
       <div className="border border-dashed border-rule rounded-card p-4 flex flex-wrap items-center justify-between gap-3 bg-card">
         <div>
           {/* No heading and no storage promise here. `PrecedentIntake`, which
-              renders directly below this panel, already states both — and it
-              stated the promise in DIFFERENT words ("Not stored with the
-              playbook" against this panel's "never stored"). Two wordings of
-              the same guarantee is how a promise quietly weakens: a reader
-              cannot tell whether the difference is careless or deliberate,
-              and the narrower phrasing reads as leaving room for storage
-              somewhere else. The guarantee is that a precedent document is
-              never persisted anywhere, so it is said once, in the strong
-              form, by the screen that owns the header. */}
+              renders directly below this panel, already states both — and
+              once stated the promise in DIFFERENT words from this panel's.
+              Two wordings of the same guarantee is how a promise quietly
+              weakens: a reader cannot tell whether the difference is careless
+              or deliberate. The guarantee has CHANGED since (§11.1 stores
+              these documents), and the thing that has not changed is that it
+              is said exactly once, in the strong form, by the screen that
+              owns the header. The sentence below is about what is READ. */}
           <p className="font-ui text-meta text-ink-3">
             Marked-up .docx files are read for tracked changes; anything else, including PDFs, can be
             compared against another version instead.

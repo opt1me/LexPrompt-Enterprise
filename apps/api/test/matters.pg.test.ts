@@ -274,9 +274,9 @@ describe('matter routes over a real Postgres', () => {
       const h = harness(t, owner);
       await h.put('/v1/matters/m5', { id: 'm5', name: 'Doomed', ownerId: owner, createdAt: 1, updatedAt: 1 });
       await t.query(
-        `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
+        `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state,
                                byte_size, mime, blob_key, role, added_at)
-         values ('d5', $1, 'm5', 'Lease.pdf', 'pdf', 'x', 'parsed', 10, 'application/pdf',
+         values ('d5', $1, 'matter', 'm5', 'Lease.pdf', 'pdf', 'x', 'parsed', 10, 'application/pdf',
                  $2, 'standalone', now())`, [WS, `workspace/${WS}/document/d5`]);
       await t.query(
         `insert into collection (id, workspace_id, matter_id, name, base_document_id, created_at)

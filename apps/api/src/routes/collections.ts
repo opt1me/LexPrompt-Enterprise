@@ -5,6 +5,7 @@ import { ConflictError } from '../errors.ts';
 import {
   fromCollectionRow, toCollectionRow, type Collection, type CollectionRow,
 } from '../db/rows.ts';
+import { refuseForeignDocuments } from './matterMembership.ts';
 
 /**
  * The `collections` repository, server side — Task 9's seven properties
@@ -117,18 +118,21 @@ export function registerCollections(app: FastifyInstance, db: Db): void {
       }
       const introduced = [...new Set(named)].filter(docId => !already.has(docId));
       if (introduced.length > 0) {
+        // `and kind = 'matter'` (Task 19, §11.1). A precedent document can
+        // never be a collection member — base or varies — and the refusal
+        // NAMES it as a precedent rather than answering a generic "not in
+        // this matter" that would send someone hunting for a file they can
+        // see on the playbook side of the app. Redundant today, since
+        // `matter_id` is nullable and a precedent's is NULL; kept because
+        // relying on that is the convention S23 refuses.
         const found = await db.query<{ id: string }>(
           `select id from document
-           where workspace_id = $1 and matter_id = $2 and id = any($3::text[])`,
+           where workspace_id = $1 and matter_id = $2 and kind = 'matter'
+             and id = any($3::text[])`,
           [ws, input.matterId, introduced]);
         if (found.length !== introduced.length) {
           const missing = introduced.filter(docId => !found.some(r => r.id === docId));
-          throw new ModelError(
-            `This collection names ${missing.length} document${missing.length === 1 ? '' : 's'} `
-            + `that ${missing.length === 1 ? 'is' : 'are'} not in this matter: `
-            + `${missing.join(', ')}. A collection can only group documents in the matter it `
-            + 'belongs to.',
-            'conflict', 400);
+          throw await refuseForeignDocuments(db, ws, missing, 'collection');
         }
       }
     }

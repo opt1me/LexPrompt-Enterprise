@@ -68,9 +68,9 @@ describe('002_records', () => {
       const owner = await aUser(t);
       await t.query(`insert into matter (id, workspace_id, name, owner_id, created_at, updated_at)
                      values ('m3', $1, 'M', $2, now(), now())`, [WS, owner]);
-      await t.query(`insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
+      await t.query(`insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state,
                        byte_size, mime, blob_key, role, added_at, added_by_user_id)
-                     values ('d3', $1, 'm3', 'D', 'pdf', 't', 'parsed', 1, 'application/pdf',
+                     values ('d3', $1, 'matter', 'm3', 'D', 'pdf', 't', 'parsed', 1, 'application/pdf',
                        'workspace/x/document/d3', 'standalone', now(), $2)`, [WS, owner]);
       await t.query(`insert into collection (id, workspace_id, matter_id, name, base_document_id,
                        varies_document_ids, created_at, created_by_user_id)
@@ -110,12 +110,53 @@ describe('002_records', () => {
   // persisted document always belongs to a matter — so the column must
   // refuse to be created without one, exactly as it would refuse a matter
   // that does not exist.
-  it('refuses a document with no matter_id', async () => {
+  //
+  // WHAT REFUSES IT CHANGED IN MIGRATION 003, and the assertion moved with
+  // it. §11.1 made `matter_id` nullable, because a precedent document
+  // belongs to no matter — so the NOT NULL that used to do this job is gone
+  // and `document_kind_shape` does it instead, in both directions. That is
+  // strictly stronger: the old constraint could not tell a MATTER document
+  // with no matter from a precedent, and "a document with no matter" is
+  // exactly the third state §11.1 refuses to let exist. `precedent.pg.test.ts`
+  // carries the other three faces of the same constraint.
+  it('refuses a matter document with no matter_id', async () => {
     await withPg(async t => {
+      await expect(t.query(
+        `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state,
+           byte_size, mime, blob_key, role, added_at)
+         values ('d-no-matter', $1, 'matter', null, 'D', 'pdf', 't', 'parsed', 1, 'application/pdf',
+           'k', 'standalone', now())`, [WS],
+      )).rejects.toThrow(/check constraint/i);
+    });
+  });
+
+  // The half the NOT NULL never covered: a row naming NEITHER a matter nor a
+  // precedent set. Left to a nullable column alone this would insert
+  // cleanly and belong to nothing — visible in no matter's list and in no
+  // precedent set's, and filtered out by neither predicate.
+  it('refuses a document belonging to neither a matter nor a precedent set', async () => {
+    await withPg(async t => {
+      await expect(t.query(
+        `insert into document (id, workspace_id, kind, matter_id, precedent_set_id, name, doc_type,
+           text, parse_state, byte_size, mime, blob_key, role, added_at)
+         values ('d-orphan', $1, 'precedent', null, null, 'D', 'pdf', 't', 'parsed', 1,
+           'application/pdf', 'k', 'standalone', now())`, [WS],
+      )).rejects.toThrow(/check constraint/i);
+    });
+  });
+
+  // The default the migration drops. A column default is how a future
+  // INSERT that forgets `kind` silently becomes a MATTER document — which
+  // is precisely the failure the column exists to prevent — so an insert
+  // that does not name it must fail rather than pick a side.
+  it('refuses a document that does not name its kind at all', async () => {
+    await withPg(async t => {
+      await t.query(`insert into matter (id, workspace_id, name, created_at, updated_at)
+                     values ('m-kindless', $1, 'M', now(), now())`, [WS]);
       await expect(t.query(
         `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
            byte_size, mime, blob_key, role, added_at)
-         values ('d-no-matter', $1, null, 'D', 'pdf', 't', 'parsed', 1, 'application/pdf',
+         values ('d-kindless', $1, 'm-kindless', 'D', 'pdf', 't', 'parsed', 1, 'application/pdf',
            'k', 'standalone', now())`, [WS],
       )).rejects.toThrow(/not-null constraint/i);
     });

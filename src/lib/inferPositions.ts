@@ -263,18 +263,22 @@ export async function inferPositions(
   const byId = new Map<string, EditEntry>();
   edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
-  // No `documentIds`, deliberately.
+  // No `documentIds`, and the REASON changed in Stage 2 even though the
+  // behaviour did not.
   //
-  // The precedent documents this call reads are, by design, NEVER PERSISTED
-  // — not IndexedDB, not localStorage, not the URL (CLAUDE.md). Their ids
-  // are session-only `uid()`s with no referent anywhere, and the audit
-  // record `INFERENCE_PRIVACY` promises the user says it names "which
-  // document or review it was for". Sending an opaque string that nothing
-  // can resolve makes that record claim to answer a question it cannot: a
-  // field that reads as an answer and is not one, which is the shape of
-  // defect this app exists not to produce. No privacy leak — the ids are
-  // opaque — but an empty context is the truthful one here, and `purpose:
-  // 'redlines.infer'` already says what the call was for.
+  // It used to be that these ids had no referent at all: a precedent
+  // document was read for one session and never persisted, so its `uid()`
+  // resolved to nothing, and sending one would make the audit record
+  // `INFERENCE_PRIVACY` promises — "which document or review it was for" —
+  // claim to answer a question it could not. Spec §11.1 supersedes that:
+  // a precedent IS stored now, under this same id, and the id resolves.
+  //
+  // So sending them is no longer a false claim, and it is DEFERRED rather
+  // than impossible — what the browser sends to the gateway's audit log is a
+  // privacy surface with its own Stage 1 tests, and widening it belongs to a
+  // change that is about that surface rather than to the one that made the
+  // storage true. `purpose: 'redlines.infer'` still says what the call was
+  // for. Do not let this comment ossify into "the ids do not resolve".
   const raw = await gatewayModelClient.chatJson<RawInferResponse>({
     modelChoiceId: settings.modelChoiceId,
     purpose: 'redlines.infer',

@@ -7,6 +7,7 @@ import type { InferredPosition } from './lib/inferPositions';
 import type { ParsedEdit } from './lib/docxRedlines';
 import { type as typeInto } from './test/mount';
 import { TEST_ALLOWED_MODEL } from './test/allowedModel';
+import { PRECEDENT_STORAGE_PRIVACY } from './lib/privacyCopy';
 
 // No @testing-library/react in this project — a real react-dom root, driven
 // directly, exactly as App.authoring.test.tsx does for sub-project E's own
@@ -44,6 +45,9 @@ const saveChangesetMock = vi.fn();
 const publishChangesetMock = vi.fn();
 const addDocumentMock = vi.fn();
 const getDocumentBlobMock = vi.fn();
+const createPrecedentSetMock = vi.fn();
+const uploadPrecedentMock = vi.fn();
+const deletePrecedentDocumentMock = vi.fn();
 
 vi.mock('./lib/db/migrate', () => ({
   migrateIfNeeded: (...args: unknown[]) => migrateIfNeededMock(...args),
@@ -99,13 +103,26 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
   },
 }));
 
-// The only route by which a precedent document's bytes could ever reach
-// durable storage — spied on, not implemented, so a write shows up as a
-// call rather than quietly succeeding (same reasoning as
-// App.authoring.test.tsx's `savePlaybookMock`/`publishVersionMock`).
+// THE MATTER INGEST PATH. A precedent must never go through it (S23): that
+// would put another client's marked-up lease in a matter's document list,
+// openable as though it were the deal under review. Spied on, not
+// implemented, so a write shows up as a call rather than quietly succeeding.
 vi.mock('./lib/db/documents', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/db/documents')>()),
   addDocument: (...args: unknown[]) => addDocumentMock(...args),
+}));
+
+// THE PRECEDENT PATH (spec §11.1), which is where these documents DO go.
+// Both halves are spied: the first proves nothing reached the matter store,
+// the second proves something actually reached the precedent store — and
+// only the pair rules out the two opposite failures (a precedent filed as a
+// matter document, and a screen promising storage that never happens).
+vi.mock('./lib/db/precedents', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/db/precedents')>()),
+  createPrecedentSet: (...args: unknown[]) => createPrecedentSetMock(...args),
+  uploadPrecedent: (...args: unknown[]) => uploadPrecedentMock(...args),
+  deletePrecedentDocument: (...args: unknown[]) => deletePrecedentDocumentMock(...args),
+  deletePrecedentSet: vi.fn(),
 }));
 
 vi.mock('./lib/db/blobs', async (importOriginal) => ({
@@ -337,6 +354,15 @@ beforeEach(() => {
   publishChangesetMock.mockReset();
   addDocumentMock.mockReset();
   getDocumentBlobMock.mockReset().mockResolvedValue(null);
+  createPrecedentSetMock.mockReset().mockImplementation(async (set: { id: string; name: string }) => ({
+    ...set, id: 'set-1',
+  }));
+  // Answers with the record it was handed, so an assertion about what was
+  // stored reads the real argument rather than a fixture that would agree
+  // whatever the app passed.
+  uploadPrecedentMock.mockReset().mockImplementation(
+    async (_setId: string, rec: unknown) => rec);
+  deletePrecedentDocumentMock.mockReset().mockResolvedValue(undefined);
 
   container = document.createElement('div');
   document.body.appendChild(container);
@@ -355,21 +381,26 @@ afterEach(() => {
 // yet". These tests exercise that path, not the pieces behind it (each of
 // which has its own suite already).
 describe('the intake screen says each thing once (found by driving the real app)', () => {
-  it('renders one heading and states the storage promise once, in the strong form', async () => {
+  it('renders one heading and states the STORAGE promise once, in the strong form', async () => {
     // `PrecedentUploadPanel` and `PrecedentIntake` are siblings on this
-    // route, and both used to render "Bring in what you negotiated" plus
-    // their own wording of the storage promise — "never stored" against
-    // "Not stored with the playbook". Two headings looked like a bug; two
-    // wordings were the real problem, because the narrower one reads as
-    // leaving room for storage somewhere else, and a privacy promise must
-    // never drift in the direction of understating itself.
+    // route, and two wordings of one promise was a real defect that had to
+    // be fixed once already. The promise has CHANGED — precedents are
+    // stored now (spec §11.1) — and it is still said exactly once, in the
+    // same place, in the strong form. What the panel says is unchanged: it
+    // is about what is READ.
     await openRedlinesIntake();
     const text = container.textContent ?? '';
     const occurrences = (needle: string) => text.split(needle).length - 1;
 
     expect(occurrences('Bring in what you negotiated')).toBe(1);
-    expect(occurrences('Never stored')).toBe(1);
+    expect(occurrences(PRECEDENT_STORAGE_PRIVACY)).toBe(1);
+    // The old promise is GONE from the screen, and this assertion is paired
+    // with the positive one above so it cannot pass by the screen being
+    // empty.
+    expect(text).not.toContain('Never stored');
     expect(text).not.toContain('Not stored with the playbook');
+    // The panel's own sentence is untouched and still there.
+    expect(text).toContain('Marked-up .docx files are read for tracked changes');
   });
 });
 
@@ -584,28 +615,93 @@ describe('the open-questions block says why it is empty, rather than claiming a 
   });
 });
 
-// Spec §4/§11: "precedent documents are read once and are not stored with
-// the playbook". Mutation-tested by hand while building Task 10A (calling
-// `addDocument` from inside `handleAddRedlinesFiles` made this test fail,
-// as expected, before being reverted) — see the Task 10A report for the
-// specific mutation.
-describe('a precedent document is read and never stored (spec §4, §11)', () => {
-  it('never calls addDocument/getDocumentBlob and writes nothing new to localStorage across the whole flow', async () => {
+// REWRITTEN, NOT DELETED, in the same change as the storage — §11.1
+// requirement 4 states that explicitly: *"A promise test that is deleted
+// rather than replaced is how the next person learns there was never a
+// promise."* This block used to be titled "a precedent document is read and
+// never stored (spec §4, §11)" and asserted that nothing reached durable
+// storage at all. The server design's §11.1 supersedes that; what is left of
+// the old promise is asserted below, and the new one is asserted alongside
+// it.
+describe('a precedent document is stored, and is never a matter document (spec §11.1)', () => {
+  it('uploads to the precedent set and NOT through addDocument', async () => {
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    await reachTheDraftReview();
+    // `addDocument` is the MATTER ingest path. A precedent going through it
+    // would be a precedent in a matter's document list — S23's whole point,
+    // and the one thing about the old promise that has not changed at all.
+    expect(addDocumentMock).not.toHaveBeenCalled();
+    expect(getDocumentBlobMock).not.toHaveBeenCalled();
+    // …and the positive half, which the old test could not have: something
+    // WAS stored, in a precedent set, as a precedent.
+    expect(createPrecedentSetMock).toHaveBeenCalledTimes(1);
+    expect(uploadPrecedentMock).toHaveBeenCalledTimes(1);
+    const [setId, record] = uploadPrecedentMock.mock.calls[0] as [string, Record<string, unknown>];
+    expect(setId).toBe('set-1');
+    expect(record.storedAs).toBe('precedent');
+    expect(record.precedentSetId).toBe('set-1');
+    // No `matterId`, ever — absent rather than empty, because "belongs to no
+    // matter" and "I forgot which matter" must not arrive in one shape.
+    expect('matterId' in record).toBe(false);
+    // The stored document's id IS the id the session keys its edits by —
+    // read off what `inferPositions` was actually handed, so this is the
+    // real link rather than a restatement. That identity is what lets a
+    // position's basis still resolve to a real document next year (§11.1,
+    // `position_basis`).
+    const entries = inferPositionsMock.mock.calls[0][0] as { documentId: string }[];
+    expect(entries[0].documentId).toBe(record.id);
+  });
+
+  it('still writes nothing about a precedent to localStorage or the URL', async () => {
+    // What DID survive from the old promise. Server-side storage is the
+    // change; a document's text in `localStorage` was never the plan and
+    // still is not.
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     await reachTheDraftReview();
     click(buttonNamed(/^keep$/i));
     click(buttonNamed(/save as v1/i));
     await flush();
 
-    expect(addDocumentMock).not.toHaveBeenCalled();
-    expect(getDocumentBlobMock).not.toHaveBeenCalled();
+    for (const key of Object.keys(localStorage)) {
+      expect(localStorage.getItem(key)).not.toMatch(/Brookvale|TEXT OF/);
+    }
+    expect(window.location.href).not.toMatch(/Brookvale/);
+  });
 
-    // Nothing at all — no key holding a document's name or extracted text
-    // under any name. Task 18: the model choice this test configures comes
-    // from the mocked `getWorkspaceSettings()` now, so there is no settings
-    // blob in `localStorage` to exempt any more.
-    const keys = Object.keys(localStorage);
-    expect(keys).toEqual([]);
+  it('refuses a file the server would not store, rather than listing it as though it were', async () => {
+    // The screen promises these documents are kept. A file sitting in the
+    // list that the server never took would make that sentence false for it,
+    // quietly, with the person who chose it none the wiser — the exact shape
+    // this app's one rule is about. Loud and recoverable instead.
+    uploadPrecedentMock.mockRejectedValueOnce(new Error('storage is unreachable'));
+    await openRedlinesIntake();
+    selectFile(new File(['x'], 'Brookvale - our markup.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }));
+    await flush();
+
+    expect(container.textContent).toMatch(/could not be stored/i);
+    expect(container.textContent).toMatch(/storage is unreachable/i);
+    expect(container.textContent).not.toContain('Brookvale - our markup.docx —');
+    // Continue is not offered over a document that is not there.
+    expect(container.textContent).toMatch(/no documents brought in yet/i);
+  });
+
+  it('removing a document from the session removes its stored copy too', async () => {
+    // Otherwise "stored with the playbook you build from them" is false in
+    // the quiet direction for the one document the person went out of their
+    // way to reject.
+    await openRedlinesIntake();
+    selectFile(new File(['x'], 'Brookvale - our markup.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }));
+    await flush();
+    const stored = uploadPrecedentMock.mock.calls[0][1] as { id: string };
+
+    click(buttonNamed(/^remove$/i));
+    await flush();
+
+    expect(deletePrecedentDocumentMock).toHaveBeenCalledWith(stored.id);
   });
 });
 
@@ -628,7 +724,14 @@ describe('warns before navigating away from a live learning session (R-F6)', () 
     click(buttonNamed(/^playbooks$/i));
     await flush();
 
-    expect(confirmSpy).toHaveBeenCalledWith(expect.stringMatching(/leaving loses the documents/i));
+    // The message CHANGED in the same commit as the storage (spec §11.1). It
+    // used to say leaving "loses the documents you brought in" — which
+    // asserted, in a modal read at the moment of deciding, that the
+    // documents were not stored. What is lost is the SESSION.
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/leaving loses the positions found in these documents/i));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/documents themselves stay in your firm's LexPrompt/i));
     // Cancelled: the session is still here, not silently dropped.
     expect(container.textContent).toMatch(/bring in what you negotiated/i);
     expect(container.textContent).toContain('Brookvale - our markup.docx');

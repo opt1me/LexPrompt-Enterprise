@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { Button } from '../../components/Button';
 import type { PrecedentDocument, PrecedentRole } from '../../lib/chains';
+import { PRECEDENT_STORAGE_PRIVACY } from '../../lib/privacyCopy';
 
 /**
  * Precedent intake — spec §7. Chain cards and standalone cards, a role chip
@@ -26,6 +27,27 @@ import type { PrecedentDocument, PrecedentRole } from '../../lib/chains';
  * for the confirmed shape at a glance (R-F4) — this is the one place in
  * these five files where getting a colour wrong would reproduce this
  * sub-project's founding failure.
+ *
+ * ## The sentence in this header
+ *
+ * It used to say the documents brought in here were read once and kept
+ * nowhere. That was TRUE when it was written, and the server design's §11.1
+ * made it false: precedent documents are stored, in the firm's own tenant,
+ * as `kind = 'precedent'` documents belonging to a precedent set. The
+ * storage and this sentence shipped in the SAME COMMIT, which §11.1 states
+ * as an acceptance condition — *"there is no release in which the storage
+ * exists and the sentence does"* — because shipping the storage while the
+ * old wording was still on screen would be this project's founding defect in
+ * its purest form: something incorrect presented as correct, to a lawyer, at
+ * the moment they are deciding whether to hand over a client's document.
+ *
+ * The replacement is as strong in its new direction as the old one was in
+ * its: it says what happens, where, and what it is kept apart from. It lives
+ * in `privacyCopy.ts` (R-G5, §11.1 requirement 2) rather than inline, and it
+ * is still said exactly ONCE, here, by the screen that owns the header — two
+ * wordings of one promise is a defect this route has already had to fix.
+ * `PrecedentUploadPanel`'s own sentence is about what is READ and says
+ * nothing about storage, so it is untouched.
  */
 
 export interface UnreadableDocument {
@@ -138,13 +160,9 @@ export function PrecedentIntake({
           )}
         </p>
         <p className="font-ui text-meta text-ink-2 mt-1">
-          {/* "Never stored", not "not stored with the playbook". The
-              guarantee this flow makes and its tests enforce is that a
-              precedent document is never persisted ANYWHERE — not in
-              IndexedDB, not in localStorage, not in the URL. The narrower
-              phrasing understates that, and understating a privacy promise
-              is the one direction it must never drift. */}
-          Read once to learn from. Never stored.
+          {/* The storage promise. See "The sentence in this header" at the
+              top of this file for what it replaced and why. */}
+          {PRECEDENT_STORAGE_PRIVACY}
         </p>
       </header>
 

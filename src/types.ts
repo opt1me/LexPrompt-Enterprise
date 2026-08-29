@@ -308,9 +308,17 @@ export const SCHEMA_VERSION = 7;
  *  document it came from and how it was found. Spec §5 (sub-project F). This
  *  is the PERSISTED counterpart of `docxRedlines.ts`'s in-session
  *  `ParsedEdit`: a `ChangesetItem`'s `basis` is a durable copy of the edits
- *  that produced it, taken at build time, so a changeset can still show its
- *  evidence after the source documents (which are read, never stored — spec
- *  §4.1) are gone.
+ *  that produced it, taken at build time.
+ *
+ *  WHY THE COPY IS STILL TAKEN, now that the reason has changed. It was
+ *  taken because the source documents were read and never stored (F's spec
+ *  §4.1), so the copy was the only surviving witness. The server design's
+ *  §11.1 supersedes that: precedent documents ARE stored now, in the firm's
+ *  own tenant, as `kind = 'precedent'` documents belonging to a precedent
+ *  set. So the copy becomes a CORROBORATION rather than the only witness —
+ *  §11.1's own word — and it still has to exist, because a precedent set can
+ *  be disposed of under a retention schedule while the playbook it taught
+ *  lives on for years.
  *
  *  `kind` reuses `docxRedlines.ts`'s `RedlineEditKind` rather than
  *  re-declaring the same four-way union a second time (spec §5 itself lists
@@ -327,6 +335,54 @@ export interface RedlineEdit {
   source: 'tracked' | 'diff';
   author?: string;
   at?: number;
+}
+
+/**
+ * A batch of precedent documents brought in for one "learn from redlines"
+ * session, stored server-side (server spec §6.5, §11.1).
+ *
+ * Sub-project F held these in the browser for one session and stored
+ * nothing. §11.1 supersedes that: a house position adopted from a redline is
+ * only *evidenced* for as long as the evidence exists, and session-only
+ * storage made that claim true for about ninety seconds.
+ *
+ * `playbookId` is absent until a playbook is actually saved from the set.
+ */
+export interface PrecedentSet {
+  id: string;
+  name: string;
+  playbookId?: string;
+  createdAt: number;
+  createdByUserId: string;
+  /** The optimistic-concurrency token — see `Matter.version`. */
+  version?: number;
+}
+
+/**
+ * A stored precedent document.
+ *
+ * **Not a `DocumentRecord`, and `storedAs` is not `kind`.** `kind` here is
+ * the FILE type, exactly as it is on `DocumentRecord`; the server column
+ * that says matter-or-precedent is surfaced as `storedAs`, because two
+ * different facts wearing one word is a defect nobody could see (the
+ * `document` table refused the same conflation in its own schema). There is
+ * no `matterId` at all — absent, never `undefined` — because a precedent
+ * belongs to no matter, and S23 is that this distinction must survive
+ * somebody writing a new query.
+ */
+export interface PrecedentDocumentRecord {
+  id: string;
+  precedentSetId: string;
+  name: string;
+  /** The FILE type. */
+  kind: 'pdf' | 'docx' | 'txt';
+  text: string;
+  parseError?: string;
+  markupNotice?: string;
+  byteSize: number;
+  addedAt: number;
+  addedByUserId: string;
+  storedAs: 'precedent';
 }
 
 /** How a changeset item's proposal relates to the playbook's live version:

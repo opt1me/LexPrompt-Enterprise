@@ -53,9 +53,9 @@ async function aVersion(t: Tx, id = 'v1', playbookId = 'p1', ws = WS): Promise<v
 
 async function aDocument(t: Tx, id: string, matterId = 'm1', ws = WS): Promise<void> {
   await t.query(
-    `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
+    `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state,
                            byte_size, mime, blob_key, role, added_at)
-     values ($1, $2, $3, $4, 'pdf', 'x', 'parsed', 4, 'application/pdf', $5, 'standalone', now())`,
+     values ($1, $2, 'matter', $3, $4, 'pdf', 'x', 'parsed', 4, 'application/pdf', $5, 'standalone', now())`,
     [id, ws, matterId, `${id}.pdf`, `workspace/${ws}/document/${id}`]);
 }
 

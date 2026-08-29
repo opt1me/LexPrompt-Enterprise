@@ -239,9 +239,9 @@ describe('uploading a document', () => {
       await aMatter(t);
       await aMatter(t, 'theirs', OTHER_WS);
       await t.query(
-        `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
+        `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state,
                                byte_size, mime, blob_key, role, added_at)
-         values ('d1', $1, 'theirs', 'theirs.pdf', 'pdf', 'x', 'parsed', 4, 'application/pdf',
+         values ('d1', $1, 'matter', 'theirs', 'theirs.pdf', 'pdf', 'x', 'parsed', 4, 'application/pdf',
                  $2, 'standalone', now())`, [OTHER_WS, blobKeyFor(OTHER_WS, 'd1')]);
 
       const h = harness(t, await aUser(t));
@@ -380,9 +380,9 @@ describe('reading a document and its bytes', () => {
       await t.query("insert into workspace (id, name) values ($1, 'Other')", [OTHER_WS]);
       await aMatter(t, 'theirs', OTHER_WS);
       await t.query(
-        `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
+        `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state,
                                byte_size, mime, blob_key, role, added_at)
-         values ('foreign', $1, 'theirs', 'Theirs.pdf', 'pdf', 'secret', 'parsed', 6,
+         values ('foreign', $1, 'matter', 'theirs', 'Theirs.pdf', 'pdf', 'secret', 'parsed', 6,
                  'application/pdf', $2, 'standalone', now())`,
         [OTHER_WS, blobKeyFor(OTHER_WS, 'foreign')]);
       const blobs = memoryBlobStore();

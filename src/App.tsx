@@ -19,6 +19,12 @@ import {
   listMatters, getMatter, saveMatter, newMatter, deleteMatter,
 } from './lib/db/matters';
 import { listDocuments, getDocument, addDocument, deleteDocument, setDocumentRole } from './lib/db/documents';
+// The precedent path (§11.1) — deliberately NOT `addDocument`, which is the
+// matter ingest path: a precedent going through it would be another client's
+// deal in a matter's document list (S23).
+import {
+  createPrecedentSet, deletePrecedentDocument, newPrecedentSet, uploadPrecedent,
+} from './lib/db/precedents';
 import { getDocumentBlob } from './lib/db/blobs';
 import {
   listReviews, getReview, saveReview, createDebouncedReviewSaver, type DebouncedReviewSaver,
@@ -143,9 +149,21 @@ const TEMPLATE_DIRTY_MESSAGE = 'This template has unsaved changes. Discard them?
 const AUTHORING_DRAFT_DIRTY_MESSAGE =
   'This drafted playbook has not been saved. It exists only in this tab, ' +
   'so leaving loses every clause you have reviewed. Leave anyway?';
+// REWRITTEN IN THE SAME COMMIT AS THE STORAGE (spec §11.1). This used to say
+// leaving "loses the documents you brought in and the positions found in
+// them" — which asserted, in a modal a person reads at the moment of
+// deciding, that the documents were not stored. §18 item 3 says no screen
+// may say that, and the search for such a screen is what found this one: the
+// task brief's own grep (for "never stored" / "read once") would have missed
+// it entirely, because the false claim is made in different words.
+//
+// What is still true and still worth a confirm: the SESSION is session-only
+// (R-E1/R-F6) — the roles confirmed, the positions found, the adopt/reject
+// decisions, and the draft they lead to all die with the tab.
 const REDLINES_DIRTY_MESSAGE =
   'This learning session has not been turned into a playbook. It exists only in this tab, ' +
-  'so leaving loses the documents you brought in and the positions found in them. Leave anyway?';
+  'so leaving loses the positions found in these documents and the decisions you have made ' +
+  "about them. The documents themselves stay in your firm's LexPrompt. Leave anyway?";
 
 /** Why "What we learned" shows no open questions on THIS entry point, and
  *  why that is not the same as having found none.
@@ -720,18 +738,30 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
 
   // --- Sub-project F: learning from redlines (Task 10A wiring) -----------
   //
-  // Everything here is session-only, full stop, per R-F6 (mirrors E's
-  // `AuthoringDraft`, which this session hands off to): a precedent document's
-  // `File` and its parsed edits live only in `redlinesFilesRef` below and
-  // die with the tab, never reaching `addDocument`/blob storage — spec §4 /
-  // §11's "read once, never stored" promise. `redlinesDocs` is the thin,
+  // The SESSION here is session-only, per R-F6 (mirrors E's
+  // `AuthoringDraft`, which this session hands off to). **The DOCUMENTS are
+  // not, and that changed in Stage 2** — this comment used to say a
+  // precedent document's `File` and edits "die with the tab, never reaching
+  // blob storage — spec §4/§11's 'read once, never stored' promise", and
+  // the server design's §11.1 supersedes that: `handleAddRedlinesFiles`
+  // uploads every file to a precedent set on the firm's own service, and
+  // the intake screen says so. A stale comment is how a true statement gets
+  // restored by a well-meaning refactor, which is why this paragraph is here
+  // rather than deleted.
+  //
+  // What is still session-only: the parsed edits, the live `File`, the roles
+  // and chains a person confirms, the positions inferred from them, and the
+  // `AuthoringDraft` they become. `redlinesDocs` is the thin,
   // serialisable-looking half of that state (`PrecedentDocument[]` — no
   // `File`, no edit text) that actually drives `PrecedentIntake`'s render;
-  // `redlinesFilesRef` is the other half, keyed by the same `id`.
+  // `redlinesFilesRef` is the other half, keyed by the same `id` — which is
+  // ALSO the stored precedent document's id, so a position's basis still
+  // resolves to a real document a year later (§11.1, `position_basis`).
   const [redlinesDocs, setRedlinesDocs] = useState<PrecedentDocument[]>([]);
   const [redlinesUnreadable, setRedlinesUnreadable] = useState<UnreadableDocument[]>([]);
-  /** One entry per document brought in: its live `File` (read, never
-   *  persisted), the text `pdfRedlineDiff` needs for the diff fallback, the
+  /** One entry per document brought in: its live `File` (held for the
+   *  session; its BYTES are also uploaded, see above), the text
+   *  `pdfRedlineDiff` needs for the diff fallback, the
    *  edits actually read from it (tracked-change or diff-derived), and which
    *  of the two `source` they are. A `useRef`, not `useState`: a `File` is
    *  exactly the kind of per-session-only value `AuthoringDraft`'s own
@@ -757,6 +787,13 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
    *  actually required, not here — intake itself must not trap someone who
    *  has not decided on a name yet. */
   const [redlinesContractType, setRedlinesContractType] = useState('');
+  /** The `PrecedentSet` this session's documents are stored in (§11.1),
+   *  created lazily on the first batch of files and NOT cleared when the
+   *  session ends: the set outlives the tab, exactly as its documents do,
+   *  and deleting it is a retention decision rather than a side effect of
+   *  navigating away. A `useRef` because `handleAddRedlinesFiles` reads it
+   *  synchronously within one call and nothing renders it. */
+  const redlinesSetIdRef = useRef<string | undefined>(undefined);
   // No playbook, no version and no changeset state here on purpose. This
   // session mints NOTHING: `handleRedlinesToDraftReview` converts the
   // adopted positions into E's `AuthoringDraft` and hands over, and the
@@ -1449,6 +1486,11 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
   useEffect(() => {
     if (isRedlinesView(view)) return;
     redlinesFilesRef.current = new Map();
+    // The SET id is cleared too, so a second session starts a second set —
+    // but the set itself is NOT deleted. §11.1 stores these documents on
+    // purpose; disposing of them is the firm's retention decision (§17 Q3),
+    // not something a nav click does silently.
+    redlinesSetIdRef.current = undefined;
     setRedlinesDocs([]);
     setRedlinesUnreadable([]);
     setRedlinesBusy(false);
@@ -3184,14 +3226,28 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
   };
 
   /**
-   * Reads a freshly-picked batch of files into memory ONLY — no
-   * `addDocument`, no blob write, nothing that reaches IndexedDB or
-   * `localStorage` (spec §4/§11's storage promise; mutation-tested in
-   * `App.redlines.test.tsx`). `parseFile` (`lib/documents.ts`) already never
-   * persists anything on its own, which is what makes it safe to reuse here
-   * for the pdf-diff fallback's text — it is called for every file, not
-   * only PDFs, so a `.docx` whose OOXML tracked changes cannot be read still
-   * has SOME text available if the user offers the diff fallback for it.
+   * Reads a freshly-picked batch of files AND stores them in this session's
+   * precedent set (spec §11.1).
+   *
+   * **Never through `addDocument`.** That is the MATTER ingest path, and a
+   * precedent going through it would be another client's marked-up lease
+   * sitting in a matter's document list — the failure S23 exists to prevent.
+   * `uploadPrecedent` is the other path: same multipart shape, same
+   * server-side ingest, a `kind = 'precedent'` row with no matter and a
+   * check constraint that makes the other shape unwritable.
+   *
+   * The parse stays HERE. `docxRedlines.ts` reads the `.docx`'s OOXML
+   * directly (never through `mammoth`, which silently discards `<w:ins>` and
+   * `<w:del>`), it needs the raw bytes, and they are already in hand.
+   * `parseFile` (`lib/documents.ts`) is called for every file, not only
+   * PDFs, so a `.docx` whose tracked changes cannot be read still has SOME
+   * text available if the user offers the diff fallback for it.
+   *
+   * **A file whose upload fails does not join the session.** The screen says
+   * these documents are stored; a document sitting in the list that is not
+   * stored would make that sentence false for it, quietly, with the person
+   * who chose it none the wiser. So the failures are named and the files are
+   * refused — loud and recoverable rather than quietly wrong.
    *
    * A `.docx` is additionally read for tracked changes via
    * `parseDocxRedlines`. That function distinguishes "no markup" from
@@ -3238,15 +3294,60 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
         return { id, file, name: file.name, text, edits, hasMarkup, markupError };
       }));
 
-      const readable = parsed.filter(p => !p.markupError);
-      const unreadable = parsed.filter(p => p.markupError);
+      // ---- Stored, before anything reaches the screen. ----
+      //
+      // The set is created lazily, on the first batch, so opening the screen
+      // and leaving mints nothing. Its id is the SESSION's id for each
+      // document (`p.id`), because `InferredPosition.basis` is keyed by that
+      // id and `position_basis` has to resolve it a year later.
+      const setId = redlinesSetIdRef.current ?? await (async () => {
+        const created = await createPrecedentSet(newPrecedentSet(
+          redlinesContractType.trim() || `Precedents brought in with ${files[0].name}`));
+        redlinesSetIdRef.current = created.id;
+        return created.id;
+      })();
+      const stored = await Promise.all(parsed.map(async (p) => {
+        try {
+          await uploadPrecedent(setId, {
+            id: p.id,
+            precedentSetId: setId,
+            name: p.name,
+            kind: /\.pdf$/i.test(p.name) ? 'pdf' : /\.docx$/i.test(p.name) ? 'docx' : 'txt',
+            text: p.text,
+            byteSize: p.file.size,
+            addedAt: Date.now(),
+            // Read and DISCARDED by the route, which attributes the upload to
+            // the authenticated actor.
+            addedByUserId: '',
+            storedAs: 'precedent',
+          }, p.file);
+          return { p, error: undefined as string | undefined };
+        } catch (e) {
+          return { p, error: e instanceof Error ? e.message : 'it could not be stored.' };
+        }
+      }));
+      const rejected = stored.filter(s => s.error);
+      if (rejected.length > 0) {
+        setRedlinesError(
+          `${rejected.map(s => s.p.name).join(', ')} could not be stored, so ${
+            rejected.length === 1 ? 'it has' : 'they have'} not been brought in: ${
+            rejected[0].error}`);
+      }
+      const kept = new Set(stored.filter(s => !s.error).map(s => s.p.id));
+      const parsedAndStored = parsed.filter(p => kept.has(p.id));
+
+      const readable = parsedAndStored.filter(p => !p.markupError);
+      const unreadable = parsedAndStored.filter(p => p.markupError);
 
       const proposed = proposeChains(readable.map((p) => {
         const { role, inferred } = proposeRole(p.name, p.hasMarkup);
         return { id: p.id, name: p.name, role, roleInferred: inferred } satisfies PrecedentDocument;
       }));
 
-      for (const p of parsed) {
+      // Only the files that actually stored. A session entry for a document
+      // the server never took would let the diff fallback and the inference
+      // run over evidence nothing can resolve afterwards.
+      for (const p of parsedAndStored) {
         redlinesFilesRef.current.set(p.id, { file: p.file, text: p.text, edits: p.edits, source: 'tracked' });
       }
 
@@ -3271,9 +3372,29 @@ function AppShell({ migratedCount, signIn }: { migratedCount: number | null; sig
     setRedlinesDocs(prev => prev.map(d => (d.id === document.id ? { ...d, role, roleInferred: false } : d)));
   };
 
+  /**
+   * Takes a document back out of the session — and out of storage.
+   *
+   * The stored delete is not optional tidying. The intake screen says these
+   * documents are kept "with the playbook you build from them"; a document
+   * the person explicitly removed belongs to no playbook, and leaving it
+   * stored would make that sentence false in the quiet direction for the one
+   * document they went out of their way to reject.
+   *
+   * The screen state is cleared FIRST and unconditionally: the person asked
+   * for it gone, and a storage failure must not leave it sitting in the list
+   * looking like the click did nothing. A failure is reported instead, so an
+   * administrator can be told rather than the bytes silently surviving.
+   */
   const handleRemoveRedlinesDocument = (document: PrecedentDocument) => {
     redlinesFilesRef.current.delete(document.id);
     setRedlinesDocs(prev => prev.filter(d => d.id !== document.id));
+    setRedlinesUnreadable(prev => prev.filter(d => d.id !== document.id));
+    void deletePrecedentDocument(document.id).catch((e: unknown) => {
+      setRedlinesError(
+        `${document.name} was removed from this session, but its stored copy could not be `
+        + `deleted: ${e instanceof Error ? e.message : String(e)}`);
+    });
   };
 
   /** Spec §8: "a chain the user rejects is ungrouped, not re-proposed."

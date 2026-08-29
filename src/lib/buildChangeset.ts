@@ -244,11 +244,12 @@ export async function buildChangeset(
     const byId = new Map<string, EditEntry>();
     edits.forEach((entry, i) => byId.set(`e${i + 1}`, entry));
 
-    // No `documentIds` — the same reasoning as `inferPositions.ts`, on the
-    // same session-only documents: a redlines intake's `PrecedentDocument`
-    // ids are never persisted, so sending them makes the audit record claim
-    // to name a document nothing can resolve. `purpose: 'changeset.build'`
-    // already says what the call was for.
+    // No `documentIds` — the same reasoning as `inferPositions.ts`, and the
+    // same correction: those ids DO resolve since spec §11.1 stored
+    // precedent documents server-side, so widening what this call reports is
+    // now possible and is deferred to a change about the audit surface
+    // rather than done here. `purpose: 'changeset.build'` already says what
+    // the call was for.
     const raw = await gatewayModelClient.chatJson<RawResponse>({
       modelChoiceId: settings.modelChoiceId,
       purpose: 'changeset.build',

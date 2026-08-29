@@ -86,6 +86,26 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'PATCH /v1/documents/:id/role': 'reviewer',
   'DELETE /v1/documents/:id': 'reviewer',
 
+  // Precedent sets and precedent documents (§11.1). `reviewer` throughout:
+  // this table's own docstring already lists "brings in precedent documents"
+  // among the things §7 says a reviewer does, and none of these routes
+  // publishes anything or changes workspace configuration.
+  //
+  // DELETE is `reviewer` too, and it is the one worth pausing on. Deleting a
+  // set destroys another client's documents AND makes every house position
+  // adopted from it unresolvable — but it is the same person's own working
+  // material, brought in by a reviewer in the first place, and the routes a
+  // reviewer cannot reach are defined by §7 as publishing and configuration.
+  // Raising this to `partner` would be a rule this design did not make.
+  'POST /v1/precedent-sets': 'reviewer',
+  'GET /v1/precedent-sets/:id': 'reviewer',
+  'DELETE /v1/precedent-sets/:id': 'reviewer',
+  'GET /v1/precedent-sets/:id/documents': 'reviewer',
+  'POST /v1/precedent-sets/:id/documents': 'reviewer',
+  'GET /v1/precedent-documents/:id': 'reviewer',
+  'GET /v1/precedent-documents/:id/bytes': 'reviewer',
+  'DELETE /v1/precedent-documents/:id': 'reviewer',
+
   // §7: a reviewer groups and ungroups documents into collections.
   'GET /v1/matters/:id/collections': 'reviewer',
   'GET /v1/collections/:id': 'reviewer',

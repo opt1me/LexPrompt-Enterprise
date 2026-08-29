@@ -1,11 +1,11 @@
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { ModelError } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
-import { ConflictError } from '../errors.ts';
-import { blobKeyFor, workspacePrefix, type BlobStore } from '../blob/store.ts';
+import { workspacePrefix, type BlobStore } from '../blob/store.ts';
 import {
   fromDocumentRow, toDocumentRow, type DocumentRecord, type DocumentRow,
 } from '../db/rows.ts';
+import { badUpload, ingestDocument, readUpload } from './ingest.ts';
 
 /**
  * The `documents` and `blobs` repositories, server side — Task 9's seven
@@ -62,7 +62,9 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
     // where the database can do it. Two sorts that must agree is this
     // project's most repeated defect, so there is now one.
     const rows = await db.query<DocumentRow>(
-      'select * from document where matter_id = $1 and workspace_id = $2 order by added_at asc, id asc',
+      `select * from document
+       where matter_id = $1 and workspace_id = $2 and kind = 'matter'
+       order by added_at asc, id asc`,
       [id, req.actor!.workspaceId],
     );
     return rows.map(fromDocumentRow);
@@ -70,8 +72,14 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
 
   app.get('/v1/documents/:id', async (req): Promise<DocumentRecord> => {
     const { id } = req.params as { id: string };
+    // `and kind = 'matter'`, on the READ as well as on the list above. A
+    // predicate that is only on the list is a picker convention: a deep link
+    // to `/v1/documents/<precedent id>` would be the way round it, and the
+    // whole of S23 is that the distinction has to survive somebody writing a
+    // new query. A precedent answers 404 here and is served by its own route.
     const rows = await db.query<DocumentRow>(
-      'select * from document where id = $1 and workspace_id = $2',
+      `select * from document
+       where id = $1 and workspace_id = $2 and kind = 'matter' and matter_id is not null`,
       [id, req.actor!.workspaceId],
     );
     if (!rows[0]) throw new ModelError('There is no such document.', 'not_found', 404);
@@ -92,7 +100,8 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
     const ws = req.actor!.workspaceId;
     const { id } = req.params as { id: string };
     const rows = await db.query<{ blob_key: string; mime: string }>(
-      'select blob_key, mime from document where id = $1 and workspace_id = $2', [id, ws]);
+      `select blob_key, mime from document
+       where id = $1 and workspace_id = $2 and kind = 'matter' and matter_id is not null`, [id, ws]);
     if (!rows[0]) throw new ModelError('There is no such document.', 'not_found', 404);
     // Every OTHER failure from the store propagates — a permission error or
     // an unreachable account answered as 404 would render "this document's
@@ -131,65 +140,40 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
       throw new ModelError(
         `There is no matter ${input.matterId} to add this document to.`, 'not_found', 404);
     }
-    // The id, before the blob. A POST over a live document's id would
-    // otherwise overwrite that document's bytes and then fail the insert,
-    // leaving the surviving row pointing at a different file.
-    const taken = await db.query<{ id: string }>(
-      'select id from document where id = $1 and workspace_id = $2', [input.id, ws]);
-    if (taken[0]) throw new ConflictError(undefined, DUPLICATE_MESSAGE);
-    // …and the id held by ANOTHER workspace, which `document.id` being a
-    // global primary key makes possible and the check above cannot see
-    // (Part 2A m4). A bare `ConflictError`, exactly as `matters.ts` answers
-    // the same P6 collision: "that id is taken and by what is not yours to
-    // know". Refused HERE, before the blob put, so no bytes are written for
-    // an insert that `on conflict (id) do nothing` was always going to
-    // swallow — the alternative left an orphan behind AND answered with
-    // `RACED_MESSAGE`, which asserts an overwrite that cannot have happened
-    // (the blob key is workspace-scoped, so the two documents' bytes never
-    // shared a key). A confident wrong claim about a client's file, in the
-    // one message that tells a reader to fetch an administrator.
-    const elsewhere = await db.query<{ id: string }>(
-      'select id from document where id = $1 and workspace_id <> $2', [input.id, ws]);
-    if (elsewhere[0]) throw new ConflictError();
-
-    // ---- Blob first. See the module docstring. ----
-    const blobKey = blobKeyFor(ws, input.id);
-    await blobs.put(blobKey, bytes, mime);
-
-    const row = toDocumentRow(
-      // THE ATTRIBUTION COMES FROM THE TOKEN (property 3). What the body
-      // claimed is read by `parseDocument` and discarded there.
-      { ...input, addedByUserId: req.actor!.id }, ws,
-      { mime, blobKey, ...(input.contentSha256 === undefined ? {} : { contentSha256: input.contentSha256 }) },
-    );
-    const rows = await db.query<DocumentRow>(
-      `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
-                             parse_error, markup_notice, byte_size, mime, blob_key,
-                             content_sha256, role, collection_id, document_date, added_at,
-                             added_by_user_id)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
-       on conflict (id) do nothing
-       returning *`,
-      [row.id, ws, row.matter_id, row.name, row.doc_type, row.text, row.parse_state,
-        row.parse_error, row.markup_notice, row.byte_size, row.mime, row.blob_key,
-        row.content_sha256, row.role, row.collection_id, row.document_date, row.added_at,
-        row.added_by_user_id],
-    );
-    if (!rows[0]) {
-      // The narrow race the checks above cannot close. Which of the two
-      // races it was decides which answer is true: a row that appeared in
-      // ANOTHER workspace shares no blob key with this upload, so nothing
-      // was overwritten and the honest answer is the same bare refusal the
-      // pre-check gives. Only a row in THIS workspace shares the key, and
-      // only then are the bytes under it now this request's rather than the
-      // surviving row's — which `RACED_MESSAGE` says, because saying so is
-      // the only honest answer available: restoring bytes this route never
-      // read is not something it can offer.
-      const raced = await db.query<{ id: string }>(
-        'select id from document where id = $1 and workspace_id <> $2', [input.id, ws]);
-      if (raced[0]) throw new ConflictError();
-      throw new ConflictError(undefined, RACED_MESSAGE);
-    }
+    // The id checks, the blob put and the race resolution are `ingest.ts`'s
+    // — SHARED with the precedent upload (§13's "the ingest path they
+    // already share"), so the blob-first ordering this module argues for at
+    // length exists in exactly one place. What stays here is the INSERT,
+    // because a matter document's row shape is not a precedent's.
+    const stored = await ingestDocument({
+      db, blobs, ws, id: input.id, bytes, mime,
+      insert: async (blobKey) => {
+        const row = toDocumentRow(
+          // THE ATTRIBUTION COMES FROM THE TOKEN (property 3). What the body
+          // claimed is read by `parseDocument` and discarded there.
+          { ...input, addedByUserId: req.actor!.id }, ws,
+          { mime, blobKey, ...(input.contentSha256 === undefined ? {} : { contentSha256: input.contentSha256 }) },
+        );
+        // `kind` is NAMED, never left to a default — migration 003 drops the
+        // one it needed to backfill with, so an insert that forgets it fails
+        // loudly rather than quietly producing a matter document.
+        const rows = await db.query<DocumentRow>(
+          `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text,
+                                 parse_state, parse_error, markup_notice, byte_size, mime,
+                                 blob_key, content_sha256, role, collection_id, document_date,
+                                 added_at, added_by_user_id)
+           values ($1, $2, 'matter', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                   $16, $17, $18)
+           on conflict (id) do nothing
+           returning *`,
+          [row.id, ws, row.matter_id, row.name, row.doc_type, row.text, row.parse_state,
+            row.parse_error, row.markup_notice, row.byte_size, row.mime, row.blob_key,
+            row.content_sha256, row.role, row.collection_id, row.document_date, row.added_at,
+            row.added_by_user_id],
+        );
+        return rows[0];
+      },
+    });
     // `reply.code(201)` and NOT `await reply.code(201)`. A `FastifyReply` is
     // thenable, and awaiting one means "I am sending this reply myself" — so
     // an awaited `.code()` with no `.send()` never settles and the request
@@ -197,7 +181,7 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
     // assertion in this route's suite failed as a five-second timeout, with
     // the SQL visibly succeeding, which reads as a database problem.
     reply.code(201);
-    return fromDocumentRow(rows[0]);
+    return fromDocumentRow(stored);
   });
 
   /**
@@ -240,7 +224,9 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
       }
     }
     const rows = await db.query<DocumentRow>(
-      'update document set role = $3, collection_id = $4 where id = $1 and workspace_id = $2 returning *',
+      `update document set role = $3, collection_id = $4
+       where id = $1 and workspace_id = $2 and kind = 'matter' and matter_id is not null
+       returning *`,
       [id, ws, role, collectionId ?? null],
     );
     if (!rows[0]) {
@@ -261,7 +247,9 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
     // delete rolls back would leave a document pointing at bytes that no
     // longer exist, which is visible and worse than a leak.
     const rows = await db.query<{ blob_key: string }>(
-      'delete from document where id = $1 and workspace_id = $2 returning blob_key', [id, ws]);
+      `delete from document
+       where id = $1 and workspace_id = $2 and kind = 'matter' and matter_id is not null
+       returning blob_key`, [id, ws]);
     if (!rows[0]) throw new ModelError('There is no such document.', 'not_found', 404);
     const failed = await deleteBlobs(blobs, rows.map(r => r.blob_key));
     if (failed.length > 0) throw blobDeleteFailure(failed);
@@ -311,17 +299,13 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
   });
 }
 
-const DUPLICATE_MESSAGE =
-  'A document with that id is already here. Nothing was stored — its file was left exactly as '
-  + 'it was, because overwriting the bytes of a document that already exists would replace one '
-  + 'document\'s contents with another\'s.';
-
-const RACED_MESSAGE =
-  'A document with that id was added while this upload was in flight, so this upload was '
-  + 'refused. Its file HAS been written to storage under that id and may have replaced the '
-  + 'other document\'s. Tell an administrator before opening it.';
-
-/** The keys under this workspace's prefix that no `document` row claims. */
+/** The keys under this workspace's prefix that no `document` row claims.
+ *
+ *  NO `kind` predicate, deliberately, and it is the one `document` query in
+ *  this module that must not have one: a PRECEDENT's bytes are claimed too,
+ *  and filtering them out here would make every precedent blob look like an
+ *  orphan — which the route below then offers to delete. The workspace
+ *  filter is the whole of the scoping this query needs. */
 async function orphanKeys(db: Db, blobs: BlobStore, ws: string): Promise<string[]> {
   const stored = await blobs.list(workspacePrefix(ws));
   const rows = await db.query<{ blob_key: string }>(
@@ -369,51 +353,11 @@ export function blobDeleteFailure(failed: string[]): ModelError {
   );
 }
 
+/** `ingest.ts`'s refusal, under this module's shorter name. One
+ *  implementation, so a matter upload and a precedent upload refuse an
+ *  unreadable record in the same words. */
 function bad(detail: string): never {
-  throw new ModelError(`LexPrompt could not read this document (${detail}).`, 'unknown', 400);
-}
-
-interface Upload { record: unknown; bytes: Buffer; mime: string }
-
-/**
- * The multipart body: a `record` field carrying the JSON `DocumentRecord`
- * and a `bytes` file part.
- *
- * Read with `req.parts()` rather than `req.file()` so the ORDER of the two
- * parts does not matter — a `FormData` built in a different order is still
- * the same request, and a route that only worked one way round would fail
- * for a reason no error message would name.
- */
-async function readUpload(req: FastifyRequest): Promise<Upload> {
-  if (!req.isMultipart()) {
-    bad('the upload is not a multipart form; it needs a "record" field and a "bytes" file');
-  }
-  let record: unknown;
-  let bytes: Buffer | undefined;
-  let mime = '';
-  for await (const part of req.parts()) {
-    if (part.type === 'file' && part.fieldname === 'bytes') {
-      bytes = await part.toBuffer();
-      // `part.mimetype` is what the BROWSER labelled the Blob with, which
-      // is what `getDocumentBlob` hands back to the viewer. Never guessed
-      // from the filename's extension — that would be this layer inventing
-      // a fact about bytes it did not read.
-      mime = part.mimetype || 'application/octet-stream';
-    } else if (part.type === 'file') {
-      // Drained rather than ignored: an unconsumed file part leaves the
-      // request stream stalled, and the caller sees a hang with no cause.
-      await part.toBuffer();
-    } else if (part.fieldname === 'record') {
-      try {
-        record = JSON.parse(part.value as string) as unknown;
-      } catch (err) {
-        bad(`the "record" field is not JSON: ${(err as Error).message}`);
-      }
-    }
-  }
-  if (record === undefined) bad('the upload has no "record" field');
-  if (bytes === undefined) bad('the upload has no "bytes" file');
-  return { record, bytes, mime };
+  badUpload(detail);
 }
 
 /**

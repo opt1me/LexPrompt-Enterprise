@@ -52,9 +52,9 @@ async function aMembers(t: Tx, matterId = 'm1', ws = WS,
   for (const id of ids) {
     // eslint-disable-next-line no-await-in-loop
     await t.query(
-      `insert into document (id, workspace_id, matter_id, name, doc_type, text, parse_state,
+      `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state,
                              byte_size, mime, blob_key, role, added_at)
-       values ($1, $2, $3, $4, 'pdf', 'x', 'parsed', 4, 'application/pdf', $5, 'standalone', now())
+       values ($1, $2, 'matter', $3, $4, 'pdf', 'x', 'parsed', 4, 'application/pdf', $5, 'standalone', now())
        on conflict (id) do nothing`,
       [id, ws, matterId, `${id}.pdf`, `workspace/${ws}/document/${id}`]);
   }

@@ -15,6 +15,7 @@ import { registerMe } from './routes/me.ts';
 import { registerMatters } from './routes/matters.ts';
 import { registerDocuments } from './routes/documents.ts';
 import { registerCollections } from './routes/collections.ts';
+import { registerPrecedents } from './routes/precedents.ts';
 import { registerPlaybooks } from './routes/playbooks.ts';
 import { registerChangesets } from './routes/changesets.ts';
 import { registerWorkspaceSettings } from './routes/workspaceSettings.ts';
@@ -269,6 +270,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerMatters(app, deps.db, deps.blobs);
   registerDocuments(app, deps.db, deps.blobs);
   registerCollections(app, deps.db);
+  registerPrecedents(app, deps.db, deps.blobs);
   registerPlaybooks(app, deps.db);
   registerChangesets(app, deps.db);
   registerReviews(app, deps.db);
