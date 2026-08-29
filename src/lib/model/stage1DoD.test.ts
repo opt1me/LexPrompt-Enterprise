@@ -193,11 +193,11 @@ describe('Stage 1 definition of done (§18.2)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('no credential of any kind exists in apps/api', () => {
+  it('no MODEL-PROVIDER credential of any kind exists in apps/api', () => {
     const patterns = [
       /\bapiKey\b/, /\bAPI_KEY\b/, /\bsk-[a-zA-Z0-9]{4}/, /\bx-api-key\b/,
       /OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY/,
-      /KeyVault|SecretClient|DefaultAzureCredential/,
+      /KeyVault|SecretClient/,
     ];
     // The scan bites on something.
     expect(patterns.some(p => p.test('const apiKey = 1'))).toBe(true);
@@ -212,6 +212,41 @@ describe('Stage 1 definition of done (§18.2)', () => {
     // …and no provider key reaches apps/api's own package manifest either.
     const pkg = readFileSync(path.join(ROOT, 'apps/api/package.json'), 'utf8');
     expect(pkg).not.toContain('@azure/keyvault-secrets');
+  });
+
+  /**
+   * `DefaultAzureCredential` used to be on the list above, and Stage 2 Task
+   * 10 took it off - deliberately, and narrowly.
+   *
+   * S1/S2 is about MODEL PROVIDER credentials: the gateway is the only
+   * service that holds one, and `apps/api` reaching a provider directly is
+   * what that pattern list exists to catch. A managed identity for the
+   * firm's OWN document store is a different fact - the store is
+   * `apps/api`'s to read and write, the credential authenticates nothing
+   * outside the firm's own tenant, and 6.5 says in as many words that the
+   * bytes are "reachable only through the API's managed identity". Keeping
+   * the pattern as written would have made 6.5 unimplementable, and the only
+   * ways out would have been to delete the check or to exempt a file.
+   *
+   * So it is SCOPED rather than removed, and the exemption is asserted to be
+   * exactly one file - because a file-level exemption hides everything in
+   * that file, not just the part you meant to protect (CLAUDE.md,
+   * `PdfCanvas`). The second half below is what keeps that from being a
+   * hole: the one permitted file is held to the full provider-credential
+   * pattern list, and to holding no other credential machinery.
+   */
+  it('DefaultAzureCredential appears in exactly one apps/api file, and it is the blob store', () => {
+    const holders = API_FILES.filter(f => /DefaultAzureCredential/.test(codeOf(f))).map(rel);
+    expect(holders).toEqual(['apps/api/src/blob/store.ts']);
+    const code = codeOf(path.join(ROOT, 'apps/api/src/blob/store.ts'));
+    // It is a STORAGE credential and nothing else: no Key Vault, no secret
+    // client, no api key, no provider key.
+    for (const pattern of [/KeyVault/, /SecretClient/, /apiKey/, /x-api-key/,
+      /OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY/]) {
+      expect(pattern.test(code), String(pattern)).toBe(false);
+    }
+    // ...and it reaches a BLOB endpoint, not a model provider.
+    expect(code).toContain('BlobServiceClient');
   });
 
   // ---- one OIDC path, no vendor library, no bypass ----

@@ -185,11 +185,27 @@ services:
       API_MTLS_KEY_FILE: /certs/api.key
       API_DATABASE_URL: postgres://lexprompt_app:lexprompt_app_dev@postgres:5432/lexprompt
       API_DATABASE_MIGRATION_URL: postgres://lexprompt_migrator:lexprompt_migrator_dev@postgres:5432/lexprompt
+      # Document BYTES (§6.5). ONE source, and no fallback between the two:
+      # `resolveBlobCredential` refuses a configured source with no material
+      # rather than reaching for the other, because a fallback means the
+      # system used a different identity than the operator configured and
+      # said nothing. Azure sets API_BLOB_CREDENTIAL_SOURCE: managed-identity
+      # and API_BLOB_ACCOUNT_URL, and sets NO connection string; that
+      # asymmetry is §5.1 row 5 and Task 25 tables it in the Bicep.
+      API_BLOB_CREDENTIAL_SOURCE: connection-string
+      # The well-known Azurite development connection string — see
+      # .env.example for why a credential may sit in version control here
+      # and why a real one never may. Overridable, and interpolated the same
+      # way API_ROLE_MAPPINGS is, so a developer pointing at their own
+      # emulator changes one value in .env rather than editing this file.
+      API_BLOB_CONNECTION_STRING: "${AZURITE_CONNECTION_STRING:-DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;}"
+      API_BLOB_CONTAINER: documents
     volumes: ["./certs:/certs:ro"]
     depends_on:
       gateway: { condition: service_healthy }
       keycloak: { condition: service_healthy }
       postgres: { condition: service_healthy }
+      azurite: { condition: service_healthy }
 
   gateway:
     build: { context: ., dockerfile: apps/gateway/Dockerfile }
@@ -262,5 +278,30 @@ services:
       interval: 5s
       retries: 30
 
+  azurite:
+    # MICROSOFT'S OWN EMULATOR, never MinIO and never anything
+    # "S3-compatible" (S30): S3-compatible is exactly the class of
+    # near-equivalence that produces a defect visible only in production,
+    # because the local run is green and the difference is in a header, an
+    # error code, or a consistency guarantee nobody read.
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    # `internal` ONLY and NO published port, for the same reason postgres has
+    # none: it holds the firm's document bytes and must have no route out,
+    # and a blob store reachable from the host is a blob store reachable from
+    # anything else on that host.
+    command: ["azurite-blob", "--blobHost", "0.0.0.0", "--loose", "--location", "/data"]
+    networks: [internal]
+    volumes: ["lexprompt-azurite:/data"]
+    healthcheck:
+      # Azurite's image has no curl and no wget; `nc -z` on its own port is
+      # what it can actually answer. CHECKED against the running container
+      # rather than copied — a healthcheck that can never pass makes docker
+      # restart a healthy service on a schedule (the gateway's own
+      # healthcheck comment records that lesson).
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 10000"]
+      interval: 5s
+      retries: 30
+
 volumes:
   lexprompt-pgdata:
+  lexprompt-azurite:

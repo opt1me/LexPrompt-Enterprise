@@ -8,6 +8,7 @@ import { makeDb, makePool, type Db } from './db/pool.ts';
 import { runMigrations } from './db/migrate.ts';
 import { resolveActor, type Actor } from './auth/actor.ts';
 import { roleFor, seedRoleMappings } from './auth/roles.ts';
+import { AzureBlobStore, type BlobStore } from './blob/store.ts';
 
 /** Every startup failure reaches the operator as the same banner, whatever
  *  threw it. `ConfigError` was the only thing caught before, so a missing
@@ -29,6 +30,7 @@ async function main(): Promise<void> {
   let config: ApiConfig;
   let gateway: GatewayClient;
   let db: Db;
+  let blobs: BlobStore;
   try {
     config = loadConfig(process.env);
     // Inside the same guard as `loadConfig`, deliberately. `makeGatewayClient`
@@ -39,6 +41,14 @@ async function main(): Promise<void> {
     // not in an unhandled rejection.
     gateway = makeGatewayClient(config);
     db = makeDb(makePool(config.databaseUrl, config.databasePoolMax));
+    // Inside the SAME guard, for the same reason `makeGatewayClient` is:
+    // `AzureBlobStore`'s constructor resolves the credential, and
+    // `resolveBlobCredential` refuses a configured source with no material
+    // rather than reaching for the other one. That refusal is a fact about
+    // how this process is configured, so it belongs in the startup banner —
+    // not in an unhandled rejection the first time somebody opens a
+    // document.
+    blobs = new AzureBlobStore(config.blob, config.blob.container);
   } catch (err) {
     // Fail loudly, at startup, before a single call can be served — the
     // same discipline as the gateway's config, and for the same reason:
@@ -74,6 +84,17 @@ async function main(): Promise<void> {
     } finally {
       await migrationPool.end();
     }
+  } catch (err) {
+    refuseToStart(err);
+  }
+
+  // The container, created if it is not there — private, no public access
+  // (`ensureContainer`'s own note on `access: undefined`). At startup rather
+  // than lazily on first upload, so an unreachable or misconfigured store is
+  // a loud startup failure instead of a document that will not save at the
+  // moment somebody needed it to.
+  try {
+    await blobs.ensureContainer();
   } catch (err) {
     refuseToStart(err);
   }

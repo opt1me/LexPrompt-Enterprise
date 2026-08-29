@@ -21,6 +21,7 @@ const DIVERGENCE = JSON.parse(
   rowsWithNoKeys: Record<string, string>;
   sameEverywhere: string[];
   defaultedInBothEnvironments: string[];
+  awaitingAzureTemplate: string[];
   localOnlyServices: string[];
 };
 
@@ -251,6 +252,7 @@ describe('the configuration diff is exactly §5.1s divergence list (S30)', () =>
   const tabled = new Set(DIVERGENCE.rows.flatMap(r => r.keys));
   const same = new Set(DIVERGENCE.sameEverywhere);
   const defaulted = new Set(DIVERGENCE.defaultedInBothEnvironments);
+  const awaiting = new Set(DIVERGENCE.awaitingAzureTemplate);
 
   it('reads a non-empty key set from BOTH sides', () => {
     // The check that would have caught the previous version of this file,
@@ -268,7 +270,8 @@ describe('the configuration diff is exactly §5.1s divergence list (S30)', () =>
   });
 
   it('names every compose service, so a new one cannot arrive unscanned', () => {
-    expect([...local.keys()].sort()).toEqual(['api', 'gateway', 'keycloak', 'postgres', 'web']);
+    expect([...local.keys()].sort())
+      .toEqual(['api', 'azurite', 'gateway', 'keycloak', 'postgres', 'web']);
     for (const service of DIVERGENCE.localOnlyServices) {
       expect(local.has(service), `${service} is named local-only but is not a service`).toBe(true);
     }
@@ -332,11 +335,39 @@ describe('the configuration diff is exactly §5.1s divergence list (S30)', () =>
     expect(codeOf(path.join(ROOT, 'apps/api/src/config.ts'))).not.toContain('GATEWAY_CALLER_AUTH');
   });
 
-  it('every key a config module reads is classified: tabled, same, or defaulted in both', () => {
+  it('every key a config module reads is classified: tabled, same, defaulted, or awaiting Azure', () => {
     const unclassified = [...declared]
-      .filter(k => !tabled.has(k) && !same.has(k) && !defaulted.has(k))
+      .filter(k => !tabled.has(k) && !same.has(k) && !defaulted.has(k) && !awaiting.has(k))
       .sort();
     expect(unclassified).toEqual([]);
+  });
+
+  /**
+   * The fourth classification, added by Task 10 and meant to empty.
+   *
+   * A key with NO default that is required by one environment's posture and
+   * set by neither environment yet — API_BLOB_ACCOUNT_URL, which the Azure
+   * deployment needs and which Task 25's Bicep will set. It is not
+   * `defaultedInBothEnvironments`: those keys fall back to a value in a
+   * config module and are SUPPOSED to be unset, and filing this one there
+   * would say the software has an opinion about which storage account holds
+   * a firm's documents.
+   *
+   * The check is the same shape as the defaulted one and for the same
+   * reason: an entry that is quietly set by an environment has stopped being
+   * this kind of key, and an entry no module reads is a key nobody is going
+   * to configure.
+   */
+  it('every "awaiting the Azure template" key is set by NEITHER environment and read by a module', () => {
+    const offenders: string[] = [];
+    for (const key of awaiting) {
+      if (localAll.has(key)) offenders.push(`${key} is set by docker-compose.yml`);
+      if (deployed.has(key)) {
+        offenders.push(`${key} is now set by the Azure template — move it into a table row`);
+      }
+      if (!declared.has(key)) offenders.push(`${key} is read by no configuration module`);
+    }
+    expect(offenders.sort()).toEqual([]);
   });
 
   it('every "defaulted in both" key is set by NEITHER environment and read by a module', () => {
@@ -357,6 +388,11 @@ describe('the configuration diff is exactly §5.1s divergence list (S30)', () =>
     }
     for (const key of [...same]) {
       if (defaulted.has(key)) dupes.push(`${key} is both sameEverywhere and defaulted`);
+    }
+    for (const key of [...awaiting]) {
+      if (tabled.has(key)) dupes.push(`${key} is both awaiting the Azure template and tabled`);
+      if (same.has(key)) dupes.push(`${key} is both awaiting the Azure template and sameEverywhere`);
+      if (defaulted.has(key)) dupes.push(`${key} is both awaiting the Azure template and defaulted`);
     }
     expect(dupes.sort()).toEqual([]);
   });

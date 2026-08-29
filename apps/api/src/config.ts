@@ -1,5 +1,6 @@
 import { assertIssuerUsable, type AuthConfig } from './oidc.ts';
 import { parseRoleMappings, type RoleMapping } from './auth/roles.ts';
+import type { BlobCredentialConfig } from './blob/credential.ts';
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -73,6 +74,23 @@ export interface ApiConfig {
    * `seedRoleMappings`.
    */
   roleMappings: RoleMapping[];
+  /**
+   * Where the firm's document BYTES live (§6.5), and which identity reaches
+   * them.
+   *
+   * `source` is `connection-string` locally (Azurite, over the `internal`
+   * network) and `managed-identity` in Azure, and there is NO FALLBACK
+   * between the two — `resolveBlobCredential` refuses rather than trying the
+   * other, for the reason written at length there. The keys are read here
+   * and validated there, so this module stays a reader and the rule stays in
+   * one place.
+   *
+   * `connectionString` and `accountUrl` are both optional HERE and required
+   * by the source that names them: an Azure deployment sets no connection
+   * string at all, and the local stack sets no account URL, which is §5.1
+   * row 5's asymmetry rather than an oversight.
+   */
+  blob: BlobCredentialConfig & { container: string };
 }
 
 /**
@@ -208,6 +226,25 @@ function roleMappingsFrom(env: NodeJS.ProcessEnv): RoleMapping[] {
   return mappings;
 }
 
+/**
+ * The blob keys, READ here and VALIDATED in `resolveBlobCredential`.
+ *
+ * `source` is passed through UNCHECKED on purpose: an unrecognised value is
+ * refused by `resolveBlobCredential` with a message naming the key and the
+ * two values it accepts, and duplicating that check here would be a second
+ * place for the list of sources to live. There is no default — a missing
+ * `API_BLOB_CREDENTIAL_SOURCE` arrives as `''`, which is not one of the two
+ * and is refused as such.
+ */
+function blobFrom(env: NodeJS.ProcessEnv): ApiConfig['blob'] {
+  return {
+    source: (env.API_BLOB_CREDENTIAL_SOURCE ?? '') as ApiConfig['blob']['source'],
+    connectionString: env.API_BLOB_CONNECTION_STRING,
+    accountUrl: env.API_BLOB_ACCOUNT_URL,
+    container: env.API_BLOB_CONTAINER || 'documents',
+  };
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
   return {
     port: int(env, 'API_PORT', 8080),
@@ -220,6 +257,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     databaseMigrationUrl: required(env, 'API_DATABASE_MIGRATION_URL'),
     databasePoolMax: int(env, 'API_DATABASE_POOL_MAX', 10),
     roleMappings: roleMappingsFrom(env),
+    blob: blobFrom(env),
   };
 }
 
@@ -254,6 +292,14 @@ export function describeConfig(cfg: ApiConfig): string {
     `Gateway: ${cfg.gatewayUrl}${cfg.mtls ? ' (mTLS)' : ''}`,
     `Max request body: ${cfg.maxBodyBytes} bytes`,
     `Database: ${redactDsn(cfg.databaseUrl)}`,
+    // The SOURCE and the container, never the material. A connection string
+    // carries an account key, and a boot banner is the last place it should
+    // appear — but WHICH identity this process was configured to hold the
+    // firm's documents with is exactly the fact an operator needs on the
+    // first screen of logs, because a fallback is what this refuses to do
+    // and a silent one is what they would otherwise be looking for.
+    `Documents: ${cfg.blob.container} (credential: ${cfg.blob.source}`
+      + `${cfg.blob.source === 'managed-identity' ? `, ${cfg.blob.accountUrl ?? 'no account URL'}` : ''})`,
     // One line per mapping, printed every start. The answer to "why can
     // nobody sign in" — a group name that does not match what the issuer
     // actually emits, or an issuer string that is the container-network

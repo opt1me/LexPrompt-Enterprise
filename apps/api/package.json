@@ -8,10 +8,12 @@
     "start": "node --experimental-strip-types src/main.ts"
   },
   "dependencies": {
+    "@azure/identity": "^4.5.0",
+    "@azure/storage-blob": "^12.32.0",
     "@lexprompt/core": "*",
     "fastify": "^5.2.0",
-    "undici": "^7.2.0",
     "jose": "^6.0.0",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "undici": "^7.2.0"
   }
 }

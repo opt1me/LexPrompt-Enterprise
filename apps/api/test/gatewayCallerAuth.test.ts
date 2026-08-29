@@ -36,6 +36,13 @@ const BASE: ApiConfig = {
   roleMappings: [
     { issuer: 'https://login.microsoftonline.com/tid/v2.0', groupValue: 'g-1', role: 'reviewer' },
   ],
+  // The Azure posture, matching the rest of this fixture: managed identity,
+  // an account URL, and NO connection string (§5.1 row 5's asymmetry).
+  blob: {
+    source: 'managed-identity',
+    accountUrl: 'https://lexprompt.blob.core.windows.net',
+    container: 'documents',
+  },
 };
 
 const MTLS = {

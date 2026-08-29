@@ -65,6 +65,16 @@
       "why": "Local only, and deliberately so. In Azure every credential models.json declares resolves through the gateway's managed identity or Key Vault, so no provider key is an environment variable, a parameter or an output — which is the whole of S2's stronger property, expressed as an absence in infra/modules/containerApps.bicep."
     },
     {
+      "n": 5,
+      "what": "Document storage (Stage 2 Task 10 — Azurite exists only in compose so far)",
+      "keys": [
+        "API_BLOB_CREDENTIAL_SOURCE",
+        "API_BLOB_CONNECTION_STRING",
+        "API_BLOB_CONTAINER"
+      ],
+      "why": "The bytes live in Azure Blob Storage in a firm deployment and in Azurite locally, and what diverges is WHICH IDENTITY reaches them. Locally the source is `connection-string` and the material is the well-known, published, non-secret Azurite development credential; in Azure the source is `managed-identity` with an API_BLOB_ACCOUNT_URL and NO connection string at all, which is why API_BLOB_CONNECTION_STRING is a local-only key rather than a same-everywhere pair. API_BLOB_CREDENTIAL_SOURCE and API_BLOB_CONTAINER are tabled here rather than as sameEverywhere for the same reason the two Postgres DSNs in row 11 are: infra/modules/containerApps.bicep does not set them yet (Task 25), so there is no Azure value for them to differ FROM. API_BLOB_CREDENTIAL_SOURCE is expected to become sameEverywhere the day it does — the same key, a different value — while API_BLOB_CONNECTION_STRING stays local-only permanently, because its absence in Azure is the point (S2's stronger property: no key is an environment variable, a parameter, or an output). There is NO FALLBACK between the two sources; a source configured with no material refuses to start."
+    },
+    {
       "n": 7,
       "what": "api egress denial",
       "keys": []
@@ -176,6 +186,25 @@
   ],
   "localOnlyServices": [
     "keycloak",
-    "postgres"
+    "postgres",
+    "azurite"
+  ],
+  "awaitingAzureTemplate": [
+    "API_BLOB_ACCOUNT_URL"
+  ],
+  "awaitingAzureTemplateNote": [
+    "Read by a configuration module and set by NEITHER environment — but NOT",
+    "the same case as defaultedInBothEnvironments above, which is why it is a",
+    "list of its own rather than a line added to that one. Those keys fall",
+    "back to a value in a config module and are supposed to be unset. This one",
+    "has no default and no fallback: it is REQUIRED whenever",
+    "API_BLOB_CREDENTIAL_SOURCE is managed-identity, which is the Azure",
+    "posture, and the Azure template that sets it is Task 25's work. Filing it",
+    "as 'defaulted' would say the software has an opinion about which storage",
+    "account holds a firm's documents, which it must not.",
+    "",
+    "The day containerApps.bicep sets it, this list empties and the key joins",
+    "row 5. An entry that outlives that is a key nobody is going to configure,",
+    "which is why the check below asserts each one is genuinely set nowhere"
   ]
 }
