@@ -464,7 +464,26 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
           ]
         }
       ]
-      scale: { minReplicas: 1, maxReplicas: 3 }
+      // PINNED BY STAGE 4 TASK 14 (Spike 3, P41) — chosen, not inherited
+      // from a template default.
+      //
+      // Fan-out is IN-PROCESS as of this commit: a client's WebSocket is
+      // held by one replica's hub, and a write served by another replica
+      // reaches nothing. Measured locally at two replicas, where nginx
+      // resolves `api` per request and `dns.resolve4('api')` answers two
+      // addresses, so successive requests genuinely land on different
+      // containers.
+      //
+      // So `api` may run at ONE replica and no more. Raising this without
+      // `apps/api/test/replicaFanout.compose.test.ts` passing means a
+      // reviewer connected to one replica silently stops seeing a
+      // colleague's changes — in the deployed environment only, which is
+      // where nobody is watching, and which is exactly how AZURE_CLIENT_ID
+      // and oidcRequiredClaims shipped broken.
+      //
+      // Task 18 builds the outbox-by-cursor fan-out with `pg_notify` as its
+      // doorbell and raises this, citing that test by name.
+      scale: { minReplicas: 1, maxReplicas: 1 }
     }
   }
   dependsOn: [ apiAcrPull ]

@@ -2,6 +2,12 @@ import { describe, it, expect, afterAll } from 'vitest';
 import {
   API_BASE, asUser, twoAccounts, type TestAccount,
 } from './helpers/twoAccounts.ts';
+// The seeding fixture moved to a helper when a second and a third compose
+// suite needed it (Stage 4 Task 14). One copy, extracted at two rather than
+// at three — `CLAUDE.md`'s rule, and `uid()` is what ignoring it looks like.
+import {
+  dispositionPath, removeSeeded, seedOneDoneFinding, type Seeded,
+} from './helpers/seedReview.ts';
 
 /**
  * THE GAP THIS WHOLE STAGE EXISTS TO CLOSE, DEMONSTRATED RATHER THAN ARGUED.
@@ -39,69 +45,12 @@ import {
  * to refuse the override — it was to stop it being anonymous.
  */
 
-const now = (): number => Date.now();
-
-interface Seeded { matterId: string; reviewId: string; findingsKey: string; clauseId: string }
-
-/** Everything this file created, torn down in `afterAll` — `test:pg` and
- *  `test:compose` share ONE database, and a suite that leaves state behind
- *  breaks a different file with a message pointing at the wrong feature. */
-const litter: { who: TestAccount; seeded: Seeded }[] = [];
-
 /**
- * One review, one clause, one `done` finding nobody has judged yet.
- *
- * Seeded over HTTP as the signed-in person rather than by reaching into
- * Postgres, so that every row it produces carries the attribution the API
- * would actually have given it. The findings map travels on the CREATE —
- * `PUT /v1/reviews/:id` accepts findings for a review this workspace has
- * never seen (`importFindings`) and refuses them on an update — and the
- * import records the authenticated actor and nobody else.
+ * Everything this file created, torn down in `afterAll` — `test:pg` and
+ * `test:compose` share ONE database, and a suite that leaves state behind
+ * breaks a different file with a message pointing at the wrong feature.
  */
-async function seedOneDoneFinding(who: TestAccount): Promise<Seeded> {
-  const stamp = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const seeded: Seeded = {
-    matterId: `t1-${stamp}`,
-    reviewId: `t1-${stamp}-review`,
-    findingsKey: 'd1',
-    clauseId: 'c1',
-  };
-
-  const matter = await asUser(who, 'PUT', `/v1/matters/${seeded.matterId}`,
-    { name: 'Two accounts (Task 1)', createdAt: now() });
-  expect(matter.status, await matter.text()).toBe(200);
-
-  const review = await asUser(who, 'PUT', `/v1/reviews/${seeded.reviewId}`, {
-    matterId: seeded.matterId,
-    playbookSnapshot: { id: 'p1', name: 'Task 1', clauses: [] },
-    // No documents: this suite is about WHO changed a judgement, and a
-    // document would add an upload, a parse and a blob to a test that
-    // asserts nothing about any of them. `findingsKeyFor` returns the key
-    // itself for a `documents` target, so 'd1' is a key this review's own
-    // target explains.
-    target: { kind: 'documents', documentIds: [] },
-    documentIds: [],
-    modelId: 'test-model',
-    startedAt: now(),
-    findings: {
-      [seeded.findingsKey]: {
-        [seeded.clauseId]: {
-          clauseId: seeded.clauseId,
-          status: 'done',
-          summary: 'Liability is capped at the fees paid in the preceding 12 months.',
-          citations: [],
-        },
-      },
-    },
-  });
-  expect(review.status, await review.text()).toBe(200);
-
-  litter.push({ who, seeded });
-  return seeded;
-}
-
-const dispositionPath = (s: Seeded): string =>
-  `/v1/reviews/${s.reviewId}/findings/${s.findingsKey}/${s.clauseId}/disposition`;
+const litter: { who: TestAccount; seeded: Seeded }[] = [];
 
 /** Whether a route is REGISTERED, as distinct from refused. A signed-in
  *  caller reaching an unregistered path gets Fastify's 404; anything else
@@ -113,13 +62,7 @@ async function routeExists(who: TestAccount, path: string): Promise<boolean> {
 
 describe('two real accounts, and the override that is no longer anonymous', () => {
   afterAll(async () => {
-    for (const { who, seeded } of litter.splice(0)) {
-      // The review first: a matter delete cascades, but deleting in
-      // dependency order means a failure names the record that actually
-      // resisted rather than a foreign key.
-      await asUser(who, 'DELETE', `/v1/reviews/${seeded.reviewId}`);
-      await asUser(who, 'DELETE', `/v1/matters/${seeded.matterId}`);
-    }
+    for (const { who, seeded } of litter.splice(0)) await removeSeeded(who, seeded);
   });
 
   it('signs two DIFFERENT people in, each with their own app_user id', async () => {
@@ -136,7 +79,8 @@ describe('two real accounts, and the override that is no longer anonymous', () =
 
   it('lets a second person overwrite the first person s verification, and NOW says who', async () => {
     const { trainee, partner } = await twoAccounts();
-    const seeded = await seedOneDoneFinding(trainee);
+    const seeded = await seedOneDoneFinding(trainee, 'Two accounts (Task 1)');
+    litter.push({ who: trainee, seeded });
 
     const first = await asUser(trainee, 'PUT', dispositionPath(seeded),
       { state: 'verified', version: 1 });

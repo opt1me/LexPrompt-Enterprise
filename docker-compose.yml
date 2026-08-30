@@ -128,6 +128,33 @@ services:
     # A browser reaches this service through `web`'s nginx proxy (/api/ ->
     # api:8080 over `internal`), which is why it needs no port of its own.
     networks: [internal]
+    # TWO REPLICAS, DELIBERATELY, and this is Spike 3's whole apparatus
+    # (Stage 4 Task 14, P41).
+    #
+    # `infra/modules/containerApps.bicep` runs `api` at more than one replica
+    # in Azure, and §8's fan-out has to be correct there or a reviewer
+    # connected to one replica silently stops seeing a colleague's changes —
+    # in the deployed environment only, which is where nobody is watching.
+    # That is the class of defect this project has now shipped twice
+    # (AZURE_CLIENT_ID, oidcRequiredClaims): true in compose, false in a
+    # tenant, with every test green.
+    #
+    # So compose runs the multi-replica condition BY DEFAULT rather than
+    # behind a `--scale` flag somebody has to remember. `web`'s nginx
+    # resolves `api` per request through Docker's embedded DNS (see
+    # infra/nginx/web.conf), which returns both containers' A records, so
+    # successive requests land on different replicas — verified with
+    # `dns.resolve4('api')` inside the network, which answered two addresses.
+    #
+    # The arithmetic this multiplies, written out because
+    # `postgres`'s own `max_connections=100` comment already writes out the
+    # single-replica form: API_DATABASE_POOL_MAX (10) + API_WORKER_POOL_MAX
+    # (4) + ONE dedicated LISTEN client for the event feed (Task 18) = 15 per
+    # replica, so 30 here and 45 at the Azure ceiling of three. The migrator
+    # pool is 2 and is closed before `listen`, so it does not add to the
+    # steady state. Well inside 100.
+    deploy:
+      replicas: 2
     environment:
       API_PORT: "8080"
       # §5.1 row 1: the ONLY thing that differs from a firm deployment is
