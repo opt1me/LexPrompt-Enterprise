@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { appendAudit } from '../audit/write.ts';
 import {
   ModelError, couldNotBeReadMessageFor, notYetReadMessageFor, targetDocumentIds,
-  type RetryCleared, type RetryResult, type ReviewTarget, type RunEventPage, type RunView,
+  type RetryCleared, type RetryResult, type ReviewTarget, type EventPage, type RunView,
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 import { cellsFor, createRun, readRun, settleRunIfFinished, type RunRow } from '../run/queue.ts';
@@ -353,7 +353,7 @@ export function registerRuns(app: FastifyInstance, db: Db, config: RunRoutesConf
    * retention; see `run/events.ts` for why a silently short page is the
    * failure.
    */
-  app.get('/v1/runs/:id/events', async (req): Promise<RunEventPage> => {
+  app.get('/v1/runs/:id/events', async (req): Promise<EventPage> => {
     const ws = req.actor!.workspaceId;
     const { id } = req.params as { id: string };
     const query = (req.query ?? {}) as Record<string, unknown>;
@@ -369,7 +369,11 @@ export function registerRuns(app: FastifyInstance, db: Db, config: RunRoutesConf
     const requested = intParam(query.limit, config.eventPageMax);
     return readEvents(db, {
       workspaceId: ws,
-      runId: id,
+      // This route is and stays the RUN's events. The review and matter
+      // subscriptions are the socket's (§8) and have no HTTP equivalent by
+      // design: a poll over a whole matter would be a second, slower way to
+      // do the thing the socket exists for.
+      subscription: { run: id },
       after: intParam(query.after, 0),
       limit: Math.max(1, Math.min(config.eventPageMax, requested)),
     });

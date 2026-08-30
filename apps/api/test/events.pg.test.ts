@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { RUN_EVENT_TYPES, type RunEventPage } from '@lexprompt/core';
+import {
+  EVENT_TYPES, RUN_EVENT_TYPES, isEventType, type EventPage,
+} from '@lexprompt/core';
 import { appendEvent, pruneEvents, readEvents } from '../src/run/events.ts';
 import { appDb, dbOn, migratorDb, withPg } from './helpers/pgHarness.ts';
 import { buildTestApi } from './helpers/apiHarness.ts';
@@ -67,8 +69,8 @@ describe('the five payload types are the shared vocabulary', () => {
         `insert into event (workspace_id, review_id, run_id, type, payload)
          values ($1, 'ev-r1', 'ev-run-x', 'finding.invented', '{}'::jsonb)`, [WS]);
       await expect(readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-run-x', after: 0, limit: 10,
-      })).rejects.toThrow(/not one of the five/);
+        workspaceId: WS, subscription: { run: 'ev-run-x' }, after: 0, limit: 10,
+      })).rejects.toThrow(/not one of the nine/);
     });
   });
 });
@@ -150,7 +152,7 @@ describe('the cursor', () => {
     await withPg(async t => {
       const ids = await seed(t, 'ev-cursor', 5);
       const first = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-cursor', after: 0, limit: 2,
+        workspaceId: WS, subscription: { run: 'ev-cursor' }, after: 0, limit: 2,
       });
       expect(first.events.map(e => e.id)).toEqual(ids.slice(0, 2));
       expect(first.hasMore).toBe(true);
@@ -158,7 +160,7 @@ describe('the cursor', () => {
       expect('resyncRequired' in first).toBe(false);
 
       const second = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-cursor', after: first.nextCursor, limit: 10,
+        workspaceId: WS, subscription: { run: 'ev-cursor' }, after: first.nextCursor, limit: 10,
       });
       // No overlap and no gap. A page that repeated its last event would
       // make an at-least-once client apply it twice; one that skipped an
@@ -174,12 +176,12 @@ describe('the cursor', () => {
     await withPg(async t => {
       await seed(t, 'ev-exact', 4);
       const page = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-exact', after: 0, limit: 4,
+        workspaceId: WS, subscription: { run: 'ev-exact' }, after: 0, limit: 4,
       });
       expect(page.events).toHaveLength(4);
       expect(page.hasMore).toBe(false);
       const short = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-exact', after: 0, limit: 3,
+        workspaceId: WS, subscription: { run: 'ev-exact' }, after: 0, limit: 3,
       });
       expect(short.hasMore).toBe(true);
     });
@@ -191,7 +193,7 @@ describe('the cursor', () => {
     await withPg(async t => {
       await seed(t, 'ev-version', 3);
       const page = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-version', after: 0, limit: 10,
+        workspaceId: WS, subscription: { run: 'ev-version' }, after: 0, limit: 10,
       });
       expect(page.events.map(e => (e.payload as { version: number }).version)).toEqual([1, 2, 3]);
     });
@@ -205,11 +207,11 @@ describe('the cursor', () => {
       await seed(t, 'ev-mine', 2, 'ev-r-mine');
       await seed(t, 'ev-theirs', 2, 'ev-r-theirs');
       const page = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-mine', after: 0, limit: 10,
+        workspaceId: WS, subscription: { run: 'ev-mine' }, after: 0, limit: 10,
       });
       expect(page.events.every(e => e.runId === 'ev-mine')).toBe(true);
       const other = await readEvents(dbOn(t), {
-        workspaceId: '00000000-0000-0000-0000-0000000000ff', runId: 'ev-mine',
+        workspaceId: '00000000-0000-0000-0000-0000000000ff', subscription: { run: 'ev-mine' },
         after: 0, limit: 10,
       });
       expect(other.events).toEqual([]);
@@ -227,7 +229,7 @@ describe('retention, and the honest answer past it', () => {
       const oldest = (await t.query<{ oldest: string }>(
         'select min(id)::text as oldest from event'))[0].oldest;
       const page = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-retain', after: Number(oldest) - 5, limit: 10,
+        workspaceId: WS, subscription: { run: 'ev-retain' }, after: Number(oldest) - 5, limit: 10,
       });
       expect(page.resyncRequired).toBe(true);
       expect(page.events).toEqual([]);
@@ -256,7 +258,7 @@ describe('retention, and the honest answer past it', () => {
       // …and the NEXT poll, from that cursor, is an ordinary page: it
       // delivers the surviving events and does not ask for a resync again.
       const next = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-retain', after: page.nextCursor, limit: 10,
+        workspaceId: WS, subscription: { run: 'ev-retain' }, after: page.nextCursor, limit: 10,
       });
       expect('resyncRequired' in next).toBe(false);
       expect(next.events).toHaveLength(1);
@@ -280,7 +282,7 @@ describe('retention, and the honest answer past it', () => {
         payload: { runId: 'ev-fresh', reviewId: 'ev-r1', cells: 1, version: 1 },
       });
       const page = await readEvents(dbOn(t), {
-        workspaceId: WS, runId: 'ev-fresh', after: 0, limit: 10,
+        workspaceId: WS, subscription: { run: 'ev-fresh' }, after: 0, limit: 10,
       });
       expect('resyncRequired' in page).toBe(false);
       expect(page.events).toHaveLength(1);
@@ -344,7 +346,7 @@ describe('the events route', () => {
         headers: { authorization: 'Bearer t' },
       });
       expect(res.statusCode, res.body).toBe(200);
-      const page = res.json() as RunEventPage;
+      const page = res.json() as EventPage;
       expect(page.events).toHaveLength(2);
       expect(page.hasMore).toBe(true);
     });
@@ -394,6 +396,244 @@ describe('the events route has an index that matches its predicate', () => {
       // `id > $3` scans the tail of a matching prefix rather than filtering
       // after one.
       expect(rows[0].indexdef).toMatch(/\(workspace_id,\s*run_id,\s*id\)/);
+    });
+  });
+});
+
+/**
+ * STAGE 4 TASK 15: one outbox, nine types, three subscriptions.
+ *
+ * The five run types are unchanged and unrenamed; what is new is that a
+ * change made by a PERSON goes into the same table, read through the same
+ * cursor. That is P39's whole argument — the outbox is the delivery and the
+ * socket is only a doorbell — and it is why there is no second table here.
+ */
+describe('the outbox carries what people decide, not only what the engine did', () => {
+  it('names nine types, and the five Stage 3 shipped are the first five of them', () => {
+    expect([...EVENT_TYPES]).toEqual([
+      'run.started', 'finding.running', 'finding.done', 'finding.error', 'run.finished',
+      'finding.disposition_changed', 'note.added', 'assignment.created', 'assignment.resolved',
+    ]);
+    // The five are still their own predicate: "is this about a run" is a
+    // question the browser asks on every frame.
+    expect([...RUN_EVENT_TYPES]).toEqual([...EVENT_TYPES].slice(0, 5));
+    expect(isEventType('finding.disposition_changed')).toBe(true);
+    expect(isEventType('finding.exploded')).toBe(false);
+  });
+
+  it('appends a disposition change with no run, and reads it back with no runId key', async () => {
+    await withPg(async t => {
+      await aRun(t, 'ev-nrun', 'ev-sub-r');
+      await appendEvent(t, {
+        workspaceId: WS, type: 'finding.disposition_changed', reviewId: 'ev-sub-r',
+        payload: {
+          reviewId: 'ev-sub-r', findingsKey: 'd1', clauseId: 'c1', version: 2,
+          disposition: {
+            reviewId: 'ev-sub-r', findingsKey: 'd1', clauseId: 'c1', state: 'rejected',
+            changedCount: 2, version: 2,
+          },
+          event: {
+            id: 1, fromState: 'verified', toState: 'rejected', cause: 'human',
+            byUserId: '00000000-0000-0000-0000-0000000000aa', at: Date.now(),
+          },
+        },
+      });
+      const page = await readEvents(dbOn(t), {
+        workspaceId: WS, subscription: { review: 'ev-sub-r' }, after: 0, limit: 10,
+      });
+      const e = page.events.find(x => x.type === 'finding.disposition_changed')!;
+      expect(e, 'the disposition change was not read back').toBeDefined();
+      // ABSENT, not `''` and not `undefined`. `toEqual` cannot tell an absent
+      // key from an undefined one, and `structuredClone` — how a payload
+      // crosses a worker boundary — preserves an undefined-valued key, so
+      // `in` is the only assertion that means what this test is about.
+      expect('runId' in e).toBe(false);
+      // …and the sanity check that the `in` guard can find a key that IS
+      // there, so the assertion above is about the shape rather than about
+      // `in` never finding anything.
+      expect('reviewId' in e).toBe(true);
+      // Populated by `appendEvent`'s own subselect, with no `matterId:` at
+      // this call site at all.
+      expect(e.matterId).toBe('ev-m1');
+      expect(e.workspaceId).toBe(WS);
+    });
+  });
+
+  it('still refuses a type nobody registered, after the widening', async () => {
+    await withPg(async t => {
+      await aRun(t, 'ev-closed', 'ev-closed-r');
+      await t.query(
+        `insert into event (workspace_id, review_id, type, payload)
+         values ($1, 'ev-closed-r', 'finding.exploded', '{}'::jsonb)`, [WS]);
+      await expect(readEvents(dbOn(t), {
+        workspaceId: WS, subscription: { review: 'ev-closed-r' }, after: 0, limit: 10,
+      })).rejects.toThrow(/not one of the nine/);
+      // The closed set SURVIVES the widening. An event nothing reads is a
+      // hole a client cannot see, and the refusal is what makes it visible.
+    });
+  });
+
+  it('serves a review subscription every event of that review, run events included', async () => {
+    await withPg(async t => {
+      await aRun(t, 'ev-mixed', 'ev-mixed-r');
+      await appendEvent(t, {
+        workspaceId: WS, type: 'finding.done', reviewId: 'ev-mixed-r', runId: 'ev-mixed',
+        payload: {
+          runId: 'ev-mixed', reviewId: 'ev-mixed-r', findingsKey: 'd1', clauseId: 'c1',
+          version: 1,
+        },
+      });
+      await appendEvent(t, {
+        workspaceId: WS, type: 'note.added', reviewId: 'ev-mixed-r',
+        payload: {
+          reviewId: 'ev-mixed-r', findingsKey: 'd1', clauseId: 'c1',
+          note: {
+            id: 'n1', findingId: 'd1::c1', text: 'Ask the partner.',
+            byUserId: '00000000-0000-0000-0000-0000000000aa', at: Date.now(),
+          },
+        },
+      });
+      const page = await readEvents(dbOn(t), {
+        workspaceId: WS, subscription: { review: 'ev-mixed-r' }, after: 0, limit: 100,
+      });
+      const types = page.events.map(e => e.type);
+      expect(types).toContain('finding.done');
+      expect(types).toContain('note.added');
+    });
+  });
+
+  it('serves a matter subscription every review in that matter, and no other', async () => {
+    await withPg(async t => {
+      // Two reviews under ONE matter, and a third review under another.
+      await aRun(t, 'ev-mat-a', 'ev-mat-r1');
+      await aRun(t, 'ev-mat-b', 'ev-mat-r2');
+      await t.query(
+        `insert into matter (id, workspace_id, name, created_at, updated_at)
+         values ('ev-m2', $1, 'Other', now(), now()) on conflict (id) do nothing`, [WS]);
+      await t.query(
+        `insert into review (id, workspace_id, matter_id, playbook_snapshot, target, findings,
+                             model_id, started_at)
+         values ('ev-mat-r3', $1, 'ev-m2', '{}'::jsonb,
+                 '{"kind":"documents","documentIds":[]}'::jsonb, '{}'::jsonb, 'm', now())
+         on conflict (id) do nothing`, [WS]);
+
+      for (const [reviewId, clauseId] of [
+        ['ev-mat-r1', 'c1'], ['ev-mat-r2', 'c2'], ['ev-mat-r3', 'c3'],
+      ]) {
+        await appendEvent(t, {
+          workspaceId: WS, type: 'note.added', reviewId,
+          payload: {
+            reviewId, findingsKey: 'd1', clauseId,
+            note: {
+              id: `n-${clauseId}`, findingId: `d1::${clauseId}`, text: 't',
+              byUserId: '00000000-0000-0000-0000-0000000000aa', at: Date.now(),
+            },
+          },
+        });
+      }
+
+      const mine = await readEvents(dbOn(t), {
+        workspaceId: WS, subscription: { matter: 'ev-m1' }, after: 0, limit: 100,
+      });
+      const reviews = new Set(mine.events.map(e => e.reviewId));
+      expect(reviews.has('ev-mat-r1')).toBe(true);
+      expect(reviews.has('ev-mat-r2')).toBe(true);
+      // The half that matters: the OTHER matter's review is not in it. A
+      // subscription that answered with a neighbouring matter's changes
+      // would be a screen showing another engagement's judgements.
+      expect(reviews.has('ev-mat-r3')).toBe(false);
+
+      // …and the other matter's subscription finds its own, so the exclusion
+      // above is about the predicate rather than about the row not existing.
+      const other = await readEvents(dbOn(t), {
+        workspaceId: WS, subscription: { matter: 'ev-m2' }, after: 0, limit: 100,
+      });
+      expect(other.events.map(e => e.reviewId)).toContain('ev-mat-r3');
+    });
+  });
+
+  it('refuses another workspace the events of this one, on every subscription shape', async () => {
+    await withPg(async t => {
+      await aRun(t, 'ev-scope', 'ev-scope-r');
+      await appendEvent(t, {
+        workspaceId: WS, type: 'note.added', reviewId: 'ev-scope-r',
+        payload: {
+          reviewId: 'ev-scope-r', findingsKey: 'd1', clauseId: 'c1',
+          note: {
+            id: 'n-scope', findingId: 'd1::c1', text: 't',
+            byUserId: '00000000-0000-0000-0000-0000000000aa', at: Date.now(),
+          },
+        },
+      });
+      const ELSEWHERE = '00000000-0000-0000-0000-0000000000ff';
+      for (const subscription of [
+        { review: 'ev-scope-r' }, { matter: 'ev-m1' }, { run: 'ev-scope' },
+      ] as const) {
+        const theirs = await readEvents(dbOn(t), {
+          workspaceId: ELSEWHERE, subscription, after: 0, limit: 100,
+        });
+        expect(theirs.events, JSON.stringify(subscription)).toEqual([]);
+      }
+      // The sanity check: the same reads in the right workspace find
+      // something, so the empty lists above are the predicate biting rather
+      // than a review with nothing in it.
+      const ours = await readEvents(dbOn(t), {
+        workspaceId: WS, subscription: { review: 'ev-scope-r' }, after: 0, limit: 100,
+      });
+      expect(ours.events.length).toBeGreaterThan(0);
+    });
+  });
+
+  it('populates matter_id on every event a run writes', async () => {
+    await withPg(async t => {
+      await aRun(t, 'ev-matid', 'ev-matid-r');
+      for (const type of ['run.started', 'finding.running', 'finding.done'] as const) {
+        await appendEvent(t, {
+          workspaceId: WS, type, reviewId: 'ev-matid-r', runId: 'ev-matid',
+          payload: type === 'run.started'
+            ? { runId: 'ev-matid', reviewId: 'ev-matid-r', cells: 1, version: 1 }
+            : {
+              runId: 'ev-matid', reviewId: 'ev-matid-r', findingsKey: 'd1', clauseId: 'c1',
+              version: 1,
+            },
+        });
+      }
+      const nulls = await t.query<{ type: string }>(
+        "select type from event where run_id = 'ev-matid' and matter_id is null");
+      expect(nulls).toEqual([]);
+      // The sanity check for that empty list: the rows are there at all.
+      const all = await t.query<{ n: string }>(
+        "select count(*)::text as n from event where run_id = 'ev-matid'");
+      expect(Number(all[0].n)).toBe(3);
+    });
+  });
+
+  it('keeps resyncRequired measured against the whole table, not this subscription', async () => {
+    await withPg(async t => {
+      await aRun(t, 'ev-resync', 'ev-resync-r');
+      await appendEvent(t, {
+        workspaceId: WS, type: 'run.started', reviewId: 'ev-resync-r', runId: 'ev-resync',
+        payload: { runId: 'ev-resync', reviewId: 'ev-resync-r', cells: 1, version: 1 },
+      });
+      const oldest = Number((await t.query<{ oldest: string | null }>(
+        'select min(id)::text as oldest from event'))[0].oldest);
+      // A cursor BELOW the table's watermark: the events between it and now
+      // are gone whatever subscription is asking.
+      const page = await readEvents(dbOn(t), {
+        workspaceId: WS, subscription: { review: 'ev-resync-r' },
+        after: Math.max(1, oldest - 5), limit: 10,
+      });
+      expect(page.resyncRequired).toBe(true);
+      // Comparing against THIS subscription's own oldest event would report
+      // a resync to every client that connected before its first event —
+      // which is every client. A cursor AT the table's watermark is provably
+      // continuous with everything that survives, whatever this particular
+      // review's own first id happens to be.
+      const atWatermark = await readEvents(dbOn(t), {
+        workspaceId: WS, subscription: { review: 'ev-resync-r' },
+        after: oldest, limit: 10,
+      });
+      expect('resyncRequired' in atWatermark).toBe(false);
     });
   });
 });

@@ -36,11 +36,15 @@ export type { Role, MeResponse, WorkspaceSettings } from './api/records.ts';
 export type { WorkspaceUser, WorkspaceUsers } from './api/records.ts';
 // §8/§9's run outbox, P22: one payload vocabulary, two transports. Declared
 // here because the browser reads these and `apps/api` writes them, and
-// Stage 4's socket sends exactly the same five.
-export { RUN_EVENT_TYPES, isRunEventType, RUN_STATES, RUN_CELL_STATES } from './api/records.ts';
+// Stage 4's socket sends the same vocabulary, four types wider (EVENT_TYPES).
+export {
+  RUN_EVENT_TYPES, isRunEventType, EVENT_TYPES, isEventType, subscriptionKey,
+  RUN_STATES, RUN_CELL_STATES,
+} from './api/records.ts';
 export type {
   RunEventType, RunStartedPayload, FindingEventPayload, RunFinishedPayload,
-  RunEventPayload, RunEvent, RunEventPage,
+  RunEventPayload, EventType, EventPayload, AppEvent, EventPage, SubscriptionRef,
+  DispositionChangedPayload, NoteAddedPayload,
   RunState, RunCellState, RunCellCounts, RunView,
 } from './api/records.ts';
 // Part 3B's wire shapes: a review's findings assembled from rows, a

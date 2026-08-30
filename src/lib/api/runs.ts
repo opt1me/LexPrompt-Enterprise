@@ -1,4 +1,4 @@
-import type { RetryResult, RunEvent, RunEventPage, RunView } from '@lexprompt/core';
+import type { AppEvent, EventPage, RetryResult, RunView } from '@lexprompt/core';
 import { apiGet, apiGetOrNull, apiSend } from './client';
 import { debug } from '../debug';
 
@@ -115,7 +115,7 @@ const DEFAULT_INTERVAL_MS = 1_000;
  */
 export function watchRun(
   runId: string,
-  onEvent: (event: RunEvent) => void,
+  onEvent: (event: AppEvent) => void,
   onError: (error: unknown) => void,
   options: WatchOptions = {},
 ): () => void {
@@ -149,7 +149,7 @@ export function watchRun(
     if (stopped || inFlight) return;
     inFlight = true;
     try {
-      const page = await apiGet<RunEventPage>(
+      const page = await apiGet<EventPage>(
         `/v1/runs/${encodeURIComponent(runId)}/events?after=${cursor}`);
       failures = 0;
 

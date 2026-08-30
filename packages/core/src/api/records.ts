@@ -1,5 +1,5 @@
 import type { Jurisdiction } from '../model/protocol.ts';
-import type { Finding, NetPosition, VerificationState } from '../domain/types.ts';
+import type { Finding, NetPosition, Note, VerificationState } from '../domain/types.ts';
 /** The three roles (§7). A closed set, here, because both sides read it. */
 export const ROLES = ['reviewer', 'partner', 'admin'] as const;
 export type Role = (typeof ROLES)[number];
@@ -148,6 +148,114 @@ export function isRunEventType(value: unknown): value is RunEventType {
   return typeof value === 'string' && (RUN_EVENT_TYPES as readonly string[]).includes(value);
 }
 
+/**
+ * §8, Stage 4: ONE OUTBOX, ONE VOCABULARY — nine types, not five.
+ *
+ * The five above are Stage 3's and are UNCHANGED and NOT RENAMED. They are
+ * still exported and still narrowed by `isRunEventType`, because "is this
+ * event about a run" is a question the browser asks (a `run.*` event routes
+ * to the findings refresh; a disposition event is applied to a card) and a
+ * predicate over the five is the honest way to ask it.
+ *
+ * The four Stage 4 adds are the changes made by PEOPLE. Putting them in the
+ * same table, read through the same cursor, is the whole of P39: the outbox
+ * is the delivery and the socket is only a doorbell, so there is one
+ * durable record of what happened and one resume protocol, rather than a
+ * queue for engine progress and something else for human judgement.
+ *
+ * `assignment.created` / `assignment.resolved` HAVE NO WRITER YET. Task 24
+ * adds the table, the route and the payload; they are named here for the
+ * same reason `audit/actions.ts` names its assignment verbs — the
+ * vocabulary is a CLOSED SET both sides read, and a type arriving later
+ * from a database somebody wrote to by hand would reach a client's switch
+ * statement, match nothing and be dropped in silence. A named type with no
+ * writer is inert; an unnamed one is a hole.
+ */
+export const EVENT_TYPES = [
+  // The five Stage 3 shipped.
+  'run.started', 'finding.running', 'finding.done', 'finding.error', 'run.finished',
+  // The four Stage 4 adds.
+  'finding.disposition_changed', 'note.added', 'assignment.created', 'assignment.resolved',
+] as const;
+
+export type EventType = (typeof EVENT_TYPES)[number];
+
+export function isEventType(value: unknown): value is EventType {
+  return typeof value === 'string' && (EVENT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * WHAT A CLIENT ASKED TO BE TOLD ABOUT (§8's three subscriptions).
+ *
+ * Three shapes and not a string with a prefix: `{ review: 'r1' }` cannot be
+ * confused with `{ run: 'r1' }` by a typo, and each shape maps to exactly
+ * one `where` clause on `event`. A `"review:r1"` convention would need a
+ * separator that cannot appear in an id — the same choice `findings.ts`
+ * avoids by keying its cache with `JSON.stringify` — and would make the
+ * server parse a string a client composed.
+ */
+export type SubscriptionRef =
+  | { review: string }
+  | { matter: string }
+  | { run: string };
+
+/** A stable key for one subscription, for a map that has to hold several.
+ *  Derived in ONE place so the browser's per-subscription cursor and the
+ *  server's per-subscription fan-out cannot key the same thing differently. */
+export function subscriptionKey(sub: SubscriptionRef): string {
+  if ('review' in sub) return `review:${sub.review}`;
+  if ('matter' in sub) return `matter:${sub.matter}`;
+  return `run:${sub.run}`;
+}
+
+/**
+ * §8, verbatim: a disposition change "carries the whole new
+ * `finding_disposition` row plus the `finding_disposition_event` that
+ * produced it, so a client applies one push and has both the current state
+ * and the fact that it changed."
+ *
+ * Which is exactly what makes *"Rejected by R. Okafor, 16:04 — was
+ * Verified"* renderable from ONE frame with no second query. A payload
+ * carrying only the new state would send every receiving client back to the
+ * server for the sentence's second half, which is a read per push per
+ * reader.
+ */
+export interface DispositionChangedPayload {
+  reviewId: string;
+  findingsKey: string;
+  clauseId: string;
+  disposition: DispositionView;
+  event: DispositionEventView;
+  /**
+   * `finding_disposition.version` — THE SAME NUMBER the stale-change refusal
+   * turns on, not a second one.
+   *
+   * It is duplicated out of `disposition.version` deliberately and it is the
+   * load-bearing field: a client drops an event whose version is not newer
+   * than what it holds, which is what makes replay safe, makes the echo of
+   * your own write a no-op, and makes out-of-order delivery survivable.
+   * Every payload in this file carries the version of the row it describes
+   * for the same reason.
+   */
+  version: number;
+}
+
+/**
+ * A note arrived. `note.added` APPENDS; it never replaces a notes array
+ * from a stale local copy, which is why the payload carries one note and
+ * not a list.
+ *
+ * No `version`: a note is insert-only (`note` holds no UPDATE grant for
+ * anybody), so its own id is its idempotence key and there is no row whose
+ * version could move.
+ */
+export interface NoteAddedPayload {
+  reviewId: string;
+  findingsKey: string;
+  clauseId: string;
+  note: Note;
+}
+
 /** The run has been created and its cells queued. `cells` is how many units
  *  of work there are, so a reader can render progress before a single one
  *  has finished — and, more to the point, can tell a run that stopped after
@@ -203,17 +311,48 @@ export type RunEventPayload =
   | FindingEventPayload
   | RunFinishedPayload;
 
-export interface RunEvent {
+/** Every payload the outbox can carry today. The two assignment types have
+ *  no payload here because they have no writer here — Task 24 adds both
+ *  together, which is the only order in which a payload can be honest. */
+export type EventPayload =
+  | RunEventPayload
+  | DispositionChangedPayload
+  | NoteAddedPayload;
+
+/**
+ * ONE EVENT OUT OF THE OUTBOX — the shape the HTTP cursor and the socket
+ * both deliver.
+ *
+ * Named `AppEvent` rather than `RunEvent` since Stage 4, because most of
+ * them are no longer about a run: a disposition change, a note and an
+ * assignment belong to a review and to a matter, and a type called
+ * `RunEvent` carrying `runId: ''` for three of its nine types is a shape
+ * that lies quietly.
+ *
+ * `runId` is ABSENT on an event that belongs to no run. Not `''`, which is
+ * what this used to return and which reads to a client as a run whose id is
+ * empty — and `structuredClone` preserves an `undefined`-valued key, so
+ * `runId: undefined` would read to an `in` check as a run that is there.
+ * `reviewId` and `matterId` are absent on the same terms.
+ *
+ * `matterId` is optional for a second, duller reason as well: `event`'s
+ * column is nullable and rows written before Stage 4 have none. A required
+ * field over a nullable column is a claim the database cannot support.
+ */
+export interface AppEvent {
   /** Monotonic, and the cursor `after` names. `bigint` in Postgres, a
    *  `number` here — a firm would have to append nine quadrillion events to
    *  reach the point where that is not enough. */
   id: number;
-  type: RunEventType;
-  reviewId: string;
-  runId: string;
+  type: EventType;
+  /** Always present: `event.workspace_id` is `not null`. */
+  workspaceId: string;
+  matterId?: string;
+  reviewId?: string;
+  runId?: string;
   /** Epoch milliseconds, like every other timestamp on this wire. */
   at: number;
-  payload: RunEventPayload;
+  payload: EventPayload;
 }
 
 /**
@@ -228,8 +367,8 @@ export interface RunEvent {
  * cannot tell from a complete one: it asked for everything after 400 and
  * got everything after 900, and nothing in the shape says so.
  */
-export interface RunEventPage {
-  events: RunEvent[];
+export interface EventPage {
+  events: AppEvent[];
   /** Where to ask from next. Equal to `after` when nothing new arrived. */
   nextCursor: number;
   hasMore: boolean;

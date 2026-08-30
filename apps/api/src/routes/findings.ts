@@ -8,6 +8,7 @@ import {
 import type { Db, Tx } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
 import { readFindings, type FindingsRead } from '../findings/read.ts';
+import { appendEvent } from '../run/events.ts';
 import type { FindingKey } from '../findings/rows.ts';
 import {
   readDispositionEvents, setDisposition, toDispositionView, toEventView,
@@ -80,7 +81,38 @@ export function registerFindings(app: FastifyInstance, db: Db): void {
           // else's name on a rejection.
           { id: req.actor!.id }, new Date(), body.version));
         const events = await readDispositionEvents(t, key, ws, 1);
-        return { disposition, event: eventWritten(events[0]) };
+        const event = eventWritten(events[0]);
+        /*
+         * THE PUSH, IN THE TRANSACTION THAT WROTE THE ROW (§8, Task 15).
+         *
+         * `appendEvent` takes a `Tx` and that signature is the rule: a push
+         * that commits while its write rolls back is a client told about a
+         * judgement that does not exist, and — the worse half — has no way
+         * to find out.
+         *
+         * The payload carries the WHOLE new disposition row AND the event
+         * that produced it, which is §8 verbatim. That is what lets a
+         * receiving card render "Rejected by R. Okafor, 16:04 — was
+         * Verified" from one frame with no second query, and it is exactly
+         * the pair this handler already has in hand.
+         */
+        await appendEvent(t, {
+          workspaceId: ws,
+          type: 'finding.disposition_changed',
+          reviewId: key.reviewId,
+          payload: {
+            reviewId: key.reviewId,
+            findingsKey: key.findingsKey,
+            clauseId: key.clauseId,
+            disposition,
+            event,
+            // The SAME number the stale-change refusal turns on, not a
+            // second one. A receiving client drops an event whose version
+            // is not newer than what it holds.
+            version: disposition.version,
+          },
+        });
+        return { disposition, event };
       });
     });
 
@@ -110,7 +142,7 @@ export function registerFindings(app: FastifyInstance, db: Db): void {
                              by_user_id, at)
            values ($1, $2, $3, $4, $5, $6, $7, $8)`,
           [id, key.reviewId, key.findingsKey, key.clauseId, ws, text, req.actor!.id, at]);
-        return {
+        const written = {
           id,
           // `findingId` is `${findingsKey}::${clauseId}`, derived rather than
           // stored — see `findings/read.ts`, which reconstructs it the same
@@ -120,6 +152,22 @@ export function registerFindings(app: FastifyInstance, db: Db): void {
           byUserId: req.actor!.id,
           at: at.getTime(),
         } satisfies Note;
+        // In the SAME transaction as the insert, for the reason the
+        // disposition route gives above. A note APPENDS at the far end — the
+        // payload carries one note, never the list, so a receiver cannot
+        // replace a fresh array with a stale one.
+        await appendEvent(t, {
+          workspaceId: ws,
+          type: 'note.added',
+          reviewId: key.reviewId,
+          payload: {
+            reviewId: key.reviewId,
+            findingsKey: key.findingsKey,
+            clauseId: key.clauseId,
+            note: written,
+          },
+        });
+        return written;
       });
 
       // `reply.code(201)` and NOT `await reply.code(201)` — a `FastifyReply`

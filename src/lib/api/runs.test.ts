@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ModelError, type RunEvent, type RunEventPage, type RunView } from '@lexprompt/core';
+import { ModelError, type AppEvent, type EventPage, type RunView } from '@lexprompt/core';
 import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
 
 /**
@@ -26,12 +26,13 @@ const RUN: RunView = {
   version: 1,
 };
 
-const event = (id: number, type: RunEvent['type']): RunEvent => ({
-  id, type, reviewId: 'rev-1', runId: 'run-1', at: 1_700_000_000_000 + id,
+const event = (id: number, type: AppEvent['type']): AppEvent => ({
+  id, type, workspaceId: 'ws-1', matterId: 'm-1', reviewId: 'rev-1', runId: 'run-1',
+  at: 1_700_000_000_000 + id,
   payload: { runId: 'run-1', reviewId: 'rev-1', findingsKey: 'd1', clauseId: `c${id}`, version: id },
 });
 
-const page = (events: RunEvent[], over: Partial<RunEventPage> = {}): RunEventPage => ({
+const page = (events: AppEvent[], over: Partial<EventPage> = {}): EventPage => ({
   events,
   nextCursor: events.length > 0 ? events[events.length - 1].id : 0,
   hasMore: false,

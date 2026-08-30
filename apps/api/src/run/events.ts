@@ -1,11 +1,18 @@
 import {
-  isRunEventType,
-  type RunEvent, type RunEventPage, type RunEventPayload, type RunEventType,
+  isEventType,
+  type AppEvent, type EventPage, type EventPayload, type EventType, type SubscriptionRef,
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 
 /**
- * The run outbox (§8, §9, P22) — one payload vocabulary, two transports.
+ * The outbox (§8, §9, P22) — one payload vocabulary, two transports, and
+ * since Stage 4 one table for the engine's progress AND for what people
+ * decide.
+ *
+ * Nine types, three subscriptions (`review`, `matter`, `run`), one cursor.
+ * A second table for human changes would be a second resume protocol and a
+ * second retention policy, and a client reconnecting would have to
+ * reconcile two streams whose ids mean different things.
  *
  * ## `appendEvent` writes in the CALLER'S transaction, never its own
  *
@@ -29,11 +36,23 @@ import type { Db, Tx } from '../db/pool.ts';
 
 export interface EventToAppend {
   workspaceId: string;
-  type: RunEventType;
+  type: EventType;
   reviewId: string;
-  runId: string;
+  /**
+   * OPTIONAL SINCE STAGE 4. A disposition change, a note and an assignment
+   * belong to no run, and `runId: ''` would reach a client as a run whose id
+   * is empty — the same quiet lie `fromEventRow` used to tell on the way
+   * back out.
+   */
+  runId?: string;
+  /**
+   * Optional at the CALL SITE and populated at the WRITE. See `appendEvent`:
+   * the insert resolves it from `review` when a caller does not supply one,
+   * so "every event carries its matter" is a property of the one writer
+   * rather than of five callers remembering.
+   */
   matterId?: string;
-  payload: RunEventPayload;
+  payload: EventPayload;
 }
 
 export interface EventRow {
@@ -57,11 +76,28 @@ export interface EventRow {
  * one (`db/rows.ts` says the same at length).
  */
 export async function appendEvent(t: Tx, e: EventToAppend): Promise<number> {
+  /*
+   * THE MATTER IS RESOLVED IN THE INSERT, not by the caller.
+   *
+   * `event.matter_id` existed from 008 and was populated by exactly one of
+   * five call sites, so §8's `matter:{id}` subscription had no data to serve
+   * — the ledger's own pre-flight names this. Fixing it by adding
+   * `matterId:` to the other four would be four places to forget it a sixth
+   * time; the subselect makes it a property of the one writer.
+   *
+   * `coalesce` so a caller that DOES know (the queue, which has the review
+   * in hand) pays for no lookup, and a caller that does not (the worker,
+   * which holds a `run` row, and `run` has no matter column) still writes a
+   * complete row. The subselect runs in the caller's transaction against
+   * `review`, which both the app role and the worker role hold `select` on.
+   */
   const rows = await t.query<{ id: string | number }>(
     `insert into event (workspace_id, matter_id, review_id, run_id, type, payload)
-     values ($1, $2, $3, $4, $5, $6::jsonb)
+     select $1, coalesce($2, (select matter_id from review where id = $3 and workspace_id = $1)),
+            $3, $4, $5, $6::jsonb
      returning id`,
-    [e.workspaceId, e.matterId ?? null, e.reviewId, e.runId, e.type, JSON.stringify(e.payload)],
+    [e.workspaceId, e.matterId ?? null, e.reviewId, e.runId ?? null, e.type,
+      JSON.stringify(e.payload)],
   );
   return Number(rows[0].id);
 }
@@ -73,17 +109,17 @@ function parsedJson(value: unknown): unknown {
 /**
  * A row to the wire shape.
  *
- * An unrecognised `type` is refused rather than passed through. The five
- * types are a closed vocabulary both sides read (`RUN_EVENT_TYPES` in core);
- * a sixth arriving from a database somebody wrote to by hand would reach a
+ * An unrecognised `type` is refused rather than passed through. The nine
+ * types are a closed vocabulary both sides read (`EVENT_TYPES` in core);
+ * a tenth arriving from a database somebody wrote to by hand would reach a
  * client's switch statement, match nothing, and be dropped in silence —
  * which is exactly the "a hole it cannot see" shape this whole module exists
  * to avoid.
  */
-export function fromEventRow(row: EventRow): RunEvent {
-  if (!isRunEventType(row.type)) {
+export function fromEventRow(row: EventRow): AppEvent {
+  if (!isEventType(row.type)) {
     throw new Error(
-      `Event ${row.id} has type ${JSON.stringify(row.type)}, which is not one of the five this `
+      `Event ${row.id} has type ${JSON.stringify(row.type)}, which is not one of the nine this `
       + 'system emits. Nothing reads it, so returning it would put an event on the wire that '
       + 'every client silently drops.',
     );
@@ -91,16 +127,26 @@ export function fromEventRow(row: EventRow): RunEvent {
   return {
     id: Number(row.id),
     type: row.type,
-    reviewId: row.review_id ?? '',
-    runId: row.run_id ?? '',
+    workspaceId: row.workspace_id,
+    // ABSENT, not `''`. The old empty strings were written for the five
+    // run-only types, where they were always populated and the coercion
+    // never showed; a disposition change belongs to no run, and `runId: ''`
+    // reads to a client as a run whose id is empty. Spread-on-condition
+    // rather than `?? undefined`, because `structuredClone` preserves an
+    // undefined-valued key and an `in` check would then find a run that is
+    // not there.
+    ...(row.matter_id === null ? {} : { matterId: row.matter_id }),
+    ...(row.review_id === null ? {} : { reviewId: row.review_id }),
+    ...(row.run_id === null ? {} : { runId: row.run_id }),
     at: row.at.getTime(),
-    payload: parsedJson(row.payload) as RunEventPayload,
+    payload: parsedJson(row.payload) as EventPayload,
   };
 }
 
 export interface ReadEventsOptions {
   workspaceId: string;
-  runId: string;
+  /** §8's three subscriptions. One shape, one predicate — see `predicateFor`. */
+  subscription: SubscriptionRef;
   /** The client's cursor: the id of the last event it applied. `0` means
    *  "from the beginning", which never triggers a resync. */
   after: number;
@@ -110,21 +156,59 @@ export interface ReadEventsOptions {
 }
 
 /**
- * A page of a run's events, oldest first, plus the honest answer when the
- * cursor has fallen off the back of the buffer.
+ * ONE PREDICATE PER SUBSCRIPTION SHAPE, each written as a WHOLE LITERAL.
+ *
+ * Not `` `... and ${column} = $2` `` with the column name interpolated. Three
+ * whole strings is three statements `workspaceScope.test.ts`'s extractor can
+ * read; a name spliced into a template is a statement no scanner can see the
+ * predicate of, and this module is already outside that guard by design —
+ * which is a reason to be MORE legible here, not less.
+ *
+ * Every shape carries `workspace_id`. A subscription is named by a client,
+ * so the id in it is exactly the "id out of a URL" shape §19 warns about:
+ * without the predicate, `{ review: <another firm's review> }` would be fed
+ * that review's events for as long as the socket stayed open.
+ */
+function predicateFor(sub: SubscriptionRef): { sql: string; id: string } {
+  if ('review' in sub) {
+    return {
+      sql: 'select * from event where workspace_id = $1 and review_id = $2 and id > $3'
+        + ' order by id asc limit $4',
+      id: sub.review,
+    };
+  }
+  if ('matter' in sub) {
+    return {
+      sql: 'select * from event where workspace_id = $1 and matter_id = $2 and id > $3'
+        + ' order by id asc limit $4',
+      id: sub.matter,
+    };
+  }
+  return {
+    sql: 'select * from event where workspace_id = $1 and run_id = $2 and id > $3'
+      + ' order by id asc limit $4',
+    id: sub.run,
+  };
+}
+
+/**
+ * A page of one subscription's events, oldest first, plus the honest answer
+ * when the cursor has fallen off the back of the buffer.
  *
  * The resync test compares the cursor against `min(id)` over the WHOLE
- * table, not against this run's own oldest surviving event. That is
+ * table, not against this SUBSCRIPTION's own oldest surviving event. That is
  * deliberate: ids are allocated monotonically and the pruner deletes by AGE,
  * so everything below the table's minimum id is gone and everything at or
- * above it survives. Comparing against this run's own minimum would report a
- * resync for every client that connected before its run's first event was
- * written, which is every client.
+ * above it survives. Comparing against this subscription's own minimum would report a
+ * resync for every client that connected before its first event was
+ * written, which is every client -- and the predicate getting wider in
+ * Stage 4 does not change that argument, it only widens what would have
+ * been compared.
  *
  * `after >= min - 1` is continuity: the very next id after the cursor is
  * still present, so nothing between them was dropped.
  */
-export async function readEvents(db: Db, opts: ReadEventsOptions): Promise<RunEventPage> {
+export async function readEvents(db: Db, opts: ReadEventsOptions): Promise<EventPage> {
   const watermark = await db.query<{ oldest: string | number | null }>(
     'select min(id) as oldest from event');
   const oldest = watermark[0]?.oldest === null || watermark[0]?.oldest === undefined
@@ -179,12 +263,9 @@ export async function readEvents(db: Db, opts: ReadEventsOptions): Promise<RunEv
   // limit + 1, so `hasMore` is a fact rather than a guess. A page that
   // returned exactly `limit` rows and reported `hasMore: false` would stop a
   // client one page short of a run's own `run.finished`.
+  const { sql, id } = predicateFor(opts.subscription);
   const rows = await db.query<EventRow>(
-    `select * from event
-      where workspace_id = $1 and run_id = $2 and id > $3
-      order by id asc
-      limit $4`,
-    [opts.workspaceId, opts.runId, opts.after, opts.limit + 1]);
+    sql, [opts.workspaceId, id, opts.after, opts.limit + 1]);
 
   const hasMore = rows.length > opts.limit;
   const page = (hasMore ? rows.slice(0, opts.limit) : rows).map(fromEventRow);
