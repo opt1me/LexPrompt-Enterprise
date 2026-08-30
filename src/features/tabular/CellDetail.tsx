@@ -40,7 +40,7 @@ export interface CellDetailProps {
   onRetry: (clauseId: string) => void;
   /** Persists the human's verification intent for this one finding (Task
    *  10). Optional: omitted, the card shows its state chip with no controls. */
-  onVerify?: (change: VerificationChange) => Promise<void>;
+  onVerify?: (change: VerificationChange, atVersion?: number) => Promise<void>;
   /** True while this finding's verification or note write is in flight. */
   verifyBusy?: boolean;
   /** Persists a new note against this finding (Task 10). */

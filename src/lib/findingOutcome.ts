@@ -812,3 +812,34 @@ export function conflictReapplyLabel(attempted: VerificationChange): string {
     ? 'Clear it anyway'
     : `Set it to ${STATE_WORD[attempted.state]} anyway`;
 }
+
+/**
+ * WHAT A HELD CHANGE SAYS WHILE IT IS BEING HELD (P36).
+ *
+ * *"R. Okafor changed this while you were writing. Your view will update
+ * when you are done."*
+ *
+ * A change that lands while somebody has a reject-reason dialog open is not
+ * applied under the open control — but it is not hidden either, and the
+ * difference between those two is the whole rule. Concealing it would leave
+ * a person writing a rejection about a state that no longer exists, which is
+ * exactly the outcome holding it exists to prevent; the hold buys them the
+ * moment to finish the sentence, and this tells them why finishing it may
+ * not land.
+ *
+ * Here rather than in the card, for `dispositionLabel`'s reason: it names a
+ * PERSON, through the same `actorPhrase`, so an actor the directory cannot
+ * resolve reads the same way in the announcement as on the line above it.
+ * It deliberately does NOT name the new state — the reader is mid-judgement
+ * about the old one, and a second state word on screen at that moment is a
+ * card that appears to say two things at once. The state arrives when the
+ * change does.
+ */
+export function heldUpdateLine(
+  incoming: DispositionWithHistory,
+  audience: DispositionAudience,
+): string {
+  const who = actorPhrase(incoming.disposition.byUserId, audience);
+  return `${who} changed this while you were writing. `
+    + 'Your view will update when you are done.';
+}

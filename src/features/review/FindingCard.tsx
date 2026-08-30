@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { PlaybookClause, Finding, RiskLevel } from '../../types';
 import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
@@ -14,7 +14,10 @@ import { PositionComparison } from './PositionComparison';
 import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
 import { DispositionHistory } from './DispositionHistory';
 import { ConflictNotice, type VerificationConflict } from './ConflictNotice';
-import { dispositionLabel, isVerifiable, type DispositionAudience } from '../../lib/findingOutcome';
+import { mayApplyNow, sameCell, sameDisposition } from './pendingUpdate';
+import {
+  dispositionLabel, heldUpdateLine, isVerifiable, type DispositionAudience,
+} from '../../lib/findingOutcome';
 import { formatInstant } from '../../lib/instant';
 
 export interface FindingCardProps {
@@ -52,7 +55,7 @@ export interface FindingCardProps {
    *  somewhere with no way to persist (a preview) simply shows the state
    *  chip and no controls, rather than offering an action that goes
    *  nowhere. */
-  onVerify?: (change: VerificationChange) => void;
+  onVerify?: (change: VerificationChange, atVersion?: number) => void;
   /** True while this card's verification write is in flight. */
   verifyBusy?: boolean;
   /** Reports a new note's text. Optional, same reasoning as `onVerify`: a
@@ -123,6 +126,17 @@ export interface FindingCardProps {
    *  else (P25). */
   onReapplyConflict?: () => void;
   onDismissConflict?: () => void;
+  /**
+   * True while a control that composes a disposition for THIS finding is
+   * open somewhere the card cannot see (P36).
+   *
+   * `ResultsView` mounts a second `RejectReasonModal` for the keyboard path
+   * (`r` on the focused clause), which is not this card's own dialog and
+   * which this card would otherwise have no way to know about. The card's
+   * own reject dialog reports itself through `VerificationControls`; this is
+   * the other half, and both feed one gate.
+   */
+  rejectModalOpen?: boolean;
 }
 
 /**
@@ -174,10 +188,52 @@ export function FindingCard({
   onVerify, verifyBusy, onAddNote, noteBusy, authorInitials, localUserId,
   onConfirmNetPosition, onAmendNetPosition, netPositionBusy, documentInfo,
   disposition, audience = NO_DIRECTORY, conflict, onReapplyConflict, onDismissConflict,
+  rejectModalOpen = false,
 }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
   const [trailOpen, setTrailOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [ownRejectOpen, setOwnRejectOpen] = useState(false);
+
+  /**
+   * THE DISPOSITION THIS CARD IS SHOWING, which is not always the one it was
+   * last handed (P36).
+   *
+   * A change from somebody else is applied the moment it arrives — that is
+   * the default and it must stay the default, or the app feels broken. What
+   * `mayApplyNow` holds back is exactly two cases: a write of this finding's
+   * own disposition is in flight, or a control composing one for this
+   * finding is open. In those two the incoming row is HELD and ANNOUNCED,
+   * never swapped in under the person's hand.
+   *
+   * `heldIncoming` is DERIVED rather than stored: "something is being held"
+   * is precisely "the prop and what is on screen disagree", and a second
+   * piece of state saying the same thing is a second thing to get out of
+   * step. `sameDisposition` compares VERSIONS, not object identity — every
+   * poll hands this a structurally identical but referentially new object,
+   * and an identity comparison would announce a change nobody made every few
+   * seconds at anyone who happened to be typing.
+   */
+  // This card's own identifier, and the only one it needs: every question
+  // `mayApplyNow` asks here is "is something open or in flight FOR ME". The
+  // three-key shape is what the poll and socket paths need, where the busy
+  // cell and the incoming cell are genuinely different findings.
+  const cellKey = clause.id;
+  const gateOpen = mayApplyNow({
+    busyKey: verifyBusy ? cellKey : null,
+    openModalKey: (ownRejectOpen || rejectModalOpen) ? cellKey : null,
+    findingKey: cellKey,
+  });
+  const [shownDisposition, setShownDisposition] = useState(disposition);
+  useEffect(() => {
+    // A disposition for a DIFFERENT cell is not a change to this one — the
+    // grid's detail panel re-renders this component for another clause
+    // without remounting it — so it is taken immediately whatever is open.
+    if (sameDisposition(disposition, shownDisposition)) return;
+    if (gateOpen || !sameCell(disposition, shownDisposition)) setShownDisposition(disposition);
+  }, [disposition, shownDisposition, gateOpen]);
+  const heldIncoming = !sameDisposition(disposition, shownDisposition)
+    && sameCell(disposition, shownDisposition) ? disposition : undefined;
 
   if (status === 'pending') {
     return (
@@ -413,7 +469,7 @@ export function FindingCard({
            and no failing test. */}
         {isVerifiable(finding) && (
           <p data-disposition-label className="font-ui text-ui-sm text-ink-4">
-            {dispositionLabel(disposition, audience)}
+            {dispositionLabel(shownDisposition, audience)}
             {/* §6.3: "the card shows that fact inline and makes the history
                reachable in one action". ONE action, from the line that
                states the fact.
@@ -423,7 +479,7 @@ export function FindingCard({
                empty panel would be an affordance for nothing. The ids come
                off the disposition the SERVER stated, so the panel cannot be
                opened against a cell this card only thinks it is showing. */}
-            {disposition && disposition.disposition.changedCount > 0 && (
+            {shownDisposition && shownDisposition.disposition.changedCount > 0 && (
               <>
                 {' '}
                 <button
@@ -435,6 +491,17 @@ export function FindingCard({
                 </button>
               </>
             )}
+          </p>
+        )}
+
+        {/* HELD, AND SAID (P36). Applying an update under an open dialogue
+           is worse than showing a state the store did not take: the person
+           then submits a judgement about text that has moved, with no error
+           and no flicker anyone would name. Concealing it would be the same
+           defect one step later, so the hold is announced. */}
+        {isVerifiable(finding) && heldIncoming && (
+          <p data-held-update className="font-ui text-ui-sm text-ink-4" role="status">
+            {heldUpdateLine(heldIncoming, audience)}
           </p>
         )}
 
@@ -457,7 +524,14 @@ export function FindingCard({
           <VerificationControls
             verification={finding.verification}
             busy={verifyBusy}
-            onChange={onVerify}
+            // THE VERSION THIS CARD WAS SHOWING, not the one the module
+            // cache last heard (P36). A change held off the screen still
+            // moved that cache, so a judgement submitted from here would
+            // otherwise land on a state its author never read. Stating what
+            // was on screen means the store REFUSES it, and the refusal
+            // names who replaced it.
+            onChange={(change) => onVerify(change, shownDisposition?.disposition.version)}
+            onRejectOpenChange={setOwnRejectOpen}
           />
         )}
 
@@ -472,11 +546,11 @@ export function FindingCard({
         )}
       </div>
 
-      {historyOpen && disposition && (
+      {historyOpen && shownDisposition && (
         <DispositionHistory
-          reviewId={disposition.disposition.reviewId}
-          findingsKey={disposition.disposition.findingsKey}
-          clauseId={disposition.disposition.clauseId}
+          reviewId={shownDisposition.disposition.reviewId}
+          findingsKey={shownDisposition.disposition.findingsKey}
+          clauseId={shownDisposition.disposition.clauseId}
           audience={audience}
           onClose={() => setHistoryOpen(false)}
         />

@@ -134,7 +134,7 @@ describe('ResultsView — keyboard verify loop gated on status (Critical 2)', ()
     keyDown({ key: 'j' }); // c3
     keyDown({ key: 'j' }); // c4, done
     keyDown({ key: 'v' });
-    expect(onVerify).toHaveBeenCalledWith('d1', 'c4', { state: 'verified' });
+    expect(onVerify).toHaveBeenCalledWith('d1', 'c4', { state: 'verified' }, undefined);
   });
 
   it('still moves the cursor across every clause regardless of status (j/k are not gated)', () => {
@@ -148,7 +148,7 @@ describe('ResultsView — keyboard verify loop gated on status (Critical 2)', ()
     keyDown({ key: 'v' });
     // Only the done clause (c4, index 3) can have produced a call.
     expect(onVerify).toHaveBeenCalledTimes(1);
-    expect(onVerify).toHaveBeenCalledWith('d1', 'c4', { state: 'verified' });
+    expect(onVerify).toHaveBeenCalledWith('d1', 'c4', { state: 'verified' }, undefined);
     expect(container.textContent).toContain('Assignment');
   });
 });
@@ -241,7 +241,7 @@ describe('ResultsView — keyboard verify loop gated on verifyBusyKey (Minor 5)'
     );
     // Focus starts at c1 (index 0), which is done and not the busy key.
     keyDown({ key: 'v' });
-    expect(onVerify).toHaveBeenCalledWith('d1', 'c1', { state: 'verified' });
+    expect(onVerify).toHaveBeenCalledWith('d1', 'c1', { state: 'verified' }, undefined);
     expect(container.textContent).toContain('Governing Law');
   });
 });
@@ -488,7 +488,7 @@ describe('ResultsView — the comparison grid\'s "Open in review" handoff', () =
     // gate lets `v` act on. If the cursor had defaulted to index 0 (c1,
     // pending) this would not fire at all.
     keyDown({ key: 'v' });
-    expect(onVerify).toHaveBeenCalledWith('d1', 'c4', { state: 'verified' });
+    expect(onVerify).toHaveBeenCalledWith('d1', 'c4', { state: 'verified' }, undefined);
     expect(container).toBeTruthy();
   });
 

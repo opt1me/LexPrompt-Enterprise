@@ -11,6 +11,19 @@ export interface VerificationControlsProps {
    *  the first is known to have persisted (spec section 9). */
   busy?: boolean;
   onChange: (change: VerificationChange) => void;
+  /**
+   * Reports whether the reject-reason dialog this owns is open (P36).
+   *
+   * The dialog's state stays HERE — it is this component's own control and
+   * lifting it would put a modal's open flag three levels up from the button
+   * that opens it. What the card above needs is not the state but the FACT,
+   * because a disposition arriving from somebody else must not be applied
+   * under an open dialogue, and the card is what renders the disposition.
+   *
+   * Optional: a caller with no interest in the fact passes nothing and
+   * behaves exactly as before.
+   */
+  onRejectOpenChange?: (open: boolean) => void;
 }
 
 const ACTION = 'font-ui text-ui-sm px-2.5 py-1 rounded-control border transition-colors disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1';
@@ -25,9 +38,19 @@ const ACTION = 'font-ui text-ui-sm px-2.5 py-1 rounded-control border transition
  * verification that displays without persisting is the single worst failure
  * this feature can have.
  */
-export function VerificationControls({ verification, busy = false, onChange }: VerificationControlsProps) {
+export function VerificationControls({
+  verification, busy = false, onChange, onRejectOpenChange,
+}: VerificationControlsProps) {
   const [rejectOpen, setRejectOpen] = useState(false);
   const active = verification.state;
+
+  // Reported on the way through rather than from an effect: an effect would
+  // fire a frame after the dialog opened, and the frame in between is
+  // exactly when an incoming change would be applied under it.
+  const setReject = (open: boolean): void => {
+    setRejectOpen(open);
+    onRejectOpenChange?.(open);
+  };
 
   return (
     <>
@@ -55,7 +78,7 @@ export function VerificationControls({ verification, busy = false, onChange }: V
           <button
             type="button"
             disabled={busy}
-            onClick={() => setRejectOpen(true)}
+            onClick={() => setReject(true)}
             className={`${ACTION} ${active === 'rejected' ? 'bg-risk-high text-page border-risk-high' : 'border-risk-high-edge text-risk-high hover:bg-risk-high-tint'}`}
           >
             <XCircle className="w-3 h-3" aria-hidden="true" /> Reject
@@ -76,9 +99,9 @@ export function VerificationControls({ verification, busy = false, onChange }: V
       <RejectReasonModal
         open={rejectOpen}
         initialReason={verification.state === 'rejected' ? verification.reason ?? '' : ''}
-        onCancel={() => setRejectOpen(false)}
+        onCancel={() => setReject(false)}
         onConfirm={(reason) => {
-          setRejectOpen(false);
+          setReject(false);
           onChange({ state: 'rejected', reason });
         }}
       />

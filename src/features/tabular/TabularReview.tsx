@@ -27,7 +27,9 @@ export interface TabularReviewProps {
    *  Retry a done/error/cancelled cell already has. */
   interrupted?: boolean;
   /** Forwarded to `CellDetail` for whichever cell is open (Task 10). */
-  onVerify?: (docId: string, clauseId: string, change: VerificationChange) => Promise<void>;
+  onVerify?: (
+    docId: string, clauseId: string, change: VerificationChange, atVersion?: number,
+  ) => Promise<void>;
   onAddNote?: (docId: string, clauseId: string, text: string) => Promise<void>;
   verifyBusyKey?: string | null;
   authorInitials?: string;
@@ -230,7 +232,10 @@ export function TabularReview({
             finding={selectedFinding}
             onClose={() => setSelected(null)}
             onRetry={(clauseId) => onRetryCell(selected.docId, clauseId)}
-            onVerify={onVerify ? (change) => onVerify(selected.docId, selected.clauseId, change) : undefined}
+            onVerify={onVerify
+              ? (change, atVersion) =>
+                onVerify(selected.docId, selected.clauseId, change, atVersion)
+              : undefined}
             onAddNote={onAddNote ? (text) => onAddNote(selected.docId, selected.clauseId, text) : undefined}
             verifyBusy={verifyBusyKey === findingKey(selected.docId, selected.clauseId)}
             authorInitials={authorInitials}

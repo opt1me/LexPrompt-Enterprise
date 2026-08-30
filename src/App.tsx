@@ -2692,7 +2692,9 @@ function AppShell({ signIn }: { signIn: () => void }) {
    * says the plain thing, because half an attribution surface is worse than
    * none (P28).
    */
-  const handleVerify = async (docId: string, clauseId: string, change: VerificationChange) => {
+  const handleVerify = async (
+    docId: string, clauseId: string, change: VerificationChange, atVersion?: number,
+  ) => {
     const current = latestRunRef.current ?? run;
     if (!current) return;
     const key = findingsKeyFor(current.target, docId);
@@ -2701,7 +2703,8 @@ function AppShell({ signIn }: { signIn: () => void }) {
 
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
-      const { disposition } = await setDisposition(current.id, key, clauseId, change);
+      const { disposition } = await setDisposition(
+        current.id, key, clauseId, change, atVersion);
       // The write landed, so whatever refusal was on screen is about a state
       // that no longer stands. Cleared here rather than left for the next
       // render, because a notice saying "your change was not applied" beside
@@ -2785,7 +2788,12 @@ function AppShell({ signIn }: { signIn: () => void }) {
   const handleReapplyConflict = () => {
     const conflict = verifyConflict;
     if (!conflict) return;
-    void handleVerify(conflict.docId, conflict.clauseId, conflict.attempted);
+    // Against the version that WON, which the refusal stated and
+    // `rememberConflict` recorded — never against whatever the card was
+    // showing when the refused click was made, which is the version that has
+    // just been refused.
+    void handleVerify(conflict.docId, conflict.clauseId, conflict.attempted,
+      conflict.current.disposition.version);
   };
 
   /** The sentence a refused verification shows when the refusal named no

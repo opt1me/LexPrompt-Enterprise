@@ -572,3 +572,160 @@ describe('FindingCard — the history, reachable in one action (§6.3)', () => {
     expect(shape.disposition.findingsKey).toBe('d1');
   });
 });
+
+/**
+ * P36: A CHANGE THAT ARRIVES WHILE SOMEBODY IS MID-DECISION.
+ *
+ * `await-then-apply` says a reviewer never sees a state the store did not
+ * take. It does not cover the inverse, which live change introduces: a state
+ * the store DID take, swapped in under a person's hand while they are
+ * deciding about the state it replaced. A partner's rejection landing while
+ * the trainee is three words into a reject reason replaces the state the
+ * reason is being written about, and the symptom is nothing — no error, no
+ * flicker anyone would name, and a history row that reads as a considered
+ * second opinion.
+ */
+function rerenderable(node: React.ReactElement): {
+  container: HTMLDivElement; rerender: (next: React.ReactElement) => void;
+} {
+  const { container, root } = render(node);
+  cleanup = () => { act(() => { root.unmount(); }); container.remove(); };
+  return { container, rerender: (next) => { act(() => { root.render(next); }); } };
+}
+
+const verifiedByTrainee = DISPOSITION_SHAPES['verified once'];
+const rejectedByOther = DISPOSITION_SHAPES['rejected with a reason'];
+
+const label = (container: HTMLDivElement): string =>
+  container.querySelector('[data-disposition-label]')!.textContent!;
+
+const rejectButton = (container: HTMLDivElement): HTMLButtonElement =>
+  Array.from(container.querySelectorAll('button')).find(b => /^Reject$/.test(b.textContent!.trim()))!;
+
+describe('FindingCard — a change arriving mid-decision is held and announced (P36)', () => {
+  const props = {
+    ...baseProps,
+    finding: doneFinding({ verification: { state: 'verified' as const, byUserId: 'u1', at: 1 } }),
+    audience: TEST_AUDIENCE,
+    onVerify: () => {},
+  };
+
+  it('applies an incoming change immediately when nothing is open and nothing is in flight', () => {
+    // THE DEFAULT, first. A guard that became "hold everything" would make
+    // the app feel broken, which is a second and quieter defect.
+    const { container, rerender } = rerenderable(
+      <FindingCard {...props} disposition={verifiedByTrainee} />);
+    expect(label(container)).toContain('Verified by A. Trainee');
+    rerender(<FindingCard {...props} disposition={rejectedByOther} />);
+    expect(label(container)).toContain('Rejected by R. Okafor');
+    expect(container.querySelector('[data-held-update]')).toBeNull();
+  });
+
+  it('holds an incoming change while the reject-reason modal is open, and announces it', () => {
+    const { container, rerender } = rerenderable(
+      <FindingCard {...props} disposition={verifiedByTrainee} />);
+    act(() => { rejectButton(container).click(); });
+    expect(container.querySelector('[role="dialog"]')).toBeTruthy();
+
+    rerender(<FindingCard {...props} disposition={rejectedByOther} />);
+    // NOT applied under the open control...
+    expect(label(container)).toContain('Verified by A. Trainee');
+    // ...but SAID, so nothing is hidden. Concealing it would leave a person
+    // writing a rejection about a state that no longer exists.
+    expect(container.querySelector('[data-held-update]')!.textContent)
+      .toContain('R. Okafor changed this while you were writing');
+  });
+
+  it('applies the held change the moment the modal closes without submitting', () => {
+    const { container, rerender } = rerenderable(
+      <FindingCard {...props} disposition={verifiedByTrainee} />);
+    act(() => { rejectButton(container).click(); });
+    rerender(<FindingCard {...props} disposition={rejectedByOther} />);
+    expect(label(container)).toContain('Verified by A. Trainee');
+
+    const cancel = Array.from(container.querySelectorAll('button'))
+      .find(b => /^Cancel$/.test(b.textContent!.trim()))!;
+    act(() => { cancel.click(); });
+    expect(label(container)).toContain('Rejected by R. Okafor');
+    expect(container.querySelector('[data-held-update]')).toBeNull();
+  });
+
+  it('holds an incoming change while a write of THIS finding s disposition is in flight', () => {
+    // The `busyKey` half of the guard. Delete that condition from
+    // `mayApplyNow` and THIS is the case that goes red — the brief's own
+    // Step 4 says a guard with an untested half is half a guard.
+    const { container, rerender } = rerenderable(
+      <FindingCard {...props} disposition={verifiedByTrainee} verifyBusy />);
+    rerender(<FindingCard {...props} disposition={rejectedByOther} verifyBusy />);
+    expect(label(container)).toContain('Verified by A. Trainee');
+    expect(container.querySelector('[data-held-update]')!.textContent)
+      .toContain('changed this while you were writing');
+
+    rerender(<FindingCard {...props} disposition={rejectedByOther} />);
+    expect(label(container)).toContain('Rejected by R. Okafor');
+  });
+
+  it('holds nothing when the same row arrives again under a different object', () => {
+    // Every poll replaces the whole dispositions map, so the card is handed
+    // a structurally identical but referentially new object constantly. An
+    // identity comparison would announce a change nobody made, every few
+    // seconds, at anyone who happened to be typing.
+    const { container, rerender } = rerenderable(
+      <FindingCard {...props} disposition={verifiedByTrainee} />);
+    act(() => { rejectButton(container).click(); });
+    rerender(<FindingCard {...props} disposition={structuredClone(verifiedByTrainee)} />);
+    expect(container.querySelector('[data-held-update]')).toBeNull();
+    expect(label(container)).toContain('Verified by A. Trainee');
+  });
+
+  it('submits the version it was SHOWING, so a judgement made against a held state is refused',
+    () => {
+      /*
+       * The half of P36 that has no visible symptom at all.
+       *
+       * Holding the display is not enough on its own: the read that carried
+       * the incoming change also moved `src/lib/api/findings.ts`'s version
+       * cache, so a rejection submitted from the dialog would take the NEW
+       * version, be accepted, and land on a state its author never read —
+       * with no error, and a history row that reads as a considered second
+       * opinion.
+       *
+       * Stating what was on screen means the store refuses it (Task 7) and
+       * the person is told what replaced it. Mutation: drop `atVersion` in
+       * `FindingCard`'s `onChange` and this goes red.
+       */
+      const seen: (number | undefined)[] = [];
+      const onVerify = (_c: unknown, atVersion?: number) => { seen.push(atVersion); };
+      const { container, rerender } = rerenderable(
+        <FindingCard {...props} disposition={verifiedByTrainee} onVerify={onVerify} />);
+      act(() => { rejectButton(container).click(); });
+      rerender(
+        <FindingCard {...props} disposition={rejectedByOther} onVerify={onVerify} />);
+
+      const textarea = container.querySelector('textarea')!;
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype, 'value')!.set!;
+      act(() => {
+        setter.call(textarea, 'Cap is uncapped');
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+      const confirm = Array.from(container.querySelectorAll('button'))
+        .find(b => /Confirm rejection/.test(b.textContent!))!;
+      act(() => { confirm.click(); });
+
+      expect(seen).toEqual([verifiedByTrainee.disposition.version]);
+      expect(seen[0]).not.toBe(rejectedByOther.disposition.version);
+    });
+
+  it('holds an incoming change while the KEYBOARD path s reject dialog is open for it', () => {
+    // `ResultsView` mounts its own `RejectReasonModal` for `r`, which this
+    // card cannot see. Without `rejectModalOpen` the guard would cover the
+    // mouse path and silently not the keyboard one — the shape Critical 2
+    // already cost this project once.
+    const { container, rerender } = rerenderable(
+      <FindingCard {...props} disposition={verifiedByTrainee} rejectModalOpen />);
+    rerender(<FindingCard {...props} disposition={rejectedByOther} rejectModalOpen />);
+    expect(label(container)).toContain('Verified by A. Trainee');
+    expect(container.querySelector('[data-held-update]')).toBeTruthy();
+  });
+});

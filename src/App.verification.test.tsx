@@ -745,10 +745,14 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
 
     // Only the change and the version this browser was looking at.
     expect(setDispositionMock.mock.calls[0][3]).toEqual({ state: 'verified' });
-    // Nothing about the actor crossed the wire — the fourth argument is the
-    // change and nothing else. (`getProfile` is still used elsewhere in the
-    // app; what matters is that this write does not state who made it.)
-    expect(setDispositionMock.mock.calls[0]).toHaveLength(4);
+    // Nothing about the actor crossed the wire. Five arguments as of Stage 4
+    // — the fifth is `atVersion`, the disposition version the CARD was
+    // showing (P36), which is a concurrency token and not a claim about who
+    // did anything. (`getProfile` is still used elsewhere in the app; what
+    // matters is that this write does not state who made it.)
+    expect(setDispositionMock.mock.calls[0]).toHaveLength(5);
+    const atVersion: unknown = setDispositionMock.mock.calls[0][4];
+    expect(atVersion === undefined || typeof atVersion === 'number').toBe(true);
     expect(Array.from(container.querySelectorAll('[role="status"]'))[0].textContent)
       .toBe('Verified');
   });

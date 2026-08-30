@@ -93,7 +93,9 @@ export interface ResultsViewProps {
   /** Persists the human's verification intent for one finding (Task 10).
    *  Optional: omitted entirely, a card renders its state chip with no
    *  controls rather than an action that goes nowhere. */
-  onVerify?: (docId: string, clauseId: string, change: VerificationChange) => Promise<void>;
+  onVerify?: (
+    docId: string, clauseId: string, change: VerificationChange, atVersion?: number,
+  ) => Promise<void>;
   /** Persists a new note against one finding (Task 10). Same optionality
    *  reasoning as `onVerify`. */
   onAddNote?: (docId: string, clauseId: string, text: string) => Promise<void>;
@@ -208,6 +210,16 @@ export function ResultsView({
   const [tab, setTab] = useState<Tab>('findings');
   const [focusIndex, setFocusIndex] = useState(0);
   const [rejectClauseId, setRejectClauseId] = useState<string | null>(null);
+  /**
+   * The disposition version the KEYBOARD path's reject dialog was opened
+   * against (P36).
+   *
+   * Captured when the dialog opens, not read when it is submitted: a change
+   * from somebody else landing while the reason is being typed moves the
+   * module cache, and a submission taking the cache would land a rejection
+   * on a state its author never read. What is stated is what was on screen.
+   */
+  const [rejectAtVersion, setRejectAtVersion] = useState<number | undefined>(undefined);
 
   const [emailLoading, setEmailLoading] = useState(false);
   const [emailContent, setEmailContent] = useState<string | null>(null);
@@ -455,8 +467,14 @@ export function ResultsView({
       // the first was known to have persisted, with the second racing the
       // first's read-modify-write on `latestRunRef`. Gate it the same way.
       if (verifyBusyKey === findingKey(activeDocId, clause.id)) return;
-      if (change.state === 'rejected') { setRejectClauseId(clause.id); return; }
-      void onVerify(activeDocId, clause.id, change);
+      const at = findingsKey ? dispositionOf?.(findingsKey, clause.id)?.disposition.version
+        : undefined;
+      if (change.state === 'rejected') {
+        setRejectClauseId(clause.id);
+        setRejectAtVersion(at);
+        return;
+      }
+      void onVerify(activeDocId, clause.id, change, at);
     },
   });
 
@@ -698,7 +716,9 @@ export function ResultsView({
                       onSuggestFix={handleSuggestFix}
                       suggestFixLoading={revisionLoadingClauseId === clause.id}
                       interrupted={interrupted}
-                      onVerify={onVerify ? (change) => onVerify(activeDocId, clause.id, change) : undefined}
+                      onVerify={onVerify
+                        ? (change, atVersion) => onVerify(activeDocId, clause.id, change, atVersion)
+                        : undefined}
                       onAddNote={onAddNote ? (text) => onAddNote(activeDocId, clause.id, text) : undefined}
                       verifyBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
                       noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
@@ -719,6 +739,11 @@ export function ResultsView({
                       }
                       onReapplyConflict={onReapplyConflict}
                       onDismissConflict={onDismissConflict}
+                      // The KEYBOARD path's reject dialog (`r`), which this
+                      // view owns and the card cannot see. The card's own
+                      // dialog reports itself; both feed one gate, so an
+                      // incoming change is held under either (P36).
+                      rejectModalOpen={rejectClauseId === clause.id}
                       onConfirmNetPosition={onConfirmNetPosition ? () => onConfirmNetPosition(activeDocId, clause.id) : undefined}
                       onAmendNetPosition={onAmendNetPosition ? (text) => onAmendNetPosition(activeDocId, clause.id, text) : undefined}
                       netPositionBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
@@ -797,11 +822,15 @@ export function ResultsView({
             ? findings[rejectClauseId]?.verification.reason ?? ''
             : ''
         }
-        onCancel={() => setRejectClauseId(null)}
+        onCancel={() => { setRejectClauseId(null); setRejectAtVersion(undefined); }}
         onConfirm={(reason) => {
           const clauseId = rejectClauseId;
+          const atVersion = rejectAtVersion;
           setRejectClauseId(null);
-          if (clauseId && onVerify) void onVerify(activeDocId, clauseId, { state: 'rejected', reason });
+          setRejectAtVersion(undefined);
+          if (clauseId && onVerify) {
+            void onVerify(activeDocId, clauseId, { state: 'rejected', reason }, atVersion);
+          }
         }}
       />
     </div>

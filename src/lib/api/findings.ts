@@ -196,13 +196,29 @@ export function findingVersionFor(
  */
 export async function setDisposition(
   reviewId: string, findingsKey: string, clauseId: string, change: VerificationChange,
+  atVersion?: number,
 ): Promise<DispositionWriteResult> {
   const result = await apiSend<DispositionWriteResult>(
     'PUT', dispositionPath(reviewId, findingsKey, clauseId),
     {
       state: change.state,
       ...(change.reason ? { reason: change.reason } : {}),
-      version: dispositionVersionFor(reviewId, findingsKey, clauseId),
+      // THE VERSION THE PERSON WAS LOOKING AT, when the caller knows it.
+      //
+      // The module cache is what this browser last HEARD; `atVersion` is
+      // what the reviewer last SAW, and P36 is the case where those differ.
+      // A change arriving while a reject-reason dialog is open is held off
+      // the screen — but the read that carried it still moved this cache, so
+      // a submission taking the cache would carry the NEW version, be
+      // accepted, and land a rejection on a state the person never read.
+      // Refused, visibly, is the correct outcome: they acted on what they
+      // could see, and `ConflictNotice` tells them what replaced it.
+      //
+      // Optional, and the fallback is the cache: a caller with no card in
+      // hand (the whole-review paths) has nothing better to state, and a
+      // wrong version is REFUSED rather than applied, which is the only
+      // property the fallback needs.
+      version: atVersion ?? dispositionVersionFor(reviewId, findingsKey, clauseId),
     },
   );
   rememberDispositionVersion(reviewId, findingsKey, clauseId, result.disposition.version);
