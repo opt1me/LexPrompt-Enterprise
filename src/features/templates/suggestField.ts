@@ -49,7 +49,7 @@ const SUGGESTION_SCHEMA = {
  * this function. The caller (`TemplateEditor`) holds it as an unaccepted
  * suggestion until a human explicitly takes it; see `FieldSuggestion.tsx`.
  *
- * Errors from `chatJson` propagate untouched, so `isAuthFailure` (`lib/model/authFailure.ts`)
+ * Errors from `chatJson` propagate untouched, so `isAuthFailure` (`@lexprompt/core`)
  * still recognises a 401/403 on whatever this throws.
  */
 export async function suggestField(

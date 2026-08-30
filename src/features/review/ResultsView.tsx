@@ -1,7 +1,7 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Table, Mail, FileDown, Loader, FileText, X } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun } from '../../types';
-import { isAuthFailure } from '../../lib/model/authFailure';
+import { isAuthFailure } from '@lexprompt/core';
 import {
   ModelError,
   SERVICE_CONFIG_HINT,

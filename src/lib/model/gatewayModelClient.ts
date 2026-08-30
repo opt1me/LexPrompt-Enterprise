@@ -1,5 +1,5 @@
 import {
-  ModelError, parseJsonLoose, readFrames,
+  ModelError, parseJsonLoose, readFrames, inferResponseFrom,
   type AllowedModel, type InferRequest, type InferResponse, type ModelClient,
 } from '@lexprompt/core';
 import { getAccessToken } from '../auth/oidc';
@@ -135,33 +135,15 @@ export function makeGatewayModelClient(deps: GatewayClientDeps): ModelClient {
   };
 
   /**
-   * A 200 is not a contract. `readJson` is a cast, so a body that parses as
-   * JSON but is not an `InferResponse` — an intermediary's interstitial, an
-   * ingress error page served as 200, a future `apps/api` change — arrives
-   * with `content === undefined` and no complaint. `draftEmail` then hands
-   * `setEmailContent(undefined)` to a modal gated on `!== null`, and a
-   * lawyer gets an empty client email with a working Copy button: the
-   * blank-CSV-cell defect, in a new place.
-   *
-   * This is the BROWSER checking the GATEWAY's own envelope, on the side of
-   * the wire that renders it. It is deliberately NOT a restatement of
-   * `openrouter.ts`'s "returned no message content" guard — that one was
-   * about a provider's reply, it has a live successor in the gateway's
-   * `openaiCompatible.readResponse`, and a second provider-shaped copy of it
-   * here is precisely the sibling drift this project has paid for six times.
+   * A 200 is not a contract, and `readJson` is a cast — see
+   * `inferResponseFrom` in `@lexprompt/core` for the whole of why, and for
+   * the `draftEmail` failure it was written for. The check lives there
+   * rather than here because `apps/api/src/run/modelClient.ts` reads the
+   * same envelope off the same endpoint and must reach the same verdict; the
+   * only thing this wrapper adds is getting the JSON out of a `Response`.
    */
-  const readInferResponse = async (response: Response): Promise<InferResponse> => {
-    const body = await readJson<InferResponse>(response);
-    if (typeof body?.content !== 'string') {
-      throw new ModelError(
-        "LexPrompt's server answered without an answer in it. Nothing was returned that could "
-        + 'be shown, so nothing is being shown. Try again, and tell your IT team if it repeats.',
-        'upstream_failed', 502,
-        typeof body?.callId === 'string' ? body.callId : undefined,
-      );
-    }
-    return body;
-  };
+  const readInferResponse = async (response: Response): Promise<InferResponse> =>
+    inferResponseFrom(await readJson<unknown>(response));
 
   const chat = async (req: InferRequest, signal?: AbortSignal): Promise<InferResponse> => {
     const response = await post('/v1/infer', req, signal);

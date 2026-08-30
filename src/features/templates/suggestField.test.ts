@@ -5,7 +5,7 @@ import type { WorkspaceSettings } from '@lexprompt/core';
 // `extractClause.test.ts`: `isAuthFailure` must stay real, since the whole
 // point of propagating errors untouched is that it still recognises them.
 import { ModelError } from '@lexprompt/core';
-import { isAuthFailure } from '../../lib/model/authFailure';
+import { isAuthFailure } from '@lexprompt/core';
 
 vi.mock('../../lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {

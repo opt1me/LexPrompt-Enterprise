@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { ModelError } from '@lexprompt/core';
-import { isAccessRefusedError, isAuthFailure } from './authFailure';
+import { ModelError } from './protocol.ts';
+import { isAccessRefusedError, isAuthFailure } from './authFailure.ts';
 
 describe('isAccessRefusedError', () => {
   it.each(['no_role', 'account_disabled', 'group_overage'] as const)(

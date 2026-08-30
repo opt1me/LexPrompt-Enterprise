@@ -10,6 +10,18 @@ export type {
   StopReason,
 } from './model/protocol.ts';
 export type { ModelClient } from './model/client.ts';
+// The two "a retry cannot fix this" predicates. They lived in
+// `src/lib/model/authFailure.ts` and moved here for one reason: the
+// extractors read `isAuthFailure` to set `Finding.authError`, and the
+// extractors now run in the browser AND in the worker. Both are pure tests
+// over a `ModelError` code, so they belong beside `protocol.ts`, which is
+// where the codes themselves are declared.
+export { isAuthFailure, isAccessRefusedError } from './model/authFailure.ts';
+// Reading the gateway's two envelopes. Shared because BOTH the browser and
+// `apps/api` now call /v1/infer, and what must not diverge is the judgement
+// — which bodies count as an answer, and what a refusal means — not the
+// transport each one holds it in.
+export { codeFromStatus, modelErrorFrom, inferResponseFrom } from './model/inferEnvelope.ts';
 export {
   createSseEventReader, sseFields, encodeFrame, decodeFrame, readFrames,
 } from './model/sse.ts';
@@ -78,3 +90,23 @@ export type { ReadableSource, DocumentReadability } from './domain/modelContext.
 export { orderedMembers } from './domain/collectionOrder.ts';
 export type { CollectionMember } from './domain/collectionOrder.ts';
 export { buildCollectionPrompt } from './domain/collectionPrompt.ts';
+
+// The two extractors. They are SEPARATE functions with their own prompts and
+// their own schemas, deliberately (CLAUDE.md): a collection produces one
+// synthesised position per clause across many documents, a standalone review
+// produces one answer per document, and sharing code between them is how the
+// single-document path acquires a special case for collections later. Do not
+// merge them.
+//
+// Both take a `ModelClient` as their FIRST argument rather than importing
+// one. That is the whole of §9's "the worker runs the extractors from core":
+// the same function, over the same shapes, reached through the gateway from a
+// browser or from a worker.
+export {
+  extractClause, buildClausePrompt, clauseSchema, CLAUSE_SCHEMA,
+} from './review/extractClause.ts';
+export type { BuildClausePromptOptions, ExtractClauseContext } from './review/extractClause.ts';
+export {
+  extractCollectionClause, collectionClauseSchema, COLLECTION_CLAUSE_SCHEMA,
+} from './review/extractCollectionClause.ts';
+export type { ExtractCollectionClauseContext } from './review/extractCollectionClause.ts';

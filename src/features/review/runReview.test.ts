@@ -3,11 +3,16 @@ import { emptyRun, runReview, retryCell, runProgress, countNoContent } from './r
 import type { DocumentFile, PlaybookVersion, Finding, ReviewTarget, ReviewRun } from '../../types';
 import type { WorkspaceSettings, CollectionMember } from '@lexprompt/core';
 
-vi.mock('./extractClause', () => ({ extractClause: vi.fn() }));
-const { extractClause } = await import('./extractClause');
-
-vi.mock('./extractCollectionClause', () => ({ extractCollectionClause: vi.fn() }));
-const { extractCollectionClause } = await import('./extractCollectionClause');
+// The extractors live in `@lexprompt/core` now (Stage 3 Task 3), so the
+// mock target is the barrel — spread over `importOriginal` so every other
+// core export stays REAL. Stubbing the whole package would silently
+// replace `unchecked`, `findingsKeyFor` and the rest with undefined.
+vi.mock('@lexprompt/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@lexprompt/core')>(),
+  extractClause: vi.fn(),
+  extractCollectionClause: vi.fn(),
+}));
+const { extractClause, extractCollectionClause } = await import('@lexprompt/core');
 
 const settings: WorkspaceSettings = { modelChoiceId: 'm', concurrency: 2 };
 
@@ -34,7 +39,9 @@ const ok = (documentId: string, clauseId: string): Finding =>
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(extractClause).mockImplementation(async (d, c) => ok(d.id, c.id));
+  // `_client` first: the extractors take a `ModelClient` at position 0 now
+  // (Stage 3 Task 3), so every positional argument shifted by exactly one.
+  vi.mocked(extractClause).mockImplementation(async (_client, d, c) => ok(d.id, c.id));
 });
 
 describe('emptyRun', () => {
@@ -93,7 +100,7 @@ describe('emptyRun + runReview: a collection run writes under the key it was see
       { document: doc('d1'), documentId: 'd1', kind: 'original', position: 1 },
       { document: doc('d2'), documentId: 'd2', kind: 'varies', position: 2 },
     ];
-    vi.mocked(extractCollectionClause).mockImplementation(async (_members, clause) => ({
+    vi.mocked(extractCollectionClause).mockImplementation(async (_client, _members, clause) => ({
       clauseId: clause.id, status: 'done', citations: [], verification: { state: 'unchecked' }, notes: [],
     }));
 
@@ -134,7 +141,7 @@ describe('runReview', () => {
   });
 
   it('completes the run when one clause fails', async () => {
-    vi.mocked(extractClause).mockImplementation(async (d, c) =>
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) =>
       c.id === 'c1'
         ? { clauseId: c.id, status: 'error', citations: [], error: 'boom', verification: { state: 'unchecked' }, notes: [] }
         : ok(d.id, c.id));
@@ -150,7 +157,7 @@ describe('runReview', () => {
   it('respects the concurrency ceiling', async () => {
     let inFlight = 0;
     let peak = 0;
-    vi.mocked(extractClause).mockImplementation(async (d, c) => {
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) => {
       inFlight++;
       peak = Math.max(peak, inFlight);
       await new Promise(r => setTimeout(r, 5));
@@ -165,7 +172,7 @@ describe('runReview', () => {
 
   it('stops on abort', async () => {
     const controller = new AbortController();
-    vi.mocked(extractClause).mockImplementation(async (d, c) => {
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) => {
       await new Promise(r => setTimeout(r, 10));
       return ok(d.id, c.id);
     });
@@ -184,7 +191,7 @@ describe('runReview', () => {
   it('marks cells still pending at the moment of cancellation as cancelled, not left pending forever', async () => {
     const controller = new AbortController();
     let calls = 0;
-    vi.mocked(extractClause).mockImplementation(async (d, c) => {
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) => {
       calls++;
       await new Promise(r => setTimeout(r, 20));
       return ok(d.id, c.id);
@@ -215,7 +222,7 @@ describe('runReview', () => {
 
   it('resolves an in-flight cell to cancelled (not error) when its own extraction rejects with AbortError', async () => {
     const controller = new AbortController();
-    vi.mocked(extractClause).mockImplementation(async (d, c) => {
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) => {
       if (c.id === 'c1') return { clauseId: c.id, status: 'cancelled' as const, citations: [], verification: { state: 'unchecked' }, notes: [] };
       return ok(d.id, c.id);
     });
@@ -234,7 +241,7 @@ describe('runReview', () => {
   // pattern (see empty-review-investigation.md) has to reflect exactly the
   // findings extractClause flagged as no-content, across every document.
   it('counts no-content findings across the whole run via countNoContent', async () => {
-    vi.mocked(extractClause).mockImplementation(async (d, c) =>
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) =>
       c.id === 'c1'
         ? { clauseId: c.id, status: 'error', citations: [], error: 'no content', noContent: true, verification: { state: 'unchecked' }, notes: [] }
         : ok(d.id, c.id));
@@ -262,7 +269,7 @@ describe('runReview', () => {
 
 describe('retryCell', () => {
   it('re-runs one cell and leaves its neighbours untouched', async () => {
-    vi.mocked(extractClause).mockImplementation(async (d, c) =>
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) =>
       c.id === 'c1'
         ? { clauseId: c.id, status: 'error', citations: [], error: 'boom', verification: { state: 'unchecked' }, notes: [] }
         : ok(d.id, c.id));
@@ -271,7 +278,7 @@ describe('retryCell', () => {
     const failed = await runReview(emptyRun(template, docs), docs, settings, () => {});
 
     vi.mocked(extractClause).mockClear();
-    vi.mocked(extractClause).mockImplementation(async (d, c) => ok(d.id, c.id));
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) => ok(d.id, c.id));
     const retried = await retryCell(failed, docs[0], 'c1', settings, () => {});
 
     expect(retried.findings.d1.c1.status).toBe('done');
@@ -279,7 +286,7 @@ describe('retryCell', () => {
     // Pin retryCell's own behaviour, isolated from runReview's earlier calls:
     // exactly one call, for the specific clause it was asked to retry.
     expect(extractClause).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(extractClause).mock.calls[0][1].id).toBe('c1');
+    expect(vi.mocked(extractClause).mock.calls[0][2].id).toBe('c1');
   });
 
   it('is a no-op for an unknown clause id', async () => {
@@ -364,7 +371,7 @@ describe('retryCell — a collection run', () => {
   });
 
   it('with no collection argument, behaves exactly as the standalone path (regression pin)', async () => {
-    vi.mocked(extractClause).mockImplementation(async (d, c) => ok(d.id, c.id));
+    vi.mocked(extractClause).mockImplementation(async (_client, d, c) => ok(d.id, c.id));
     const docs = [doc('d1')];
     const run = await runReview(emptyRun(template, docs), docs, settings, () => {});
     const retried = await retryCell(run, docs[0], 'c1', settings, () => {});

@@ -13,8 +13,8 @@ const ROOT = path.resolve(__dirname, '../../..');
  * and `tsconfig.json` sets neither `strict` nor `noUnusedLocals`.
  */
 const SITES: Record<Purpose, string[]> = {
-  'review.clause': ['src/features/review/extractClause.ts'],
-  'review.collection_clause': ['src/features/review/extractCollectionClause.ts'],
+  'review.clause': ['packages/core/src/review/extractClause.ts'],
+  'review.collection_clause': ['packages/core/src/review/extractCollectionClause.ts'],
   'assistant.chat': ['src/features/assistant/chatContext.ts'],
   'playbook.draft': ['src/features/authoring/generateDraft.ts'],
   'playbook.suggest': [
@@ -76,8 +76,8 @@ describe('every purpose has a call site, and every call site names one', () => {
  * review or document exists), so `[]` there is correct, not an oversight.
  */
 const EXPECTED_CONTEXT_KEYS: Record<string, string[]> = {
-  'src/features/review/extractClause.ts': ['matterId', 'reviewId', 'clauseId', 'documentIds'],
-  'src/features/review/extractCollectionClause.ts': ['matterId', 'reviewId', 'clauseId', 'documentIds'],
+  'packages/core/src/review/extractClause.ts': ['matterId', 'reviewId', 'clauseId', 'documentIds'],
+  'packages/core/src/review/extractCollectionClause.ts': ['matterId', 'reviewId', 'clauseId', 'documentIds'],
   'src/features/assistant/chatContext.ts': ['matterId', 'documentIds'],
   'src/features/authoring/generateDraft.ts': [],
   'src/features/templates/suggestField.ts': [],
@@ -111,7 +111,9 @@ describe('every call site carries the context its table row names', () => {
  * The guard that actually protects the FUTURE, not just today's ten sites
  * (CLAUDE.md's "correct mechanism with no path to it" defect, hit seventeen
  * times in this codebase): every `chat`/`chatJson`/`chatStream` call anywhere
- * under `src/` must pass a `purpose` that is a member of `PURPOSES`, found by
+ * under `src/` OR `packages/core/src` — see `SCANNED_ROOTS`, and the note
+ * there about why the second root is not optional — must pass a `purpose`
+ * that is a member of `PURPOSES`, found by
  * parsing each file's AST rather than by enumerating file names — a listed
  * file passes because it is on the list above; an unlisted eleventh call
  * site is caught here because it is a `chat*` call with no recognisable
@@ -233,15 +235,34 @@ function listSourceFiles(dir: string): string[] {
  */
 const CLIENT_DEFINITION = 'src/lib/model/gatewayModelClient.ts';
 
-describe('every chat/chatJson/chatStream call in src/ carries a valid purpose', () => {
-  const files = listSourceFiles(path.join(ROOT, 'src'))
+/**
+ * BOTH roots, and the second one is not optional.
+ *
+ * Stage 3 Task 3 moved `extractClause` and `extractCollectionClause` into
+ * `packages/core` so the worker can run them. Two of the ten call sites this
+ * guard exists for therefore left `src/`. A walk that still looked only at
+ * `src/` would have gone on reporting green over EIGHT sites while calling
+ * itself a forever-guard — and the two it stopped watching are the two that
+ * send a firm's document text to a model.
+ */
+const SCANNED_ROOTS = ['src', 'packages/core/src'];
+
+const allSourceFiles = (): string[] =>
+  SCANNED_ROOTS.flatMap(root => listSourceFiles(path.join(ROOT, root)));
+
+describe('every chat/chatJson/chatStream call carries a valid purpose', () => {
+  const files = allSourceFiles()
     .filter(f => path.relative(ROOT, f).replace(/\\/g, '/') !== CLIENT_DEFINITION);
 
   it('exempts exactly one file, and it is the client that defines the methods', () => {
-    const all = listSourceFiles(path.join(ROOT, 'src'))
-      .map(f => path.relative(ROOT, f).replace(/\\/g, '/'));
+    const all = allSourceFiles().map(f => path.relative(ROOT, f).replace(/\\/g, '/'));
     expect(all).toContain(CLIENT_DEFINITION);
     expect(all.length - files.length).toBe(1);
+    // The second root is genuinely being walked — otherwise the two
+    // extractors would be invisible here, and this suite would read as
+    // coverage of ten call sites while watching eight.
+    expect(all).toContain('packages/core/src/review/extractClause.ts');
+    expect(all).toContain('packages/core/src/review/extractCollectionClause.ts');
   });
 
   it('finds at least the ten known call sites (sanity check on the AST walk itself)', () => {

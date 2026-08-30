@@ -104,7 +104,12 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
 // hood — mocking it lets a retry be driven deterministically without a real
 // network call, mirroring App.authRedirect.test.tsx's precedent.
 const extractClauseMock = vi.fn();
-vi.mock('./features/review/extractClause', () => ({
+// The extractors live in `@lexprompt/core` now (Stage 3 Task 3), so the
+// mock target is the barrel — spread over `importOriginal` so every other
+// core export stays REAL. Stubbing the whole package would silently
+// replace `unchecked`, `findingsKeyFor` and the rest with undefined.
+vi.mock('@lexprompt/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@lexprompt/core')>(),
   extractClause: (...args: unknown[]) => extractClauseMock(...args),
 }));
 

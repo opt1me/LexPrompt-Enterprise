@@ -108,7 +108,12 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
 }));
 
 const extractClauseMock = vi.fn();
-vi.mock('./features/review/extractClause', () => ({
+// The extractors live in `@lexprompt/core` now (Stage 3 Task 3), so the
+// mock target is the barrel — spread over `importOriginal` so every other
+// core export stays REAL. Stubbing the whole package would silently
+// replace `unchecked`, `findingsKeyFor` and the rest with undefined.
+vi.mock('@lexprompt/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@lexprompt/core')>(),
   extractClause: (...args: unknown[]) => extractClauseMock(...args),
 }));
 
@@ -395,7 +400,7 @@ describe('App — persisting a net position (Task 8)', () => {
   // which knows nothing about it and would otherwise silently revert it.
   it('does not lose a net position confirmation to the next update from a live run', async () => {
     let resolveC2: ((finding: unknown) => void) | undefined;
-    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => {
+    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => {
       if (clause.id === 'c1') {
         return Promise.resolve({
           clauseId: 'c1',
@@ -619,7 +624,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     // live); c2 stays pending until released, standing in for "some other
     // cell finishing" after the verification has already been written.
     let resolveC2: ((finding: unknown) => void) | undefined;
-    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => {
+    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => {
       if (clause.id === 'c1') {
         return Promise.resolve({
           clauseId: 'c1',
@@ -694,7 +699,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     // never sees the verification written mid-run. `persistFinal` must not
     // hand `saveNow` that raw return value.
     let resolveC2: ((finding: unknown) => void) | undefined;
-    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => {
+    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => {
       if (clause.id === 'c1') {
         return Promise.resolve({
           clauseId: 'c1',
@@ -752,7 +757,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     // so the run itself does not complete and dispose its saver out from
     // under this test's assertions on it.
     let resolveC2: ((finding: unknown) => void) | undefined;
-    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => {
+    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => {
       if (clause.id === 'c1') {
         return Promise.resolve({
           clauseId: 'c1',
@@ -839,7 +844,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     // Ordinary two-clause template: both clauses resolve immediately, so the
     // run completes and `persistFinal` disposes its saver and clears
     // `activeRunSaverRef` before this test ever verifies anything.
-    extractClauseMock.mockImplementation((_doc: unknown, clause: { id: string }) => Promise.resolve({
+    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => Promise.resolve({
       clauseId: clause.id,
       status: 'done',
       citations: clause.id === 'c1' ? [{ quote: 'x', documentId: 'live-doc' }] : [],
@@ -887,7 +892,12 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     // path above is covered, but nothing exercised the abort path's use of
     // `latestRunRef.current` in `persistFinal`.
     extractClauseMock.mockImplementation(
-      (_doc: unknown, clause: { id: string }, _template: unknown, _settings: unknown, signal?: AbortSignal) => {
+      // `_client` first: `extractClause` takes its `ModelClient` at position 0
+      // now, so `signal` is the SIXTH positional argument, not the fifth.
+      (
+        _client: unknown, _doc: unknown, clause: { id: string }, _template: unknown,
+        _settings: unknown, signal?: AbortSignal,
+      ) => {
         if (clause.id === 'c1') {
           return Promise.resolve({
             clauseId: 'c1',

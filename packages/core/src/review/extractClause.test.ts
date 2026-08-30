@@ -1,17 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractClause, buildClausePrompt, clauseSchema, CLAUSE_SCHEMA } from './extractClause';
-import type { PlaybookClause, PlaybookVersion, DocumentFile, StandardPosition } from '../../types';
-import type { WorkspaceSettings } from '@lexprompt/core';
+import { extractClause, buildClausePrompt, clauseSchema, CLAUSE_SCHEMA } from './extractClause.ts';
+import type { PlaybookClause, PlaybookVersion, DocumentFile, StandardPosition } from '../domain/types.ts';
+import type { WorkspaceSettings } from '../api/records.ts';
+import type { ModelClient } from '../model/client.ts';
 
-import { ModelError } from '@lexprompt/core';
+import { ModelError } from '../model/protocol.ts';
 
-vi.mock('../../lib/model/gatewayModelClient', () => ({
-  gatewayModelClient: {
-    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
-  },
-}));
-const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
-const chatJson = gatewayModelClient.chatJson;
+// The model client is a PARAMETER now, so there is nothing to mock at the
+// module level: the tests build one and hand it in. `chatJson` is the only
+// method either extractor calls; the other three throw rather than
+// returning a plausible empty answer, so a test that starts calling one
+// fails loudly instead of quietly passing on a stub.
+const chatJson = vi.fn();
+const client = {
+  chatJson,
+  chat: () => { throw new Error('the extractors do not call chat'); },
+  chatStream: () => { throw new Error('the extractors do not call chatStream'); },
+  listModels: () => { throw new Error('the extractors do not call listModels'); },
+} as unknown as ModelClient;
 
 // A fully capable model (reads images, honours a strict schema, generous
 // context window) is the default fixture so the existing happy-path tests
@@ -49,6 +55,52 @@ const pos: StandardPosition = {
 };
 
 beforeEach(() => vi.clearAllMocks());
+
+/**
+ * The argument order, pinned before anything else in this file runs.
+ *
+ * `client` is position 0 and `signal` is position 5. Both `signal` and
+ * `context` are optional, and mocks in `src/App.*.test.tsx` and
+ * `runReview.test.ts` read the arguments POSITIONALLY — a mock holding the
+ * settings object where it expected an `AbortSignal` gets no type error, it
+ * just never sees the abort, and the symptom is a run that cannot be
+ * cancelled. Nothing but a test can catch that.
+ */
+describe('the extractor signature', () => {
+  it('takes the client first and hands the signal through at position 5', async () => {
+    chatJson.mockImplementation(async () => ({
+      summary: 's', citations: [], risk_level: 'Low', risk_analysis: 'r',
+    }));
+    const controller = new AbortController();
+    await extractClause(client, doc, clause, template, settings, controller.signal, { reviewId: 'r1' });
+
+    // `chatJson`'s own SECOND argument is the signal it was handed — which is
+    // only true if `signal` arrived where the implementation expects it.
+    expect(chatJson.mock.calls[0][1]).toBe(controller.signal);
+    // …and the request built from arguments 1-4 is the one for this clause,
+    // so nothing shifted underneath it either.
+    expect(chatJson.mock.calls[0][0].purpose).toBe('review.clause');
+    expect(chatJson.mock.calls[0][0].context.clauseId).toBe('c1');
+    expect(chatJson.mock.calls[0][0].context.reviewId).toBe('r1');
+  });
+
+  it('calls the client it was given, never one of its own', async () => {
+    // The whole point of the injection: this function has no import that
+    // could reach a model, so a worker gets the same extractor a browser
+    // does. If it ever acquired one, the second client would answer and this
+    // spy would see nothing.
+    const other = vi.fn(async () => ({
+      summary: 'from the injected client', citations: [], risk_level: 'Low', risk_analysis: 'r',
+    }));
+    const finding = await extractClause(
+      { ...client, chatJson: other } as unknown as ModelClient,
+      doc, clause, template, settings,
+    );
+    expect(other).toHaveBeenCalledTimes(1);
+    expect(chatJson).not.toHaveBeenCalled();
+    expect(finding.summary).toBe('from the injected client');
+  });
+});
 
 describe('buildClausePrompt', () => {
   it('includes the clause instruction and the document text', () => {
@@ -124,7 +176,7 @@ describe('extractClause', () => {
       risk_analysis: 'Matches the preferred jurisdiction.',
     });
 
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.clauseId).toBe('c1');
@@ -138,7 +190,7 @@ describe('extractClause', () => {
   it('resolves to an error finding rather than rejecting', async () => {
     vi.mocked(chatJson).mockRejectedValue(new Error('rate limited'));
 
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/rate limited/);
@@ -147,32 +199,32 @@ describe('extractClause', () => {
 
   it('passes the JSON schema through to the model', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
-    await extractClause(doc, clause, template, settings);
+    await extractClause(client, doc, clause, template, settings);
     expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBe(CLAUSE_SCHEMA);
   });
 
   it('coerces a missing citations array to empty', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 'no citations given' });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.citations).toEqual([]);
     expect(finding.status).toBe('done');
   });
 
   it('coerces citations to empty when the model sends a bare string instead of an array', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: 'not an array' });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.citations).toEqual([]);
   });
 
   it('coerces citations to empty when the model sends null', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: null });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.citations).toEqual([]);
   });
 
   it('drops non-string entries from a mixed-type citations array, keeping only the strings', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: ['ok', 42, null, 'fine'] });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.citations).toEqual([
       { quote: 'ok', documentId: 'd1' },
       { quote: 'fine', documentId: 'd1' },
@@ -181,36 +233,36 @@ describe('extractClause', () => {
 
   it('drops a risk level the model invented outside the allowed set', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [], risk_level: 'Catastrophic' });
-    expect((await extractClause(doc, clause, template, settings)).riskLevel).toBeUndefined();
+    expect((await extractClause(client, doc, clause, template, settings)).riskLevel).toBeUndefined();
   });
 
   it('drops a null risk level', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [], risk_level: null });
-    expect((await extractClause(doc, clause, template, settings)).riskLevel).toBeUndefined();
+    expect((await extractClause(client, doc, clause, template, settings)).riskLevel).toBeUndefined();
   });
 
   it('drops a numeric risk level', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [], risk_level: 7 });
-    expect((await extractClause(doc, clause, template, settings)).riskLevel).toBeUndefined();
+    expect((await extractClause(client, doc, clause, template, settings)).riskLevel).toBeUndefined();
   });
 
   it('normalises a lowercase risk level to the canonical casing', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [], risk_level: 'high' });
-    expect((await extractClause(doc, clause, template, settings)).riskLevel).toBe('High');
+    expect((await extractClause(client, doc, clause, template, settings)).riskLevel).toBe('High');
   });
 
   it('attaches page images for a scanned document', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
     const scan: DocumentFile = { ...doc, text: '', pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] };
 
-    await extractClause(scan, clause, template, settings);
+    await extractClause(client, scan, clause, template, settings);
 
     expect(vi.mocked(chatJson).mock.calls[0][0].images).toHaveLength(1);
   });
 
   it('sends no images for a document that has a text layer', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
-    await extractClause(doc, clause, template, settings);
+    await extractClause(client, doc, clause, template, settings);
     expect(vi.mocked(chatJson).mock.calls[0][0].images).toBeUndefined();
   });
 
@@ -221,7 +273,7 @@ describe('extractClause', () => {
   // a real 'done' finding.
   it('reports an empty summary as an error finding, not done', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: '', citations: [], risk_level: 'Low' });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.status).toBe('error');
     expect(finding.noContent).toBe(true);
     expect(finding.error).toMatch(/no content/i);
@@ -229,7 +281,7 @@ describe('extractClause', () => {
 
   it('reports a whitespace-only summary as an error finding, not done', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: '   \n\t  ', citations: [] });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.status).toBe('error');
     expect(finding.noContent).toBe(true);
   });
@@ -241,7 +293,7 @@ describe('extractClause', () => {
       risk_level: 'High',
       risk_analysis: 'stray analysis',
     });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.citations).toEqual([{ quote: 'stray quote', documentId: 'd1' }]);
     expect(finding.riskLevel).toBe('High');
     expect(finding.riskAnalysis).toBe('stray analysis');
@@ -252,20 +304,20 @@ describe('extractClause', () => {
   // finding, whether or not it has citations to back it up.
   it('treats a real summary with no citations as done (boundary: clause genuinely absent)', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 'The agreement is silent on this point.', citations: [] });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.status).toBe('done');
     expect(finding.summary).toBe('The agreement is silent on this point.');
   });
 
   it('treats a real summary with citations as done', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 'Governed by English law.', citations: ['English law'] });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.status).toBe('done');
   });
 
   it('reports a parse failure without calling the model', async () => {
     const broken: DocumentFile = { ...doc, text: '', parseError: 'corrupt file' };
-    const finding = await extractClause(broken, clause, template, settings);
+    const finding = await extractClause(client, broken, clause, template, settings);
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/corrupt file/);
     expect(chatJson).not.toHaveBeenCalled();
@@ -285,7 +337,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
     };
     const textOnly: WorkspaceSettings = { ...settings, modelSupportsImages: false };
 
-    const finding = await extractClause(scan, clause, template, textOnly);
+    const finding = await extractClause(client, scan, clause, template, textOnly);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/scan/i);
@@ -295,7 +347,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
 
   it('reports an error finding, without calling the model, for a scan with no page images at all', async () => {
     const blank: DocumentFile = { ...doc, text: '[Page 1]\n\n' };
-    const finding = await extractClause(blank, clause, template, settings);
+    const finding = await extractClause(client, blank, clause, template, settings);
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/no readable text or images/i);
     expect(chatJson).not.toHaveBeenCalled();
@@ -309,7 +361,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
     };
     const unknownCapabilities: WorkspaceSettings = { modelChoiceId: 'm', concurrency: 5 };
 
-    const finding = await extractClause(scan, clause, template, unknownCapabilities);
+    const finding = await extractClause(client, scan, clause, template, unknownCapabilities);
 
     expect(finding.status).toBe('error');
     expect(chatJson).not.toHaveBeenCalled();
@@ -322,7 +374,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
       text: '[Page 1]\nThis is a perfectly readable cover page with real content.\n\n[Page 2]\nAB\n\n',
     };
 
-    const finding = await extractClause(mixed, clause, template, settings);
+    const finding = await extractClause(client, mixed, clause, template, settings);
 
     expect(finding.status).toBe('done');
     const prompt = vi.mocked(chatJson).mock.calls[0][0].user as string;
@@ -332,7 +384,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
 
   it('reports an empty-document error finding for a DOCX mammoth resolved to no text (Critical 2)', async () => {
     const empty: DocumentFile = { id: 'd2', name: 'blank.docx', kind: 'docx', text: '', file: new File([''], 'blank.docx') };
-    const finding = await extractClause(empty, clause, template, settings);
+    const finding = await extractClause(client, empty, clause, template, settings);
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/no readable text or images/i);
     expect(chatJson).not.toHaveBeenCalled();
@@ -340,7 +392,7 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
 
   it('reports an empty-document error finding for any text-free document, not only a parse failure', async () => {
     const empty: DocumentFile = { ...doc, text: '   ' };
-    const finding = await extractClause(empty, clause, template, settings);
+    const finding = await extractClause(client, empty, clause, template, settings);
     expect(finding.status).toBe('error');
     expect(chatJson).not.toHaveBeenCalled();
   });
@@ -349,20 +401,20 @@ describe('extractClause: readability guard (Critical 1 & 2)', () => {
 describe('extractClause: structured output capability', () => {
   it('sends the JSON schema when the model advertises structured output support', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
-    await extractClause(doc, clause, template, { ...settings, modelSupportsStructuredOutput: true });
+    await extractClause(client, doc, clause, template, { ...settings, modelSupportsStructuredOutput: true });
     expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBe(CLAUSE_SCHEMA);
   });
 
   it('omits the JSON schema when the model does not advertise structured output support', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
-    await extractClause(doc, clause, template, { ...settings, modelSupportsStructuredOutput: false });
+    await extractClause(client, doc, clause, template, { ...settings, modelSupportsStructuredOutput: false });
     expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBeUndefined();
   });
 
   it('omits the JSON schema when structured-output support is unknown', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
     const unknown: WorkspaceSettings = { modelChoiceId: 'm', concurrency: 5 };
-    await extractClause(doc, clause, template, unknown);
+    await extractClause(client, doc, clause, template, unknown);
     expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBeUndefined();
   });
 });
@@ -374,7 +426,7 @@ describe('extractClause: context budget (Important 9)', () => {
     // contextLength 100 -> budget = floor(100 * 4 * 0.5) = 200 characters.
     const tightBudget: WorkspaceSettings = { ...settings, modelContextLength: 100 };
 
-    const finding = await extractClause(long, clause, template, tightBudget);
+    const finding = await extractClause(client, long, clause, template, tightBudget);
 
     const prompt = vi.mocked(chatJson).mock.calls[0][0].user as string;
     expect(prompt).toContain('TRUNCATED');
@@ -383,7 +435,7 @@ describe('extractClause: context budget (Important 9)', () => {
 
   it('does not flag a finding as truncated when the document fits the budget', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 's', citations: [] });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     // Absence, not an undefined-valued key. `toBeUndefined` passes either
     // way, and `structuredClone` — how IndexedDB writes every record —
     // PRESERVES an undefined-valued key, so the persisted finding would read
@@ -395,20 +447,20 @@ describe('extractClause: context budget (Important 9)', () => {
 describe('extractClause: auth errors and cancellation (Important 4 & 5)', () => {
   it('tags the finding as an auth error on a 401 from OpenRouter', async () => {
     vi.mocked(chatJson).mockRejectedValue(new ModelError('Your session has expired. Sign in again.', 'sign_in_required', 401));
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.status).toBe('error');
     expect(finding.authError).toBe(true);
   });
 
   it('does not tag an ordinary failure as an auth error', async () => {
     vi.mocked(chatJson).mockRejectedValue(new Error('rate limited'));
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.authError).toBeUndefined();
   });
 
   it('resolves an aborted request to a calm "cancelled" finding, not an error with a raw DOMException message', async () => {
     vi.mocked(chatJson).mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.status).toBe('cancelled');
     expect(finding.error).toBeUndefined();
   });
@@ -428,7 +480,7 @@ describe('extractClause citations and verification', () => {
       risk_analysis: 'Standard cap.',
     });
 
-    const finding = await extractClause(pagedDoc, clause, template, settings);
+    const finding = await extractClause(client, pagedDoc, clause, template, settings);
 
     expect(finding.citations).toEqual([
       { quote: 'Liability is capped at the Charges.', documentId: 'doc-42', page: 2 },
@@ -437,14 +489,14 @@ describe('extractClause citations and verification', () => {
 
   it('starts every finding unchecked with no notes', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 'Found it.', citations: [], risk_level: 'Low', risk_analysis: 'Fine.' });
-    const finding = await extractClause(doc, clause, template, settings);
+    const finding = await extractClause(client, doc, clause, template, settings);
     expect(finding.verification).toEqual({ state: 'unchecked' });
     expect(finding.notes).toEqual([]);
   });
 
   it('starts an error finding unchecked too — a failure is not a judgement', async () => {
     const broken: DocumentFile = { ...doc, parseError: 'corrupt' };
-    const finding = await extractClause(broken, clause, template, settings);
+    const finding = await extractClause(client, broken, clause, template, settings);
     expect(finding.status).toBe('error');
     expect(finding.verification).toEqual({ state: 'unchecked' });
     expect(finding.notes).toEqual([]);
@@ -462,7 +514,7 @@ describe('extractClause citations and verification', () => {
       text: '[Page 1]\nThe Supplier shall deliver.\n\n',
       file: new File([''], 'doc7.pdf'),
     };
-    const finding = await extractClause(doc7, clause, template, settings);
+    const finding = await extractClause(client, doc7, clause, template, settings);
     expect(finding.citations).toEqual([
       { quote: 'The Supplier shall deliver.', documentId: 'doc-7', page: 1 },
     ]);
@@ -480,7 +532,7 @@ describe('extractClause: standard position evaluation (Task 6)', () => {
       summary: 'The lease gives 9 months.', citations: [], risk_level: 'Medium',
       risk_analysis: 'x', position_outcome: 'deviates', position_rationale: 'Nine months, not six.',
     });
-    const f = await extractClause(doc, { ...clause, standardPosition: pos }, template, settings);
+    const f = await extractClause(client, doc, { ...clause, standardPosition: pos }, template, settings);
     expect(f.status).toBe('done');
     expect(f.positionOutcome).toBe('deviates');
     expect(f.positionRationale).toBe('Nine months, not six.');
@@ -491,7 +543,7 @@ describe('extractClause: standard position evaluation (Task 6)', () => {
       summary: 'x', citations: [], risk_level: 'Low', risk_analysis: 'y',
       position_outcome: 'meets', position_rationale: 'z',
     });
-    const f = await extractClause(doc, clause, template, settings);
+    const f = await extractClause(client, doc, clause, template, settings);
     // The model volunteered an outcome for a clause with no house rule. It
     // is dropped, not recorded: there was nothing to compare against.
     expect('positionOutcome' in f).toBe(false);
@@ -500,7 +552,7 @@ describe('extractClause: standard position evaluation (Task 6)', () => {
 
   it('records unclear when the model omits the outcome', async () => {
     vi.mocked(chatJson).mockResolvedValue({ summary: 'x', citations: [], risk_level: 'Low', risk_analysis: 'y' });
-    const f = await extractClause(doc, { ...clause, standardPosition: pos }, template, settings);
+    const f = await extractClause(client, doc, { ...clause, standardPosition: pos }, template, settings);
     expect(f.positionOutcome).toBe('unclear');
   });
 
@@ -511,7 +563,7 @@ describe('extractClause: standard position evaluation (Task 6)', () => {
       summary: '  ', citations: [], risk_level: 'Low', risk_analysis: 'y',
       position_outcome: 'deviates', position_rationale: 'Nine months.',
     });
-    const f = await extractClause(doc, { ...clause, standardPosition: pos }, template, settings);
+    const f = await extractClause(client, doc, { ...clause, standardPosition: pos }, template, settings);
     expect(f.status).toBe('error');
     expect(f.noContent).toBe(true);
     expect(f.positionOutcome).toBe('deviates');
@@ -530,7 +582,7 @@ describe('extractClause: standard position evaluation (Task 6)', () => {
     vi.mocked(chatJson).mockResolvedValue({
       summary: 'x', citations: [], position_outcome: 'meets', position_rationale: 'y',
     });
-    await extractClause(doc, { ...clause, standardPosition: pos }, template, settings);
+    await extractClause(client, doc, { ...clause, standardPosition: pos }, template, settings);
     const sent = vi.mocked(chatJson).mock.calls[0][0].jsonSchema as { required: string[] };
     expect(sent).not.toBe(CLAUSE_SCHEMA);
     expect(sent.required).toContain('position_outcome');

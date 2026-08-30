@@ -57,6 +57,8 @@ describe('import boundary (S14)', () => {
     // per-page scan test this project has had to fix three times. A second
     // copy of any of them, reachable only from the other process, is the
     // failure S14 exists for.
+    'isAuthFailure', 'isAccessRefusedError',
+    'codeFromStatus', 'modelErrorFrom', 'inferResponseFrom',
     'uid', 'mapWithConcurrency',
     'SCAN_TEXT_THRESHOLD', 'pageSegments', 'pageSegmentsWithNumbers',
     'hasNoTextLayer', 'normalizeForMatch', 'findQuoteRects',
@@ -70,6 +72,13 @@ describe('import boundary (S14)', () => {
     'isCollectionTarget', 'targetDocumentIds', 'findingsKeyFor',
     'extractableText', 'usableText', 'assessDocument', 'contextBudgetChars',
     'orderedMembers', 'buildCollectionPrompt',
+
+    // The extractors themselves (Stage 3 Task 3). A second `extractClause`
+    // is not a style problem: it is two functions deciding what a review of
+    // a scanned document says, in two processes, with no way to read them
+    // side by side.
+    'extractClause', 'buildClausePrompt', 'clauseSchema', 'CLAUSE_SCHEMA',
+    'extractCollectionClause', 'collectionClauseSchema', 'COLLECTION_CLAUSE_SCHEMA',
   ];
 
   const scanned = (): string[] => [

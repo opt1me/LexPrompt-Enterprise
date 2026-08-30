@@ -13,7 +13,7 @@ import { StandardPositionField } from './StandardPositionField';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { uid } from '@lexprompt/core';
 import type { WorkspaceSettings } from '@lexprompt/core';
-import { isAuthFailure } from '../../lib/model/authFailure';
+import { isAuthFailure } from '@lexprompt/core';
 import { canPublish, PUBLISH_NEEDS_PARTNER_TITLE, type RoleState } from '../../lib/role';
 import { suggestField, FIELD_LABEL, type SuggestableField } from './suggestField';
 import { FieldSuggestion } from './FieldSuggestion';

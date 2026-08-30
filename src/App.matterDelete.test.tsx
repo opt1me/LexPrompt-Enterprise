@@ -114,12 +114,22 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
 // front of) is actually reachable, the same as it would be for a genuine
 // live run.
 const extractClauseMock = vi.fn((..._args: unknown[]) => {
-  const signal = _args[4] as AbortSignal | undefined;
+  // Index 5, not 4: `extractClause` takes its `ModelClient` first now
+  // (Stage 3 Task 3), so every positional argument shifted by one. A mock
+  // still reading index 4 would silently hold the SETTINGS object, whose
+  // `addEventListener` is undefined — no type error, just a run that never
+  // notices it was aborted.
+  const signal = _args[5] as AbortSignal | undefined;
   return new Promise((_resolve, reject) => {
     signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
   });
 });
-vi.mock('./features/review/extractClause', () => ({
+// The extractors live in `@lexprompt/core` now (Stage 3 Task 3), so the
+// mock target is the barrel — spread over `importOriginal` so every other
+// core export stays REAL. Stubbing the whole package would silently
+// replace `unchecked`, `findingsKeyFor` and the rest with undefined.
+vi.mock('@lexprompt/core', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@lexprompt/core')>(),
   extractClause: (...args: unknown[]) => extractClauseMock(...args),
 }));
 

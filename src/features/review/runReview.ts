@@ -4,11 +4,18 @@ import {
   uid,
   findingsKeyFor,
   isCollectionTarget,
+  extractClause,
+  extractCollectionClause,
 } from '@lexprompt/core';
+// The BROWSER's `ModelClient`, handed to the extractors on every call. They
+// used to import it themselves; they now take one, so the same two functions
+// run here and in §9's worker with no second copy of either. This module is
+// browser code and is the right place for the browser's implementation to be
+// named — an extractor that reached for `getAccessToken` on a server could
+// not work at all, and would fail somewhere far from here.
+import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import type { WorkspaceSettings, CollectionMember } from '@lexprompt/core';
 import type { DocumentFile, Finding, ReviewRun, ReviewTarget, PlaybookVersion } from '../../types';
-import { extractClause } from './extractClause';
-import { extractCollectionClause } from './extractCollectionClause';
 
 function pendingFinding(clauseId: string): Finding {
   return { clauseId, status: 'pending', citations: [], verification: unchecked(), notes: [] };
@@ -192,7 +199,8 @@ export async function runReview(
           onUpdate(current);
 
           const finding = await extractCollectionClause(
-            collection.members, clause, template, settings, signal, { matterId, reviewId },
+            gatewayModelClient, collection.members, clause, template, settings, signal,
+            { matterId, reviewId },
           );
           current = withFinding(current, key, finding);
           onUpdate(current);
@@ -211,7 +219,9 @@ export async function runReview(
           });
           onUpdate(current);
 
-          const finding = await extractClause(doc, clause, template, settings, signal, { matterId, reviewId });
+          const finding = await extractClause(
+            gatewayModelClient, doc, clause, template, settings, signal, { matterId, reviewId },
+          );
           current = withFinding(current, doc.id, finding);
           onUpdate(current);
         },
@@ -269,10 +279,12 @@ export async function retryCell(
 
   const finding = collection
     ? await extractCollectionClause(
-        collection.members, clause, run.templateSnapshot, settings, undefined, { matterId, reviewId: run.id },
+        gatewayModelClient, collection.members, clause, run.templateSnapshot, settings, undefined,
+        { matterId, reviewId: run.id },
       )
     : await extractClause(
-        doc, clause, run.templateSnapshot, settings, undefined, { matterId, reviewId: run.id },
+        gatewayModelClient, doc, clause, run.templateSnapshot, settings, undefined,
+        { matterId, reviewId: run.id },
       );
   current = withFinding(current, key, finding);
   onUpdate(current);

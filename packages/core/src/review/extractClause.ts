@@ -1,15 +1,14 @@
-import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import { isAuthFailure } from '../../lib/model/authFailure';
-import {
-  assessDocument,
-  contextBudgetChars,
-  repairCitations,
-  unchecked,
-  normalisePositionOutcome,
-  riskCriteriaBlock,
-} from '@lexprompt/core';
-import type { WorkspaceSettings } from '@lexprompt/core';
-import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, RiskLevel } from '../../types';
+import type { ModelClient } from '../model/client.ts';
+import { isAuthFailure } from '../model/authFailure.ts';
+import type { WorkspaceSettings } from '../api/records.ts';
+import { assessDocument, contextBudgetChars } from '../domain/modelContext.ts';
+import { repairCitations } from '../domain/citationRepair.ts';
+import { unchecked } from '../domain/verification.ts';
+import { normalisePositionOutcome } from '../domain/positionOutcome.ts';
+import { riskCriteriaBlock } from '../domain/riskBlock.ts';
+import type {
+  PlaybookClause, DocumentFile, Finding, PlaybookVersion, RiskLevel,
+} from '../domain/types.ts';
 
 const RISK_LEVELS: RiskLevel[] = ['High', 'Medium', 'Low', 'Info'];
 
@@ -144,15 +143,25 @@ export interface ExtractClauseContext {
 }
 
 export async function extractClause(
+  // FIRST, and injected rather than imported. This function ran only in a
+  // browser, where `gatewayModelClient` was the one route to a model; §9
+  // runs the same extractor in a worker, where that module — and the OIDC
+  // token source it reaches for — does not exist. A second copy of this
+  // function for the server is the one thing that must not happen: it
+  // decides what a review of a scanned document says.
+  //
+  // Position 0 is deliberate. `signal` and `context` are both optional and
+  // both read POSITIONALLY by existing mocks; inserting a required
+  // parameter between them would hand a mock the wrong object with no type
+  // error at all. At the front, every positional index shifts by exactly
+  // one, uniformly and visibly — which is a change the mocks had to make
+  // (they did: `App.verification.test.tsx` and `App.matterDelete.test.tsx`
+  // now read the signal at index 5), not one they could silently miss.
+  client: ModelClient,
   doc: DocumentFile,
   clause: PlaybookClause,
   template: PlaybookVersion,
   settings: WorkspaceSettings,
-  // `signal` stays 5th, its original position: `App.verification.test.tsx`'s
-  // `extractClauseMock` destructures the 5th positional argument as the
-  // abort signal, and reordering it silently would hand that mock a plain
-  // object with no `addEventListener` — not a type error, just a mock that
-  // stops seeing the abort. `context` is appended last instead.
   signal?: AbortSignal,
   context: ExtractClauseContext = {},
 ): Promise<Finding> {
@@ -197,7 +206,7 @@ export async function extractClause(
   const textForPrompt = readability.text.slice(0, budget);
 
   try {
-    const raw = await gatewayModelClient.chatJson<RawFinding>(
+    const raw = await client.chatJson<RawFinding>(
       {
         modelChoiceId: settings.modelChoiceId,
         purpose: 'review.clause',

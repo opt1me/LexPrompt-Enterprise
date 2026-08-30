@@ -243,6 +243,12 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
       // Caught by the case-insensitive regex above and not by the old one,
       // which is the point of having widened it.
       'apps/api/src/config.ts',
+      // The two extractors (Stage 3 Task 3). They READ `doc.pageImages` to
+      // decide whether to attach a scan's rendered pages to the model call —
+      // which is the whole reason a scanned document can be reviewed at all.
+      // They hold no store and write nothing.
+      'packages/core/src/review/extractClause.ts',
+      'packages/core/src/review/extractCollectionClause.ts',
     ];
     const PAGE_IMAGE = /pageimages|page_images|pageimage/i;
     // The scan bites on what it looks for, including the name that the
@@ -654,8 +660,14 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
   it('nothing derives a human judgement — the engine writes only `unchecked()`', () => {
     // The rule the whole verification model rests on, re-checked at the
     // stage that gave verifications a real author for the first time.
-    for (const file of ['src/features/review/extractClause.ts',
-      'src/features/review/extractCollectionClause.ts']) {
+    // The extractors moved to `packages/core` in Stage 3 Task 3 so the worker
+    // can run them. That makes this check MORE load-bearing, not less: the
+    // same two functions now decide what a verification starts as in two
+    // processes, and `existsSync` is asserted first so a later move renames
+    // this guard's target rather than quietly deleting it.
+    for (const file of ['packages/core/src/review/extractClause.ts',
+      'packages/core/src/review/extractCollectionClause.ts']) {
+      expect(existsSync(path.join(ROOT, file)), file).toBe(true);
       const code = codeOf(path.join(ROOT, file));
       expect(code, file).toContain('unchecked()');
       expect(code, file).not.toMatch(/state:\s*'verified'|state:\s*'flagged'|state:\s*'rejected'/);

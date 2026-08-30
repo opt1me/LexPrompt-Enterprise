@@ -5,7 +5,7 @@ import { Loader, MessageSquare } from 'lucide-react';
 import type { DocumentFile } from '../../types';
 import type { WorkspaceSettings } from '@lexprompt/core';
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import { isAuthFailure } from '../../lib/model/authFailure';
+import { isAuthFailure } from '@lexprompt/core';
 import { sendChatMessage, type ChatMessage } from './chatContext';
 
 export interface ChatPanelProps {

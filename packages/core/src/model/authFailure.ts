@@ -1,4 +1,4 @@
-import { ModelError, isServiceConfigError, isSignInError } from '@lexprompt/core';
+import { ModelError, isServiceConfigError, isSignInError } from './protocol.ts';
 
 /**
  * A failure a Retry button cannot fix.

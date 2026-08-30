@@ -8,7 +8,7 @@ import type { FewShotSource } from './fewShot';
 // its own module and the auth tests below depend on its real behaviour, not
 // a stub of it.
 import { ModelError } from '@lexprompt/core';
-import { isAuthFailure } from '../../lib/model/authFailure';
+import { isAuthFailure } from '@lexprompt/core';
 
 vi.mock('../../lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {
@@ -124,7 +124,7 @@ describe('generateDraft', () => {
   it('marks a rejected key as an auth error, so the caller can route to Settings', async () => {
     // Spec §7: "A 401/403 routes to Settings, as everywhere else in this app."
     // `generateDraft` does not navigate — it reports, and the route decides.
-    // `isAuthFailure` (`lib/model/authFailure.ts`) is the shared predicate; do not
+    // `isAuthFailure` (`@lexprompt/core`) is the shared predicate; do not
     // re-derive "was this a 401" from a message string.
     mockChatJsonRejection(authRejection(401));
     await expect(generateDraft(form, '', [], settings)).rejects.toSatisfy(isAuthFailure);

@@ -50,7 +50,7 @@ const ANSWER_LENGTH_LABEL: Record<AnswerLength, string> = {
  * `onAuthError`, not render inline — but an ordinary failure (a 502, a
  * timeout) must NOT, or every unrelated failure sends someone to fix an API
  * key that was never the problem. The caller decides which is which (via
- * `isAuthFailure`, `lib/model/authFailure.ts`) and hands this component only the
+ * `isAuthFailure`, `@lexprompt/core`) and hands this component only the
  * resulting `authFailed` flag; this component's only job is to act on it.
  */
 export function DraftForm({

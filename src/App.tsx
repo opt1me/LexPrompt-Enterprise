@@ -54,7 +54,7 @@ import {
 } from './lib/db/collections';
 import { useRoute, type Route } from './lib/router';
 import { gatewayModelClient } from './lib/model/gatewayModelClient';
-import { isAuthFailure } from './lib/model/authFailure';
+import { isAuthFailure } from '@lexprompt/core';
 import { MODEL_CHOICE_STALE_MESSAGE, modelProvenanceName } from './lib/model/modelChoice';
 import { useToast, Toast } from './components/Toast';
 import { LoadErrorPanel } from './components/LoadErrorPanel';
@@ -115,7 +115,7 @@ import { useAuth } from './lib/auth/useAuth';
 import { SignInScreen } from './features/auth/SignInScreen';
 import { AccessRefusedPanel } from './features/auth/AccessRefusedPanel';
 import { useRole } from './lib/role';
-import { isAccessRefusedError } from './lib/model/authFailure';
+import { isAccessRefusedError } from '@lexprompt/core';
 import { UploadLocalData } from './features/upload/UploadLocalData';
 import { LocalDataBanner, type LocalDataBannerState } from './features/upload/LocalDataBanner';
 import { countLocalData } from './lib/upload/scan';

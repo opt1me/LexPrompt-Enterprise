@@ -1,17 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { extractCollectionClause, collectionClauseSchema, COLLECTION_CLAUSE_SCHEMA } from './extractCollectionClause';
-import type { PlaybookClause, PlaybookVersion, DocumentFile, StandardPosition } from '../../types';
-import { ModelError } from '@lexprompt/core';
-import type { WorkspaceSettings, CollectionMember } from '@lexprompt/core';
+import { extractCollectionClause, collectionClauseSchema, COLLECTION_CLAUSE_SCHEMA } from './extractCollectionClause.ts';
+import type { PlaybookClause, PlaybookVersion, DocumentFile, StandardPosition } from '../domain/types.ts';
+import { ModelError } from '../model/protocol.ts';
+import type { WorkspaceSettings } from '../api/records.ts';
+import type { ModelClient } from '../model/client.ts';
+import type { CollectionMember } from '../domain/collectionOrder.ts';
 
 
-vi.mock('../../lib/model/gatewayModelClient', () => ({
-  gatewayModelClient: {
-    chat: vi.fn(), chatJson: vi.fn(), chatStream: vi.fn(), listModels: vi.fn(),
-  },
-}));
-const { gatewayModelClient } = await import('../../lib/model/gatewayModelClient');
-const chatJson = gatewayModelClient.chatJson;
+// The model client is a PARAMETER now, so there is nothing to mock at the
+// module level: the tests build one and hand it in. `chatJson` is the only
+// method either extractor calls; the other three throw rather than
+// returning a plausible empty answer, so a test that starts calling one
+// fails loudly instead of quietly passing on a stub.
+const chatJson = vi.fn();
+const client = {
+  chatJson,
+  chat: () => { throw new Error('the extractors do not call chat'); },
+  chatStream: () => { throw new Error('the extractors do not call chatStream'); },
+  listModels: () => { throw new Error('the extractors do not call listModels'); },
+} as unknown as ModelClient;
 
 // A fully capable model, matching extractClause.test.ts's fixture posture, so
 // the happy-path tests below are unaffected by capability gating.
@@ -83,7 +90,7 @@ describe('extractCollectionClause', () => {
       net_position: 'Rent is now reviewed annually, capped at RPI.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.trail).toHaveLength(2);
@@ -100,7 +107,7 @@ describe('extractCollectionClause', () => {
       trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
       net_position: 'ok',
     });
-    await extractCollectionClause(members(), clause, template, settings);
+    await extractCollectionClause(client, members(), clause, template, settings);
     expect(vi.mocked(chatJson).mock.calls[0][0].jsonSchema).toBe(COLLECTION_CLAUSE_SCHEMA);
   });
 
@@ -116,7 +123,7 @@ describe('extractCollectionClause', () => {
       net_position: 'Now annual, capped at RPI.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.netPosition!.trail[1].citations).toEqual([
       { quote: 'Rent review is now annual, capped at RPI.', documentId: 'dov', page: 1 },
@@ -138,7 +145,7 @@ describe('extractCollectionClause', () => {
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.trail[0].citations).toHaveLength(1);
@@ -155,7 +162,7 @@ describe('extractCollectionClause', () => {
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.netPosition!.trail[1].citations).toEqual([
       { quote: 'Rent review is now annual, capped at RPI.', documentId: 'dov', page: 1 },
@@ -171,7 +178,7 @@ describe('extractCollectionClause', () => {
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.netPosition!.trail[1].citations).toEqual([]);
   });
@@ -194,7 +201,7 @@ describe('extractCollectionClause', () => {
       net_position: 'Still on 5-year review.',
     });
 
-    const finding = await extractCollectionClause(paged, clause, template, settings);
+    const finding = await extractCollectionClause(client, paged, clause, template, settings);
 
     expect(finding.netPosition!.trail[0].citations).toEqual([
       { quote: 'The rent is reviewed every five years to open market value.', documentId: 'lease', page: 2 },
@@ -207,7 +214,7 @@ describe('extractCollectionClause', () => {
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.netPosition!.state).toBe('unconfirmed');
     expect(finding.verification).toEqual({ state: 'unchecked' });
@@ -217,7 +224,7 @@ describe('extractCollectionClause', () => {
   it('treats a conclusion with no trail as an error, not a derivation', async () => {
     vi.mocked(chatJson).mockResolvedValue({ net_position: 'Now annual.' });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/trail|derivation/i);
@@ -227,7 +234,7 @@ describe('extractCollectionClause', () => {
   it('treats an empty trail array the same as a missing one', async () => {
     vi.mocked(chatJson).mockResolvedValue({ trail: [], net_position: 'Now annual.' });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.netPosition).toBeUndefined();
@@ -239,7 +246,7 @@ describe('extractCollectionClause', () => {
       net_position: '',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.noContent).toBe(true);
@@ -247,7 +254,7 @@ describe('extractCollectionClause', () => {
   });
 
   it('fails the clause loudly when the base document is missing, without calling the model', async () => {
-    const finding = await extractCollectionClause(members({ base: null }), clause, template, settings);
+    const finding = await extractCollectionClause(client, members({ base: null }), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/base document/i);
@@ -264,7 +271,7 @@ describe('extractCollectionClause', () => {
       net_position: 'Based on the base document alone.',
     });
 
-    const finding = await extractCollectionClause(members({ varies: null }), clause, template, settings);
+    const finding = await extractCollectionClause(client, members({ varies: null }), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.proposed).toMatch(/incomplete/i);
@@ -295,7 +302,7 @@ describe('extractCollectionClause', () => {
       { document: null, documentId: 'lic', kind: 'varies', position: 3 },
     ];
 
-    const finding = await extractCollectionClause(three, clause, template, settings);
+    const finding = await extractCollectionClause(client, three, clause, template, settings);
 
     expect(finding.netPosition!.proposed).toMatch(/2 amending documents/i);
     expect(finding.netPosition!.proposed).not.toContain('lic');
@@ -304,7 +311,7 @@ describe('extractCollectionClause', () => {
   it('resolves an aborted request to a calm cancelled finding, not an error', async () => {
     vi.mocked(chatJson).mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('cancelled');
     expect(finding.error).toBeUndefined();
@@ -313,7 +320,7 @@ describe('extractCollectionClause', () => {
   it('resolves an API failure to an error finding rather than rejecting', async () => {
     vi.mocked(chatJson).mockRejectedValue(new Error('rate limited'));
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/rate limited/);
@@ -322,7 +329,7 @@ describe('extractCollectionClause', () => {
   it('tags an auth error from OpenRouter', async () => {
     vi.mocked(chatJson).mockRejectedValue(new ModelError('Your session has expired. Sign in again.', 'sign_in_required', 401));
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.authError).toBe(true);
@@ -341,7 +348,7 @@ describe('extractCollectionClause: scan/image fallback', () => {
     });
     const scan = docFile('dov', 'DoV.pdf', '', { pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
 
-    const finding = await extractCollectionClause(members({ varies: scan }), clause, template, settings);
+    const finding = await extractCollectionClause(client, members({ varies: scan }), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(vi.mocked(chatJson).mock.calls[0][0].images).toHaveLength(1);
@@ -352,7 +359,7 @@ describe('extractCollectionClause: scan/image fallback', () => {
       trail: numbered({ effect: 'a', citations: [] }, { effect: 'b', citations: [] }),
       net_position: 'ok',
     });
-    await extractCollectionClause(members(), clause, template, settings);
+    await extractCollectionClause(client, members(), clause, template, settings);
     expect(vi.mocked(chatJson).mock.calls[0][0].images).toBeUndefined();
   });
 
@@ -360,7 +367,7 @@ describe('extractCollectionClause: scan/image fallback', () => {
     const scan = docFile('dov', 'DoV.pdf', '', { pageImages: [{ mime: 'image/jpeg', data: 'AAA' }] });
     const textOnly: WorkspaceSettings = { ...settings, modelSupportsImages: false };
 
-    const finding = await extractCollectionClause(members({ varies: scan }), clause, template, textOnly);
+    const finding = await extractCollectionClause(client, members({ varies: scan }), clause, template, textOnly);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/scan/i);
@@ -371,7 +378,7 @@ describe('extractCollectionClause: scan/image fallback', () => {
   it('fails loudly, without calling the model, for a present member with no readable text or images at all', async () => {
     const blank = docFile('dov', 'DoV.pdf', '[Page 1]\n\n');
 
-    const finding = await extractCollectionClause(members({ varies: blank }), clause, template, settings);
+    const finding = await extractCollectionClause(client, members({ varies: blank }), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/no readable text or images/i);
@@ -389,7 +396,7 @@ describe('extractCollectionClause: scan/image fallback', () => {
       parseError: 'The original file for this document is no longer available.',
     });
 
-    const finding = await extractCollectionClause(members({ varies: unreadable }), clause, template, settings);
+    const finding = await extractCollectionClause(client, members({ varies: unreadable }), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toContain('Could not read DoV.pdf');
@@ -407,7 +414,7 @@ describe('extractCollectionClause: scan/image fallback', () => {
       parseError: 'The original file for this document is no longer available.',
     });
 
-    const finding = await extractCollectionClause(members({ varies: unreadable }), clause, template, settings);
+    const finding = await extractCollectionClause(client, members({ varies: unreadable }), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toContain('Could not read DoV.pdf');
@@ -452,7 +459,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       },
     ];
 
-    const finding = await extractCollectionClause(three, clause, template, settings);
+    const finding = await extractCollectionClause(client, three, clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/2 derivation step/i);
@@ -470,7 +477,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/derivation/i);
@@ -486,7 +493,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/step 2/i);
@@ -503,7 +510,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/DOCUMENT 7/);
@@ -519,7 +526,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/DOCUMENT 1/);
@@ -538,7 +545,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.trail[0]).toMatchObject({
@@ -571,7 +578,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Still a 5-year review.',
     });
 
-    const finding = await extractCollectionClause(members({ varies: null }), clause, template, settings);
+    const finding = await extractCollectionClause(client, members({ varies: null }), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.error).toBeUndefined();
@@ -600,7 +607,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Based on the base document alone.',
     });
 
-    const finding = await extractCollectionClause(members({ varies: null }), clause, template, settings);
+    const finding = await extractCollectionClause(client, members({ varies: null }), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.trail[1].documentId).toBe('dov');
@@ -627,7 +634,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.trail[0]).toMatchObject({
@@ -647,7 +654,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/step 2/i);
@@ -672,7 +679,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.netPosition!.trail[1].citations).toEqual([]);
@@ -700,7 +707,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.error).toMatch(/1 derivation step/i);
@@ -723,6 +730,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
 
     vi.mocked(chatJson).mockResolvedValue(unnumbered);
     const without = await extractCollectionClause(
+      client,
       members(), clause, template, { ...settings, modelSupportsStructuredOutput: false },
     );
     expect(without.error).toMatch(/structured output/i);
@@ -730,6 +738,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
 
     vi.mocked(chatJson).mockResolvedValue(unnumbered);
     const with_ = await extractCollectionClause(
+      client,
       members(), clause, template, { ...settings, modelSupportsStructuredOutput: true },
     );
     // Already on and the model omitted the field anyway — telling the
@@ -747,7 +756,7 @@ describe('extractCollectionClause: the trail is aligned by each step\'s own docu
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     expect(finding.error).toMatch(/DOCUMENT 7/);
     expect(finding.error).toMatch(/attributed to the wrong document/i);
@@ -792,7 +801,7 @@ describe('extractCollectionClause: truncation names the documents it cut', () =>
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(longMembers(), clause, template, tight);
+    const finding = await extractCollectionClause(client, longMembers(), clause, template, tight);
 
     expect(finding.status).toBe('done');
     expect(finding.truncated).toBe(true);
@@ -814,7 +823,7 @@ describe('extractCollectionClause: truncation names the documents it cut', () =>
       net_position: '   ',
     });
 
-    const finding = await extractCollectionClause(longMembers(), clause, template, tight);
+    const finding = await extractCollectionClause(client, longMembers(), clause, template, tight);
 
     expect(finding.status).toBe('error');
     expect(finding.noContent).toBe(true);
@@ -828,7 +837,7 @@ describe('extractCollectionClause: truncation names the documents it cut', () =>
       net_position: 'Now annual.',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     // Absence, not an undefined-valued key: `structuredClone` (how
     // IndexedDB writes every record) preserves one, and it would read to
@@ -857,7 +866,7 @@ describe('extractCollectionClause: standard position evaluation (Task 6 / R-D3)'
       position_rationale: 'CPI, not RPI as our position requires.',
     });
 
-    const finding = await extractCollectionClause(members(), clauseWithPos, template, settings);
+    const finding = await extractCollectionClause(client, members(), clauseWithPos, template, settings);
 
     expect(finding.status).toBe('done');
     expect(finding.positionOutcome).toBe('deviates');
@@ -872,7 +881,7 @@ describe('extractCollectionClause: standard position evaluation (Task 6 / R-D3)'
       position_rationale: 'z',
     });
 
-    const finding = await extractCollectionClause(members(), clause, template, settings);
+    const finding = await extractCollectionClause(client, members(), clause, template, settings);
 
     // The model volunteered an outcome for a clause with no house rule. It
     // is dropped, not recorded: there was nothing to compare against.
@@ -886,7 +895,7 @@ describe('extractCollectionClause: standard position evaluation (Task 6 / R-D3)'
       net_position: 'Now annual, capped at RPI.',
     });
 
-    const finding = await extractCollectionClause(members(), clauseWithPos, template, settings);
+    const finding = await extractCollectionClause(client, members(), clauseWithPos, template, settings);
 
     expect(finding.positionOutcome).toBe('unclear');
   });
@@ -901,7 +910,7 @@ describe('extractCollectionClause: standard position evaluation (Task 6 / R-D3)'
       position_rationale: 'CPI, not RPI.',
     });
 
-    const finding = await extractCollectionClause(members(), clauseWithPos, template, settings);
+    const finding = await extractCollectionClause(client, members(), clauseWithPos, template, settings);
 
     expect(finding.status).toBe('error');
     expect(finding.noContent).toBe(true);
@@ -923,7 +932,7 @@ describe('extractCollectionClause: standard position evaluation (Task 6 / R-D3)'
       net_position: 'ok', position_outcome: 'meets', position_rationale: 'y',
     });
 
-    await extractCollectionClause(members(), clauseWithPos, template, settings);
+    await extractCollectionClause(client, members(), clauseWithPos, template, settings);
 
     const sent = vi.mocked(chatJson).mock.calls[0][0].jsonSchema as { required: string[] };
     expect(sent).not.toBe(COLLECTION_CLAUSE_SCHEMA);

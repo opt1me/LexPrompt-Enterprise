@@ -120,7 +120,7 @@ function repairClause(raw: RawClause): DraftClause | undefined {
  * is exactly what this sub-project's save gate exists to prevent.
  *
  * Errors from `chatJson` are propagated untouched, deliberately: an auth
- * failure must remain something `isAuthFailure` (`lib/model/authFailure.ts`)
+ * failure must remain something `isAuthFailure` (`@lexprompt/core`)
  * recognises so the caller can route to Settings (spec §7), which wrapping
  * it in a new `Error` would break.
  */

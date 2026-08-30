@@ -1,18 +1,19 @@
-import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import { isAuthFailure } from '../../lib/model/authFailure';
+import type { ModelClient } from '../model/client.ts';
+import { isAuthFailure } from '../model/authFailure.ts';
+import type { WorkspaceSettings } from '../api/records.ts';
 import {
-  assessDocument,
-  contextBudgetChars,
-  type DocumentReadability,
-  buildCollectionPrompt,
-  repairCitations,
-  normalizeForMatch,
-  unchecked,
-  unconfirmedPosition,
-  normalisePositionOutcome,
-} from '@lexprompt/core';
-import type { CollectionMember, WorkspaceSettings } from '@lexprompt/core';
-import type { Citation, PlaybookClause, DocumentFile, Finding, PlaybookVersion, TrailStep } from '../../types';
+  assessDocument, contextBudgetChars, type DocumentReadability,
+} from '../domain/modelContext.ts';
+import { buildCollectionPrompt } from '../domain/collectionPrompt.ts';
+import { repairCitations } from '../domain/citationRepair.ts';
+import { normalizeForMatch } from '../domain/citations.ts';
+import { unchecked } from '../domain/verification.ts';
+import { unconfirmedPosition } from '../domain/netPosition.ts';
+import { normalisePositionOutcome } from '../domain/positionOutcome.ts';
+import type { CollectionMember } from '../domain/collectionOrder.ts';
+import type {
+  Citation, PlaybookClause, DocumentFile, Finding, PlaybookVersion, TrailStep,
+} from '../domain/types.ts';
 
 interface RawCitation {
   quote?: unknown;
@@ -400,12 +401,13 @@ export interface ExtractCollectionClauseContext {
 }
 
 export async function extractCollectionClause(
+  // FIRST, mirroring `extractClause`'s identical positioning — see its
+  // comment for why the model client is injected and why it goes at 0.
+  client: ModelClient,
   members: CollectionMember<DocumentFile>[],
   clause: PlaybookClause,
   template: PlaybookVersion,
   settings: WorkspaceSettings,
-  // `signal` kept 5th, mirroring `extractClause`'s identical positioning —
-  // see its comment for why the order matters to an existing mock.
   signal?: AbortSignal,
   context: ExtractCollectionClauseContext = {},
 ): Promise<Finding> {
@@ -485,7 +487,7 @@ export async function extractCollectionClause(
     : '';
 
   try {
-    const raw = await gatewayModelClient.chatJson<RawCollectionFinding>(
+    const raw = await client.chatJson<RawCollectionFinding>(
       {
         modelChoiceId: settings.modelChoiceId,
         purpose: 'review.collection_clause',
