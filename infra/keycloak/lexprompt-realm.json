@@ -219,6 +219,28 @@
       "optionalClientScopes": []
     },
     {
+      "clientId": "lexprompt-test",
+      "name": "LexPrompt (tests only — password grant)",
+      "description": "TESTS ONLY (apps/api/test/helpers/twoAccounts.ts). The password grant lives here and nowhere else; lexprompt-web keeps directAccessGrantsEnabled false. No standard flow, no redirect URIs, and no source file outside apps/api/test names it.",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "defaultClientScopes": [
+        "basic",
+        "profile",
+        "email",
+        "groups",
+        "lexprompt-api"
+      ],
+      "optionalClientScopes": []
+    },
+    {
       "clientId": "lexprompt-api",
       "name": "LexPrompt API (bearer-only)",
       "enabled": true,
