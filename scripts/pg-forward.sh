@@ -27,6 +27,10 @@ set -euo pipefail
 NET="$(docker compose ls --format json >/dev/null 2>&1 && echo lexprompt_internal)"
 echo "export LEXPROMPT_TEST_DATABASE_URL=postgres://lexprompt_app:lexprompt_app_dev@127.0.0.1:55432/lexprompt"
 echo "export LEXPROMPT_TEST_MIGRATION_URL=postgres://lexprompt_migrator:lexprompt_migrator_dev@127.0.0.1:55432/lexprompt"
+# The third role (Stage 3 Task 4). The grant suites prove what the run worker
+# CANNOT do — write a note, read or write a disposition — and a grant test can
+# only prove that by attempting the write as the role itself.
+echo "export LEXPROMPT_TEST_WORKER_URL=postgres://lexprompt_worker:lexprompt_worker_dev@127.0.0.1:55432/lexprompt"
 
 CID=$(docker run -d --rm -p 127.0.0.1:55432:55432 alpine/socat \
   tcp-listen:55432,fork,reuseaddr tcp-connect:postgres:5432)

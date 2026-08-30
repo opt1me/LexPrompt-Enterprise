@@ -16,7 +16,7 @@ function requireUrl(name: string): string {
     throw new Error(
       `${name} is not set, and these suites run against a real Postgres by design `
       + '(spec §14: "A fake Postgres is not acceptable"). Start the stack with '
-      + '`npm run compose:up`, run `scripts/pg-forward.sh`, then export the two URLs it '
+      + '`npm run compose:up`, run `scripts/pg-forward.sh`, then export the three URLs it '
       + 'prints. These suites are NOT skipped without a database.',
     );
   }
@@ -25,6 +25,7 @@ function requireUrl(name: string): string {
 
 let appPool: Pool | undefined;
 let migratorPool: Pool | undefined;
+let workerPool: Pool | undefined;
 
 /** A `Db` on the migrator role — the schema owner. */
 export function migratorDb(): Db {
@@ -39,11 +40,26 @@ export function appDb(): Db {
   return makeDb(appPool);
 }
 
+/**
+ * A `Db` on the run worker's role (§9, §14).
+ *
+ * Here for one purpose: the grant suites prove what the worker CANNOT do —
+ * write a note, read or write a disposition — and the only way to prove a
+ * refusal is about the ROLE rather than about a missing table is to attempt
+ * the write as the role itself and to attempt it as a role that succeeds.
+ */
+export function workerDb(): Db {
+  workerPool ??= new Pool({ connectionString: requireUrl('LEXPROMPT_TEST_WORKER_URL'), max: 4 });
+  return makeDb(workerPool);
+}
+
 afterAll(async () => {
   await appPool?.end();
   await migratorPool?.end();
+  await workerPool?.end();
   appPool = undefined;
   migratorPool = undefined;
+  workerPool = undefined;
 });
 
 /**

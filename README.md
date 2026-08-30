@@ -404,18 +404,26 @@ azd provision                                   # now provisions Postgres, Stora
 
 The alternative — a `@secure()` parameter fed from the azd environment — would put three live database credentials in `.azure/<env>/.env` on somebody's laptop, which is the thing this whole arrangement exists not to do. (The DSNs the API reads are composed *inside* the Bicep from those passwords and the server's FQDN, so no connection string is ever a parameter, an output, or an app setting either.)
 
-**(b) Creating `lexprompt_migrator` and `lexprompt_app`.** `infra/postgres/init.sql` is the local form of this. In Azure it is one `psql` run by the Flexible Server admin, after provisioning and **before the first `azd deploy`** — the server has public network access disabled, so run it from inside the VNet (a jump box, Cloud Shell with VNet integration, or `az containerapp exec` into the `api` app once it exists). Use the same two passwords you put in the vault:
+**(b) Creating `lexprompt_migrator`, `lexprompt_app` and `lexprompt_worker`.** `infra/postgres/init.sql` is the local form of this. In Azure it is one `psql` run by the Flexible Server admin, after provisioning and **before the first `azd deploy`** — the server has public network access disabled, so run it from inside the VNet (a jump box, Cloud Shell with VNet integration, or `az containerapp exec` into the `api` app once it exists). Use the same passwords you put in the vault:
 
 ```sql
 -- as the admin, connected to the `lexprompt` database
 create role lexprompt_migrator login password '<database-migrator-password>';
 create role lexprompt_app      login password '<database-app-password>';
-grant connect on database lexprompt to lexprompt_migrator, lexprompt_app;
+-- The run worker (Stage 3, §9). Store its password in the vault beside the
+-- other two as `database-worker-password`; the Container App that reads it
+-- arrives with the worker itself, later in Stage 3.
+create role lexprompt_worker   login password '<database-worker-password>';
+grant connect on database lexprompt to lexprompt_migrator, lexprompt_app, lexprompt_worker;
+-- The worker's declared statement_timeout has to be set here too: ALTER ROLE
+-- needs CREATEROLE, which lexprompt_migrator deliberately does not have, so
+-- migration 005 asserts this line was run rather than running it.
+alter role lexprompt_worker set statement_timeout = '60s';
 -- the rest of the grants are what infra/postgres/init.sql does locally; read
 -- it and mirror it, because the two must not drift.
 ```
 
-Skipping this is not silent: `000_preconditions.sql` refuses the migration with a message naming this step, which is why that file exists rather than letting a `GRANT` fail with "role does not exist".
+Skipping this is not silent: `000_preconditions.sql` refuses the migration with a message naming this step for the first two roles, and `005_findings.sql` does the same for `lexprompt_worker` and for its missing `statement_timeout`. That is why those blocks exist rather than letting a `GRANT` fail with "role does not exist".
 
 **(c) Confirming the private endpoints resolve.** §5.1's own list says Azure networking is not exercised locally, so this is the one check that has no local equivalent. From inside the Container Apps environment:
 
