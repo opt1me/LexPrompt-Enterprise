@@ -34,13 +34,13 @@ import type { Review } from '../../types';
  *  - Another tab, or another person, writing bumps the server's version past
  *    what this browser remembers, so the next save from here is REFUSED.
  *    That is the whole point. Verification state is set only by a human
- *    action and nothing derives it; a run's saver silently overwriting one
- *    is the worst defect available on this path, and `carryHumanState`
- *    cannot close it across two tabs, because the other tab's write was
- *    never in this one's snapshot to carry.
- *  - The refusal reaches the reader: the debounced saver's write is
- *    fire-and-forget, so it is reported through `debug()` AND through
- *    `onError`, which `App.tsx` turns into a visible notice.
+ *    action and nothing derives it; a saver silently overwriting one is the
+ *    worst defect available on this path, and no in-tab merge could ever
+ *    close it across two tabs, because the other tab's write was never in
+ *    this one's snapshot to carry. (The merge that tried is deleted - Task
+ *    21 - along with the debounced saver that made it necessary.)
+ *  - The refusal reaches the reader: `App.tsx` turns a rejected save into a
+ *    visible notice rather than swallowing it.
  *
  * The map is per TAB and dies with it, which is right: it records what this
  * browser has seen, not what is true.

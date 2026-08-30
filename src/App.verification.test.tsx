@@ -543,14 +543,21 @@ describe('App — persisting a net position (Task 8)', () => {
     expect(container.textContent).toMatch(/amended/i);
   });
 
-  // Mutation test 3 (task-8-brief step 3): dropping `carryHumanState`'s
-  // net-position awareness must make this fail.
-  //
-  // TASK 18 MOVED THE SEAM AND NOT THE CLAIM. The "next update from a live
-  // run" used to be `runReview`'s own `onUpdate`; it is now a `finding.done`
-  // event from the server followed by a re-read of the findings map, which
-  // knows nothing about a confirmation this browser has just made. The
-  // assertions below are unchanged.
+  /*
+   * TASK 21: the claim is unchanged, the fixture is not.
+   *
+   * This began as mutation test 3 for `carryHumanState`'s net-position
+   * awareness. `carryHumanState` is gone, and so is the premise the fixture
+   * rested on: since Task 19 a confirmation is its own write to
+   * `finding.net_position`, so the map a re-read answers with CARRIES it.
+   * The server the old fixture described - one that answers `unconfirmed`
+   * for a position it has just stored as `confirmed` - does not exist.
+   *
+   * What is still defended, and is the reason this test survives the
+   * deletion: a net position is synthesised text no document contains, and a
+   * confirmation of it is the most dangerous human judgement in this app to
+   * lose. It must still be there after the next cell finishes.
+   */
   it('does not lose a net position confirmation to the next update from a live run', async () => {
     const withPosition = {
       clauseId: 'c1', status: 'done' as const, citations: [], summary: 'irrelevant',
@@ -586,13 +593,21 @@ describe('App — persisting a net position (Task 8)', () => {
     expect(container.textContent).not.toMatch(/unconfirmed/i);
     expect(container.textContent).toMatch(/\bconfirmed\b/i);
 
-    // c2 finishes. The server's findings map still carries c1's position as
-    // UNCONFIRMED — the confirmation is this browser's, and until Task 19 it
-    // reaches the store through the review record rather than the findings
-    // rows. Without `carryHumanState` knowing about `netPosition`, this
-    // re-read would silently overwrite the confirmation.
+    // c2 finishes, and the re-read that follows carries c1's position as
+    // CONFIRMED, because that is what the store holds: `setNetPosition`
+    // wrote the row, and `findings/read.ts` reads it back. The engine that
+    // finished c2 wrote only c2's own model-authored columns.
     serverFindings({
-      'live-doc': { c1: withPosition, c2: { ...pendingC2, status: 'done', summary: 'irrelevant' } },
+      'live-doc': {
+        c1: {
+          ...withPosition,
+          netPosition: {
+            proposed: 'Notice is now 6 months.', state: 'confirmed',
+            byUserId: 'u1', at: 1_700_000_000_000, trail: TRAIL,
+          },
+        },
+        c2: { ...pendingC2, status: 'done', summary: 'irrelevant' },
+      },
     });
     await emitFindingDone();
 
@@ -779,20 +794,38 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
   });
 
   /*
-   * TASK 18 MOVED THE SEAM UNDER EVERY TEST BELOW, AND MOVED NO ASSERTION.
+   * TASK 21 DELETED `carryHumanState`, AND THE FIXTURE BELOW HAD TO CHANGE
+   * BECAUSE IT WAS MODELLING A SERVER THAT NO LONGER EXISTS.
    *
-   * A run is the server's now. What used to be `runReview`'s `onUpdate`
-   * carrying a snapshot in which a mid-run verification does not appear is
-   * now a `finding.done` event followed by a re-read of the findings map,
-   * which carries the same absence for the same reason: until Task 19 a
-   * verification reaches the store through the review record, not through
-   * the findings rows, so a map read back from the server has it
-   * `unchecked`.
+   * The comment this replaces said: *"until Task 19 a verification reaches
+   * the store through the review record, not through the findings rows, so a
+   * map read back from the server has it `unchecked`"* - and it was true
+   * when it was written. **Task 19 landed.** A verification is its own row
+   * now, written by its own route, and `findings/read.ts` assembles the
+   * disposition, the notes and the net position into every map it answers
+   * with. A server that answers `unchecked` for a finding it has just stored
+   * as `verified` is not a stale server; it is not the server.
    *
-   * The thing being defended is identical and is this project's one
-   * irreversible risk: a verification made while a run is live must not be
-   * silently overwritten by the run's next update. `carryHumanState` is
-   * still what defends it, and is still deleted in Task 21 rather than here.
+   * So the fixture answers what the store would answer. That is not a
+   * weakening: the thing being defended is unchanged and is still this
+   * project's one irreversible risk - **a verification made while a run is
+   * live must still be there when the run ends** - and it is now defended by
+   * two separate facts, tested separately:
+   *
+   *  1. **The map carries it.** The run's next update re-reads the findings,
+   *     and the judgement is in them, because the engine holds no grant on
+   *     the table it lives in (`humanStateSurvives.pg.test.ts` is the proof,
+   *     over the real database, as the role the engine really runs as).
+   *  2. **A read already in flight when the write commits is DISCARDED AND
+   *     REISSUED, never applied.** That response was assembled before the
+   *     write; applying it would put a judgement a lawyer just made back to
+   *     "Not checked" for one poll interval. This is the one window the rows
+   *     do not close by themselves, and it is closed by re-reading rather
+   *     than by merging - see `humanWritesRef` in `App.tsx`.
+   *
+   * `findingMerge.ts` and its unit tests are deleted rather than rewritten:
+   * they tested an internal defence, not a promise to a user. The promise is
+   * what the two tests below hold.
    */
 
   const DONE_C1 = {
@@ -806,6 +839,12 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
   };
   const DONE_C2 = {
     ...PENDING_C2, status: 'done' as const, summary: 'Term is 12 months.',
+  };
+  /** c1 as the STORE holds it once the verification has been written - the
+   *  shape `findings/read.ts` assembles from `finding_disposition`. */
+  const VERIFIED_C1 = {
+    ...DONE_C1,
+    verification: { state: 'verified' as const, byUserId: 'u1', at: 1_700_000_000_000 },
   };
 
   it('does not lose a verification to the next update from a live run', async () => {
@@ -829,15 +868,82 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     expect(chips()[0].textContent).toBe('Verified');
     expect(setDispositionMock.mock.calls[0][3]).toEqual({ state: 'verified' });
 
-    // Now let the other cell finish — the server's own "unrelated cell
-    // finished" event, followed by a findings map that STILL SAYS
-    // `unchecked` for c1. That is the case this defends: a stale read
-    // landing after a write. Without `carryHumanState`, it would silently
-    // overwrite the verification just made.
-    serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
+    // Now let the other cell finish. The re-read that follows carries c1's
+    // verification because the STORE carries it - it is a row of its own,
+    // and the engine that finished c2 holds no grant on that row. That is
+    // what replaced `carryHumanState`, and it is proved where it can be
+    // proved: `apps/api/test/humanStateSurvives.pg.test.ts`, as the worker
+    // role, against the real database.
+    serverFindings({ 'live-doc': { c1: VERIFIED_C1, c2: DONE_C2 } });
     await emitFindingDone();
 
     expect(chips()[0].textContent).toBe('Verified');
+  });
+
+  it('discards a findings read that was already in flight when the verification was stored', async () => {
+    /*
+     * THE ONE WINDOW THE ROWS DO NOT CLOSE BY THEMSELVES, and the reason
+     * deleting `carryHumanState` was not simply a deletion.
+     *
+     * A poll issues `getFindings` at t0. The lawyer verifies at t1. The
+     * write commits at t2. The response issued at t0 lands at t3 carrying
+     * the world as it was BEFORE t2 - and applying it puts the chip back to
+     * "Unverified" until the next poll. Self-healing, and still the exact
+     * symptom `carryHumanState` existed to prevent.
+     *
+     * The fix is a re-read, not a merge: nothing from this browser's copy is
+     * put back on top of the store's answer. The second read is issued after
+     * the write, so it carries the judgement itself.
+     */
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
+    listPlaybooksMock.mockResolvedValue([makeTemplate()]);
+    listMattersMock.mockResolvedValue([makeMatter()]);
+    saveReviewMock.mockResolvedValue(undefined);
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: PENDING_C2 } });
+
+    await startLiveRun(container, root);
+    await emitFindingDone();
+
+    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
+    expect(chips()[0].textContent).toBe('Unverified');
+
+    // The next read is held open. Everything below happens inside it.
+    let releaseStaleRead: (() => void) | undefined;
+    let reads = 0;
+    getFindingsMock.mockImplementation(() => {
+      reads += 1;
+      if (reads === 1) {
+        return new Promise(resolve => {
+          releaseStaleRead = () => resolve({
+            // STALE ON PURPOSE: assembled before the write below.
+            findings: { 'live-doc': { c1: DONE_C1, c2: DONE_C2 } },
+            dispositionVersions: {}, version: 1,
+          });
+        });
+      }
+      // The reissue, after the write. This is what the store really holds.
+      return Promise.resolve({
+        findings: { 'live-doc': { c1: VERIFIED_C1, c2: DONE_C2 } },
+        dispositionVersions: {}, version: 1,
+      });
+    });
+
+    await emitFindingDone();          // starts the read, which does not settle
+    expect(reads).toBe(1);
+
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
+    await flush();
+    expect(chips()[0].textContent).toBe('Verified');
+
+    act(() => { releaseStaleRead!(); });
+    await flush();
+
+    // Not applied, and read again instead - the second read is what lands.
+    expect(reads, 'the stale read was applied instead of being reissued').toBe(2);
+    expect(chips()[0].textContent).toBe('Verified');
+    // ...and the unrelated cell the stale read carried is still delivered by
+    // the reissue, so discarding it costs nothing.
+    expect(container.textContent).toContain('Term is 12 months.');
   });
 
   it('the run completion save holds a verification made during the run, not the server\'s unmerged map', async () => {
@@ -862,7 +968,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     await flush();
     saveReviewMock.mockClear();
 
-    serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
+    serverFindings({ 'live-doc': { c1: VERIFIED_C1, c2: DONE_C2 } });
     getRunMock.mockResolvedValue({
       ...RUNNING_RUN, state: 'succeeded', finishedAt: 5,
       cells: { total: 2, queued: 0, leased: 0, done: 2, error: 0, cancelled: 0 },
@@ -966,6 +1072,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
 
+    serverFindings({ 'live-doc': { c1: VERIFIED_C1, c2: PENDING_C2 } });
     cancelRunMock.mockResolvedValue({ ...RUNNING_RUN, state: 'cancelling' });
     act(() => { findButton(container, /Stop|Cancel/i, 0).click(); });
     await flush();

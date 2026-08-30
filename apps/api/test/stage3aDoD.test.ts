@@ -98,7 +98,7 @@ describe('the scanners find something (a guard that matches nothing passes vacuo
 
   it('finds every file this suite makes a claim about', () => {
     for (const file of [
-      'src/App.tsx', 'src/lib/findingMerge.ts', 'src/lib/db/reviews.ts',
+      'src/App.tsx', 'src/lib/db/reviews.ts',
       'src/features/review/runReview.ts', 'src/lib/api/client.ts',
       'apps/api/src/routes/reviews.ts', 'apps/api/src/routes/runs.ts',
       'apps/api/src/findings/write.ts', 'apps/api/src/findings/reconcile.ts',
@@ -214,30 +214,40 @@ describe('Part 3A: the new machinery exists and is sound', () => {
  * ------------------------------------------------------------------ */
 
 describe('Part 3A: nothing a user can see has changed yet', () => {
-  it('still calls carryHumanState — it is deleted in Task 21, not before', () => {
+  it('TASK 21 HAS LANDED: carryHumanState is gone, and this clause of the boundary with it', () => {
     /*
-     * Not a joke, and the cheapest possible proof that the browser still
-     * orchestrates. `runReview` owns its own copy of a run and overwrites
-     * human-authored state roughly twice per cell; `carryHumanState` is the
-     * only thing that puts a verification back onto each snapshot. While a
-     * browser still drives a run, deleting it discards a lawyer's judgement
-     * silently — which is this stage's one irreversible risk.
+     * THIS ASSERTION IS INVERTED, NOT DELETED, AND THAT IS THE POINT.
      *
-     * Its deletion is Task 21 and is gated on the browser having stopped
-     * orchestrating (Task 18) and stopped writing (Task 19).
+     * It used to read *"still calls carryHumanState - it is deleted in Task
+     * 21, not before"*, and it was the cheapest possible proof that the
+     * browser still orchestrated a run. Task 21 has landed, so the same
+     * question now has the opposite answer, and the test is flipped rather
+     * than removed: a file that quietly loses its guard when the guarded
+     * thing happens is a file that stops guarding.
+     *
+     * The deletion was gated on a PROOF, not on this test:
+     * `apps/api/test/humanStateSurvives.pg.test.ts` asks the database,
+     * as the role the engine really runs as, whether the worker holds any
+     * grant on `finding_disposition` or `finding_disposition_event`. It
+     * holds none, so there is no write to merge away. The behavioural test
+     * beside it ("a mid-run verification survives fifteen later cells")
+     * passes with or without that grant and proves nothing on its own -
+     * which is why it is not the gate.
      */
     const app = codeOf(at('src/App.tsx'));
-    expect(app).toContain("import { carryHumanState } from './lib/findingMerge'");
-    // CALLED, not merely imported. It used to be called from three places —
-    // the live run's `onUpdate`, the retry's `onUpdate` and `failRetryCell`
-    // — because a snapshot arrived by three paths. Tasks 18 and 20 left ONE:
-    // the findings re-read, which is the only place a server-authored map
-    // now meets a human write this browser has just made. One call site,
-    // same rule, and still Task 21's to delete.
-    const calls = app.match(/carryHumanState\(/g) ?? [];
-    expect(calls.length).toBeGreaterThanOrEqual(1);
-    expect(app).toMatch(/carryHumanState\(base, \{ \.\.\.base, findings \}\)/);
-    expect(there('src/lib/findingMerge.ts')).toBe(true);
+    expect(app).not.toMatch(/carryHumanState/);
+    expect(app).not.toMatch(/findingMerge/);
+    expect(there('src/lib/findingMerge.ts')).toBe(false);
+    expect(there('src/lib/findingMerge.test.ts')).toBe(false);
+    // THE SANITY CHECK: the file was read at all. Three of this stage's
+    // guards passed against a `codeOf` that returned something other than
+    // what the author thought.
+    expect(app.length).toBeGreaterThan(50_000);
+    expect(app).toContain('refreshFindings');
+    // …and the window the merge used to cover is covered by a RE-READ, not
+    // by a second merge under another name. `humanWritesRef` is the counter
+    // a findings read compares itself against before it applies.
+    expect(app).toContain('humanWritesRef');
   });
 
   it('no longer orchestrates the run in the browser — Task 18 has landed', () => {
@@ -475,10 +485,16 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
  * ------------------------------------------------------------------ */
 
 describe('Part 3A does not claim Stage 3 is done, and says which clauses are open', () => {
-  it('§18 item 4 has two clauses this part does not meet, and they belong to named tasks', () => {
+  it('§18 item 4 had two clauses this part did not meet, and BOTH have now landed', () => {
     /*
      * §18 item 4 is Stage 3's definition of done, not Part 3A's, and two of
-     * its five clauses are Part 3B's by design:
+     * its five clauses were Part 3B's by design. BOTH HAVE NOW LANDED
+     * (Tasks 16 and 21), so this test says so rather than continuing to
+     * claim a gap that has closed - the list is only honest while it is
+     * maintained, in both directions. Stage 3's own gate is
+     * `stage3DoD.test.ts`; this file's remaining job is the part boundary.
+     *
+     * The two clauses, as they stood:
      *
      *  - *"re-running a clause clears its disposition and its net position in
      *    ONE TRANSACTION and records the clearing in
@@ -495,15 +511,23 @@ describe('Part 3A does not claim Stage 3 is done, and says which clauses are ope
      *    `routes/runs.ts`. So the first clause is MET, in both its forms,
      *    and the assertions below have flipped with it rather than being
      *    deleted.
-     *  - *"`carryHumanState` is deleted and nothing regressed"* — Task 21,
-     *    and the test above exists to keep it from arriving early.
+     *  - *"`carryHumanState` is deleted and nothing regressed"* - **TASK 21
+     *    HAS NOW LANDED.** The gate was not this test and was never a
+     *    behavioural one: `humanStateSurvives.pg.test.ts` attempts every
+     *    verb on both disposition tables as `lexprompt_worker` and is
+     *    refused every one of them, so the engine has no path to a human
+     *    judgement to merge away from.
      *
      * This test is here so that a reader of a green Part 3A gate cannot
-     * mistake it for a green Stage 3 gate. It fails when the remaining task
-     * lands without this list being revisited, which is the point: the list
-     * is only honest while it is maintained.
+     * mistake it for a green Stage 3 gate.
      */
-    expect(there('src/lib/findingMerge.ts'), 'Task 21 landed; revisit §18 item 4 here').toBe(true);
+    expect(there('src/lib/findingMerge.ts'), 'Task 21 landed').toBe(false);
+    // The proof that let it go, by name. A deletion whose gate file has
+    // itself been deleted is a deletion with no gate.
+    expect(there('apps/api/test/humanStateSurvives.pg.test.ts')).toBe(true);
+    const proof = readFileSync(at('apps/api/test/humanStateSurvives.pg.test.ts'), 'utf8');
+    expect(proof).toContain('refusesEveryDispositionStatement');
+    expect(proof).toContain('refusesEveryDispositionEventStatement');
 
     // Task 16's route HAS landed, and the reset it performs goes through the
     // one writer of both disposition tables rather than a second UPDATE of

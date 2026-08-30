@@ -497,13 +497,19 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
 
   describe('a human write to a different finding during an in-flight retry', () => {
     /*
-     * Fix round 1 (reviewer-confirmed MEDIUM defect), and it survives the
-     * move: a verification or a note written to a DIFFERENT finding while
-     * another clause's retry is still in flight must not be discarded by
-     * the findings re-read the retry performs afterwards. That read knows
-     * nothing about a write this browser has just made — which is exactly
-     * what `carryHumanState` is for, and why it is deleted in Task 21 and
-     * not here.
+     * Fix round 1 (reviewer-confirmed MEDIUM defect), and it survives both
+     * moves: a verification or a note written to a DIFFERENT finding while
+     * another clause's retry is still in flight must still be there when
+     * the retry answers.
+     *
+     * TASK 21 CHANGED WHAT MAKES THAT TRUE, and the fixture with it. The old
+     * comment said the re-read "knows nothing about a write this browser has
+     * just made" - true when the browser owned the findings blob. Since Task
+     * 19 the note and the flag are each their own row, written by their own
+     * route and CONFIRMED before the retry's re-read is even issued, so the
+     * map that comes back carries them. A server that answered `unchecked`
+     * with no notes for a finding it had just stored a flag and a note on
+     * would not be this server.
      */
     it('keeps a verification and a note on that finding, on screen and in what it renders', async () => {
       await openReview();
@@ -536,11 +542,17 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
       act(() => { findButton(container, /^Flag$/i, 0).click(); });
       await flush();
 
-      // Now the retry answers, and the findings map that comes back knows
-      // nothing about either write.
+      // Now the retry answers. The map that comes back carries both writes,
+      // because both were stored before this read was issued - and c2 was
+      // never part of the retry, so nothing server-side cleared them.
       afterRetry({ c2: {
         clauseId: 'c2', status: 'done', citations: [{ quote: 'y', documentId: 'd1' }],
-        summary: 'Term is 12 months.', verification: { state: 'unchecked' }, notes: [],
+        summary: 'Term is 12 months.',
+        verification: { state: 'flagged', byUserId: 'u1', at: 1_700_000_000_000 },
+        notes: [{
+          id: 'note-1', findingId: 'd1::c2', text: 'New note added mid-retry.',
+          byUserId: 'u1', at: 5,
+        }],
       } });
       act(() => { resolveRetry!(); });
       await flush();

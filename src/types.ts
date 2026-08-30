@@ -306,13 +306,14 @@ export interface Review {
    * The optimistic-concurrency token (§8) — see `Matter.version` for the
    * full note.
    *
-   * On THIS record it is the one that matters most. A run's debounced saver
-   * writes the whole review every two seconds from its own copy, and knows
-   * nothing about a verification somebody recorded in another tab in the
-   * meantime. `carryHumanState` re-applies human state within ONE tab;
-   * nothing can do that across two, because the other tab's write was never
-   * in this one's snapshot to carry. Without this field the second write
-   * silently wins and a human's judgement is gone with no trace.
+   * On THIS record it is the one that matters most. It was earned by a
+   * run's debounced saver, which wrote the whole review every two seconds
+   * from its own copy and knew nothing about a verification somebody
+   * recorded in another tab in the meantime. Both that saver and the
+   * in-tab merge that partly covered it are gone (Stage 3, Tasks 18 and
+   * 21) - a judgement is its own row now - but the field is not: any
+   * whole-record write from a browser holding a stale copy still has to be
+   * refused, and without this the second write silently wins.
    *
    * `saveReview` stamps it from the version this browser last SAW for the
    * review — see its docstring — because `reviewFromRun` builds a `Review`

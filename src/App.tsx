@@ -25,7 +25,6 @@ import type { WorkspaceSettings, VerificationChange, RetryResult, RunView } from
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
 import { apiKeyWasPurgedThisSession, loadSettings } from './lib/storage';
 import { API_KEY_PURGED_NOTICE } from './lib/privacyCopy';
-import { carryHumanState } from './lib/findingMerge';
 import {
   listPlaybooks as listTemplates, getPlaybook as getTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
@@ -514,6 +513,26 @@ function AppShell({ signIn }: { signIn: () => void }) {
    *  a row. See `refreshFindings`. */
   const findingsRefreshRef = useRef<{ inFlight: boolean; again: boolean; failures: number }>(
     { inFlight: false, again: false, failures: 0 });
+  /**
+   * How many human writes this browser has had CONFIRMED by the store.
+   *
+   * `carryHumanState` is gone (Task 21) and nothing merges a snapshot any
+   * more: the findings a read returns already carry the disposition, the
+   * notes and the net position, because each is its own row written by its
+   * own route. What a read cannot carry is a write that COMMITTED WHILE THE
+   * READ WAS IN FLIGHT — the response was assembled before it. Applying such
+   * a response puts a verification a lawyer has just made back to
+   * "Not checked" for one poll interval.
+   *
+   * So a read that spans a confirmed human write is DISCARDED AND REISSUED
+   * rather than merged. That is deliberately not the old merge: nothing from
+   * the browser's copy is carried onto the server's answer, and the second
+   * read is issued after the write, so it carries the judgement itself.
+   *
+   * Incremented in `applyToFinding`, which every human-write handler already
+   * funnels through.
+   */
+  const humanWritesRef = useRef(0);
   // Tracks the latest `run` state, for every path that cannot just read the
   // `run` state variable: the watch's callbacks, and the human-write
   // handlers, all of which run from closures created on an earlier render.
@@ -2303,6 +2322,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
     try {
       do {
         state.again = false;
+        const writes = humanWritesRef.current;
         let findings: Review['findings'];
         try {
           ({ findings } = await getFindings(reviewId));
@@ -2325,12 +2345,20 @@ function AppShell({ signIn }: { signIn: () => void }) {
         // was in flight. Applying it would put one review's findings under
         // another's clauses.
         if (!base || base.id !== reviewId) return;
-        // `carryHumanState` is still called (Task 21 deletes it, not this
-        // task). It cannot resurrect a judgement the server cleared: it
-        // carries a verification only while the finding's STATUS is
-        // unchanged, and every server-side reset moves the status back to
-        // `pending`.
-        const merged = carryHumanState(base, { ...base, findings });
+        // A human write was confirmed while this read was in flight, so the
+        // response predates it. Read again rather than apply — see
+        // `humanWritesRef`. NOT a merge: `carryHumanState` is deleted and
+        // nothing puts this browser's copy of a judgement back on top of the
+        // store's answer.
+        if (humanWritesRef.current !== writes) {
+          state.again = true;
+          continue;
+        }
+        // The findings a read returns ARE the human state: the disposition,
+        // the notes and the net position are rows of their own, assembled by
+        // `findings/read.ts`. There is no snapshot to merge and nothing the
+        // engine could have clobbered — it holds no grant on any of them.
+        const merged = { ...base, findings };
         latestRunRef.current = merged;
         setRun(merged);
       } while (state.again);
@@ -2577,6 +2605,9 @@ function AppShell({ signIn }: { signIn: () => void }) {
     const merged = withUpdatedFinding(latest, docId, clauseId, update(existing));
     latestRunRef.current = merged;
     setRun(merged);
+    // A findings read that was already in flight was assembled before this
+    // write and must not be applied over it. See `humanWritesRef`.
+    humanWritesRef.current += 1;
   };
 
   /** A note: a person's remark about the clause, and its own row. The actor

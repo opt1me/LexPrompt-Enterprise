@@ -26,12 +26,13 @@ import { readFindingsForReviews } from '../findings/read.ts';
  * ## 2. A stale write is REFUSED, and that is the whole point
  *
  * Verification state is set only by a human action and nothing derives it
- * (CLAUDE.md). The failure available here is a run's debounced saver — which
- * holds its own copy of the review and knows nothing about anyone else's
- * writes — overwriting a verification somebody recorded seconds ago, with
- * nothing on any screen to show it. `carryHumanState` closes that WITHIN one
- * tab; nothing could close it across two, because the second tab's write was
- * never in the first tab's snapshot to carry.
+ * (CLAUDE.md). The failure this was written against was a run's debounced
+ * saver - which held its own copy of the review and knew nothing about
+ * anyone else's writes - overwriting a verification somebody recorded
+ * seconds ago, with nothing on any screen to show it. That saver is gone
+ * (Task 18) and a judgement is its own row (Task 19), so the specific route
+ * is closed; the general one is not, and any browser holding a stale copy
+ * of this record can still try to write it back.
  *
  * So `where review.version = $N` on the DO UPDATE is load-bearing in the
  * strongest sense in this file: it turns "your colleague's verification was

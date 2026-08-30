@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { appDb, migratorDb, workerDb, withPg } from './helpers/pgHarness.ts';
+import {
+  refusesEveryDispositionEventStatement, refusesEveryDispositionStatement,
+} from './helpers/dispositionGrants.ts';
 import type { Db, Tx } from '../src/db/pool.ts';
 
 /**
@@ -123,40 +126,17 @@ describe('the run worker can write what a model produced', () => {
 describe('the run worker cannot read or write a human s judgement', () => {
   it('refuses the worker role every statement against finding_disposition', async () => {
     await withSeed('disp', async ({ userId }) => {
-      const db = workerDb();
-      await expect(db.query("select state from finding_disposition where review_id = 'wg-r-disp'"))
-        .rejects.toThrow(/permission denied/i);
-      await expect(db.query(
-        `insert into finding_disposition
-           (review_id, findings_key, clause_id, workspace_id, state, changed_count, by_user_id, at)
-         values ('wg-r-disp', 'd1', 'c1', $1, 'verified', 1, $2, now())`, [WS, userId]))
-        .rejects.toThrow(/permission denied/i);
-      await expect(db.query(
-        "update finding_disposition set state = 'verified' where review_id = 'wg-r-disp'"))
-        .rejects.toThrow(/permission denied/i);
-      await expect(db.query("delete from finding_disposition where review_id = 'wg-r-disp'"))
-        .rejects.toThrow(/permission denied/i);
+      await refusesEveryDispositionStatement(workerDb(), {
+        reviewId: 'wg-r-disp', findingsKey: 'd1', clauseId: 'c1', workspaceId: WS, userId,
+      });
     });
   });
 
   it('refuses the worker role every statement against finding_disposition_event', async () => {
     await withSeed('dispev', async ({ userId }) => {
-      const db = workerDb();
-      await expect(db.query(
-        "select to_state from finding_disposition_event where review_id = 'wg-r-dispev'"))
-        .rejects.toThrow(/permission denied/i);
-      await expect(db.query(
-        `insert into finding_disposition_event
-           (review_id, findings_key, clause_id, workspace_id, from_state, to_state, cause,
-            by_user_id, at)
-         values ('wg-r-dispev', 'd1', 'c1', $1, 'unchecked', 'verified', 'human', $2, now())`,
-        [WS, userId])).rejects.toThrow(/permission denied/i);
-      await expect(db.query("delete from finding_disposition_event where review_id = 'wg-r-dispev'"))
-        .rejects.toThrow(/permission denied/i);
-      // …and not the sequence behind the identity column either, which is
-      // 006's second REVOKE and the door an INSERT would otherwise need.
-      await expect(db.query("select nextval('finding_disposition_event_id_seq')"))
-        .rejects.toThrow(/permission denied/i);
+      await refusesEveryDispositionEventStatement(workerDb(), {
+        reviewId: 'wg-r-dispev', findingsKey: 'd1', clauseId: 'c1', workspaceId: WS, userId,
+      });
     });
   });
 

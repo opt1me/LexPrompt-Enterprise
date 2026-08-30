@@ -334,12 +334,12 @@ describe('a save that would lose somebody else s work is refused', () => {
   });
 
   it('THE ONE THAT MATTERS: a run s stale save cannot erase a human s verification', async () => {
-    // The whole reason this table has an optimistic-concurrency token. A
-    // run's debounced saver holds its own copy of the review, writes the
-    // WHOLE record every two seconds, and knows nothing about a verification
-    // somebody recorded in another tab. `carryHumanState` closes that within
-    // one tab and cannot close it across two, because the other tab's write
-    // was never in this one's snapshot to carry.
+    // The whole reason this table has an optimistic-concurrency token. It
+    // was earned by a run's debounced saver, which held its own copy of the
+    // review, wrote the WHOLE record every two seconds, and knew nothing
+    // about a verification somebody recorded in another tab. That saver is
+    // gone and a judgement is its own row now, but the refusal below is not
+    // conditional on either: any stale whole-record write must lose.
     await withPg(async t => {
       await aMatter(t);
       await aVersion(t);
