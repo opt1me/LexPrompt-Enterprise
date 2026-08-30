@@ -1,10 +1,12 @@
-import type { AssignmentView, AssignmentsPage } from '@lexprompt/core';
+import type {
+  AssignmentInboxPage, AssignmentView, AssignmentsPage,
+} from '@lexprompt/core';
 import { apiGet, apiSend } from './client';
 
 /**
  * ASKING A COLLEAGUE TO LOOK AT A CLAUSE, from the browser (§6.3, S17).
  *
- * Three calls and no cache. A cache here would be a second answer to "what
+ * Four calls and no cache. A cache here would be a second answer to "what
  * has been asked of me": the socket already pushes `assignment.created` and
  * `assignment.resolved`, and a module holding its own copy would have to
  * reconcile the two — the shape that produces a badge showing a request the
@@ -57,9 +59,36 @@ export async function resolveAssignment(id: string): Promise<AssignmentView> {
  * "assigned to me" counter is Stage 5 (S18) — a different screen over the
  * same mechanism, not a different truth.
  */
-export async function getOpenAssignments(reviewId?: string): Promise<AssignmentView[]> {
-  const query = reviewId === undefined
-    ? '?state=open' : `?state=open&review=${encodeURIComponent(reviewId)}`;
-  const page = await apiGet<AssignmentsPage>(`/v1/assignments${query}`);
+export async function getOpenAssignments(reviewId: string): Promise<AssignmentView[]> {
+  const page = await apiGet<AssignmentsPage>(
+    `/v1/assignments?state=open&review=${encodeURIComponent(reviewId)}`);
   return page.assignments;
+}
+
+/**
+ * EVERY OPEN REQUEST ADDRESSED TO ME, ACROSS EVERY MATTER (Stage 5, S18).
+ *
+ * The same route with no `review`, which is a DIFFERENT projection and not
+ * merely a wider one: it answers `AssignmentInboxPage`, carrying the matter,
+ * the review's name and the clause's title resolved server-side, because a
+ * cross-matter list rendered from ids alone is three opaque strings.
+ *
+ * ONLY WHAT WAS ASKED OF ME. The review-scoped call above answers both
+ * directions -- a request you made is your own act, and the review screen
+ * offers you a Withdraw control for it -- and this one does not, because a
+ * count of "assigned to me" that included what you asked of others would
+ * tell you that you owe somebody an answer you do not owe.
+ *
+ * NO CACHE, REJECTS ON FAILURE, and NEVER resolves to an empty page. A count
+ * of zero because a fetch failed is a lawyer not doing something a colleague
+ * is waiting on, and it looks exactly like a quiet week -- `assignedToMe.ts`
+ * is what keeps those two states apart on screen.
+ *
+ * `reviewId` above is REQUIRED, and was optional before this call existed:
+ * the same URL with no `review` now answers a different shape, so a caller
+ * omitting it would have received a page with no `assignments` key at all
+ * and read it as an empty list. A compile error is the honest form of that.
+ */
+export async function getMyInbox(): Promise<AssignmentInboxPage> {
+  return apiGet<AssignmentInboxPage>('/v1/assignments?state=open');
 }

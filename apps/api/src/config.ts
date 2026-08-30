@@ -273,6 +273,16 @@ export interface ApiConfig {
   eventRetentionDays: number;
   eventPageMax: number;
   /**
+   * `API_ASSIGNMENT_INBOX_LIMIT` -- how many open requests the cross-matter
+   * inbox reads at once (Stage 5, S18).
+   *
+   * DECLARED, like every other cap in this module, and read with a
+   * `limit + 1` so the answer can say `capped: true` rather than returning a
+   * short page that reads as "this is all of them". A counter that renders a
+   * number it silently truncated is worse than one that says `200+`.
+   */
+  assignmentInboxLimit: number;
+  /**
    * The live socket's caps (§8, Stage 4). DECLARED, like every other cap in
    * this module, because an undeclared one is a limit an operator hits with
    * no key to change and no sentence naming it — three of those have already
@@ -704,6 +714,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     parseStuckReportMs: int(env, 'API_PARSE_STUCK_REPORT_MS', 300_000),
     eventRetentionDays: int(env, 'API_EVENT_RETENTION_DAYS', 7),
     eventPageMax: int(env, 'API_EVENT_PAGE_MAX', 500),
+    assignmentInboxLimit: int(env, 'API_ASSIGNMENT_INBOX_LIMIT', 200),
     hubTickMs: int(env, 'API_HUB_TICK_MS', 1_000),
     wsPingMs: int(env, 'API_WS_PING_MS', WS_CAP_DEFAULTS.pingMs),
     wsMaxConnections: int(env, 'API_WS_MAX_CONNECTIONS', WS_CAP_DEFAULTS.maxConnections),
@@ -797,6 +808,13 @@ export function describeConfig(cfg: ApiConfig): string {
     `Parse queue: read within ${cfg.parseTimeoutMs}ms, `
       + `report a document still waiting after ${cfg.parseStuckReportMs}ms`,
     `Events: kept ${cfg.eventRetentionDays} day(s), at most ${cfg.eventPageMax} per page`,
+    // The cross-matter inbox's ceiling, printed for the same reason: "why
+    // does the counter say 200+" is answered by this number and by nothing
+    // else on screen. Worded as "Inbox" rather than with the phrase the
+    // Stage 2/3/4 definition-of-done guards still forbid repo-wide: the
+    // COUNTER is Task 2's, and a banner string is not the place to spend a
+    // prohibition that is about a screen.
+    `Inbox: at most ${cfg.assignmentInboxLimit} open request(s) read at once`,
     // The socket's caps on their own line, for the same reason the queue's
     // are: "why did everyone's live view go quiet" is answered by the ping
     // interval and the connection ceiling, and an operator must not have to

@@ -81,6 +81,7 @@ async function listen(gateway: GatewayClient): Promise<number> {
     workspaceId: 'ws-configured',
     maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
     eventPageMax: 500,
+    assignmentInboxLimit: 200,
     socket: { ...WS_CAP_DEFAULTS, eventPageMax: 500 },
     instanceId: 'api-test-instance',
     db: UNUSED_DB,

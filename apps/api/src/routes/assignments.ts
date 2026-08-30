@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
   ModelError, uid,
+  type AssignmentInboxItem, type AssignmentInboxPage,
   type AssignmentsPage, type AssignmentView,
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
@@ -43,7 +44,15 @@ import type { FindingKey } from '../findings/rows.ts';
  * assigns, when they are not sure. So it sits at the same bar as the
  * disposition it deliberately does not change.
  */
-export function registerAssignments(app: FastifyInstance, db: Db): void {
+export interface AssignmentRouteOptions {
+  /** `API_ASSIGNMENT_INBOX_LIMIT`. Read with a `limit + 1` so `capped` is
+   *  measured rather than guessed. */
+  inboxLimit: number;
+}
+
+export function registerAssignments(
+  app: FastifyInstance, db: Db, opts: AssignmentRouteOptions,
+): void {
   /**
    * *"Please look at this."*
    *
@@ -231,31 +240,102 @@ export function registerAssignments(app: FastifyInstance, db: Db): void {
    * needs (Task 25). The firm-wide "assigned to me" counter is Stage 5 (S18)
    * and is a different screen, not a different truth.
    */
-  app.get('/v1/assignments', async (req): Promise<AssignmentsPage> => {
-    const ws = req.actor!.workspaceId;
-    const query = req.query as { state?: string; review?: string };
-    if (query.state !== undefined && query.state !== 'open') {
-      // A CLOSED SET, refused rather than silently treated as `open`. A
-      // caller who asked for `state=resolved` and received open requests
-      // would be reading the wrong list with no way to tell.
-      throw new ModelError(
-        `LexPrompt lists open assignments; it does not understand state=${query.state}.`,
-        'unknown', 400);
-    }
-    const rows = query.review === undefined
-      ? await db.query<AssignmentRow>(
-        `select * from assignment
-          where workspace_id = $1 and resolved_at is null
-            and (assignee_user_id = $2 or assigned_by_user_id = $2)
-          order by created_at desc`, [ws, req.actor!.id])
-      : await db.query<AssignmentRow>(
-        `select * from assignment
-          where workspace_id = $1 and resolved_at is null
-            and (assignee_user_id = $2 or assigned_by_user_id = $2)
-            and review_id = $3
-          order by created_at desc`, [ws, req.actor!.id, query.review]);
-    return { assignments: rows.map(toAssignmentView) };
-  });
+  app.get('/v1/assignments',
+    async (req): Promise<AssignmentsPage | AssignmentInboxPage> => {
+      const ws = req.actor!.workspaceId;
+      const query = req.query as { state?: string; review?: string };
+      if (query.state !== undefined && query.state !== 'open') {
+        // A CLOSED SET, refused rather than silently treated as `open`. A
+        // caller who asked for `state=resolved` and received open requests
+        // would be reading the wrong list with no way to tell.
+        throw new ModelError(
+          `LexPrompt lists open assignments; it does not understand state=${query.state}.`,
+          'unknown', 400);
+      }
+      if (query.review !== undefined) {
+        const rows = await db.query<AssignmentRow>(
+          `select * from assignment
+            where workspace_id = $1 and resolved_at is null
+              and (assignee_user_id = $2 or assigned_by_user_id = $2)
+              and review_id = $3
+            order by created_at desc`, [ws, req.actor!.id, query.review]);
+        return { assignments: rows.map(toAssignmentView) };
+      }
+
+      // THE CROSS-MATTER INBOX. `limit + 1` so `capped` is measured rather
+      // than guessed -- the same idiom `readEvents` uses for `hasMore`, and
+      // for the same reason: a `count(*)` is a second statement that can
+      // disagree with the first.
+      const rows = await db.query<InboxRow>(
+        INBOX, [ws, req.actor!.id, opts.inboxLimit + 1]);
+      const capped = rows.length > opts.inboxLimit;
+      return {
+        items: rows.slice(0, opts.inboxLimit).map(toInboxItem),
+        capped,
+      };
+    });
+}
+
+interface InboxRow extends AssignmentRow {
+  matter_id: string;
+  matter_name: string;
+  review_name: string | null;
+  clause_title: string | null;
+}
+
+/**
+ * ONE STATEMENT, joining the context an assignee needs in order to act from
+ * a screen that is not inside any particular matter.
+ *
+ * ## Only what was asked OF me
+ *
+ * Unlike `?review=`, which answers both directions because a request you
+ * MADE is your own act and the review screen offers you a Withdraw control
+ * for it, this is the "assigned to me" queue: `assignee_user_id = $2` and
+ * nothing else. A counter that included requests you made would tell you
+ * that you owe somebody an answer you do not owe.
+ *
+ * ## The clause title comes from the review's SNAPSHOT, never from the
+ * playbook as it stands
+ *
+ * `playbook_snapshot` is a deep copy of what the review claims to have
+ * checked (`CLAUDE.md`), so a clause renamed since is still named as it was
+ * named then, and a clause the snapshot no longer holds yields NULL rather
+ * than a title read live from a version this review never ran. Do not join
+ * `playbook_version` here: a title read live renames history.
+ *
+ * Every arm of the join carries `workspace_id` -- `assignment`, `review` and
+ * `matter` alike -- because a join that scopes only its driving table is a
+ * join one careless `or` away from another firm's matter names.
+ */
+const INBOX = `
+select a.*, m.id as matter_id, m.name as matter_name,
+       r.playbook_snapshot ->> 'name' as review_name,
+       (select c ->> 'title' from jsonb_array_elements(r.playbook_snapshot -> 'clauses') c
+         where c ->> 'id' = a.clause_id limit 1) as clause_title
+  from assignment a
+  join review r on r.id = a.review_id and r.workspace_id = a.workspace_id
+  join matter m on m.id = r.matter_id and m.workspace_id = a.workspace_id
+ where a.workspace_id = $1 and a.resolved_at is null and a.assignee_user_id = $2
+ order by a.created_at desc
+ limit $3`;
+
+/**
+ * A row to the wire shape.
+ *
+ * `reviewName` and `clauseTitle` go back ABSENT rather than
+ * `undefined`-valued: `structuredClone` preserves an undefined-valued key,
+ * so `clauseTitle: undefined` would read to an `in` check as a clause this
+ * review still holds, unnamed.
+ */
+function toInboxItem(row: InboxRow): AssignmentInboxItem {
+  return {
+    assignment: toAssignmentView(row),
+    matterId: row.matter_id,
+    matterName: row.matter_name,
+    ...(row.review_name ? { reviewName: row.review_name } : {}),
+    ...(row.clause_title ? { clauseTitle: row.clause_title } : {}),
+  };
 }
 
 export interface AssignmentRow {

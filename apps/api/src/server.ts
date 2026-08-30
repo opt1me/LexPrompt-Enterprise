@@ -119,6 +119,12 @@ export interface ServerDeps {
    *  route that would hand a client all of them on request is an undeclared
    *  cap by another name. */
   eventPageMax: number;
+  /** `API_ASSIGNMENT_INBOX_LIMIT` -- the cross-matter inbox's page size,
+   *  DECLARED rather than invented here. It comes in for the same reason
+   *  `eventPageMax` does: `loadConfig` is the one reader of the
+   *  environment, and a default picked in this file would be an undeclared
+   *  cap in the tier that cannot report it. */
+  assignmentInboxLimit: number;
   /**
    * §8's live socket (Stage 4 Task 16), and the `verify` above is what
    * authenticates it — the SAME function, before the upgrade.
@@ -352,7 +358,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerFindings(app, deps.db);
   registerHistory(app, deps.db);
   registerActivity(app, deps.db);
-  registerAssignments(app, deps.db);
+  registerAssignments(app, deps.db, { inboxLimit: deps.assignmentInboxLimit });
   registerRuns(app, deps.db, { eventPageMax: deps.eventPageMax });
   registerWorkspaceSettings(app, deps.db, deps.gateway);
 

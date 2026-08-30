@@ -61,6 +61,10 @@ const DECLARED = [
   // places. `assertPresenceOutlivesBeat` refuses a pair that would expire
   // everybody between beats.
   'API_PRESENCE_HEARTBEAT_MS', 'API_PRESENCE_TTL_MS',
+  // Stage 5's cross-matter inbox. The ceiling a counter renders `200+`
+  // against -- an undeclared one here would be a number a lawyer's queue
+  // stopped at with nothing on screen saying so.
+  'API_ASSIGNMENT_INBOX_LIMIT',
 ];
 
 /** `API_RUN_LEASE_MS` -> `runLeaseMs`, the naming `config.ts` uses without
@@ -111,6 +115,7 @@ describe('every declared cap has a reader, and every reader has a declaration', 
     expect(fieldNameFor('API_RUN_CELL_TIMEOUT_MS')).toBe('runCellTimeoutMs');
     expect(fieldNameFor('API_WORKSPACE_RUN_CONCURRENCY')).toBe('workspaceRunConcurrency');
     expect(fieldNameFor('API_EVENT_PAGE_MAX')).toBe('eventPageMax');
+    expect(fieldNameFor('API_ASSIGNMENT_INBOX_LIMIT')).toBe('assignmentInboxLimit');
   });
 
   it('gives every declared cap a reader in the shipped source', () => {

@@ -364,6 +364,51 @@ export interface AssignmentsPage {
 }
 
 /**
+ * ONE OPEN REQUEST, WITH ENOUGH CONTEXT TO ACT ON IT from a screen that is
+ * not inside any particular matter (Stage 5, S18).
+ *
+ * COMPOSED, not extended. `AssignmentView` is the row and is what the socket
+ * carries; this is the row PLUS the names of the things it points at,
+ * resolved server-side in the same statement. Extending would have made one
+ * type mean two things depending on where it came from, which is how a
+ * payload ends up carrying a name.
+ */
+export interface AssignmentInboxItem {
+  assignment: AssignmentView;
+  matterId: string;
+  matterName: string;
+  /**
+   * The review's name, from its own playbook SNAPSHOT.
+   *
+   * ABSENT rather than invented when the snapshot names none. `review` has
+   * no `name` column at all -- a review is named by what it claims to have
+   * checked -- and `ActivityRow.reviewName` is optional for exactly this
+   * reason. The BRIEF declared this required; the shipped schema wins.
+   */
+  reviewName?: string;
+  /** The clause's title from the review's own playbook SNAPSHOT, never from
+   *  the playbook as it stands today -- a review's snapshot is what it
+   *  claims to have checked, and a title read live would rename history.
+   *  ABSENT when the snapshot no longer holds that clause id: "a clause this
+   *  review no longer has" is a real state and inventing a title for it
+   *  would be worse than saying so. */
+  clauseTitle?: string;
+}
+
+/**
+ * EVERY OPEN REQUEST ADDRESSED TO ME, across every matter.
+ *
+ * `capped` rather than a silently short page: a counter reads this and
+ * renders `200+` rather than a number that is wrong. A list that stopped at
+ * a limit and did not say so is the blank-CSV-cell defect with a ceiling.
+ */
+export interface AssignmentInboxPage {
+  items: AssignmentInboxItem[];
+  /** True when `API_ASSIGNMENT_INBOX_LIMIT` was reached. */
+  capped: boolean;
+}
+
+/**
  * Somebody was asked to look at a clause, or the request was closed.
  *
  * The WHOLE row travels, on both types, so a receiving client renders "A.

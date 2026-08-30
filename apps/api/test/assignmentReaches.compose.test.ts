@@ -96,7 +96,12 @@ describe('an assignment reaches the person it was addressed to', () => {
     // list is how a person who was away from their desk finds out at all,
     // and a feature with only the first would lose every request made while
     // its assignee was signed out.
-    const listed = await asUser(partner, 'GET', '/v1/assignments?state=open');
+    // NARROWED TO THE REVIEW, since Stage 5 Task 1: the un-narrowed call
+    // answers the cross-matter INBOX shape (`items`), which is a different
+    // question -- "what do I owe somebody", assignee-only. This surface is
+    // the review screen's, and it needs both directions.
+    const listed = await asUser(
+      partner, 'GET', `/v1/assignments?state=open&review=${seeded.reviewId}`);
     expect(listed.status).toBe(200);
     const { assignments } = await listed.json() as {
       assignments: { id: string; clauseId: string }[];
@@ -113,7 +118,8 @@ describe('an assignment reaches the person it was addressed to', () => {
     // R. Okafor to look at this" line and its **Withdraw the request**
     // control lived in the assigner's tab and nowhere else: they vanished on
     // reload, while the assignee went on seeing the request open.
-    const mine = await asUser(trainee, 'GET', '/v1/assignments?state=open');
+    const mine = await asUser(
+      trainee, 'GET', `/v1/assignments?state=open&review=${seeded.reviewId}`);
     const theirs = await mine.json() as {
       assignments: { id: string; assignedByUserId: string }[];
     };
@@ -163,9 +169,16 @@ describe('an assignment reaches the person it was addressed to', () => {
     } }).payload;
     expect(payload.assignment.resolvedByUserId).toBe(partner.userId);
 
-    const listed = await asUser(partner, 'GET', '/v1/assignments?state=open');
+    const listed = await asUser(
+      partner, 'GET', `/v1/assignments?state=open&review=${seeded.reviewId}`);
     const { assignments } = await listed.json() as { assignments: { id: string }[] };
     expect(assignments.filter(a => a.id === id)).toEqual([]);
+    // …and out of the cross-matter inbox too, which is the surface Stage 5's
+    // counter reads. Two reads of one row that disagreed about whether it is
+    // open would put a number on the home screen the review screen denies.
+    const inbox = await asUser(partner, 'GET', '/v1/assignments?state=open');
+    const { items } = await inbox.json() as { items: { assignment: { id: string } }[] };
+    expect(items.filter(i => i.assignment.id === id)).toEqual([]);
   }, 60_000);
 
   it('refuses a third person closing it, with two real tokens', async () => {

@@ -96,6 +96,9 @@ export interface TestApiOptions {
   /** Overrides `API_EVENT_PAGE_MAX`, so a test can prove the cursor's
    *  `hasMore` without writing five hundred events. */
   eventPageMax?: number;
+  /** Overrides `API_ASSIGNMENT_INBOX_LIMIT`, so a test can prove `capped`
+   *  without seeding two hundred requests. */
+  assignmentInboxLimit?: number;
   /** The instance id every socket's `hello` frame carries. Overridable so a
    *  test can stand two servers up and tell their sockets apart -- which is
    *  the cross-replica condition, in one process. */
@@ -220,6 +223,8 @@ export function buildTestApi(
     // The shipped default, so a route suite reads the same page size the
     // running service uses rather than a number the harness invented.
     eventPageMax: opts.eventPageMax ?? 500,
+    // The SHIPPED default (config.ts), never a number this harness invented.
+    assignmentInboxLimit: opts.assignmentInboxLimit ?? 200,
     // The SHIPPED defaults (config.ts's WS_CAP_DEFAULTS), never numbers this
     // harness invented: a suite exercising a ping interval no deployment
     // uses is the quiet half of an undeclared cap.

@@ -50,7 +50,9 @@ export type {
 // §6.3/S17's assignment (Stage 4 Task 24): a request a person made of
 // another, never a disposition. Declared here because `apps/api` writes it
 // and the browser renders it, like every other wire shape in this file.
-export type { AssignmentView, AssignmentsPage } from './api/records.ts';
+export type {
+  AssignmentView, AssignmentsPage, AssignmentInboxItem, AssignmentInboxPage,
+} from './api/records.ts';
 // Part 3B's wire shapes: a review's findings assembled from rows, a
 // disposition and its event, and what a per-clause retry cleared. One
 // declaration, two programs — the browser reads them and `apps/api` writes

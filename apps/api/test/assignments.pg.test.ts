@@ -377,7 +377,22 @@ describe('closing a request', () => {
 });
 
 describe('what has been asked of me, and what I have asked of others', () => {
-  it('lists BOTH directions for the caller, and nothing at all for a third party', async () => {
+  /*
+   * TWO QUESTIONS, TWO PROJECTIONS, ONE ROUTE (Stage 5 Task 1).
+   *
+   * `?review=` is the REVIEW SCREEN's question -- "what is open between me
+   * and somebody else, here" -- and it answers both directions, because a
+   * request you made is your own act and the screen offers you a Withdraw
+   * control for it.
+   *
+   * The un-narrowed call is the CROSS-MATTER INBOX's question -- "what do I
+   * owe somebody" -- and it answers only what was asked OF the caller,
+   * because a counter that included what you asked of others would tell you
+   * that you owe an answer you do not owe. It also answers a different
+   * SHAPE (`AssignmentInboxPage`), which is `assignmentInbox.pg.test.ts`'s
+   * subject; what is asserted here is that narrowing still behaves.
+   */
+  it('lists BOTH directions on a review, and nothing at all for a third party', async () => {
     await withPg(async t => {
       await seed(t);
       // The trainee asks the partner about c1; the partner asks the trainee
@@ -386,18 +401,35 @@ describe('what has been asked of me, and what I have asked of others', () => {
       await as(t, PARTNER).send('POST', '/v1/reviews/ar1/findings/d1/c2/assignments',
         { assigneeUserId: TRAINEE });
 
-      const mine = await as(t, PARTNER).send('GET', '/v1/assignments?state=open');
+      const mine = await as(t, PARTNER).send('GET', '/v1/assignments?state=open&review=ar1');
       expect(mine.statusCode, mine.body).toBe(200);
       expect(mine.json().assignments.map((a: { clauseId: string }) => a.clauseId).sort())
         .toEqual(['c1', 'c2']);
-      const theirs = await as(t, TRAINEE).send('GET', '/v1/assignments?state=open');
+      const theirs = await as(t, TRAINEE).send('GET', '/v1/assignments?state=open&review=ar1');
       expect(theirs.json().assignments.map((a: { clauseId: string }) => a.clauseId).sort())
         .toEqual(['c1', 'c2']);
 
-      // …and NOBODY ELSE'S. The caller's id comes from the token and there
-      // is no query parameter that could ask for another person's queue.
-      const outsider = await as(t, OUTSIDER).send('GET', '/v1/assignments?state=open');
-      expect(outsider.json().assignments).toEqual([]);
+      // …and NOBODY ELSE'S, on either projection. The caller's id comes from
+      // the token and there is no query parameter that could ask for another
+      // person's queue.
+      const outsiderHere = await as(t, OUTSIDER).send(
+        'GET', '/v1/assignments?state=open&review=ar1');
+      expect(outsiderHere.json().assignments).toEqual([]);
+      const outsiderInbox = await as(t, OUTSIDER).send('GET', '/v1/assignments?state=open');
+      expect(outsiderInbox.json().items).toEqual([]);
+    });
+  });
+
+  it('answers the inbox with what was asked OF me only, not what I asked of others', async () => {
+    await withPg(async t => {
+      await seed(t);
+      await as(t, TRAINEE).send('POST', ASSIGN, { assigneeUserId: PARTNER });
+      const asker = await as(t, TRAINEE).send('GET', '/v1/assignments?state=open');
+      expect(asker.statusCode, asker.body).toBe(200);
+      expect(asker.json().items).toEqual([]);
+      const asked = await as(t, PARTNER).send('GET', '/v1/assignments?state=open');
+      expect(asked.json().items.map((i: { assignment: { clauseId: string } }) =>
+        i.assignment.clauseId)).toEqual(['c1']);
     });
   });
 
@@ -431,12 +463,17 @@ describe('what has been asked of me, and what I have asked of others', () => {
     });
   });
 
-  it('drops a request once it is closed', async () => {
+  it('drops a request once it is closed, on BOTH projections', async () => {
     await withPg(async t => {
       await seed(t);
       const mine = (await as(t, TRAINEE).send('POST', ASSIGN, { assigneeUserId: PARTNER })).json();
       await as(t, PARTNER).send('POST', `/v1/assignments/${mine.id}/resolve`);
-      expect((await as(t, PARTNER).send('GET', '/v1/assignments?state=open')).json().assignments)
+      expect((await as(t, PARTNER).send('GET', '/v1/assignments?state=open&review=ar1'))
+        .json().assignments).toEqual([]);
+      // …and out of the cross-matter inbox too. A closed request that stayed
+      // in one of the two would make a counter and a review screen disagree
+      // about the same row.
+      expect((await as(t, PARTNER).send('GET', '/v1/assignments?state=open')).json().items)
         .toEqual([]);
     });
   });
