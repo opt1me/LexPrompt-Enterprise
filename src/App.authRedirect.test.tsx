@@ -62,11 +62,6 @@ vi.mock('./lib/db/reviews', () => ({
   listReviews: (...args: unknown[]) => listReviewsMock(...args),
   getReview: (...args: unknown[]) => getReviewMock(...args),
   saveReview: vi.fn().mockResolvedValue(undefined),
-  createDebouncedReviewSaver: vi.fn(() => ({
-    scheduleSave: vi.fn(),
-    saveNow: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn(),
-  })),
 }));
 
 vi.mock('./lib/db/profile', () => ({
@@ -96,19 +91,47 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
   },
 }));
 
-// extractClause is runReview.ts's only external dependency (both are v1
-// code this sub-project does not touch) — mocking it lets a "live" run be
-// driven deterministically to an auth-rejected finding without a real
-// network call or a real API key.
-const extractClauseMock = vi.fn();
-// The extractors live in `@lexprompt/core` now (Stage 3 Task 3), so the
-// mock target is the barrel — spread over `importOriginal` so every other
-// core export stays REAL. Stubbing the whole package would silently
-// replace `unchecked`, `findingsKeyFor` and the rest with undefined.
-vi.mock('@lexprompt/core', async (importOriginal) => ({
-  ...await importOriginal<typeof import('@lexprompt/core')>(),
-  extractClause: (...args: unknown[]) => extractClauseMock(...args),
+// TASK 18: A "LIVE" RUN IS THE SERVER'S NOW, so the seam this file drives
+// moved from `extractClause` to the run client.
+//
+// Both halves it tests survive the move and neither assertion changed:
+//
+//  - a PER-CLAUSE auth failure is a `finding` carrying `authError: true`,
+//    which now arrives from the findings map the worker wrote rather than
+//    from `extractClause`'s return value; and
+//  - a REAL `ModelError` — one carrying a `code` and, where the gateway
+//    sends one, a `callId` — now reaches `handleModelError` by `startRun`
+//    rejecting, where it used to reach it by `runReview` rejecting. That is
+//    the same safety net at the same place; only what throws into it has
+//    changed.
+const startRunMock = vi.fn();
+const getFindingsMock = vi.fn();
+const cancelRunMock = vi.fn();
+let emitRunEvent: ((event: unknown) => void) | null = null;
+
+vi.mock('./lib/api/runs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/runs')>()),
+  startRun: (...args: unknown[]) => startRunMock(...args),
+  getRun: vi.fn(async () => ({ ...RUNNING_RUN, state: 'succeeded' as const, finishedAt: 9 })),
+  cancelRun: (...args: unknown[]) => cancelRunMock(...args),
+  liveRunFor: vi.fn().mockResolvedValue(null),
+  watchRun: (_runId: string, onEvent: (event: unknown) => void) => {
+    emitRunEvent = onEvent;
+    return () => { emitRunEvent = null; };
+  },
 }));
+
+vi.mock('./lib/api/findings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/findings')>()),
+  getFindings: (...args: unknown[]) => getFindingsMock(...args),
+}));
+
+const RUNNING_RUN = {
+  id: 'run-1', reviewId: 'r-live', state: 'running' as const, requestedByUserId: 'u1',
+  concurrency: 5, createdAt: 1,
+  cells: { total: 1, queued: 0, leased: 1, done: 0, error: 0, cancelled: 0 },
+  version: 1,
+};
 
 // Stubs for the two screens whose OWN rendering/upload mechanics are
 // covered elsewhere (RunPanel.test.tsx; TemplateLibrary has no dedicated
@@ -160,6 +183,37 @@ vi.mock('./features/matters/MatterPickerModal', () => ({
 }));
 
 import App from './App';
+
+/** The findings map a run has produced: one clause, rejected by the model. */
+function authErrorFinding(): void {
+  getFindingsMock.mockResolvedValue({
+    findings: {
+      'live-doc': {
+        c1: {
+          clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR,
+          authError: true, verification: { state: 'unchecked' }, notes: [],
+        },
+      },
+    },
+    dispositionVersions: {},
+    version: 1,
+  });
+}
+
+/** The server saying that cell finished, which is what makes the browser
+ *  re-read the map above. */
+async function deliverFinding(): Promise<void> {
+  const emit = emitRunEvent;
+  if (!emit) throw new Error('the run was never watched');
+  act(() => {
+    emit({
+      id: 1, type: 'finding.error', reviewId: 'r-live', runId: 'run-1', at: 1,
+      payload: { runId: 'run-1', reviewId: 'r-live', findingsKey: 'live-doc', clauseId: 'c1',
+        version: 2, error: STALE_FINDING_ERROR },
+    });
+  });
+  await flush();
+}
 
 async function flush(times = 6) {
   // Several microtask turns: extractClause's mocked promise, runReview's
@@ -283,7 +337,12 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     getDocumentBlobMock.mockReset().mockResolvedValue(null);
     getReviewMock.mockReset();
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
-    extractClauseMock.mockReset();
+    emitRunEvent = null;
+    startRunMock.mockReset().mockImplementation(async (reviewId: string) =>
+      ({ ...RUNNING_RUN, reviewId }));
+    cancelRunMock.mockReset().mockResolvedValue({ ...RUNNING_RUN, state: 'cancelling' });
+    getFindingsMock.mockReset().mockResolvedValue(
+      { findings: {}, dispositionVersions: {}, version: 1 });
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -324,9 +383,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     // failure, which is the one thing this whole task exists to stop.
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
-    extractClauseMock.mockResolvedValue({
-      clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR, authError: true,
-    });
+    authErrorFinding();
 
     act(() => { root.render(<App />); });
     await flush();
@@ -334,6 +391,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
+    await deliverFinding();
 
     expect(container.textContent).toContain(STALE_TOAST);
     expect(container.textContent).not.toContain(ON_SETTINGS);
@@ -358,13 +416,12 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     // noticed — proving the guard resets between runs rather than
     // permanently silencing every future auth-class failure for the rest of
     // the session.
-    extractClauseMock.mockResolvedValue({
-      clauseId: 'c1', status: 'error', citations: [], error: STALE_FINDING_ERROR, authError: true,
-    });
+    authErrorFinding();
     clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
+    await deliverFinding();
 
     expect(container.textContent).toContain(STALE_TOAST);
     expect(container.textContent).not.toContain(ON_SETTINGS);
@@ -372,18 +429,23 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
 
   // --- Task 23: the copy split, dispatched by `handleModelError` --------
   //
-  // These five exercise `handleStartRun`'s `runReview(...).catch(...)`
-  // safety net: `extractClause.ts` itself never rejects (it always resolves
-  // to an error `Finding`, proven by the three tests above), but a REAL
-  // `ModelError` — carrying a `code` and, where the gateway sends one, a
-  // `callId` — is exactly what the safety net exists to route correctly
-  // wherever it originates. Mocking `extractClause` to reject is the only
-  // way, in this file's existing harness, to hand that real error through
-  // to `handleModelError` without inventing a second mocking seam.
+  // These five exercise the safety net `handleStartRun` puts around the
+  // whole of starting a run. A per-clause failure is a `Finding` and never a
+  // rejection (proven by the three tests above), but a REAL `ModelError` —
+  // carrying a `code` and, where the gateway sends one, a `callId` — is
+  // exactly what that net exists to route correctly. It used to arrive by
+  // `runReview` rejecting; it now arrives by `startRun` rejecting, which is
+  // the honest place for it: refusing to start is what the server does with
+  // a run it cannot accept.
+  //
+  // The routing is `handleModelError`'s and NOT a second policy beside it.
+  // Written the other way once — "a 4xx is a refusal, show its own message"
+  // — a 403 `model_not_allowed` became a plain toast and lost the
+  // navigation to Settings these tests are about.
   it('a live sign_in_required during a run shows the sign-in message and does not navigate to Settings', async () => {
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
-    extractClauseMock.mockRejectedValue(
+    startRunMock.mockRejectedValue(
       new ModelError('Your sign-in could not be verified. Sign in again.', 'sign_in_required', 401),
     );
 
@@ -401,7 +463,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   it('a live service_misconfigured during a run shows the configuration message in place, does not navigate to Settings, and shows the callId', async () => {
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
-    extractClauseMock.mockRejectedValue(
+    startRunMock.mockRejectedValue(
       new ModelError(
         "The AI provider rejected LexPrompt's credentials. This is a configuration problem in "
         + `the firm's deployment, ${SERVICE_CONFIG_HINT}.`,
@@ -424,7 +486,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   it('a live model_not_allowed does navigate to Settings', async () => {
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
-    extractClauseMock.mockRejectedValue(
+    startRunMock.mockRejectedValue(
       new ModelError("The model is not on this workspace's allowlist.", 'model_not_allowed', 400),
     );
 
@@ -441,7 +503,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   it('a live jurisdiction_not_allowed navigates to Settings, shows the jurisdiction, and shows that nothing was sent', async () => {
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
-    extractClauseMock.mockRejectedValue(
+    startRunMock.mockRejectedValue(
       new ModelError(
         'This model is processed in EU · Sweden Central, which your firm\'s deployment does not '
         + 'permit. Nothing was sent. Choose another model, or ask your IT team to reconcile the '
@@ -465,7 +527,7 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
   it('a live group_overage shows the overage message, does not navigate to Settings, does not offer sign-in, and does not show the not_permitted wording', async () => {
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makePlaybook()]);
-    extractClauseMock.mockRejectedValue(
+    startRunMock.mockRejectedValue(
       new ModelError(
         'Your account is in too many groups for LexPrompt to read them from your sign-in '
         + '(group overage). This is not a problem you can fix by signing in again — ask your '

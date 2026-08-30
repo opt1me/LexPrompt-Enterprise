@@ -25,20 +25,42 @@ const getDocumentBlobMock = vi.fn();
 const saveReviewMock = vi.fn();
 const getProfileMock = vi.fn();
 
-// The debounced saver instance App.tsx gets back from
-// `createDebouncedReviewSaver` — captured here (rather than re-created per
-// call) so a test can assert `dispose` was actually called on THIS run's
-// saver once its matter is deleted, and that `scheduleSave` stops being
-// invoked with real data afterwards.
-let currentSaver: { scheduleSave: ReturnType<typeof vi.fn>; saveNow: ReturnType<typeof vi.fn>; dispose: ReturnType<typeof vi.fn> } | null = null;
-const createDebouncedReviewSaverMock = vi.fn((..._args: unknown[]) => {
-  currentSaver = {
-    scheduleSave: vi.fn(),
-    saveNow: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn(),
-  };
-  return currentSaver;
-});
+// TASK 18: A RUN IS THE SERVER'S, SO DELETING ITS MATTER IS A REQUEST.
+//
+// The debounced saver this file used to capture — and whose `dispose` it
+// asserted on, because an armed timer would otherwise send a write it
+// captured before the matter went — is gone. What has to be true now is the
+// same thing in the new machinery: the POLL stops, the run is asked to
+// stop, and nothing writes to the purged matter afterwards.
+const startRunMock = vi.fn();
+const cancelRunMock = vi.fn();
+const getFindingsMock = vi.fn();
+const stopWatchMock = vi.fn();
+let emitRunEvent: ((event: unknown) => void) | null = null;
+
+vi.mock('./lib/api/runs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/runs')>()),
+  startRun: (...args: unknown[]) => startRunMock(...args),
+  getRun: vi.fn(async () => ({ ...RUNNING_RUN, state: 'succeeded' as const, finishedAt: 9 })),
+  cancelRun: (...args: unknown[]) => cancelRunMock(...args),
+  liveRunFor: vi.fn().mockResolvedValue(null),
+  watchRun: (_runId: string, onEvent: (event: unknown) => void) => {
+    emitRunEvent = onEvent;
+    return stopWatchMock;
+  },
+}));
+
+vi.mock('./lib/api/findings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/findings')>()),
+  getFindings: (...args: unknown[]) => getFindingsMock(...args),
+}));
+
+const RUNNING_RUN = {
+  id: 'run-1', reviewId: 'r-live', state: 'running' as const, requestedByUserId: 'u1',
+  concurrency: 5, createdAt: 1,
+  cells: { total: 1, queued: 0, leased: 1, done: 0, error: 0, cancelled: 0 },
+  version: 1,
+};
 
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
@@ -80,7 +102,6 @@ vi.mock('./lib/db/reviews', () => ({
   listReviews: (...args: unknown[]) => listReviewsMock(...args),
   getReview: vi.fn(),
   saveReview: (...args: unknown[]) => saveReviewMock(...args),
-  createDebouncedReviewSaver: (...args: unknown[]) => createDebouncedReviewSaverMock(...args),
 }));
 
 vi.mock('./lib/db/profile', () => ({
@@ -249,8 +270,13 @@ describe('App — deleting a matter with a run in flight for it (Important 2)', 
     saveReviewMock.mockReset().mockResolvedValue(undefined);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     extractClauseMock.mockClear();
-    currentSaver = null;
-    createDebouncedReviewSaverMock.mockClear();
+    emitRunEvent = null;
+    stopWatchMock.mockClear();
+    startRunMock.mockReset().mockImplementation(async (reviewId: string) =>
+      ({ ...RUNNING_RUN, reviewId }));
+    cancelRunMock.mockReset().mockResolvedValue({ ...RUNNING_RUN, state: 'cancelling' });
+    getFindingsMock.mockReset().mockResolvedValue(
+      { findings: {}, dispositionVersions: {}, version: 1 });
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -275,13 +301,13 @@ describe('App — deleting a matter with a run in flight for it (Important 2)', 
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
 
-    expect(currentSaver).not.toBeNull();
+    expect(startRunMock).toHaveBeenCalled();
+    expect(emitRunEvent, 'the run was never watched').not.toBeNull();
     expect(container.textContent).toContain('live.txt');
   }
 
-  it('disposes the in-flight run\'s debounced saver and clears "Current run" the moment its matter is deleted', async () => {
+  it('stops watching the run and asks the server to stop it, the moment its matter is deleted', async () => {
     await startLiveRunForM1();
-    const saverAtDeleteTime = currentSaver!;
 
     // Delete the matter the live run belongs to.
     clickNav(container, 'Matters');
@@ -294,16 +320,22 @@ describe('App — deleting a matter with a run in flight for it (Important 2)', 
     await flush();
 
     expect(deleteMatterMock).toHaveBeenCalledWith('m1');
-    // The armed debounce timer for this exact run must be killed outright —
-    // not just prevented from scheduling NEW saves.
-    expect(saverAtDeleteTime.dispose).toHaveBeenCalled();
+    // The poll for this exact run must be killed outright — not merely
+    // prevented from applying what it reads. It would otherwise keep asking
+    // about a review that has been deleted and answer 404 into a toast about
+    // a matter the person has already been told is gone.
+    expect(stopWatchMock, 'the poll kept running against a deleted matter s run')
+      .toHaveBeenCalled();
+    // …and the run itself is asked to stop, because the work is the
+    // server's and nobody is coming back for it.
+    expect(cancelRunMock).toHaveBeenCalledWith('run-1');
     // No live run left to point back to.
     expect(container.textContent).not.toContain('Current run');
   });
 
-  it('never lets the run\'s completion handler write to the purged matter once its abort resolves (mutation target)', async () => {
+  it('never lets a late run event write to the purged matter (mutation target)', async () => {
     await startLiveRunForM1();
-    const saverAtDeleteTime = currentSaver!;
+    const emit = emitRunEvent!;
 
     clickNav(container, 'Matters');
     await flush();
@@ -311,59 +343,22 @@ describe('App — deleting a matter with a run in flight for it (Important 2)', 
     act(() => { deleteButton.click(); });
     await flush();
     clickByText(container, /^Confirm$/);
-    // Let the aborted runReview's rejection propagate through
-    // handleStartRun's `.catch` into `persistFinal` — the exact call site
-    // I2's guard sits in front of.
     await flush();
 
-    expect(saverAtDeleteTime.dispose).toHaveBeenCalled();
-    // The write persistFinal would otherwise make (`reviewSaver.saveNow`,
-    // which itself calls the real `saveReview`) must never fire once the
-    // matter is gone — neither directly through `saveReview`, nor through
-    // the saver's own `saveNow`.
-    expect(saverAtDeleteTime.saveNow).not.toHaveBeenCalled();
-    expect(saveReviewMock).not.toHaveBeenCalled();
-  });
-
-  // Stage 2 Task 15. The debounced saver's write is FIRE-AND-FORGET —
-  // nothing awaits it, so a rejection cannot surface on a promise any caller
-  // holds. Over a local disk that was rare; over a network it is routine,
-  // and one of the failures is a 409 refusing this save because somebody
-  // else's write landed first, which is not an error at all but a fact the
-  // reader has to act on before they close the tab.
-  //
-  // A notice with no test is a notice the next restyle deletes, so this
-  // pins it: the callback App.tsx passes is invoked, and what it puts on
-  // screen leads with the CONSEQUENCE rather than echoing a transport error
-  // a lawyer cannot act on.
-  it('shows a visible notice when the run s auto-save fails, naming the risk before the cause', async () => {
-    await startLiveRunForM1();
-    // The second argument App.tsx passes to `createDebouncedReviewSaver` —
-    // the `onError` the interface has always had and nothing needed until
-    // the store moved across a network.
-    const onError = createDebouncedReviewSaverMock.mock.calls.at(-1)?.[1] as
-      ((error: unknown, review: unknown) => void) | undefined;
-    expect(onError, 'App.tsx passed no onError to the debounced saver').toBeTypeOf('function');
-
+    // An event delivered after the delete — the poll's last read landing
+    // late. Unsubscribing cannot make that impossible on its own, which is
+    // why the write guards this test is really about still exist.
+    saveReviewMock.mockClear();
     act(() => {
-      onError!(
-        new ModelError(
-          'This was changed since you opened it — by another tab, or by someone else.',
-          'conflict', 409),
-        { id: 'rev-1' },
-      );
+      emit({
+        id: 9, type: 'run.finished', reviewId: 'r-live', runId: 'run-1', at: 9,
+        payload: { runId: 'run-1', reviewId: 'r-live', state: 'succeeded', cells: 1, done: 1,
+          errored: 0, cancelled: 0, version: 3 },
+      });
     });
     await flush();
 
-    const toast = container.querySelector('[data-toast]');
-    expect(toast, 'no notice was raised for a failed auto-save').not.toBeNull();
-    expect(toast!.textContent).toMatch(/not being saved/i);
-    expect(toast!.textContent).toMatch(/at risk if you close this tab/i);
-    // The cause is carried too, after the consequence — a reader who can act
-    // on "somebody else changed it" should still be told which it was.
-    expect(toast!.textContent).toMatch(/by another tab, or by someone else/);
-    // …and the run is NOT blocked: a run whose auto-save is failing is still
-    // producing correct answers, and the results view stays up.
-    expect(container.querySelector('[data-toast]')).not.toBeNull();
+    // Nothing was written back to the matter that is gone.
+    expect(saveReviewMock).not.toHaveBeenCalled();
   });
 });

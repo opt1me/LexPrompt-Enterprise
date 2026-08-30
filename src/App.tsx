@@ -21,7 +21,7 @@ import {
   isNotYetRead,
   notYetReadMessageFor,
 } from '@lexprompt/core';
-import type { WorkspaceSettings, VerificationChange } from '@lexprompt/core';
+import type { WorkspaceSettings, VerificationChange, RunView } from '@lexprompt/core';
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
 import { apiKeyWasPurgedThisSession, loadSettings } from './lib/storage';
 import { API_KEY_PURGED_NOTICE } from './lib/privacyCopy';
@@ -43,10 +43,14 @@ import {
 } from './lib/db/precedents';
 import { getDocumentBlob } from './lib/db/blobs';
 import {
-  listReviews, getReview, saveReview, createDebouncedReviewSaver, type DebouncedReviewSaver,
+  listReviews, getReview, saveReview,
 } from './lib/db/reviews';
 import { getProfile } from './lib/db/profile';
-import { describeLoadError } from './lib/loadError';
+import { describeLoadError, describeRunEnding } from './lib/loadError';
+// Task 17/18: the browser asks about a run instead of performing one.
+import { cancelRun, getRun, isRunOver, liveRunFor, startRun, watchRun } from './lib/api/runs';
+import { getFindings } from './lib/api/findings';
+import { debug } from './lib/debug';
 import { getVersion, listVersions } from './lib/db/playbookVersions';
 import { scanPlaybookAcrossMatters } from './lib/playbookScan';
 import { buildPositionHealthMap } from './lib/positionHealthMap';
@@ -82,7 +86,10 @@ import { RunPanel, RunProgressBar, RunCancelledBanner, RunEmptyFindingsBanner, R
 import { ResultsView } from './features/review/ResultsView';
 import { ExportGateBanner } from './features/review/ExportGateBanner';
 import { firstUncheckedClauseId } from './features/review/ClauseIndex';
-import { emptyRun, runReview, retryCell, type CollectionRunInput } from './features/review/runReview';
+// `runReview` is GONE (Task 18): the browser no longer performs a run.
+// `emptyRun` stays for the optimistic shape a just-clicked run renders,
+// and `retryCell` until Task 20 replaces it with one POST.
+import { emptyRun, retryCell, type CollectionRunInput } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
 import { parseFiles, parseFile, toDocumentRecord, documentFileForViewing, documentFileForReview, evictPageImages } from './lib/documents';
 // --- Sub-project F: learning from redlines ---------------------------------
@@ -477,12 +484,39 @@ function AppShell({ signIn }: { signIn: () => void }) {
   const [runPlaybookVersion, setRunPlaybookVersion] =
     useState<PlaybookVersion | null | undefined | 'error'>(undefined);
   const [isRunning, setIsRunning] = useState(false);
-  const abortControllerRef = useRef<AbortController | null>(null);
-  // Tracks the latest `run` state during an in-flight run, for the one path
-  // that can't just read the `run` state variable: `runReview`'s rejection
-  // on cancellation carries no run, only the abort — see the `.catch` in
-  // `handleStartRun`, which needs the run as it stood at the moment of
-  // cancellation to persist it.
+  /**
+   * THE RUN, AS THE SERVER HAS IT (Task 18).
+   *
+   * A run used to be an `AbortController` and some React state, and it died
+   * with the tab. It is a row now: this is the browser's copy of what
+   * `GET /v1/runs/:id` last said, kept in a ref as well as in state because
+   * `handleCancelRun` and the watch callbacks read it from closures that
+   * outlive the render they were created in.
+   *
+   * `null` means no run is being watched — which is not the same as no run
+   * existing, and is why `openReview` ASKS (`liveRunFor`) rather than
+   * assuming.
+   *
+   * A REF AND NOT STATE, deliberately: nothing renders a `RunView`. The
+   * screen renders the `ReviewRun` (the findings) and `isRunning`, and the
+   * only readers of this are `handleCancelRun` and the watch's callbacks,
+   * every one of which runs from a closure created on an earlier render.
+   * Holding it in state as well would be a second copy of one fact, kept in
+   * step by hand.
+   */
+  const runViewRef = useRef<RunView | null>(null);
+  /** Unsubscribes the current `watchRun`. One at a time; `attachRun` stops
+   *  the previous before starting another, so two watches cannot both be
+   *  applying events to one screen. */
+  const watchStopRef = useRef<(() => void) | null>(null);
+  /** `refreshFindings`'s coalescing state: whether a read is in flight,
+   *  whether another was asked for while it was, and how many have failed in
+   *  a row. See `refreshFindings`. */
+  const findingsRefreshRef = useRef<{ inFlight: boolean; again: boolean; failures: number }>(
+    { inFlight: false, again: false, failures: 0 });
+  // Tracks the latest `run` state, for every path that cannot just read the
+  // `run` state variable: the watch's callbacks, and the human-write
+  // handlers, all of which run from closures created on an earlier render.
   const latestRunRef = useRef<ReviewRun | null>(null);
   // Task 8A: the collection info (`target` + ordered, hydrated `members`) a
   // LIVE run over a collection was started with (`handleStartRun`), or that
@@ -530,15 +564,11 @@ function AppShell({ signIn }: { signIn: () => void }) {
   // `handleRetryCell`) checks this set before writing; `handleDeleteMatter`
   // adds to it the moment `deleteMatter` resolves, before anything else.
   const deletedMatterIdsRef = useRef<Set<string>>(new Set());
-  // The debounced saver (if any) backing the CURRENTLY in-flight run, and
-  // which matter it's scoped to — tracked separately from `activeMatterId`
-  // state for the same reason as `deletedMatterIdsRef` above: this needs to
-  // survive the user navigating away from the run while it keeps going in
-  // the background. `handleDeleteMatter` disposes it outright (killing an
-  // already-armed debounce timer, which `deletedMatterIdsRef` alone cannot
-  // do — a fired timer would still send the write it captured before being
-  // cancelled) when its matter is the one just deleted.
-  const activeRunSaverRef = useRef<{ matterId: string; saver: DebouncedReviewSaver } | null>(null);
+  // `activeRunSaverRef` — the debounced whole-review saver backing an
+  // in-flight run — is GONE with Task 18. The server writes every finding
+  // now, so there is nothing for a mid-run whole-review save to carry, and
+  // with it goes the armed-timer problem this ref existed to solve: a fired
+  // timer sending a write it captured before its matter was deleted.
   // RunPanel seeds its own upload-list state from `initialDocuments` only
   // on mount (a plain useState initializer, not synced on prop changes) —
   // bumping this key on every entry into the run flow forces a fresh mount,
@@ -1201,8 +1231,33 @@ function AppShell({ signIn }: { signIn: () => void }) {
       // auth error from retrying a cell in this same review still redirects.
       authErrorHandledRef.current = true;
       createdByUserIdRef.current = review.createdByUserId;
+      latestRunRef.current = reviewRun;
       setRun(reviewRun);
       setIsRunning(false);
+
+      // A RUN STARTED IN ANOTHER TAB, OR BEFORE A RELOAD, IS FINDABLE (Task
+      // 18). A run used to live in React state and die with the tab; it is a
+      // row now, so opening a review ASKS whether one is live and resumes
+      // watching it. This is new behaviour and it is the point of the stage.
+      //
+      // A failure to ask does NOT fail the open: the findings are real work
+      // and the review must still be readable. It is reported, because a
+      // review that is quietly running while the screen says it is idle is
+      // the "a job that died looking like a job still working" failure
+      // inverted — the reader would think nothing more is coming.
+      stopWatching();
+      runViewRef.current = null;
+      try {
+        const live = await liveRunFor(review.id);
+        if (live) attachRun(live, matterId);
+      } catch (e) {
+        debug('could not ask whether this review has a live run', review.id, e);
+        notify(
+          'LexPrompt could not tell whether this review is still running. The findings below are '
+          + 'what it has recorded so far; reload to check again.',
+          'error',
+        );
+      }
     } catch (e) {
       setReviewLoadError(describeLoadError(e, 'This review could not be loaded. Try again.'));
     } finally {
@@ -1215,6 +1270,13 @@ function AppShell({ signIn }: { signIn: () => void }) {
     if (route.name === 'review') openReview(route.matterId, route.reviewId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewRouteKey]);
+
+  // The watch is a timer and an in-flight request; it has to stop when this
+  // component goes away, or it keeps polling a run nobody is looking at and
+  // keeps calling `setRun` on an unmounted tree. Deliberately a mount-only
+  // effect with an empty dependency list: `attachRun` stops the previous
+  // watch itself, so this is the LAST stop rather than one per render.
+  useEffect(() => () => stopWatching(), []);
 
   // --- Opening the playbook editor by URL (Task 12) -----------------------
   //
@@ -1647,7 +1709,14 @@ function AppShell({ signIn }: { signIn: () => void }) {
       Object.values(byClause).some(f => f.authError));
     if (!hasAuthError) return;
     authErrorHandledRef.current = true;
-    abortControllerRef.current?.abort();
+    // The run is the server's, so stopping it is a request rather than an
+    // abort. Fire-and-forget: the notice below is what the reader acts on,
+    // and a second toast saying the stop request itself failed would bury
+    // it.
+    const live = runViewRef.current;
+    if (live && !isRunOver(live.state)) {
+      void cancelRun(live.id).catch(e => debug('cancelling a run after an auth failure', e));
+    }
     notify(PER_CLAUSE_MODEL_FAILURE_MESSAGE, 'error');
   }, [run]);
 
@@ -2030,49 +2099,68 @@ function AppShell({ signIn }: { signIn: () => void }) {
     const matterId = options.matterId !== undefined ? options.matterId : activeMatterId;
     const collectionInput = options.collection;
 
-    let userId = '';
-    if (matterId) {
-      // Important 2: the matter could already be gone by the time this run
-      // was queued up (e.g. a stale run panel) — never write a document
-      // into a matter that no longer exists.
-      if (deletedMatterIdsRef.current.has(matterId)) {
-        notify('This matter has been deleted, so this review cannot be started.', 'error');
-        return;
-      }
-      try {
-        const profile = await getProfile();
-        userId = profile.id;
-        createdByUserIdRef.current = userId;
-        const existingIds = new Set(matterDocuments.map(d => d.id));
-        const newDocs = docs.filter(d => !existingIds.has(d.id));
-        if (newDocs.length > 0) {
-          await Promise.all(newDocs.map(doc => {
-            const { record, bytes } = toDocumentRecord(doc, matterId, userId);
-            return addDocument(record, bytes);
-          }));
-          await loadMatterDocuments(matterId);
-        }
-      } catch (e) {
-        notify(e instanceof Error ? e.message : 'Could not save the new documents to this matter.', 'error');
-        return;
-      }
-      // Re-check: the matter may have been deleted WHILE the documents above
-      // were being written. Those writes can't be undone from here, but the
-      // review itself — the bigger, ongoing write this guards — must not
-      // start against a matter that's already gone.
-      if (deletedMatterIdsRef.current.has(matterId)) {
-        notify('This matter has been deleted, so this review cannot be started.', 'error');
-        return;
-      }
+    // A REVIEW IS A ROW NOW, AND A ROW BELONGS TO A MATTER.
+    //
+    // The browser used to be able to run a review that belonged to nothing
+    // — `matterId` null meant "no saver, no persistence, gone when the tab
+    // closes". The server has nowhere to put such a run: `POST
+    // /v1/reviews/:id/runs` reads the review's own target and playbook
+    // snapshot out of the `review` row. Every path into this function today
+    // goes through the matter picker or Matter Home, so this is refused
+    // rather than silently downgraded to a run nobody could find again.
+    if (!matterId) {
+      notify('A review has to belong to a matter. Choose one and start the review again.', 'error');
+      return;
     }
 
+    // Important 2: the matter could already be gone by the time this run
+    // was queued up (e.g. a stale run panel) — never write a document
+    // into a matter that no longer exists.
+    if (deletedMatterIdsRef.current.has(matterId)) {
+      notify('This matter has been deleted, so this review cannot be started.', 'error');
+      return;
+    }
+
+    let userId = '';
+    try {
+      const profile = await getProfile();
+      userId = profile.id;
+      createdByUserIdRef.current = userId;
+      const existingIds = new Set(matterDocuments.map(d => d.id));
+      const newDocs = docs.filter(d => !existingIds.has(d.id));
+      if (newDocs.length > 0) {
+        await Promise.all(newDocs.map(doc => {
+          const { record, bytes } = toDocumentRecord(doc, matterId, userId);
+          return addDocument(record, bytes);
+        }));
+        await loadMatterDocuments(matterId);
+      }
+    } catch (e) {
+      notify(e instanceof Error ? e.message : 'Could not save the new documents to this matter.', 'error');
+      return;
+    }
+    // Re-check: the matter may have been deleted WHILE the documents above
+    // were being written. Those writes can't be undone from here, but the
+    // review itself — the bigger, ongoing write this guards — must not
+    // start against a matter that's already gone.
+    if (deletedMatterIdsRef.current.has(matterId)) {
+      notify('This matter has been deleted, so this review cannot be started.', 'error');
+      return;
+    }
+
+    // `emptyRun` SURVIVES, and only for its shape. It mints the review's
+    // id, freezes the playbook snapshot, records the target and seeds one
+    // `pending` finding per cell — which is what the results view renders
+    // between the click and the server's first answer. The server seeds its
+    // OWN `pending` findings inside `createRun`, and those are the ones
+    // that outlive this tab; these are the optimistic view of the same
+    // shape, replaced by the first refresh.
     const newRun = emptyRun(template, docs, collectionInput?.target);
     authErrorHandledRef.current = false;
     latestRunRef.current = newRun;
-    // Task 8A: so a retry later in THIS run (`handleRetryCell`) can re-run a
-    // collection clause through the collection extractor rather than
-    // `extractClause` — `null` for the standalone path, exactly as before
-    // this ref existed.
+    // Task 8A: kept for the collection VIEWER, not for a retry — a retry is
+    // one POST now (Task 20) and the server reads the collection record
+    // itself.
     activeCollectionRef.current = collectionInput ?? null;
     setDocuments(docs);
     setRun(newRun);
@@ -2084,128 +2172,273 @@ function AppShell({ signIn }: { signIn: () => void }) {
     setIsRunning(true);
     setView('results');
 
-    const controller = new AbortController();
-    abortControllerRef.current = controller;
-
-    // `onError` was already wired — a failed debounced mid-run save reported
-    // through `debug()` alone is invisible, which is the "quietly wrong"
-    // failure this app exists to avoid. What Stage 2 changes is WHAT it has
-    // to say. Over a local disk the underlying error's own message was the
-    // whole story; over a network the likeliest causes are an unreachable
-    // server and a 409 refusing this save because somebody else's landed
-    // first — and neither of those messages, on its own, tells the reader
-    // the thing they need to know.
-    //
-    // So the notice leads with the consequence and carries the cause after
-    // it. It does NOT block the run — a run whose auto-save is failing is
-    // still producing correct answers — and it must not read as a finding.
-    const reviewSaver = matterId
-      ? createDebouncedReviewSaver(undefined, (error) => {
-          const cause = error instanceof Error ? error.message : String(error);
-          notify(
-            `This review is not being saved — your work is at risk if you close this tab. ${cause}`,
-            'error',
-          );
-        })
-      : null;
-    if (matterId && reviewSaver) {
-      activeRunSaverRef.current = { matterId, saver: reviewSaver };
-    }
-
-    const handleUpdate = (updated: ReviewRun) => {
-      // Important 2: `matterId` is this closure's own local copy, captured
-      // at the top of this function — it does NOT track `activeMatterId`
-      // state, precisely because this run must keep going (and keep being
-      // reachable via "Current run") even after the user navigates
-      // elsewhere and that state changes. So the one thing that CAN stop
-      // this write, or this UI update, once the matter is gone is checking
-      // the deleted-ids set directly, every time, here.
+    try {
+      // THE REVIEW ROW FIRST, ONCE — not a debounced stream of them.
       //
-      // The `setRun` gate matters just as much as the write one below: a
-      // cancellation triggered BY this same delete (`handleDeleteMatter`
-      // aborts this run) runs `cancelPendingCells` and calls straight back
-      // into this function before its own promise chain's `.catch` ever
-      // runs — and that call would otherwise resurrect the "Current run"
-      // button and the results view for a matter `handleDeleteMatter` had
-      // just cleared `run` for, moments before.
-      if (matterId && deletedMatterIdsRef.current.has(matterId)) return;
-      // `runReview` owns its own copy of the run and knows nothing about a
-      // verification or note written mid-run by `handleVerify`/`handleAddNote`
-      // — every snapshot it emits carries `unchecked()` for every finding.
-      // Without re-applying human state onto each snapshot here, the very
-      // next cell finishing would silently overwrite a verification the user
-      // just watched succeed (see `carryHumanState`'s own doc comment).
-      const merged = carryHumanState(latestRunRef.current, updated);
-      latestRunRef.current = merged;
-      setRun(merged);
-      if (matterId && reviewSaver) {
-        reviewSaver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
-      }
-    };
+      // `createDebouncedReviewSaver` and `persistFinal` are gone with the
+      // orchestration they kept up with. The server writes every finding
+      // now, so there is nothing for a mid-run whole-review save to carry —
+      // and the 409 that save kept colliding with (a run's saver holding its
+      // own copy of a review somebody else has since written to) has no way
+      // to arise any more. That is P25's remedy, and it is a deletion rather
+      // than a fix.
+      //
+      // The findings this write carries are `emptyRun`'s `pending` ones,
+      // which is what the review genuinely holds at this instant. The run
+      // then replaces them with its own.
+      await saveReview(reviewFromRun(newRun, matterId, settings.modelChoiceId, userId));
+      const started = await startRun(newRun.id);
+      attachRun(started, matterId);
+    } catch (e) {
+      setIsRunning(false);
+      // THROUGH `handleModelError`, and not through a second policy of its
+      // own. This was first written as "a 4xx is a refusal, show its own
+      // message; anything else goes to `handleModelError`" — and that
+      // routed a 403 `model_not_allowed` to a plain toast, losing the
+      // navigation to Settings that the whole of Task 23's copy split
+      // exists to get right.
+      //
+      // `handleModelError`'s own fallback already ends in
+      // `notify(error.message)`, so the refusals this path really carries —
+      // a document still being read (§11's third load state), a document the
+      // server no longer has, a review already running — reach the reader as
+      // themselves. One classification, in one place.
+      handleModelError(e);
+      return;
+    }
+    loadMatterReviews(matterId);
+  };
 
-    // Critical 1 fix: `persistFinal` used to take the run to persist as a
-    // parameter, and had two callers — the success path passed `runReview`'s
-    // own return value (which never sees a human write; `runReview` builds
-    // every `Finding` with `unchecked()`/`notes: []`), while the abort path
-    // four lines below correctly passed `latestRunRef.current`. A parameter
-    // that only one of two callers gets right is a trap, so `persistFinal`
-    // now reads `latestRunRef.current` itself — the single place `handleUpdate`
-    // keeps the human-merged run — with `newRun` as a defensive fallback for
-    // the case (which should not occur; `latestRunRef.current` is set to
-    // `newRun` above before either code path can run) where no update ever
-    // landed.
-    const persistFinal = async () => {
-      if (!matterId || !reviewSaver) return;
-      if (activeRunSaverRef.current?.saver === reviewSaver) {
-        activeRunSaverRef.current = null;
-      }
-      if (deletedMatterIdsRef.current.has(matterId)) {
-        // The matter was deleted — most likely `handleDeleteMatter` already
-        // disposed this exact saver and aborted this run, which is how
-        // execution even got here (the abort's rejection lands in the
-        // `.catch` below). Disposing again is a harmless no-op; the point
-        // is that no write happens past this line.
-        reviewSaver.dispose();
-        return;
-      }
-      const finalRun = latestRunRef.current ?? newRun;
-      try {
-        await reviewSaver.saveNow(reviewFromRun(finalRun, matterId, settings.modelChoiceId, userId));
-      } catch (e) {
-        notify(e instanceof Error ? e.message : 'Could not save this review.', 'error');
-      }
-      reviewSaver.dispose();
-      loadMatterReviews(matterId);
-    };
+  const stopWatching = (): void => {
+    watchStopRef.current?.();
+    watchStopRef.current = null;
+  };
 
-    runReview(newRun, docs, settings, handleUpdate, controller.signal, collectionInput, matterId ?? undefined)
-      .then(async () => {
-        setIsRunning(false);
-        await persistFinal();
-      })
-      .catch(async (error) => {
-        setIsRunning(false);
-        // runReview rejects on abort — that's a deliberate stop, not a
-        // failure, and must never surface as an error toast. Everything
-        // already completed stays exactly as it was set by the last
-        // onUpdate call. A cancelled run is still real, partial work, so
-        // it's persisted the same as a completed one (unless the matter
-        // itself is what triggered the abort — see `persistFinal`'s own
-        // deleted-matter check above).
-        if (error instanceof DOMException && error.name === 'AbortError') {
-          await persistFinal();
+  /**
+   * Watches a run to its end, and keeps the findings on screen in step with
+   * the rows.
+   *
+   * THE ONE BEHAVIOURAL CHANGE A USER CAN SEE. The results view used to fill
+   * in as `onUpdate` fired, cell by cell — "that progressive fill is the
+   * entire feel of the app". It still fills in progressively; it is now one
+   * second coarser, because that is the poll interval. If it reads as
+   * sluggish the interval is the knob (`watchRun`'s `intervalMs`), not the
+   * architecture, and Stage 4's socket removes the question entirely.
+   *
+   * Used by BOTH ways a run reaches this screen: one just started, and one
+   * found already live when a review was opened — in another tab, or before
+   * a reload. That second case is new, and it is the point of the stage.
+   */
+  /**
+   * Nothing holds these promises, so an error inside one has nowhere to go
+   * but an unhandled rejection — which crashes nothing and says nothing,
+   * the worst of both. Caught and logged at the one place they are started.
+   * Every failure they can carry has already been reported by the function
+   * itself; what this catches is the unexpected.
+   */
+  const detach = (work: Promise<void>, what: string): void => {
+    void work.catch(e => debug(what, e));
+  };
+
+  const attachRun = (view: RunView, matterId: string) => {
+    stopWatching();
+    runViewRef.current = view;
+    setIsRunning(!isRunOver(view.state));
+    if (isRunOver(view.state)) {
+      detach(refreshFindings(view.reviewId), 'reading a finished run s findings');
+      return;
+    }
+    watchStopRef.current = watchRun(
+      view.id,
+      event => {
+        if (event.type === 'run.finished') {
+          detach(finishRun(view.id, view.reviewId, matterId), 'finishing the run');
           return;
         }
-        // `runReview` itself never throws an auth-class error today
-        // (`extractClause` never rejects); this is the general safety net
-        // for whatever DOES escape it, so it goes through the same split as
-        // every other model call rather than a bare toast.
-        handleModelError(error);
-      });
+        // One refresh per batch of events rather than one per event: a
+        // forty-cell run emits eighty of them and the findings map is one
+        // read whatever it is answering. `refreshFindings` coalesces.
+        detach(refreshFindings(view.reviewId), 'refreshing the findings');
+      },
+      error => {
+        // Three consecutive failed polls. A poll loop that dies quietly
+        // leaves a run apparently frozen at whatever it last saw.
+        notify(
+          error instanceof Error
+            ? `LexPrompt has lost touch with this review while it runs: ${error.message}. `
+              + 'The work is still on the server. Reload to pick it up again.'
+            : 'LexPrompt has lost touch with this review while it runs. The work is still on '
+              + 'the server. Reload to pick it up again.',
+          'error',
+        );
+      },
+      // The cursor fell outside the retention window, so the events between
+      // it and now are gone. The findings map IS the state those events
+      // described, so re-reading it is the whole recovery.
+      { onResync: () => detach(refreshFindings(view.reviewId), 'resyncing the findings') },
+    );
+  };
+
+  /**
+   * Re-reads the findings map and puts it on screen, at most one read at a
+   * time.
+   *
+   * COALESCED rather than queued: events arrive in batches and every one of
+   * them describes the same map, so a second read asked for while the first
+   * is in flight is marked and performed once, not stacked. Without this a
+   * forty-cell run would issue eighty reads of the same sixty findings.
+   *
+   * A read that keeps failing is REPORTED, on the same three-strikes rule
+   * `watchRun` uses and for the same reason: a screen that has quietly
+   * stopped updating mid-run is a job that died looking like a job still
+   * working.
+   */
+  const refreshFindings = async (reviewId: string): Promise<void> => {
+    const state = findingsRefreshRef.current;
+    if (state.inFlight) {
+      state.again = true;
+      return;
+    }
+    state.inFlight = true;
+    try {
+      do {
+        state.again = false;
+        let findings: Review['findings'];
+        try {
+          ({ findings } = await getFindings(reviewId));
+          state.failures = 0;
+        } catch (e) {
+          state.failures += 1;
+          debug('findings refresh failed', reviewId, state.failures, e);
+          if (state.failures >= 3) {
+            state.failures = 0;
+            notify(
+              'The findings on this screen have stopped updating. They are safe on the server; '
+              + 'reload the review to see where it has got to.',
+              'error',
+            );
+          }
+          return;
+        }
+        const base = latestRunRef.current;
+        // The screen moved on — another review was opened while this read
+        // was in flight. Applying it would put one review's findings under
+        // another's clauses.
+        if (!base || base.id !== reviewId) return;
+        // `carryHumanState` is still called (Task 21 deletes it, not this
+        // task). It cannot resurrect a judgement the server cleared: it
+        // carries a verification only while the finding's STATUS is
+        // unchanged, and every server-side reset moves the status back to
+        // `pending`.
+        const merged = carryHumanState(base, { ...base, findings });
+        latestRunRef.current = merged;
+        setRun(merged);
+      } while (state.again);
+    } finally {
+      state.inFlight = false;
+    }
+  };
+
+  /**
+   * The run ended. Read the findings one last time, say HOW it ended, and
+   * stop watching.
+   *
+   * The last read is not optional: `run.finished` says the run is over, and
+   * the findings it produced are only on screen once they have been read.
+   * Skipping it would leave the final cell spinning on a run the banner
+   * calls finished.
+   */
+  const finishRun = async (runId: string, reviewId: string, matterId: string): Promise<void> => {
+    stopWatching();
+    setIsRunning(false);
+    // Important 2, in its new home. `matterId` is this closure's own copy,
+    // captured when the run was attached, and the matter it names may have
+    // been deleted while the run was still going — `handleDeleteMatter`
+    // stops the watch, but an event already delivered can land after it.
+    // Past this line lies a `saveReview`, which is exactly the write that
+    // must never resurrect a purged matter.
+    //
+    // Found by a test rather than by care: the guard `persistFinal` used to
+    // carry did not come across with the rewrite, and `App.matterDelete`'s
+    // "never lets a late run event write to the purged matter" turned red.
+    if (deletedMatterIdsRef.current.has(matterId)) return;
+    await refreshFindings(reviewId);
+    let final: RunView;
+    try {
+      final = await getRun(runId);
+    } catch (e) {
+      // The run ended and this read of its ending failed. The findings are
+      // already on screen from the refresh above; what is lost is the
+      // sentence saying HOW it ended, and inventing one would be worse than
+      // saying nothing.
+      debug('could not read the finished run', runId, e);
+      loadMatterReviews(matterId);
+      return;
+    }
+    runViewRef.current = final;
+    // `cancelled` is calm and `failed` is not — the same distinction
+    // `Finding.status` already keeps one level down. A `succeeded` run says
+    // nothing about its ending: the findings are the answer.
+    const ending = describeRunEnding(final);
+    if (ending) notify(ending.message, ending.tone === 'error' ? 'error' : 'success');
+
+    // ONE WHOLE-REVIEW SAVE, AT A SETTLED MOMENT, and it writes exactly one
+    // new fact: WHEN THIS REVIEW ENDED.
+    //
+    // `Review.completedAt`/`cancelledAt` are what `RunCancelledBanner`,
+    // `RunInterruptedBanner` and `RunEmptyFindingsBanner` read when the
+    // review is reopened, and nothing else can write them: `settleRunIfFinished`
+    // runs in the WORKER, whose role holds only `select` on `review`. Making
+    // the server stamp them would need a new grant on that table, which is
+    // not a change to make in passing — so the browser records it, once, at
+    // the moment it learns the run is over.
+    //
+    // This is not the debounced saver returning. That wrote the whole record
+    // every two seconds from a copy nobody else could see, which is the
+    // sticky-409 P25 names; this is a single write of a settled fact.
+    //
+    // A `failed` run gets NEITHER timestamp, deliberately: it stopped
+    // without being asked, which is what "interrupted" means, and
+    // `RunInterruptedBanner` is the honest reading.
+    const at = final.finishedAt ?? Date.now();
+    const base = latestRunRef.current;
+    if (base && base.id === reviewId && (final.state === 'succeeded' || final.state === 'cancelled')) {
+      const stamped: ReviewRun = final.state === 'cancelled'
+        ? { ...base, cancelledAt: at }
+        : { ...base, completedAt: at };
+      latestRunRef.current = stamped;
+      setRun(stamped);
+      try {
+        await saveReview(reviewFromRun(
+          stamped, matterId, settings.modelChoiceId, createdByUserIdRef.current));
+      } catch (e) {
+        notify(
+          e instanceof Error
+            ? `This review finished, but recording that it finished failed: ${e.message}`
+            : 'This review finished, but recording that it finished failed.',
+          'error',
+        );
+      }
+    }
+    loadMatterReviews(matterId);
   };
 
   const handleCancelRun = () => {
-    abortControllerRef.current?.abort();
+    const current = runViewRef.current;
+    if (!current) return;
+    // A person asked it to stop. What has to be surfaced here is a FAILURE
+    // TO ASK: if the request never landed the run is still going, and a
+    // screen that said otherwise would be the quiet wrong answer.
+    void cancelRun(current.id)
+      .then(cancelled => {
+        runViewRef.current = cancelled;
+      })
+      .catch(e => notify(
+        e instanceof Error
+          ? `This review was not stopped: ${e.message}`
+          : 'This review was not stopped.',
+        'error',
+      ));
   };
 
   /** Key of the finding whose verification or note write is in flight, as
@@ -2325,20 +2558,12 @@ function AppShell({ signIn }: { signIn: () => void }) {
       const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, verification });
       latestRunRef.current = merged;
       setRun(merged);
-      // Item 2 fix: a live run's own debounced saver (`activeRunSaverRef`)
-      // may have a stale, pre-verification payload already armed —
-      // `scheduleSave` was called by the run's last `onUpdate`, before this
-      // write landed. Left alone, that stale timer fires after this direct
-      // write and reasserts the older state, silently undoing it in
-      // storage even though the screen still shows it verified. Rescheduling
-      // with the freshly merged run here closes that: `scheduleSave` is
-      // latest-payload-wins and does not push its timer back (see
-      // `createDebouncedReviewSaver`'s doc comment), so this cannot extend
-      // the debounce, and it is a no-op once no run is active — `persistFinal`
-      // and `handleDeleteMatter` both clear `activeRunSaverRef` before that
-      // can happen, so there is nothing here for a lingering timer to attach
-      // to.
-      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
+      // TASK 18: the reschedule that used to be here is GONE with the
+      // debounced saver it defended against. A live run no longer holds a
+      // stale, pre-verification payload of the whole review, because a live
+      // run no longer saves the whole review at all — the server writes
+      // every finding. There is nothing left for a lingering timer to
+      // reassert.
     } catch (e) {
       notify(
         e instanceof Error
@@ -2396,7 +2621,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
       });
       latestRunRef.current = merged;
       setRun(merged);
-      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
+      // TASK 18: no debounced saver to reschedule; see `handleVerify`.
     } catch (e) {
       notify(e instanceof Error ? `This note was not saved: ${e.message}` : 'This note was not saved.', 'error');
     } finally {
@@ -2455,7 +2680,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
       const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
       latestRunRef.current = merged;
       setRun(merged);
-      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
+      // TASK 18: no debounced saver to reschedule; see `handleVerify`.
     } catch (e) {
       notify(
         e instanceof Error ? `This confirmation was not saved: ${e.message}` : 'This confirmation was not saved.',
@@ -2512,7 +2737,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
       const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
       latestRunRef.current = merged;
       setRun(merged);
-      activeRunSaverRef.current?.saver.scheduleSave(reviewFromRun(merged, matterId, settings.modelChoiceId, userId));
+      // TASK 18: no debounced saver to reschedule; see `handleVerify`.
     } catch (e) {
       notify(
         e instanceof Error ? `This amendment was not saved: ${e.message}` : 'This amendment was not saved.',
@@ -3779,12 +4004,24 @@ function AppShell({ signIn }: { signIn: () => void }) {
       await deleteMatter(id);
 
       deletedMatterIdsRef.current.add(id);
-      if (activeRunSaverRef.current?.matterId === id) {
-        activeRunSaverRef.current.saver.dispose();
-        activeRunSaverRef.current = null;
-      }
       if (activeMatterId === id) {
-        abortControllerRef.current?.abort();
+        // STOP WATCHING, then ask the server to stop the run. The order
+        // matters: the watch is what would otherwise keep re-reading the
+        // findings of a review that has just been deleted, and answer 404
+        // three times in a row into a toast about a matter the person has
+        // already been told is gone.
+        //
+        // The cancel is fire-and-forget and its failure is deliberately not
+        // reported: the matter delete cascades to the review, the run and
+        // its cells, so a run this could not reach has nothing left to write
+        // to. Telling somebody their deleted matter's review "was not
+        // stopped" would be an instruction with nothing behind it.
+        stopWatching();
+        const live = runViewRef.current;
+        runViewRef.current = null;
+        if (live && !isRunOver(live.state)) {
+          void cancelRun(live.id).catch(e => debug('cancelling a deleted matter s run', e));
+        }
         setRun(null);
         setDocuments([]);
         setActiveMatterId(null);

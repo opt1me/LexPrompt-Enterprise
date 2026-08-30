@@ -19,17 +19,21 @@ import { SCHEMA_VERSION, type Review, type PlaybookVersion } from '../../types';
  * makes, the repair-on-read funnel and its `playbookVersionId` back-fill,
  * `saveReview`'s deep clone, the VERSION THIS BROWSER REMEMBERS (which has
  * no server-side counterpart — it exists precisely because a `Review` built
- * from a run cannot carry one), and the debounced saver, whose behaviour is
- * unchanged by the transport and whose tests needed no edit beyond the
- * transport itself.
+ * from a run cannot carry one), and — since Task 14 — that the findings come
+ * from their own route and that a failure to read them is never a review
+ * that found nothing.
+ *
+ * The debounced saver's suite is GONE with the saver (Task 18). It tested a
+ * throttle that existed so a crash mid-run cost seconds rather than the run;
+ * the server writes every finding now, so there is no in-progress state held
+ * only in a tab for it to rescue.
  */
 
 const transport = makeFakeTransport();
 vi.mock('../api/client', () => transportModule(transport));
 
 const {
-  listReviews, getReview, saveReview, deleteReview, createDebouncedReviewSaver,
-  forgetReviewVersion,
+  listReviews, getReview, saveReview, deleteReview, forgetReviewVersion,
 } = await import('./reviews');
 
 function makePlaybook(): PlaybookVersion {
@@ -352,90 +356,3 @@ describe('a failure is a failure, never an empty result', () => {
   });
 });
 
-describe('createDebouncedReviewSaver', () => {
-  // KEPT from the IndexedDB version, with no assertion edited: the saver's
-  // behaviour is a property of its own timers and is unchanged by which
-  // store `saveReview` writes to. Only the fixture underneath moved.
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(() => vi.useRealTimers());
-
-  it('does not persist immediately on scheduleSave', () => {
-    serverEchoes(1);
-    createDebouncedReviewSaver(2000).scheduleSave(makeReview());
-    expect(transport.sent).toEqual([]);
-  });
-
-  it('persists the latest scheduled state once the debounce interval elapses', async () => {
-    serverEchoes(1);
-    const saver = createDebouncedReviewSaver(2000);
-    saver.scheduleSave(makeReview({ modelId: 'first' }));
-    saver.scheduleSave(makeReview({ modelId: 'second' }));
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(transport.sent).toHaveLength(1);
-    expect((transport.sent[0].body as Review).modelId).toBe('second');
-  });
-
-  it('THROTTLES rather than resetting, so a continuous run still saves', async () => {
-    // The shipped comment is emphatic and the behaviour is unchanged by the
-    // transport: `onUpdate` fires continuously through a run, so a
-    // reset-on-every-call debounce could in principle never fire — i.e.
-    // never save mid-run at all, which is the crash-loses-the-whole-run
-    // failure this exists to prevent.
-    serverEchoes(1);
-    const saver = createDebouncedReviewSaver(2000);
-    for (let i = 0; i < 10; i++) {
-      saver.scheduleSave(makeReview({ modelId: `update-${i}` }));
-      await vi.advanceTimersByTimeAsync(500);
-    }
-    // 5000ms of continuous updates at a 2000ms interval: it fired, and it
-    // fired at most once per interval.
-    expect(transport.sent.length).toBeGreaterThanOrEqual(2);
-    expect(transport.sent.length).toBeLessThanOrEqual(3);
-  });
-
-  it('saveNow persists immediately and cancels a pending debounced save', async () => {
-    serverEchoes(1);
-    const saver = createDebouncedReviewSaver(2000);
-    saver.scheduleSave(makeReview({ modelId: 'scheduled' }));
-    await saver.saveNow(makeReview({ modelId: 'now' }));
-    expect(transport.sent).toHaveLength(1);
-    expect((transport.sent[0].body as Review).modelId).toBe('now');
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(transport.sent).toHaveLength(1);
-  });
-
-  it('saveNow returns its promise as-is, so a failure there is never swallowed', async () => {
-    const boom = new ModelError('Server fell over.', 'unknown', 500);
-    transport.failures.set('/v1/reviews/rev-1', boom);
-    await expect(createDebouncedReviewSaver(2000).saveNow(makeReview())).rejects.toBe(boom);
-  });
-
-  it('dispose cancels a pending save without persisting it', async () => {
-    serverEchoes(1);
-    const saver = createDebouncedReviewSaver(2000);
-    saver.scheduleSave(makeReview());
-    saver.dispose();
-    await vi.advanceTimersByTimeAsync(5000);
-    expect(transport.sent).toEqual([]);
-  });
-
-  it('hands a failed debounced save to onError rather than losing it', async () => {
-    // NEWLY LOAD-BEARING. The debounced write is fire-and-forget — nothing
-    // awaits it, so a rejection cannot surface on a promise any caller
-    // holds. Over a local disk that was rare; over a network it fires, and
-    // one of the failures is a 409 refusing this save because somebody
-    // else's landed first.
-    const refused = new ModelError('This was changed since you opened it.', 'conflict', 409);
-    transport.failures.set('/v1/reviews/rev-1', refused);
-    const onError = vi.fn();
-    const saver = createDebouncedReviewSaver(2000, onError);
-    const review = makeReview();
-    saver.scheduleSave(review);
-    await vi.advanceTimersByTimeAsync(2000);
-    expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError.mock.calls[0][0]).toBe(refused);
-    // The review it FAILED to save is handed over too, so a caller can say
-    // which one is at risk.
-    expect((onError.mock.calls[0][1] as Review).id).toBe('rev-1');
-  });
-});

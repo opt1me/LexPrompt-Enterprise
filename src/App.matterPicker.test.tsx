@@ -58,11 +58,6 @@ vi.mock('./lib/db/reviews', () => ({
   listReviews: (...args: unknown[]) => listReviewsMock(...args),
   getReview: vi.fn(),
   saveReview: vi.fn().mockResolvedValue(undefined),
-  createDebouncedReviewSaver: vi.fn(() => ({
-    scheduleSave: vi.fn(),
-    saveNow: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn(),
-  })),
 }));
 
 vi.mock('./lib/db/profile', () => ({

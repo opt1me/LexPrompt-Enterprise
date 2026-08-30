@@ -48,7 +48,6 @@ vi.mock('./lib/db/reviews', () => ({
   listReviews: vi.fn().mockResolvedValue([]),
   getReview: vi.fn(),
   saveReview: vi.fn(),
-  createDebouncedReviewSaver: vi.fn(),
 }));
 
 vi.mock('./lib/model/gatewayModelClient', () => ({

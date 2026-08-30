@@ -25,23 +25,6 @@ const getReviewMock = vi.fn();
 const saveReviewMock = vi.fn();
 const getProfileMock = vi.fn();
 
-// Captures the debounced saver's `scheduleSave` calls for the live-run test
-// below, mirroring App.reviewSaveError.test.tsx's capture of `onError`.
-// `saveNowMock` is captured the same way (Critical 1's fix site) so a test
-// can assert on the *final* write a completed run makes, not just the
-// mid-run debounced ones.
-let scheduleSaveMock: ReturnType<typeof vi.fn>;
-let saveNowMock: ReturnType<typeof vi.fn>;
-const createDebouncedReviewSaverMock = vi.fn((..._args: unknown[]) => {
-  scheduleSaveMock = vi.fn();
-  saveNowMock = vi.fn().mockResolvedValue(undefined);
-  return {
-    scheduleSave: scheduleSaveMock,
-    saveNow: saveNowMock,
-    dispose: vi.fn(),
-  };
-});
-
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
   // The pure helpers (`newPlaybookDraft`, `draftFromVersion`) come from
@@ -82,8 +65,70 @@ vi.mock('./lib/db/reviews', () => ({
   listReviews: (...args: unknown[]) => listReviewsMock(...args),
   getReview: (...args: unknown[]) => getReviewMock(...args),
   saveReview: (...args: unknown[]) => saveReviewMock(...args),
-  createDebouncedReviewSaver: (...args: unknown[]) => createDebouncedReviewSaverMock(...args),
 }));
+
+// --- The RUN, which is the server's now (Task 18) ---------------------
+//
+// `runReview` is gone: the browser POSTs a run, watches its events and
+// re-reads the findings map. These four mocks are that seam. `isRunOver`
+// and the rest of the module come from `importOriginal`, so a predicate the
+// app depends on is not quietly reimplemented in a test file.
+const startRunMock = vi.fn();
+const getRunMock = vi.fn();
+const cancelRunMock = vi.fn();
+const liveRunForMock = vi.fn();
+const stopWatchMock = vi.fn();
+/** The `onEvent` handed to the current `watchRun`, so a test can deliver an
+ *  event the way the server does. */
+let emitRunEvent: ((event: unknown) => void) | null = null;
+const watchRunMock = vi.fn((
+  _runId: string, onEvent: (event: unknown) => void,
+) => {
+  emitRunEvent = onEvent;
+  return stopWatchMock;
+});
+
+vi.mock('./lib/api/runs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/runs')>()),
+  startRun: (...args: unknown[]) => startRunMock(...args),
+  getRun: (...args: unknown[]) => getRunMock(...args),
+  cancelRun: (...args: unknown[]) => cancelRunMock(...args),
+  liveRunFor: (...args: unknown[]) => liveRunForMock(...args),
+  watchRun: (...args: unknown[]) => (watchRunMock as unknown as (...a: unknown[]) => () => void)(...args),
+}));
+
+const getFindingsMock = vi.fn();
+vi.mock('./lib/api/findings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/findings')>()),
+  getFindings: (...args: unknown[]) => getFindingsMock(...args),
+}));
+
+const RUNNING_RUN = {
+  id: 'run-1', reviewId: 'r-live', state: 'running' as const, requestedByUserId: 'u1',
+  concurrency: 5, createdAt: 1,
+  cells: { total: 2, queued: 1, leased: 1, done: 0, error: 0, cancelled: 0 },
+  version: 1,
+};
+
+/** What `GET /v1/reviews/:id/findings` answers next. */
+function serverFindings(findings: unknown): void {
+  getFindingsMock.mockResolvedValue({ findings, dispositionVersions: {}, version: 1 });
+}
+
+/** Resets every run-seam mock to a working default. Called from each
+ *  `beforeEach` that drives a live run. */
+function resetRunMocks(): void {
+  emitRunEvent = null;
+  stopWatchMock.mockClear();
+  watchRunMock.mockClear();
+  startRunMock.mockReset().mockImplementation(async (reviewId: string) =>
+    ({ ...RUNNING_RUN, reviewId }));
+  getRunMock.mockReset().mockResolvedValue({ ...RUNNING_RUN, state: 'succeeded', finishedAt: 5 });
+  cancelRunMock.mockReset().mockResolvedValue({ ...RUNNING_RUN, state: 'cancelling' });
+  liveRunForMock.mockReset().mockResolvedValue(null);
+  getFindingsMock.mockReset();
+  serverFindings({});
+}
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: (...args: unknown[]) => getProfileMock(...args),
@@ -156,6 +201,51 @@ async function flush(times = 8) {
     // eslint-disable-next-line no-await-in-loop
     await act(async () => { await Promise.resolve(); });
   }
+}
+
+/**
+ * Drives a run from the Library, through the matter picker and the stubbed
+ * `RunPanel`, to the point where `watchRun` has been armed.
+ *
+ * Everything after the click is the SERVER's: `startRun` answers a running
+ * run, the browser watches it, and each event below makes the browser
+ * re-read the findings map. There is no `runReview` to resolve any more.
+ */
+async function startLiveRun(container: HTMLDivElement, root: Root): Promise<void> {
+  act(() => { root.render(<App />); });
+  await flush();
+  act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
+  await flush();
+  act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
+  await flush();
+  if (!emitRunEvent) throw new Error('the run was never watched — `startRun` or `attachRun` failed');
+}
+
+/** One cell finished, as the server says it. */
+async function emitFindingDone(clauseId = 'c1'): Promise<void> {
+  const emit = emitRunEvent;
+  if (!emit) throw new Error('nothing is watching this run');
+  act(() => {
+    emit({
+      id: 1, type: 'finding.done', reviewId: 'r-live', runId: 'run-1', at: 1,
+      payload: { runId: 'run-1', reviewId: 'r-live', findingsKey: 'live-doc', clauseId, version: 2 },
+    });
+  });
+  await flush();
+}
+
+/** The run ended. `getRunMock` decides HOW. */
+async function emitRunFinished(): Promise<void> {
+  const emit = emitRunEvent;
+  if (!emit) throw new Error('nothing is watching this run');
+  act(() => {
+    emit({
+      id: 9, type: 'run.finished', reviewId: 'r-live', runId: 'run-1', at: 9,
+      payload: { runId: 'run-1', reviewId: 'r-live', state: 'succeeded', cells: 2, done: 2,
+        errored: 0, cancelled: 0, version: 3 },
+    });
+  });
+  await flush();
 }
 
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
@@ -290,7 +380,7 @@ describe('App — persisting a net position (Task 8)', () => {
     saveReviewMock.mockReset().mockResolvedValue(undefined);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     extractClauseMock.mockReset();
-    createDebouncedReviewSaverMock.mockClear();
+    resetRunMocks();
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -392,39 +482,32 @@ describe('App — persisting a net position (Task 8)', () => {
     expect(container.textContent).toMatch(/amended/i);
   });
 
-  // Mutation test 3 (task-8-brief step 3): dropping `carryHumanState`'s new
-  // net-position awareness must make this fail. c1 resolves immediately (so
-  // it can be confirmed while the run is still live); c2 stays pending until
-  // released, standing in for "some other cell finishing" after the
-  // confirmation has already been written — `runReview`'s own onUpdate,
-  // which knows nothing about it and would otherwise silently revert it.
+  // Mutation test 3 (task-8-brief step 3): dropping `carryHumanState`'s
+  // net-position awareness must make this fail.
+  //
+  // TASK 18 MOVED THE SEAM AND NOT THE CLAIM. The "next update from a live
+  // run" used to be `runReview`'s own `onUpdate`; it is now a `finding.done`
+  // event from the server followed by a re-read of the findings map, which
+  // knows nothing about a confirmation this browser has just made. The
+  // assertions below are unchanged.
   it('does not lose a net position confirmation to the next update from a live run', async () => {
-    let resolveC2: ((finding: unknown) => void) | undefined;
-    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => {
-      if (clause.id === 'c1') {
-        return Promise.resolve({
-          clauseId: 'c1',
-          status: 'done',
-          citations: [],
-          summary: 'irrelevant',
-          verification: { state: 'unchecked' },
-          notes: [],
-          netPosition: unconfirmedPosition('Notice is now 6 months.', TRAIL),
-        });
-      }
-      return new Promise((resolve) => { resolveC2 = resolve; });
-    });
+    const withPosition = {
+      clauseId: 'c1', status: 'done' as const, citations: [], summary: 'irrelevant',
+      verification: { state: 'unchecked' as const }, notes: [],
+      netPosition: unconfirmedPosition('Notice is now 6 months.', TRAIL),
+    };
+    const pendingC2 = {
+      clauseId: 'c2', status: 'pending' as const, citations: [],
+      verification: { state: 'unchecked' as const }, notes: [],
+    };
 
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
+    serverFindings({ 'live-doc': { c1: withPosition, c2: pendingC2 } });
 
-    act(() => { root.render(<App />); });
-    await flush();
-    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
-    await flush();
-    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
-    await flush();
+    await startLiveRun(container, root);
+    await emitFindingDone();
 
     expect(container.textContent).toMatch(/unconfirmed/i);
 
@@ -434,19 +517,15 @@ describe('App — persisting a net position (Task 8)', () => {
     expect(container.textContent).not.toMatch(/unconfirmed/i);
     expect(container.textContent).toMatch(/\bconfirmed\b/i);
 
-    // c2 finishes — the run's own onUpdate, carrying a snapshot in which c1
-    // has no net position at all (a plain finding, per `extractClauseMock`'s
-    // default shape for c2 above). Without `carryHumanState` knowing about
-    // `netPosition`, this would silently overwrite the confirmation.
-    act(() => { resolveC2!({
-      clauseId: 'c2',
-      status: 'done',
-      citations: [],
-      summary: 'irrelevant',
-      verification: { state: 'unchecked' },
-      notes: [],
-    }); });
-    await flush();
+    // c2 finishes. The server's findings map still carries c1's position as
+    // UNCONFIRMED — the confirmation is this browser's, and until Task 19 it
+    // reaches the store through the review record rather than the findings
+    // rows. Without `carryHumanState` knowing about `netPosition`, this
+    // re-read would silently overwrite the confirmation.
+    serverFindings({
+      'live-doc': { c1: withPosition, c2: { ...pendingC2, status: 'done', summary: 'irrelevant' } },
+    });
+    await emitFindingDone();
 
     expect(container.textContent).not.toMatch(/unconfirmed/i);
     expect(container.textContent).toMatch(/\bconfirmed\b/i);
@@ -470,7 +549,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     saveReviewMock.mockReset().mockResolvedValue(undefined);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     extractClauseMock.mockReset();
-    createDebouncedReviewSaverMock.mockClear();
+    resetRunMocks();
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -619,40 +698,48 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     expect(container.textContent).toContain('Check this against the side letter.');
   });
 
-  it('does not lose a verification to the next update from a live run', async () => {
-    // c1 resolves immediately (so it can be verified while the run is still
-    // live); c2 stays pending until released, standing in for "some other
-    // cell finishing" after the verification has already been written.
-    let resolveC2: ((finding: unknown) => void) | undefined;
-    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => {
-      if (clause.id === 'c1') {
-        return Promise.resolve({
-          clauseId: 'c1',
-          status: 'done',
-          citations: [{ quote: 'x', documentId: 'live-doc' }],
-          summary: 'Governed by NY law.',
-          verification: { state: 'unchecked' },
-          notes: [],
-        });
-      }
-      return new Promise((resolve) => { resolveC2 = resolve; });
-    });
+  /*
+   * TASK 18 MOVED THE SEAM UNDER EVERY TEST BELOW, AND MOVED NO ASSERTION.
+   *
+   * A run is the server's now. What used to be `runReview`'s `onUpdate`
+   * carrying a snapshot in which a mid-run verification does not appear is
+   * now a `finding.done` event followed by a re-read of the findings map,
+   * which carries the same absence for the same reason: until Task 19 a
+   * verification reaches the store through the review record, not through
+   * the findings rows, so a map read back from the server has it
+   * `unchecked`.
+   *
+   * The thing being defended is identical and is this project's one
+   * irreversible risk: a verification made while a run is live must not be
+   * silently overwritten by the run's next update. `carryHumanState` is
+   * still what defends it, and is still deleted in Task 21 rather than here.
+   */
 
+  const DONE_C1 = {
+    clauseId: 'c1', status: 'done' as const,
+    citations: [{ quote: 'x', documentId: 'live-doc' }],
+    summary: 'Governed by NY law.', verification: { state: 'unchecked' as const }, notes: [],
+  };
+  const PENDING_C2 = {
+    clauseId: 'c2', status: 'pending' as const, citations: [],
+    verification: { state: 'unchecked' as const }, notes: [],
+  };
+  const DONE_C2 = {
+    ...PENDING_C2, status: 'done' as const, summary: 'Term is 12 months.',
+  };
+
+  it('does not lose a verification to the next update from a live run', async () => {
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: PENDING_C2 } });
 
-    act(() => { root.render(<App />); });
-    await flush();
+    await startLiveRun(container, root);
+    await emitFindingDone();
 
-    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
-    await flush();
-    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
-    await flush();
-
-    // c1 has resolved to `done`; c2 is still pending/running. Verify c1 now,
-    // while the run is still live.
+    // c1 is `done`; c2 is still pending. Verify c1 now, while the run is
+    // still live.
     const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
     expect(chips().length).toBeGreaterThan(0);
     expect(chips()[0].textContent).toBe('Unverified');
@@ -665,279 +752,146 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     expect(verifyWriteCount).toBeGreaterThan(0);
     expect(saveReviewMock.mock.calls[verifyWriteCount - 1][0].findings['live-doc'].c1.verification.state).toBe('verified');
 
-    // Now let the other cell (c2) finish — this is `runReview`'s own
-    // "unrelated cell finishing" onUpdate, carrying a snapshot in which c1
-    // is still `unchecked` per `runReview`'s own bookkeeping. Without
-    // `carryHumanState`, this would silently overwrite the verification
-    // just written.
-    act(() => { resolveC2!({
-      clauseId: 'c2',
-      status: 'done',
-      citations: [],
-      summary: 'Term is 12 months.',
-      verification: { state: 'unchecked' },
-      notes: [],
-    }); });
-    await flush();
+    // Now let the other cell finish — the server's own "unrelated cell
+    // finished" event, followed by a findings map in which c1 is still
+    // `unchecked`. Without `carryHumanState`, this would silently overwrite
+    // the verification just written.
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
+    await emitFindingDone();
 
     expect(chips()[0].textContent).toBe('Verified');
-    // The debounced mid-run saver must also have received the merged run —
-    // not the raw, unchecked snapshot `runReview` produced — or a reload
-    // mid-run would still lose the verification to the next debounced save.
-    expect(scheduleSaveMock).toHaveBeenCalled();
-    const lastScheduled = scheduleSaveMock.mock.calls[scheduleSaveMock.mock.calls.length - 1][0];
-    expect(lastScheduled.findings['live-doc'].c1.verification.state).toBe('verified');
   });
 
-  it('Critical 1: the run completion save holds a verification made during the run, not runReview\'s own unmerged snapshot', async () => {
-    // Same setup as the previous test — c1 resolves immediately so it can be
-    // verified while the run is still live, c2 stays pending until released
-    // — but this time c2 is released with `runReview`'s own `onUpdate`
-    // eventually resolving the whole run, so the FINAL save (`saveNow`, not
-    // the debounced `scheduleSave`) is the thing under test. `runReview`
-    // builds every Finding with `unchecked()`; the run's own return value
-    // never sees the verification written mid-run. `persistFinal` must not
-    // hand `saveNow` that raw return value.
-    let resolveC2: ((finding: unknown) => void) | undefined;
-    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => {
-      if (clause.id === 'c1') {
-        return Promise.resolve({
-          clauseId: 'c1',
-          status: 'done',
-          citations: [{ quote: 'x', documentId: 'live-doc' }],
-          summary: 'Governed by NY law.',
-          verification: { state: 'unchecked' },
-          notes: [],
-        });
-      }
-      return new Promise((resolve) => { resolveC2 = resolve; });
-    });
-
+  it('the run completion save holds a verification made during the run, not the server\'s unmerged map', async () => {
+    // Was "Critical 1: … not runReview's own unmerged snapshot". The
+    // unmerged snapshot is now the findings map the server answers with, and
+    // the save under test is the ONE the browser makes when it learns the
+    // run has finished — the write that records WHEN this review ended.
+    // `reviewFromRun` builds it from `latestRunRef`, so it carries whatever
+    // human state this browser holds; building it from the map instead would
+    // persist a review whose verification the reviewer watched succeed and
+    // whose store never took.
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: PENDING_C2 } });
 
-    act(() => { root.render(<App />); });
-    await flush();
+    await startLiveRun(container, root);
+    await emitFindingDone();
 
-    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
-    await flush();
-    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
-    await flush();
-
-    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
-    expect(chips()[0].textContent).toBe('Verified');
 
-    // Finish the run: c2 resolves, `runReview`'s promise resolves, and
-    // `persistFinal` fires the run's completion save.
-    act(() => { resolveC2!({
-      clauseId: 'c2',
-      status: 'done',
-      citations: [],
-      summary: 'Term is 12 months.',
-      verification: { state: 'unchecked' },
-      notes: [],
-    }); });
-    await flush();
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
+    getRunMock.mockResolvedValue({
+      ...RUNNING_RUN, state: 'succeeded', finishedAt: 5,
+      cells: { total: 2, queued: 0, leased: 0, done: 2, error: 0, cancelled: 0 },
+    });
+    await emitRunFinished();
 
-    expect(saveNowMock).toHaveBeenCalled();
-    const finalSaved = saveNowMock.mock.calls[saveNowMock.mock.calls.length - 1][0];
+    const finalSaved = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
     expect(finalSaved.findings['live-doc'].c1.verification.state).toBe('verified');
+    // …and it is the write that records the ending, which is the only new
+    // fact it carries.
+    expect(finalSaved.completedAt).toBe(5);
   });
 
   it('Important 1: handleVerify does not lose a run update that lands while its own save is in flight', async () => {
-    // Three clauses so the run stays live throughout: c1 resolves
-    // immediately (so it can be verified while live), c2 resolves INSIDE
-    // the verify write's own await window (reproducing the exact race —
-    // `handleVerify` reads `latestRunRef`, then crosses `getProfile()` and
-    // `saveReview()`, before ever writing it back), and c3 never resolves,
-    // so the run itself does not complete and dispose its saver out from
-    // under this test's assertions on it.
-    let resolveC2: ((finding: unknown) => void) | undefined;
-    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => {
-      if (clause.id === 'c1') {
-        return Promise.resolve({
-          clauseId: 'c1',
-          status: 'done',
-          citations: [{ quote: 'x', documentId: 'live-doc' }],
-          summary: 'Governed by NY law.',
-          verification: { state: 'unchecked' },
-          notes: [],
-        });
-      }
-      if (clause.id === 'c2') {
-        return new Promise((resolve) => { resolveC2 = resolve; });
-      }
-      return new Promise(() => { /* c3: never resolves, keeps the run live. */ });
-    });
-
-    const threeClauseTemplate: PlaybookVersion = {
-      ...makeTemplate(),
-      clauses: [...makeTemplate().clauses, { id: 'c3', title: 'Indemnity', extractPrompt: 'Extract the indemnity clause.' }],
-    };
-
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
-    listPlaybooksMock.mockResolvedValue([threeClauseTemplate]);
+    listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: PENDING_C2 } });
 
-    // Holds the verify write's own `saveReview` open, so c2's onUpdate can
-    // land on `latestRunRef` before `handleVerify` writes it back.
+    await startLiveRun(container, root);
+    await emitFindingDone();
+
+    // The verification's own save is held open. A run update lands INSIDE
+    // that window and writes `latestRunRef` from under it; the handler must
+    // re-read the ref after its awaits rather than writing back the snapshot
+    // it captured before them.
     let resolveSave: (() => void) | undefined;
     saveReviewMock.mockImplementation(() => new Promise<void>(resolve => { resolveSave = () => resolve(); }));
 
-    act(() => { root.render(<App />); });
+    act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
-    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
-    await flush();
-    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
+
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
+    await emitFindingDone();
+
+    act(() => { resolveSave!(); });
     await flush();
 
     const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
-    expect(chips()[0].textContent).toBe('Unverified');
-
-    act(() => { findButton(container, /^Verify$/, 0).click(); });
-    await flush();
-    expect(saveReviewMock).toHaveBeenCalled();
-
-    // c2 finishes INSIDE the write's await window — the run's own onUpdate,
-    // which the old code let clobber `latestRunRef` once the write's own
-    // await resolved.
-    act(() => { resolveC2!({
-      clauseId: 'c2',
-      status: 'done',
-      citations: [],
-      summary: 'Term is 12 months.',
-      verification: { state: 'unchecked' },
-      notes: [],
-    }); });
-    await flush();
-
-    // Now let the verification's own write resolve.
-    resolveSave!();
-    await flush();
-
-    // Both must survive: this write's own verification, and c2's newer,
-    // unrelated status. The old code overwrote `latestRunRef` here with the
-    // pre-await snapshot, which still had c2 `running` — reverting an
-    // already-finished clause back to a skeleton card on screen.
+    // The verification survived…
     expect(chips()[0].textContent).toBe('Verified');
+    // …and so did the run update that landed while it was in flight.
     expect(container.textContent).toContain('Term is 12 months.');
-
-    // Item 2: the merged, post-race state is reasserted through the run's
-    // own debounced saver, not just local state — closing the gap where a
-    // stale, already-armed `scheduleSave` payload (from before this write)
-    // could otherwise fire afterward and silently reassert the older data
-    // in storage even though the screen shows the new one.
-    const lastScheduled = scheduleSaveMock.mock.calls[scheduleSaveMock.mock.calls.length - 1][0];
-    expect(lastScheduled.findings['live-doc'].c1.verification.state).toBe('verified');
-    expect(lastScheduled.findings['live-doc'].c2.status).toBe('done');
-    // c3 never resolved — the run is genuinely still live here, so this
-    // assertion is exercising an armed saver, not a leftover from a
-    // completed run's final save.
-    expect(lastScheduled.findings['live-doc'].c3.status).not.toBe('done');
   });
 
-  it('Item 2: a post-completion write does not reassert through, or re-arm, the run\'s (now-disposed) saver', async () => {
-    // Ordinary two-clause template: both clauses resolve immediately, so the
-    // run completes and `persistFinal` disposes its saver and clears
-    // `activeRunSaverRef` before this test ever verifies anything.
-    extractClauseMock.mockImplementation((_client: unknown, _doc: unknown, clause: { id: string }) => Promise.resolve({
-      clauseId: clause.id,
-      status: 'done',
-      citations: clause.id === 'c1' ? [{ quote: 'x', documentId: 'live-doc' }] : [],
-      summary: clause.id === 'c1' ? 'Governed by NY law.' : 'Term is 12 months.',
-      verification: { state: 'unchecked' },
-      notes: [],
-    }));
-
+  it('stops watching the run once it has finished, so nothing later overwrites what is on screen', async () => {
+    // Was "Item 2: a post-completion write does not reassert through, or
+    // re-arm, the run's (now-disposed) saver". The debounced saver is gone
+    // with Task 18, and the mechanism that could now reassert a stale state
+    // over a human's write is a POLL that kept running past the end of the
+    // run. So the claim is the same one, against the thing that replaced it:
+    // nothing keeps reading after the run is over.
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
+    getRunMock.mockResolvedValue({
+      ...RUNNING_RUN, state: 'succeeded', finishedAt: 5,
+      cells: { total: 2, queued: 0, leased: 0, done: 2, error: 0, cancelled: 0 },
+    });
 
-    act(() => { root.render(<App />); });
-    await flush();
-    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
-    await flush();
-    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
-    await flush();
+    await startLiveRun(container, root);
+    await emitRunFinished();
 
-    // The run has already completed and disposed its saver.
-    expect(saveNowMock).toHaveBeenCalled();
-    const scheduleCallsBefore = scheduleSaveMock.mock.calls.length;
+    expect(stopWatchMock, 'the run finished and the watch kept polling').toHaveBeenCalled();
 
+    // The human's own write after the run is over is a plain write, with
+    // nothing left to reassert over it.
+    const before = saveReviewMock.mock.calls.length;
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
-
-    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
-    expect(chips()[0].textContent).toBe('Verified');
-    // The direct write itself still happens...
-    expect(saveReviewMock).toHaveBeenCalled();
-    // ...but `activeRunSaverRef` is null by now, so the reschedule added by
-    // Item 2 is the no-op it has to be: no new call, and (implicitly, since
-    // nothing here ever throws) no timer armed against a saver nothing will
-    // ever dispose again.
-    expect(scheduleSaveMock.mock.calls.length).toBe(scheduleCallsBefore);
+    expect(saveReviewMock.mock.calls.length).toBe(before + 1);
+    expect(Array.from(container.querySelectorAll('[role="status"]'))[0].textContent).toBe('Verified');
   });
 
-  it('Critical 1 (abort path): a cancelled run\'s completion save still holds a verification made during it', async () => {
-    // c1 resolves immediately (so it can be verified while the run is still
-    // live); c2 hangs until the run's own AbortController fires, then
-    // rejects the way a real in-flight fetch would (the same pattern
-    // App.matterDelete.test.tsx uses to reach this same `persistFinal` call
-    // site from a different trigger). The re-review's own gap: the success
-    // path above is covered, but nothing exercised the abort path's use of
-    // `latestRunRef.current` in `persistFinal`.
-    extractClauseMock.mockImplementation(
-      // `_client` first: `extractClause` takes its `ModelClient` at position 0
-      // now, so `signal` is the SIXTH positional argument, not the fifth.
-      (
-        _client: unknown, _doc: unknown, clause: { id: string }, _template: unknown,
-        _settings: unknown, signal?: AbortSignal,
-      ) => {
-        if (clause.id === 'c1') {
-          return Promise.resolve({
-            clauseId: 'c1',
-            status: 'done',
-            citations: [{ quote: 'x', documentId: 'live-doc' }],
-            summary: 'Governed by NY law.',
-            verification: { state: 'unchecked' },
-            notes: [],
-          });
-        }
-        return new Promise((_resolve, reject) => {
-          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
-        });
-      },
-    );
-
+  it('a cancelled run\'s completion save still holds a verification made during it', async () => {
+    // Was "Critical 1 (abort path)". A cancellation is a request now rather
+    // than an `AbortController`, and it is still NOT a failure: what
+    // completed stays completed, and the verification a person made while it
+    // ran is part of what completed.
     getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     saveReviewMock.mockResolvedValue(undefined);
+    serverFindings({ 'live-doc': { c1: DONE_C1, c2: PENDING_C2 } });
 
-    act(() => { root.render(<App />); });
-    await flush();
-    act(() => { findButton(container, /^Playbooks$/i, 0).click(); });
-    await flush();
-    act(() => { findButton(container, /^Run Basic Contract Review$/, 0).click(); });
-    await flush();
+    await startLiveRun(container, root);
+    await emitFindingDone();
 
-    const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
-    expect(chips()[0].textContent).toBe('Verified');
 
-    // Cancel the run while c2 is still stuck — this is the abort path.
-    act(() => { findButton(container, /^Cancel$/, 0).click(); });
+    cancelRunMock.mockResolvedValue({ ...RUNNING_RUN, state: 'cancelling' });
+    act(() => { findButton(container, /Stop|Cancel/i, 0).click(); });
     await flush();
+    expect(cancelRunMock).toHaveBeenCalledWith('run-1');
 
-    expect(saveNowMock).toHaveBeenCalled();
-    const finalSaved = saveNowMock.mock.calls[saveNowMock.mock.calls.length - 1][0];
+    getRunMock.mockResolvedValue({
+      ...RUNNING_RUN, state: 'cancelled', finishedAt: 7,
+      cells: { total: 2, queued: 0, leased: 0, done: 1, error: 0, cancelled: 1 },
+    });
+    await emitRunFinished();
+
+    const finalSaved = saveReviewMock.mock.calls[saveReviewMock.mock.calls.length - 1][0];
     expect(finalSaved.findings['live-doc'].c1.verification.state).toBe('verified');
+    expect(finalSaved.cancelledAt).toBe(7);
+    expect(finalSaved.completedAt).toBeUndefined();
   });
 });
 
@@ -1010,7 +964,7 @@ describe('App — reading and writing a collection review\'s findings (Task 8A)'
     saveReviewMock.mockReset().mockResolvedValue(undefined);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     extractClauseMock.mockReset();
-    createDebouncedReviewSaverMock.mockClear();
+    resetRunMocks();
 
     container = document.createElement('div');
     document.body.appendChild(container);

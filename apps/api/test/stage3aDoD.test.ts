@@ -234,14 +234,31 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(there('src/lib/findingMerge.ts')).toBe(true);
   });
 
-  it('still orchestrates the run in the browser — runReview and retryCell, not a server run', () => {
+  it('no longer orchestrates the run in the browser — Task 18 has landed', () => {
+    /*
+     * THE WRITER FLIP BEGINS. `runReview` is not called and not imported;
+     * the browser POSTs a run and watches it. `retryCell` is still here —
+     * Task 20 replaces it with one POST — and this assertion is what stops
+     * that from being forgotten.
+     *
+     * `createDebouncedReviewSaver` goes WITH the orchestration it kept up
+     * with, and that is P25's remedy: the 409 a run's saver kept colliding
+     * with cannot arise once there is no mid-run whole-review save.
+     */
     const app = codeOf(at('src/App.tsx'));
-    expect(app).toMatch(/import\s*\{[^}]*runReview[^}]*\}\s*from\s*'\.\/features\/review\/runReview'/);
-    expect(app).toMatch(/\brunReview\(/);
-    expect(app).toMatch(/\bretryCell\(/);
-    // …and the debounced whole-review saver is still what persists a run.
-    // It goes in Task 18, with the orchestration it exists to keep up with.
-    expect(codeOf(at('src/lib/db/reviews.ts'))).toContain('scheduleSave');
+    expect(app).not.toMatch(/\brunReview\(/);
+    expect(app).not.toMatch(/import\s*\{[^}]*\brunReview\b[^}]*\}\s*from/);
+    expect(app).toContain('startRun(');
+    expect(app).toContain('watchRun(');
+    // Task 20's, still standing.
+    expect(app, 'Task 20 landed; revisit this guard').toMatch(/\bretryCell\(/);
+    // The debounced whole-review saver is gone from the repository too.
+    const reviews = codeOf(at('src/lib/db/reviews.ts'));
+    expect(reviews).not.toContain('createDebouncedReviewSaver');
+    expect(reviews).not.toContain('scheduleSave');
+    // …and the module is still the reviews repository, so the two checks
+    // above are not passing because the file emptied.
+    expect(reviews).toContain('export async function saveReview');
   });
 
   it('names a run route in ONE module — the transport — and nowhere else', () => {
@@ -259,17 +276,27 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
      * Scanned over `src/` — the browser — rather than over the API, because
      * the routes SHOULD exist server-side.
      */
-    const CALLS = /['"`]\/v1\/runs|\/runs['"`]|\/runs\/live|\/v1\/dispositions|\/v1\/notes/;
+    // Every alternative is anchored on `/v1/`. It was first written with a
+    // bare `\/runs['"`]`, which matched the IMPORT PATH `'./lib/api/runs'`
+    // and reported App.tsx as a second caller of a route it never names.
+    const CALLS = /['"`]\/v1\/runs|\/v1\/reviews\/[^'"`]*\/runs|\/v1\/dispositions|\/v1\/notes/;
     // The scan bites on each shape a caller could take, including a template
     // literal, which is how every other id-bearing path in this client is
     // written.
     expect(CALLS.test("apiGet('/v1/runs/' + id)")).toBe(true);
     expect(CALLS.test('apiSend(`/v1/reviews/${enc}/runs`, body)')).toBe(true);
+    expect(CALLS.test('apiGet(`/v1/reviews/${enc}/runs/live`)')).toBe(true);
     expect(CALLS.test("apiSend('POST', '/v1/dispositions', body)")).toBe(true);
     expect(CALLS.test("apiGet('/v1/reviews/' + id)")).toBe(false);
+    // …and an IMPORT of the client is not a call to a route.
+    expect(CALLS.test("import { startRun } from './lib/api/runs';")).toBe(false);
 
     const callers = WEB_SOURCES.filter(f => CALLS.test(codeOf(f))).map(rel);
     expect(callers).toEqual(['src/lib/api/runs.ts']);
+    // App.tsx calls the CLIENT, never a route — which is the property that
+    // lets Stage 4 swap the poll for a socket inside one function.
+    expect(codeOf(at('src/App.tsx'))).toMatch(
+      /import \{[^}]*watchRun[^}]*\} from '\.\/lib\/api\/runs'/);
     expect(WEB_SOURCES.length).toBeGreaterThan(120);        // the sanity check
 
     // …and the poll it holds is a poll, with a cursor, which is the shape

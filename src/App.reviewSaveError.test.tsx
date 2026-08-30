@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Matter, PlaybookVersion } from './types';
+import { ModelError } from '@lexprompt/core';
 
 // No @testing-library/react in this project — see Toast.test.tsx for the
 // precedent this follows: drive a real react-dom root directly.
@@ -15,19 +16,46 @@ const listReviewsMock = vi.fn();
 const listDocumentsMock = vi.fn();
 const getProfileMock = vi.fn();
 
-// Captures the `onError` callback App.tsx passes to `createDebouncedReviewSaver`
-// (Minor fix: this used to be called with no second argument at all, so a
-// failed debounced mid-run save was reported through `debug()` only).
-let capturedOnError: ((error: unknown, review: unknown) => void) | undefined;
-const createDebouncedReviewSaverMock = vi.fn((..._args: unknown[]) => {
-  const onError = _args[1] as ((error: unknown, review: unknown) => void) | undefined;
-  capturedOnError = onError;
-  return {
-    scheduleSave: vi.fn(),
-    saveNow: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn(),
-  };
-});
+// TASK 18: THE SUBJECT OF THIS FILE MOVED, AND ITS POINT DID NOT.
+//
+// It used to be about the debounced mid-run saver's `onError` — a failed
+// whole-review auto-save reported through `debug()` alone is invisible, and
+// "your in-progress review isn't saving" is something a reader has to be
+// told. That saver is gone with the orchestration it kept up with.
+//
+// What replaced it are two background operations that can fail just as
+// quietly: STARTING the run, and the poll that keeps the findings on screen
+// in step with the rows. A run that was refused, or a screen that has
+// silently stopped updating, is the same failure in new clothes — a job
+// that died looking like a job still working.
+const startRunMock = vi.fn();
+const getFindingsMock = vi.fn();
+const stopWatchMock = vi.fn();
+let emitRunEvent: ((event: unknown) => void) | null = null;
+
+vi.mock('./lib/api/runs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/runs')>()),
+  startRun: (...args: unknown[]) => startRunMock(...args),
+  getRun: vi.fn(async () => ({ ...RUNNING_RUN, state: 'succeeded' as const, finishedAt: 9 })),
+  cancelRun: vi.fn().mockResolvedValue(undefined),
+  liveRunFor: vi.fn().mockResolvedValue(null),
+  watchRun: (_runId: string, onEvent: (event: unknown) => void) => {
+    emitRunEvent = onEvent;
+    return stopWatchMock;
+  },
+}));
+
+vi.mock('./lib/api/findings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/findings')>()),
+  getFindings: (...args: unknown[]) => getFindingsMock(...args),
+}));
+
+const RUNNING_RUN = {
+  id: 'run-1', reviewId: 'r-live', state: 'running' as const, requestedByUserId: 'u1',
+  concurrency: 5, createdAt: 1,
+  cells: { total: 1, queued: 0, leased: 1, done: 0, error: 0, cancelled: 0 },
+  version: 1,
+};
 
 
 vi.mock('./lib/db/playbooks', async (importOriginal) => ({
@@ -69,7 +97,6 @@ vi.mock('./lib/db/reviews', () => ({
   listReviews: (...args: unknown[]) => listReviewsMock(...args),
   getReview: vi.fn(),
   saveReview: vi.fn().mockResolvedValue(undefined),
-  createDebouncedReviewSaver: (...args: unknown[]) => createDebouncedReviewSaverMock(...args),
 }));
 
 vi.mock('./lib/db/profile', () => ({
@@ -178,7 +205,7 @@ function makeTemplate(): PlaybookVersion {
   };
 }
 
-describe('App — a failed debounced mid-run save is surfaced, not just debug()-logged (Minor fix)', () => {
+describe('App — a run that could not start, and a screen that stopped updating, are both said out loud', () => {
   let container: HTMLDivElement;
   let root: Root;
 
@@ -191,8 +218,12 @@ describe('App — a failed debounced mid-run save is surfaced, not just debug()-
     listDocumentsMock.mockReset().mockResolvedValue([]);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     extractClauseMock.mockClear();
-    capturedOnError = undefined;
-    createDebouncedReviewSaverMock.mockClear();
+    emitRunEvent = null;
+    stopWatchMock.mockClear();
+    startRunMock.mockReset().mockImplementation(async (reviewId: string) =>
+      ({ ...RUNNING_RUN, reviewId }));
+    getFindingsMock.mockReset().mockResolvedValue(
+      { findings: {}, dispositionVersions: {}, version: 1 });
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -205,20 +236,54 @@ describe('App — a failed debounced mid-run save is surfaced, not just debug()-
     window.history.pushState(null, '', '/');
   });
 
-  it('passes a real onError callback to createDebouncedReviewSaver, and it surfaces a toast', async () => {
+  async function startARun(): Promise<void> {
     act(() => { root.render(<App />); });
     await flush();
     clickNav(container, 'Playbooks');
     await flush();
     clickByText(container, /^Run Basic Contract Review$/);
     await flush();
+  }
 
-    expect(createDebouncedReviewSaverMock).toHaveBeenCalled();
-    expect(capturedOnError).toBeInstanceOf(Function);
+  it('shows the SERVER S OWN SENTENCE when a run is refused, not "something went wrong"', async () => {
+    // The refusals this path carries are ones a person can act on: a
+    // document still being read, a document the server no longer has, a
+    // review already running. Each names what to do; folding them into a
+    // generic message would leave a reader retrying something that will keep
+    // failing.
+    startRunMock.mockRejectedValue(new ModelError(
+      'LexPrompt is still reading nda.txt. Wait for it to finish, then start the review again.',
+      'conflict', 409));
 
-    act(() => { capturedOnError!(new Error('quota exceeded'), {}); });
+    await startARun();
+
+    expect(container.textContent).toContain('still reading nda.txt');
+  });
+
+  it('says so when the findings on screen have stopped updating — after three failures, not one', async () => {
+    // A single failed read over a network is ordinary and self-correcting,
+    // and a notice on every hiccup is a notice nobody reads. Three in a row
+    // is a screen that has quietly stopped following the run.
+    getFindingsMock.mockRejectedValue(new Error('the network is down'));
+    await startARun();
+
+    const emit = (id: number) => act(() => {
+      emitRunEvent!({
+        id, type: 'finding.done', reviewId: 'r-live', runId: 'run-1', at: id,
+        payload: { runId: 'run-1', reviewId: 'r-live', findingsKey: 'live-doc',
+          clauseId: 'c1', version: id },
+      });
+    });
+
+    emit(1);
     await flush();
-
-    expect(container.textContent).toContain('quota exceeded');
+    expect(container.textContent).not.toContain('stopped updating');
+    emit(2);
+    await flush();
+    expect(container.textContent, 'a notice fired before three failures')
+      .not.toContain('stopped updating');
+    emit(3);
+    await flush();
+    expect(container.textContent).toContain('stopped updating');
   });
 });

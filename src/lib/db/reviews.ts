@@ -189,93 +189,21 @@ export async function deleteReview(id: string): Promise<void> {
   forgetReviewVersion(id);
 }
 
-const DEFAULT_REVIEW_SAVE_DEBOUNCE_MS = 2000;
-
-/** Drives how a review's in-progress state gets persisted during a run,
- *  without writing on every `onUpdate` call. `runReview`'s `onUpdate` fires
- *  roughly twice per cell — a 3-document x 20-clause run is ~120 calls — and
- *  saving on every one of those would be 120 writes for one run. Over a
- *  network that arithmetic matters more than it did over a local disk, and
- *  the shape below is unchanged by the move:
+/**
+ * TASK 18: `createDebouncedReviewSaver` IS GONE, with the orchestration it
+ * existed to keep up with.
  *
- *  - `scheduleSave` records the latest state and, if no save is already
- *    pending, arms a timer for `debounceMs` (>= 2000ms). Further calls
- *    before that timer fires only update *which* state will be written;
- *    they do not push the timer back. This is a deliberate departure from
- *    textbook trailing-edge debounce (reset-on-every-call): `onUpdate`
- *    fires continuously throughout a run, not in a bursty-then-quiet
- *    pattern, so a reset-on-every-call debounce could in principle never
- *    fire until the run itself goes quiet — i.e. never save mid-run at all,
- *    which is exactly the crash-loses-the-whole-run failure this exists to
- *    prevent. Throttling to "at most one save per debounceMs, but at least
- *    one every debounceMs while updates keep coming" is what actually
- *    delivers "a crash costs seconds, not the run".
- *  - `saveNow` cancels any pending timer and persists immediately — call it
- *    on completion and on cancellation. Its promise is returned to the
- *    caller as-is, so a failure there is never swallowed.
- *  - `dispose` cancels a pending timer without persisting (e.g. on
- *    unmount), so a stale save cannot land after the caller has moved on.
+ * It wrote the whole review roughly every two seconds while a browser ran a
+ * review, so a crash cost seconds rather than the run. The server writes
+ * every finding now — there is no in-progress state held only in a tab, so
+ * there is nothing for a mid-run whole-review save to rescue.
  *
- *  The debounced write that `scheduleSave` eventually fires is
- *  fire-and-forget by nature — nothing is `await`ing it — so a failure there
- *  cannot surface as a rejection on any promise the caller holds. It is
- *  always reported through `debug()` so it is not dropped silently, and
- *  handed to the optional `onError` callback so a caller can surface "your
- *  in-progress review isn't saving" without this module guessing what that
- *  should look like.
+ * Deleting it also retires the failure P25 names: a run's saver holds its
+ * own copy of a review and knows nothing about anyone else's writes, so
+ * every save after somebody else's landed was refused with a 409, forever,
+ * with a notice on screen the reader could do nothing about. That is a
+ * defect removed by deletion rather than by a fix.
  *
- *  `onError` was defensible-to-omit against a local disk and is not against
- *  a network: over HTTP these failures go from rare to routine, and one of
- *  them — a 409 refusing a save because somebody else's write landed first —
- *  is not an error at all but a fact the reader has to act on. `App.tsx`
- *  passes one. */
-export interface DebouncedReviewSaver {
-  scheduleSave(review: Review): void;
-  saveNow(review: Review): Promise<Review>;
-  dispose(): void;
-}
-
-export function createDebouncedReviewSaver(
-  debounceMs: number = DEFAULT_REVIEW_SAVE_DEBOUNCE_MS,
-  onError?: (error: unknown, review: Review) => void,
-): DebouncedReviewSaver {
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let pending: Review | null = null;
-
-  function clearTimer(): void {
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  }
-
-  return {
-    scheduleSave(review: Review): void {
-      pending = review;
-      if (timer !== null) return; // A save is already armed; it will pick up the latest `pending` when it fires.
-      timer = setTimeout(() => {
-        const toSave = pending;
-        timer = null;
-        pending = null;
-        if (toSave) {
-          // Deliberately not awaited (this callback isn't async) — but the
-          // rejection MUST still be handled here, not left to become an
-          // unhandled rejection: nobody else is holding this promise.
-          saveReview(toSave).catch(error => {
-            debug('debounced review auto-save failed', error);
-            onError?.(error, toSave);
-          });
-        }
-      }, debounceMs);
-    },
-    async saveNow(review: Review): Promise<Review> {
-      clearTimer();
-      pending = null;
-      return saveReview(review);
-    },
-    dispose(): void {
-      clearTimer();
-      pending = null;
-    },
-  };
-}
+ * `saveReview` itself stays, and `App.tsx` makes exactly ONE call to it per
+ * run now: the write that records WHEN the review ended (`finishRun`).
+ */

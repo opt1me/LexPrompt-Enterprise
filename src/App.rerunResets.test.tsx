@@ -85,11 +85,6 @@ vi.mock('./lib/db/reviews', () => ({
   listReviews: (...args: unknown[]) => listReviewsMock(...args),
   getReview: (...args: unknown[]) => getReviewMock(...args),
   saveReview: (...args: unknown[]) => saveReviewMock(...args),
-  createDebouncedReviewSaver: vi.fn(() => ({
-    scheduleSave: vi.fn(),
-    saveNow: vi.fn().mockResolvedValue(undefined),
-    dispose: vi.fn(),
-  })),
 }));
 
 // Task 18 / Part 2A M1: `getWorkspaceSettings` is a NETWORK call, and this
