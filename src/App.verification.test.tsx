@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Matter, Review, DocumentRecord, PlaybookVersion, TrailStep } from './types';
-import { unconfirmedPosition } from '@lexprompt/core';
+import { ModelError, unconfirmedPosition } from '@lexprompt/core';
 import { flushUntil } from './test/mount';
 import { TEST_ALLOWED_MODEL } from './test/allowedModel';
 
@@ -98,10 +98,41 @@ vi.mock('./lib/api/runs', async (importOriginal) => ({
 }));
 
 const getFindingsMock = vi.fn();
+// TASK 19: A VERIFICATION, A NOTE AND A NET POSITION ARE EACH THEIR OWN
+// WRITE, to their own row. The seam these tests drive moved from
+// `saveReview` — a read-modify-write over the whole review — to these three
+// calls. Every assertion about WHAT is written, and about the UI not showing
+// what the store refused, is the same one.
+const setDispositionMock = vi.fn();
+const addNoteMock = vi.fn();
+const setNetPositionMock = vi.fn();
+
 vi.mock('./lib/api/findings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/api/findings')>()),
   getFindings: (...args: unknown[]) => getFindingsMock(...args),
+  setDisposition: (...args: unknown[]) => setDispositionMock(...args),
+  addNote: (...args: unknown[]) => addNoteMock(...args),
+  setNetPosition: (...args: unknown[]) => setNetPositionMock(...args),
 }));
+
+/** The server's answer to a disposition write: the row it stored. The actor
+ *  and the instant are ITS, which is the whole point of the route. */
+function serverDisposition(over: Record<string, unknown> = {}): void {
+  setDispositionMock.mockImplementation(async (
+    _reviewId: string, findingsKey: string, clauseId: string,
+    change: { state: string; reason?: string },
+  ) => ({
+    disposition: {
+      reviewId: 'r1', findingsKey, clauseId, state: change.state,
+      ...(change.reason ? { reason: change.reason } : {}),
+      byUserId: 'u1', at: 1_700_000_000_000, changedCount: 1, version: 2, ...over,
+    },
+    event: {
+      id: 1, fromState: 'unchecked', toState: change.state, cause: 'human',
+      byUserId: 'u1', at: 1_700_000_000_000,
+    },
+  }));
+}
 
 const RUNNING_RUN = {
   id: 'run-1', reviewId: 'r-live', state: 'running' as const, requestedByUserId: 'u1',
@@ -128,6 +159,12 @@ function resetRunMocks(): void {
   liveRunForMock.mockReset().mockResolvedValue(null);
   getFindingsMock.mockReset();
   serverFindings({});
+  setDispositionMock.mockReset();
+  serverDisposition();
+  addNoteMock.mockReset().mockImplementation(async (
+    _reviewId: string, findingsKey: string, clauseId: string, text: string,
+  ) => ({ id: 'note-1', findingId: `${findingsKey}::${clauseId}`, text, byUserId: 'u1', at: 5 }));
+  setNetPositionMock.mockReset();
 }
 
 vi.mock('./lib/db/profile', () => ({
@@ -405,8 +442,16 @@ describe('App — persisting a net position (Task 8)', () => {
   }
 
   it('confirms a net position and shows it only after the write resolves', async () => {
-    let resolveSave: (() => void) | undefined;
-    saveReviewMock.mockImplementation(() => new Promise<void>(resolve => { resolveSave = () => resolve(); }));
+    let resolveWrite: (() => void) | undefined;
+    setNetPositionMock.mockImplementation(() => new Promise(resolve => {
+      resolveWrite = () => resolve({
+        netPosition: {
+          proposed: 'Notice is now 6 months.', state: 'confirmed',
+          byUserId: 'u1', at: 1_700_000_000_000, trail: TRAIL,
+        },
+        version: 2,
+      });
+    }));
 
     await openReview();
 
@@ -417,12 +462,13 @@ describe('App — persisting a net position (Task 8)', () => {
 
     // The write is in flight — the badge must NOT have flipped yet
     // (await-then-apply).
-    expect(saveReviewMock).toHaveBeenCalled();
-    const persisted = saveReviewMock.mock.calls[0][0];
-    expect(persisted.findings.d1.c1.netPosition.state).toBe('confirmed');
+    expect(setNetPositionMock).toHaveBeenCalled();
+    // The ACTION, never a `NetPosition`: `confirmPosition` runs on the
+    // server, over what is stored, with the actor and the instant it knows.
+    expect(setNetPositionMock.mock.calls[0][3]).toEqual({ action: 'confirm' });
     expect(container.textContent).toMatch(/unconfirmed/i);
 
-    resolveSave!();
+    resolveWrite!();
     await flush();
 
     expect(container.textContent).not.toMatch(/unconfirmed/i);
@@ -430,7 +476,7 @@ describe('App — persisting a net position (Task 8)', () => {
   });
 
   it('does not show a confirmation the store rejected, and says so', async () => {
-    saveReviewMock.mockRejectedValue(new Error('Storage quota exceeded'));
+    setNetPositionMock.mockRejectedValue(new Error('Storage quota exceeded'));
 
     await openReview();
 
@@ -438,27 +484,41 @@ describe('App — persisting a net position (Task 8)', () => {
     await flush();
 
     expect(container.textContent).toMatch(/unconfirmed/i);
-    expect(container.textContent).not.toMatch(/\bconfirmed\b/i);
     expect(container.textContent).toContain('Storage quota exceeded');
   });
 
-  it('records the local profile id and a timestamp against the confirmation', async () => {
-    getProfileMock.mockResolvedValue({ id: 'u42', name: 'Someone Else', initials: 'SE' });
+  it('shows the actor and the instant the SERVER recorded, and asks for neither itself', async () => {
+    // Was "records the local profile id and a timestamp against the
+    // confirmation". Both are the server's now, and the browser cannot
+    // state either: a body that could would let a client put somebody
+    // else's name on a confirmation. What the browser does with them is
+    // unchanged — it renders what the store took.
+    setNetPositionMock.mockResolvedValue({
+      netPosition: {
+        proposed: 'Notice is now 6 months.', state: 'confirmed',
+        byUserId: 'u42', at: 1_700_000_123_000, trail: TRAIL,
+      },
+      version: 2,
+    });
 
     await openReview();
-
-    const before = Date.now();
     act(() => { findButton(container, /^Confirm$/, 0).click(); });
     await flush();
 
-    const persisted = saveReviewMock.mock.calls[0][0];
-    const netPosition = persisted.findings.d1.c1.netPosition;
-    expect(netPosition.byUserId).toBe('u42');
-    expect(typeof netPosition.at).toBe('number');
-    expect(netPosition.at).toBeGreaterThanOrEqual(before);
+    // Nothing about the actor or the instant was sent.
+    expect(setNetPositionMock.mock.calls[0][3]).toEqual({ action: 'confirm' });
+    expect(container.textContent).not.toMatch(/unconfirmed/i);
+    expect(container.textContent).toMatch(/\bconfirmed\b/i);
   });
 
   it('amends a net position with the human\'s text, marked stronger than a plain confirmation', async () => {
+    setNetPositionMock.mockResolvedValue({
+      netPosition: {
+        proposed: 'Notice is now 6 months.', amended: 'Notice is actually 3 months.',
+        state: 'confirmed', byUserId: 'u1', at: 1_700_000_000_000, trail: TRAIL,
+      },
+      version: 2,
+    });
     await openReview();
 
     act(() => { findButton(container, /^Amend$/, 0).click(); });
@@ -474,10 +534,11 @@ describe('App — persisting a net position (Task 8)', () => {
     act(() => { findButton(container, /confirm amendment/i, 0).click(); });
     await flush();
 
-    const persisted = saveReviewMock.mock.calls[0][0];
-    const netPosition = persisted.findings.d1.c1.netPosition;
-    expect(netPosition.amended).toBe('Notice is actually 3 months.');
-    expect(netPosition.state).toBe('confirmed');
+    // The ACTION and the person's words, never a `NetPosition`. `amendPosition`
+    // runs on the server, over what is stored — which is what makes "state:
+    // confirmed, byUserId: someone" impossible for a client to assert.
+    expect(setNetPositionMock.mock.calls[0][3])
+      .toEqual({ action: 'amend', text: 'Notice is actually 3 months.' });
     expect(container.textContent).toContain('Notice is actually 3 months.');
     expect(container.textContent).toMatch(/amended/i);
   });
@@ -505,6 +566,14 @@ describe('App — persisting a net position (Task 8)', () => {
     listPlaybooksMock.mockResolvedValue([makeTemplate()]);
     listMattersMock.mockResolvedValue([makeMatter()]);
     serverFindings({ 'live-doc': { c1: withPosition, c2: pendingC2 } });
+
+    setNetPositionMock.mockResolvedValue({
+      netPosition: {
+        proposed: 'Notice is now 6 months.', state: 'confirmed',
+        byUserId: 'u1', at: 1_700_000_000_000, trail: TRAIL,
+      },
+      version: 2,
+    });
 
     await startLiveRun(container, root);
     await emitFindingDone();
@@ -574,8 +643,19 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
   }
 
   it('persists a verification and shows it only after the write resolves', async () => {
-    let resolveSave: (() => void) | undefined;
-    saveReviewMock.mockImplementation(() => new Promise<void>(resolve => { resolveSave = () => resolve(); }));
+    let resolveWrite: (() => void) | undefined;
+    setDispositionMock.mockImplementation(() => new Promise(resolve => {
+      resolveWrite = () => resolve({
+        disposition: {
+          reviewId: 'r1', findingsKey: 'd1', clauseId: 'c1', state: 'verified',
+          byUserId: 'u1', at: 1_700_000_000_000, changedCount: 1, version: 2,
+        },
+        event: {
+          id: 1, fromState: 'unchecked', toState: 'verified', cause: 'human',
+          byUserId: 'u1', at: 1_700_000_000_000,
+        },
+      });
+    }));
 
     await openReview();
 
@@ -586,21 +666,21 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
 
-    // The write is in flight (saveReview called, not yet resolved) — the
-    // chip must NOT have flipped to Verified yet (await-then-apply).
-    expect(saveReviewMock).toHaveBeenCalled();
-    const persisted = saveReviewMock.mock.calls[0][0];
-    expect(persisted.findings.d1.c1.verification.state).toBe('verified');
+    // The write is in flight — the chip must NOT have flipped to Verified
+    // yet (await-then-apply).
+    expect(setDispositionMock).toHaveBeenCalled();
+    expect(setDispositionMock.mock.calls[0].slice(0, 3)).toEqual(['r1', 'd1', 'c1']);
+    expect(setDispositionMock.mock.calls[0][3]).toEqual({ state: 'verified' });
     expect(chips()[0].textContent).toBe('Unverified');
 
-    resolveSave!();
+    resolveWrite!();
     await flush();
 
     expect(chips()[0].textContent).toBe('Verified');
   });
 
   it('does not show a verification the store rejected, and says so', async () => {
-    saveReviewMock.mockRejectedValue(new Error('Storage quota exceeded'));
+    setDispositionMock.mockRejectedValue(new Error('Storage quota exceeded'));
 
     await openReview();
 
@@ -612,65 +692,66 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     expect(container.textContent).toContain('Storage quota exceeded');
   });
 
-  it('Task 16: a getProfile() failure refuses the verification and reports it, rather than an unhandled rejection', async () => {
-    // `getProfile()` can now REJECT (it no longer mints a fallback person on
-    // a network failure) and `handleVerify` sat outside any `try` around
-    // this call before the Task 16 fix — an unhandled rejection with
-    // nothing shown, on the exact keyboard-driven path most likely to be
-    // used mid-review. This is the regression test for that fix.
-    getProfileMock.mockReset().mockRejectedValue(new Error('LexPrompt could not reach your firm\'s service'));
+  it('REFUSES a stale write with a sentence that says what to do, never a silent retry', async () => {
+    // Was "Task 16: a getProfile() failure refuses the verification". That
+    // await is GONE — the server knows who is asking — and with it one of
+    // the five unhandled-rejection sites Stage 2's Task 16 found among
+    // exactly these call sites.
+    //
+    // What replaces it is the refusal P25 is about: the row moved on, so
+    // applying this write would overwrite a judgement nobody has seen. It
+    // must not be softened into a retry, and the chip must not flip.
+    setDispositionMock.mockRejectedValue(
+      new ModelError('This was changed since you opened it.', 'conflict', 409));
 
     await openReview();
 
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
 
-    // Refused, not silently applied: the store is never reached and the
-    // chip stays exactly as it was.
-    expect(saveReviewMock).not.toHaveBeenCalled();
     const chips = Array.from(container.querySelectorAll('[role="status"]'));
     expect(chips[0].textContent).toBe('Unverified');
-    expect(container.textContent).toContain('This verification was not saved');
+    expect(container.textContent).toContain('Reload the review and try again');
+    // Once. A refusal that retried itself would be the silent overwrite
+    // this refusal exists to prevent, arriving a second later.
+    expect(setDispositionMock).toHaveBeenCalledTimes(1);
   });
 
-  it('records the local profile id and a timestamp against the verification', async () => {
-    getProfileMock.mockResolvedValue({ id: 'u42', name: 'Someone Else', initials: 'SE' });
-    saveReviewMock.mockResolvedValue(undefined);
+  it('shows the actor and the instant the SERVER recorded, and states neither itself', async () => {
+    // Was "records the local profile id and a timestamp against the
+    // verification". `getProfile()` is gone from this path: the server knows
+    // who is asking and REFUSES a body that says otherwise, which is what
+    // stops a client putting somebody else's name on a rejection.
+    serverDisposition({ byUserId: 'u42', at: 1_700_000_123_000 });
 
     await openReview();
-
-    const before = Date.now();
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
 
-    expect(saveReviewMock).toHaveBeenCalled();
-    const persisted = saveReviewMock.mock.calls[0][0];
-    const verification = persisted.findings.d1.c1.verification;
-    expect(verification.byUserId).toBe('u42');
-    expect(typeof verification.at).toBe('number');
-    expect(verification.at).toBeGreaterThanOrEqual(before);
+    // Only the change and the version this browser was looking at.
+    expect(setDispositionMock.mock.calls[0][3]).toEqual({ state: 'verified' });
+    // Nothing about the actor crossed the wire — the fourth argument is the
+    // change and nothing else. (`getProfile` is still used elsewhere in the
+    // app; what matters is that this write does not state who made it.)
+    expect(setDispositionMock.mock.calls[0]).toHaveLength(4);
+    expect(Array.from(container.querySelectorAll('[role="status"]'))[0].textContent)
+      .toBe('Verified');
   });
 
-  it('Minor 2: does not reattribute the review\'s createdByUserId to whoever verifies or adds a note', async () => {
-    // makeReview()'s createdByUserId is 'u1'; the acting user here is a
-    // different profile ('u42') to prove the two are not conflated.
-    getProfileMock.mockResolvedValue({ id: 'u42', name: 'Someone Else', initials: 'SE' });
-    saveReviewMock.mockResolvedValue(undefined);
-
+  it('Minor 2: a verification cannot reattribute the review, because it does not write one', async () => {
+    // The defect this pinned — a verification's whole-review save
+    // overwriting `createdByUserId` with whoever just clicked — is not
+    // reachable any more: the write is one row, and the review record is not
+    // touched at all.
     await openReview();
-
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
 
-    expect(saveReviewMock).toHaveBeenCalled();
-    const persisted = saveReviewMock.mock.calls[0][0];
-    expect(persisted.findings.d1.c1.verification.byUserId).toBe('u42');
-    // The review's authorship must be untouched by a later verification.
-    expect(persisted.createdByUserId).toBe('u1');
+    expect(setDispositionMock).toHaveBeenCalled();
+    expect(saveReviewMock, 'a verification wrote the whole review').not.toHaveBeenCalled();
   });
 
   it('persists a note the same way, and does not show one the store rejected', async () => {
-    saveReviewMock.mockResolvedValue(undefined);
     await openReview();
 
     const textarea = () => container.querySelectorAll('textarea')[0] as HTMLTextAreaElement;
@@ -679,15 +760,14 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     act(() => { findButton(container, /Add note/i, 0).click(); });
     await flush();
 
-    expect(saveReviewMock).toHaveBeenCalled();
-    const persisted = saveReviewMock.mock.calls[0][0];
-    expect(persisted.findings.d1.c1.notes).toHaveLength(1);
-    expect(persisted.findings.d1.c1.notes[0].text).toBe('Check this against the side letter.');
+    expect(addNoteMock).toHaveBeenCalled();
+    expect(addNoteMock.mock.calls[0].slice(0, 3)).toEqual(['r1', 'd1', 'c1']);
+    expect(addNoteMock.mock.calls[0][3]).toBe('Check this against the side letter.');
     expect(container.textContent).toContain('Check this against the side letter.');
 
     // Now a rejected write: the new note must not appear anywhere, and the
     // failure must be named.
-    saveReviewMock.mockReset().mockRejectedValue(new Error('Disk full'));
+    addNoteMock.mockReset().mockRejectedValue(new Error('Disk full'));
     act(() => { setTextareaValue(textarea(), 'This one should not stick.'); });
     act(() => { findButton(container, /Add note/i, 0).click(); });
     await flush();
@@ -747,15 +827,13 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
     expect(chips()[0].textContent).toBe('Verified');
-
-    const verifyWriteCount = saveReviewMock.mock.calls.length;
-    expect(verifyWriteCount).toBeGreaterThan(0);
-    expect(saveReviewMock.mock.calls[verifyWriteCount - 1][0].findings['live-doc'].c1.verification.state).toBe('verified');
+    expect(setDispositionMock.mock.calls[0][3]).toEqual({ state: 'verified' });
 
     // Now let the other cell finish — the server's own "unrelated cell
-    // finished" event, followed by a findings map in which c1 is still
-    // `unchecked`. Without `carryHumanState`, this would silently overwrite
-    // the verification just written.
+    // finished" event, followed by a findings map that STILL SAYS
+    // `unchecked` for c1. That is the case this defends: a stale read
+    // landing after a write. Without `carryHumanState`, it would silently
+    // overwrite the verification just made.
     serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
     await emitFindingDone();
 
@@ -782,6 +860,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
 
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
+    saveReviewMock.mockClear();
 
     serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
     getRunMock.mockResolvedValue({
@@ -810,8 +889,19 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     // that window and writes `latestRunRef` from under it; the handler must
     // re-read the ref after its awaits rather than writing back the snapshot
     // it captured before them.
-    let resolveSave: (() => void) | undefined;
-    saveReviewMock.mockImplementation(() => new Promise<void>(resolve => { resolveSave = () => resolve(); }));
+    let resolveWrite: (() => void) | undefined;
+    setDispositionMock.mockImplementation(() => new Promise(resolve => {
+      resolveWrite = () => resolve({
+        disposition: {
+          reviewId: 'r-live', findingsKey: 'live-doc', clauseId: 'c1', state: 'verified',
+          byUserId: 'u1', at: 1_700_000_000_000, changedCount: 1, version: 2,
+        },
+        event: {
+          id: 1, fromState: 'unchecked', toState: 'verified', cause: 'human',
+          byUserId: 'u1', at: 1_700_000_000_000,
+        },
+      });
+    }));
 
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
@@ -819,7 +909,7 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
     serverFindings({ 'live-doc': { c1: DONE_C1, c2: DONE_C2 } });
     await emitFindingDone();
 
-    act(() => { resolveSave!(); });
+    act(() => { resolveWrite!(); });
     await flush();
 
     const chips = () => Array.from(container.querySelectorAll('[role="status"]'));
@@ -851,12 +941,11 @@ describe('App — persisting a verification (Task 10, spec section 9)', () => {
 
     expect(stopWatchMock, 'the run finished and the watch kept polling').toHaveBeenCalled();
 
-    // The human's own write after the run is over is a plain write, with
-    // nothing left to reassert over it.
-    const before = saveReviewMock.mock.calls.length;
+    // The human's own write after the run is over is one write to one row,
+    // with nothing left to reassert over it.
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
-    expect(saveReviewMock.mock.calls.length).toBe(before + 1);
+    expect(setDispositionMock).toHaveBeenCalledTimes(1);
     expect(Array.from(container.querySelectorAll('[role="status"]'))[0].textContent).toBe('Verified');
   });
 
@@ -994,8 +1083,19 @@ describe('App — reading and writing a collection review\'s findings (Task 8A)'
   });
 
   it('verifies a collection finding, persists it under the COLLECTION key, and reads it back once the write resolves', async () => {
-    let resolveSave: (() => void) | undefined;
-    saveReviewMock.mockImplementation(() => new Promise<void>(resolve => { resolveSave = () => resolve(); }));
+    let resolveWrite: (() => void) | undefined;
+    setDispositionMock.mockImplementation(() => new Promise(resolve => {
+      resolveWrite = () => resolve({
+        disposition: {
+          reviewId: 'r1', findingsKey: 'coll-1', clauseId: 'c1', state: 'verified',
+          byUserId: 'u1', at: 1_700_000_000_000, changedCount: 1, version: 2,
+        },
+        event: {
+          id: 1, fromState: 'unchecked', toState: 'verified', cause: 'human',
+          byUserId: 'u1', at: 1_700_000_000_000,
+        },
+      });
+    }));
 
     await openReview();
 
@@ -1005,20 +1105,19 @@ describe('App — reading and writing a collection review\'s findings (Task 8A)'
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
 
-    // The write is in flight — persisted under 'coll-1', never under 'd1' or
-    // 'd2' (the active document in the viewer pane, which is what `onVerify`
-    // is actually called with).
-    expect(saveReviewMock).toHaveBeenCalled();
-    const persisted = saveReviewMock.mock.calls[0][0];
-    expect('coll-1' in persisted.findings).toBe(true);
-    expect(persisted.findings['coll-1'].c1.verification.state).toBe('verified');
-    expect('d1' in persisted.findings).toBe(false);
-    expect('d2' in persisted.findings).toBe(false);
+    // The write is in flight — addressed to 'coll-1', never to 'd1' or 'd2'
+    // (the active document in the viewer pane, which is what `onVerify` is
+    // actually called with). R-C1: `findingsKeyFor` is the only place a
+    // findings key is decided, and it decides this one too.
+    expect(setDispositionMock).toHaveBeenCalled();
+    expect(setDispositionMock.mock.calls[0][1]).toBe('coll-1');
+    expect(setDispositionMock.mock.calls[0][2]).toBe('c1');
+    expect(setDispositionMock.mock.calls[0][3]).toEqual({ state: 'verified' });
 
     // await-then-apply: not shown on screen until the write resolves.
     expect(chips()[0].textContent).toBe('Unverified');
 
-    resolveSave!();
+    resolveWrite!();
     await flush();
 
     // The round trip: written under the collection key, and read back from
@@ -1032,7 +1131,11 @@ describe('App — reading and writing a collection review\'s findings (Task 8A)'
     act(() => { findButton(container, /^Verify$/, 0).click(); });
     await flush();
 
-    const persisted = saveReviewMock.mock.calls[0][0];
-    expect(persisted.findings['coll-1'].c2.verification).toEqual({ state: 'unchecked' });
+    // ONE write, naming ONE clause. The whole-review save that could once
+    // have carried a change to c2 with it does not happen at all.
+    expect(setDispositionMock).toHaveBeenCalledTimes(1);
+    expect(setDispositionMock.mock.calls[0][2]).toBe('c1');
+    const chips = Array.from(container.querySelectorAll('[role="status"]'));
+    expect(chips[chips.length - 1].textContent).toBe('Unverified');
   });
 });

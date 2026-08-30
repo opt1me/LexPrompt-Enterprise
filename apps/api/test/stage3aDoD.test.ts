@@ -346,12 +346,16 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     const statementsOver = (file: string): string[] =>
       codeOf(at(file)).match(/\bselect\b[^`]*?\bfrom\s+finding\b[^`]*/gi) ?? [];
 
-    // `routes/findings.ts`: one identifying column and NO content. A
-    // disposition or a note about a finding that does not exist is a
-    // judgement about nothing, and that has to be answerable before a write.
+    // `routes/findings.ts`: ONE statement, reading the two columns its
+    // writes need beyond existence — the stored net position (which the
+    // net-position route TRANSFORMS rather than replaces, through
+    // `confirmPosition`/`amendPosition`) and the row's version, its
+    // optimistic-concurrency token. A disposition or a note about a finding
+    // that does not exist is a judgement about nothing, and that has to be
+    // answerable before a write.
     const existence = statementsOver('apps/api/src/routes/findings.ts');
     expect(existence).toHaveLength(1);
-    expect(existence[0]).toMatch(/select clause_id\s*\n?\s*from finding\b/i);
+    expect(existence[0]).toMatch(/select clause_id, net_position, version\s*\n?\s*from finding\b/i);
 
     // `routes/runs.ts`: ONE column, `net_position`, read INSIDE the retry's
     // own write transaction to answer what that transaction is about to

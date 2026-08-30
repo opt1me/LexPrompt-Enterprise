@@ -1,5 +1,5 @@
 import type { Jurisdiction } from '../model/protocol.ts';
-import type { Finding, VerificationState } from '../domain/types.ts';
+import type { Finding, NetPosition, VerificationState } from '../domain/types.ts';
 /** The three roles (§7). A closed set, here, because both sides read it. */
 export const ROLES = ['reviewer', 'partner', 'admin'] as const;
 export type Role = (typeof ROLES)[number];
@@ -313,9 +313,41 @@ export interface FindingsPage {
    * programs share.
    */
   dispositionVersions: Record<string, Record<string, number>>;
+  /**
+   * `findingsKey -> clauseId -> finding.version`, for the same reason and on
+   * the same terms as `dispositionVersions` above.
+   *
+   * A NET POSITION lives on the `finding` row rather than on the
+   * disposition, so confirming or amending one is guarded by this number
+   * rather than by that one. Two tokens because they guard two rows: a
+   * verification and a confirmed synthesis are separate judgements, and a
+   * single shared version would refuse one because the other had moved.
+   */
+  findingVersions: Record<string, Record<string, number>>;
   /** The `review` row's version at the moment these findings were read. Not
    *  a version OF the findings: it is what lets a caller tell that the
    *  findings it just read belong to the review it just read. */
+  version: number;
+}
+
+/**
+ * What a person did to a net position.
+ *
+ * The ACTION, never the resulting `NetPosition`. A body carrying the object
+ * itself could state `state: 'confirmed'` with anybody's name on it;
+ * `confirmPosition`/`amendPosition` in `@lexprompt/core` are the only
+ * producers of one, and the server runs them over the STORED position with
+ * the authenticated actor and its own clock — exactly as the disposition
+ * route refuses a body-supplied actor and instant.
+ */
+export type NetPositionAction =
+  | { action: 'confirm'; version: number }
+  | { action: 'amend'; text: string; version: number };
+
+/** The answer to a net-position write: what is stored now, and the finding
+ *  row's new version. */
+export interface NetPositionWriteResult {
+  netPosition: NetPosition;
   version: number;
 }
 

@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
 import {
-  ModelError, uid,
+  ModelError, NetPositionError, amendPosition, confirmPosition, uid,
   type DispositionEventView, type DispositionHistory, type DispositionView,
-  type DispositionWriteResult, type Note, type VerificationState,
+  type DispositionWriteResult, type NetPosition, type NetPositionAction,
+  type NetPositionWriteResult, type Note, type VerificationState,
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
@@ -129,6 +130,71 @@ export function registerFindings(app: FastifyInstance, db: Db): void {
     });
 
   /**
+   * A HUMAN CONFIRMS OR AMENDS A NET POSITION.
+   *
+   * *"A net position is synthesised text no document contains"* — it
+   * describes what a collection's documents, read in order, say now, not
+   * what any one of them literally says. It is the most dangerous output
+   * this app produces, and it starts UNCONFIRMED for the same reason a
+   * finding starts `unchecked()`. Only a human confirms it, or amends it —
+   * a stronger claim than confirming, because a person wrote every word.
+   *
+   * The body carries the ACTION, never the resulting `NetPosition`. A body
+   * carrying the object could state `state: 'confirmed'` with anybody's name
+   * on it. `confirmPosition`/`amendPosition` (`@lexprompt/core`) are the
+   * only producers of one, and they run HERE, over the STORED position, with
+   * the authenticated actor and this server's clock — the same refusal the
+   * disposition route makes about `byUserId` and `at`, for the same reason.
+   *
+   * A stale `version` is refused with 409. The current row is the finding
+   * itself, and re-reading the findings map is what a caller does next, so
+   * nothing travels with the refusal.
+   */
+  app.put('/v1/reviews/:id/findings/:findingsKey/:clauseId/net-position',
+    async (req): Promise<NetPositionWriteResult> => {
+      const ws = req.actor!.workspaceId;
+      const key = keyOf(req.params);
+      const body = parseNetPosition(req.body);
+
+      return db.tx(async t => {
+        const row = await requireFinding(t, key, ws);
+        const stored = (typeof row.net_position === 'string'
+          ? JSON.parse(row.net_position) : row.net_position) as NetPosition | null;
+        if (!stored) {
+          // ABSENT is not "unconfirmed". A standalone finding has no net
+          // position at all, and confirming one that does not exist would
+          // manufacture a synthesis nobody produced.
+          throw new ModelError(
+            `Clause ${key.clauseId} has no synthesised position to confirm — only a collection `
+            + 'review produces one.', 'not_found', 404);
+        }
+        const at = Date.now();
+        let next: NetPosition;
+        try {
+          next = body.action === 'amend'
+            ? amendPosition(stored, body.text, req.actor!.id, at)
+            : confirmPosition(stored, req.actor!.id, at);
+        } catch (e) {
+          if (e instanceof NetPositionError) throw new ModelError(e.message, 'unknown', 400);
+          throw e;
+        }
+
+        const updated = await t.query<{ version: string | number }>(
+          `update finding set net_position = $5::jsonb, version = version + 1, updated_at = now()
+            where review_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $4
+              and version = $6
+            returning version`,
+          [key.reviewId, key.findingsKey, key.clauseId, ws, JSON.stringify(next), body.version]);
+        if (!updated[0]) {
+          throw new ConflictError(undefined,
+            'This clause changed since you opened it — it may have been re-run. Reload the '
+            + 'review before confirming this position; nothing was saved.');
+        }
+        return { netPosition: next, version: Number(updated[0].version) };
+      });
+    });
+
+  /**
    * WHO CHANGED THIS, WHEN, AND WHAT FROM — newest first.
    *
    * **NOTHING RENDERS THIS IN STAGE 3 (P28), and that is deliberate rather
@@ -167,9 +233,15 @@ function keyOf(params: unknown): FindingKey {
  * Scoped by workspace, so a key from another firm's review answers 404
  * rather than 403: a 403 would confirm the review id exists somewhere.
  */
-async function requireFinding(t: Tx, key: FindingKey, workspaceId: string): Promise<void> {
-  const rows = await t.query<{ clause_id: string }>(
-    `select clause_id from finding
+async function requireFinding(
+  t: Tx, key: FindingKey, workspaceId: string,
+): Promise<{ net_position: unknown; version: string | number }> {
+  // ONE statement, and it reads the two columns the writes below need
+  // beyond existence: the stored net position (which the net-position route
+  // transforms rather than replaces) and the row's version, its
+  // optimistic-concurrency token. It reads no content a card renders.
+  const rows = await t.query<{ net_position: unknown; version: string | number }>(
+    `select clause_id, net_position, version from finding
       where review_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $4`,
     [key.reviewId, key.findingsKey, key.clauseId, workspaceId]);
   if (!rows[0]) {
@@ -177,6 +249,7 @@ async function requireFinding(t: Tx, key: FindingKey, workspaceId: string): Prom
       `There is no finding for clause ${key.clauseId} under ${key.findingsKey} in this review, `
       + 'so there is nothing to record a judgement or a note about.', 'not_found', 404);
   }
+  return rows[0];
 }
 
 const STATES: VerificationState[] = ['unchecked', 'verified', 'flagged', 'rejected'];
@@ -231,6 +304,42 @@ function parseDisposition(body: unknown): DispositionBody {
     ...(reason ? { reason } : {}),
     version: b.version as number,
   };
+}
+
+/**
+ * The net-position body: an ACTION, and the version it was decided against.
+ *
+ * `state`, `byUserId`, `at` and `amended` are refused rather than ignored,
+ * for the reason the disposition parser gives about `cause`: a client
+ * sending one believes it decides that, and the honest answer is that it
+ * never can.
+ */
+function parseNetPosition(body: unknown): NetPositionAction {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    bad('the body is not a record');
+  }
+  const b = body as Record<string, unknown>;
+  for (const forbidden of ['state', 'byUserId', 'at', 'amended', 'proposed', 'trail']) {
+    if (b[forbidden] !== undefined) {
+      bad(`${forbidden} is not a field a request may set. A net position is produced by `
+        + 'confirmPosition/amendPosition over what is stored, with the actor and the instant '
+        + 'this server knows');
+    }
+  }
+  if (!Number.isInteger(b.version)) {
+    bad('version is missing or is not a whole number, and without it this write could silently '
+      + 'overwrite a synthesis nobody has seen');
+  }
+  const version = b.version as number;
+  if (b.action === 'confirm') return { action: 'confirm', version };
+  if (b.action === 'amend') {
+    if (typeof b.text !== 'string' || !b.text.trim()) {
+      bad('text is missing or empty, and an amended position needs text. A person amending a '
+        + 'position is writing every word of it');
+    }
+    return { action: 'amend', text: b.text as string, version };
+  }
+  return bad(`action is ${JSON.stringify(b.action)}, which is not confirm or amend`);
 }
 
 function parseNote(body: unknown): string {

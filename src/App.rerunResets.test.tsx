@@ -87,6 +87,46 @@ vi.mock('./lib/db/reviews', () => ({
   saveReview: (...args: unknown[]) => saveReviewMock(...args),
 }));
 
+// TASK 19: a verification and a note are each their own write, to their own
+// row. This file's subject is the RESET, not the write, so the two are
+// stubbed to answer what the server would — the reset's own assertions are
+// unchanged by that.
+const setDispositionMock = vi.fn();
+const addNoteMock = vi.fn();
+const setNetPositionMock = vi.fn();
+
+vi.mock('./lib/api/findings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/findings')>()),
+  setDisposition: (...args: unknown[]) => setDispositionMock(...args),
+  addNote: (...args: unknown[]) => addNoteMock(...args),
+  setNetPosition: (...args: unknown[]) => setNetPositionMock(...args),
+}));
+
+/** Puts the three write stubs back to answering as the server does. */
+function resetHumanWriteMocks(): void {
+  setDispositionMock.mockReset().mockImplementation(async (
+    _reviewId: string, findingsKey: string, clauseId: string,
+    change: { state: string; reason?: string },
+  ) => ({
+    disposition: {
+      reviewId: 'r1', findingsKey, clauseId, state: change.state,
+      ...(change.reason ? { reason: change.reason } : {}),
+      byUserId: 'u1', at: 1_700_000_000_000, changedCount: 1, version: 2,
+    },
+    event: {
+      id: 1, fromState: 'unchecked', toState: change.state, cause: 'human',
+      byUserId: 'u1', at: 1_700_000_000_000,
+    },
+  }));
+  addNoteMock.mockReset().mockImplementation(async (
+    _reviewId: string, findingsKey: string, clauseId: string, text: string,
+  ) => ({
+    id: `note-${text.length}`, findingId: `${findingsKey}::${clauseId}`,
+    text, byUserId: 'u1', at: 1_700_000_000_000,
+  }));
+  setNetPositionMock.mockReset();
+}
+
 // Task 18 / Part 2A M1: `getWorkspaceSettings` is a NETWORK call, and this
 // file never mocked it — so `vitest.setup.ts`'s refusing `fetch` stub
 // answered it, App swallowed the rejection, and `modelChoiceId` sat at `''`.
@@ -295,6 +335,7 @@ describe('App — re-running a clause clears its verification (Task 10, Step 4)'
     getDocumentBlobMock.mockReset().mockResolvedValue(new Blob(['This is the contract text.'], { type: 'text/plain' }));
     getReviewMock.mockReset().mockResolvedValue(makeReview());
     saveReviewMock.mockReset().mockResolvedValue(undefined);
+    resetHumanWriteMocks();
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     // Simulates the real `retryCell`'s shape (a 'running' onUpdate, then a
     // fresh, unchecked, note-free 'done' finding) closely enough to drive
@@ -776,6 +817,7 @@ describe('App — retrying a collection clause calls the collection extractor (T
     getDocumentBlobMock.mockReset().mockResolvedValue(new Blob(['This is the contract text.'], { type: 'text/plain' }));
     getReviewMock.mockReset().mockResolvedValue(makeCollectionReview());
     saveReviewMock.mockReset().mockResolvedValue(undefined);
+    resetHumanWriteMocks();
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     retryCellMock.mockReset();
 
@@ -967,6 +1009,7 @@ describe('App — a retry on a reopened review re-hydrates its documents for rev
     getDocumentBlobMock.mockReset().mockResolvedValue(SCAN_BLOB);
     getReviewMock.mockReset().mockResolvedValue(makeReview());
     saveReviewMock.mockReset().mockResolvedValue(undefined);
+    resetHumanWriteMocks();
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     // Returns the run it was handed, unchanged: these tests are about what
     // reaches `retryCell`, not about what it does afterwards.

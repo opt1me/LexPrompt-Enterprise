@@ -170,10 +170,11 @@ export async function readFindings(
   if (!reviews[0]) throw new ModelError('There is no such review.', 'not_found', 404);
 
   const rows = await db.query<AssembledRow>(SELECT_FINDINGS, [[reviewId], workspaceId]);
-  const { findings, dispositionVersions } = assemble(rows);
+  const { findings, dispositionVersions, findingVersions } = assemble(rows);
   return {
     findings: findings[reviewId] ?? {},
     dispositionVersions: dispositionVersions[reviewId] ?? {},
+    findingVersions: findingVersions[reviewId] ?? {},
     version: Number(reviews[0].version),
   };
 }
@@ -209,9 +210,11 @@ export async function readFindingsForReviews(
 function assemble(rows: AssembledRow[]): {
   findings: Record<string, Record<string, Record<string, Finding>>>;
   dispositionVersions: Record<string, Record<string, Record<string, number>>>;
+  findingVersions: Record<string, Record<string, Record<string, number>>>;
 } {
   const findings: Record<string, Record<string, Record<string, Finding>>> = {};
   const dispositionVersions: Record<string, Record<string, Record<string, number>>> = {};
+  const findingVersions: Record<string, Record<string, Record<string, number>>> = {};
   for (const row of rows) {
     const byKey = (findings[row.review_id] ??= {});
     const byClause = (byKey[row.findings_key] ??= {});
@@ -227,6 +230,9 @@ function assemble(rows: AssembledRow[]): {
     const versionsByKey = (dispositionVersions[row.review_id] ??= {});
     const versionsByClause = (versionsByKey[row.findings_key] ??= {});
     versionsByClause[row.clause_id] = Number(row.d_version ?? 1);
+    const findingByKey = (findingVersions[row.review_id] ??= {});
+    const findingByClause = (findingByKey[row.findings_key] ??= {});
+    findingByClause[row.clause_id] = Number(row.version ?? 1);
   }
-  return { findings, dispositionVersions };
+  return { findings, dispositionVersions, findingVersions };
 }

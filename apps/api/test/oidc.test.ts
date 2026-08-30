@@ -540,6 +540,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'PUT /v1/playbooks/:id',
       'PUT /v1/reviews/:id',
       'PUT /v1/reviews/:id/findings/:findingsKey/:clauseId/disposition',
+      'PUT /v1/reviews/:id/findings/:findingsKey/:clauseId/net-position',
       'PUT /v1/workspace/settings',
     ]);
   });
@@ -570,7 +571,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // 50 with Task 20's basis read and 54 with Stage 3 Task 8's four run
     // routes. A DROP in this number without a route being removed is a route
     // that stopped being registered.
-    expect(checked).toHaveLength(60);
+    expect(checked).toHaveLength(61);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

@@ -49,7 +49,7 @@ import { getProfile } from './lib/db/profile';
 import { describeLoadError, describeRunEnding } from './lib/loadError';
 // Task 17/18: the browser asks about a run instead of performing one.
 import { cancelRun, getRun, isRunOver, liveRunFor, startRun, watchRun } from './lib/api/runs';
-import { getFindings } from './lib/api/findings';
+import { addNote, getFindings, setDisposition, setNetPosition } from './lib/api/findings';
 import { debug } from './lib/debug';
 import { getVersion, listVersions } from './lib/db/playbookVersions';
 import { scanPlaybookAcrossMatters } from './lib/playbookScan';
@@ -2478,150 +2478,122 @@ function AppShell({ signIn }: { signIn: () => void }) {
   };
 
   /**
-   * Await the write, then apply (ruling R-B2, spec section 9). The UI must
-   * never show a verification the store did not take: a reviewer who marks
-   * twenty findings verified, whose writes all fail, and whose export then
-   * claims verification no store holds, is the worst outcome this feature
-   * has. A single IndexedDB record write is milliseconds; correctness is
-   * worth them.
+   * A PERSON'S JUDGEMENT ABOUT ONE ANSWER, written to its own row (Task 19).
    *
-   * `latestRunRef` is updated alongside `run` state because a live run's
-   * debounced saver reads from it — without this, the next mid-run
-   * auto-save would write a snapshot taken before this verification and
-   * silently undo it.
+   * Await the write, then apply (ruling R-B2, spec §9). The UI must never
+   * show a verification the store did not take: a reviewer who marks twenty
+   * findings verified, whose writes all fail, and whose export then claims
+   * verification no store holds, is the worst outcome this feature has.
    *
-   * Important 1 fix: this function reads `latestRunRef.current` once, then
-   * crosses two `await`s (`getProfile()`, `saveReview()`) before ever
-   * writing it back. A live run's `onUpdate` can land in that window — it
-   * writes `latestRunRef.current` unconditionally (see `handleUpdate`
-   * above) — and the old code then overwrote the ref with a run built from
-   * the PRE-await snapshot, discarding whatever the run completed while this
-   * write was in flight, on screen and in the next persisted save. The fix
-   * re-reads `latestRunRef.current` after both awaits and re-applies just
-   * this finding's verification onto it, rather than replacing the whole
-   * ref with the stale `updated`. The merge direction is asymmetric on
-   * purpose: this call's own write must win for `docId`/`clauseId` — it is
-   * the reason this function is running — while every other finding must
-   * come from whichever run snapshot is freshest, since that's the one a
-   * live run (or another concurrent human write) has had the last say over.
+   * ## What went, and why the long comment that used to be here went with it
+   *
+   * This function used to read `latestRunRef.current`, cross two awaits
+   * (`getProfile()`, then a whole-review `saveReview`), and write the ref
+   * back — so a live run's `onUpdate` landing in that window was discarded
+   * unless the ref was re-read and this one finding re-applied onto it. All
+   * of that was a consequence of the write being a READ-MODIFY-WRITE OVER A
+   * WHOLE REVIEW. It is now one PUT against one row:
+   *
+   *  - `getProfile()` is gone. The server knows who is asking, and refuses a
+   *    body that says otherwise. That retires one of the two awaits those
+   *    comments were about — and one of the five unhandled-rejection sites
+   *    Stage 2's Task 16 found among exactly these call sites.
+   *  - The merge is gone. There is nothing to merge: this write touches one
+   *    row, and the engine holds no grant on it.
+   *
+   * What is NOT gone is `latestRunRef`. It is still the freshest run this
+   * browser holds and still what the next findings refresh merges onto, so
+   * the applied result goes there as well as into `run`.
+   *
+   * A 409 is a REFUSAL and must not be softened into a retry (P25): the row
+   * moved on — another tab, another person — so applying this write would
+   * overwrite a judgement nobody has seen. Stage 4 puts *"Priya changed this
+   * to Rejected at 14:22, after you loaded it"* on that sentence; Stage 3
+   * says the plain thing, because half an attribution surface is worse than
+   * none (P28).
    */
   const handleVerify = async (docId: string, clauseId: string, change: VerificationChange) => {
     const current = latestRunRef.current ?? run;
-    const matterId = activeMatterId;
-    if (!current || !matterId) return;
-
-    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
+    if (!current) return;
+    const key = findingsKeyFor(current.target, docId);
+    const existing = current.findings[key]?.[clauseId];
     if (!existing) return;
-
-    // Task 16: `getProfile()` can now REJECT (it no longer mints a fallback
-    // person on a network failure), and this call sat outside any `try`
-    // before this fix — an unhandled rejection with no message shown, on the
-    // exact keyboard-driven path most likely to be used mid-review. A write
-    // that cannot say who made it must not happen, but it must say so.
-    let profile: UserProfile;
-    try {
-      profile = await getProfile();
-    } catch (e) {
-      notify(
-        e instanceof Error ? `This verification was not saved: ${e.message}` : 'This verification was not saved.',
-        'error',
-      );
-      return;
-    }
-
-    let verification: Verification;
-    try {
-      verification = applyVerification(existing.verification, change, profile.id, Date.now());
-    } catch (e) {
-      notify(e instanceof Error ? e.message : 'That verification is not valid.', 'error');
-      return;
-    }
-
-    const updated = withUpdatedFinding(current, docId, clauseId, { ...existing, verification });
 
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
-      // Minor 2: `createdByUserId` records who created the REVIEW, not who
-      // most recently verified something in it — pass the tracked original
-      // through rather than `profile.id` (the current actor, who is instead
-      // recorded on the `Verification`/`Note` itself, correctly, above).
-      // `|| profile.id` only covers the defensive case where the ref was
-      // never set (should not happen: reaching here requires either
-      // `openReview` or `handleStartRun` to have run first).
-      const userId = createdByUserIdRef.current || profile.id;
-      await saveReview(reviewFromRun(updated, matterId, settings.modelChoiceId, userId));
-      // Important 1 fix (see doc comment above): re-read the ref rather than
-      // trusting `current`/`updated`, which were captured before the two
-      // awaits above and may already be stale.
-      const latest = latestRunRef.current ?? updated;
-      const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
-      const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, verification });
-      latestRunRef.current = merged;
-      setRun(merged);
-      // TASK 18: the reschedule that used to be here is GONE with the
-      // debounced saver it defended against. A live run no longer holds a
-      // stale, pre-verification payload of the whole review, because a live
-      // run no longer saves the whole review at all — the server writes
-      // every finding. There is nothing left for a lingering timer to
-      // reassert.
+      const { disposition } = await setDisposition(current.id, key, clauseId, change);
+      applyToFinding(docId, clauseId, finding => ({
+        ...finding,
+        // The row the store CONFIRMED, rebuilt through the same reading
+        // `findings/read.ts` performs — `unchecked` names nobody, and a
+        // judgement that has one carries it.
+        verification: disposition.state === 'unchecked'
+          ? unchecked()
+          : {
+            state: disposition.state,
+            ...(disposition.reason ? { reason: disposition.reason } : {}),
+            ...(disposition.byUserId ? { byUserId: disposition.byUserId } : {}),
+            ...(disposition.at !== undefined ? { at: disposition.at } : {}),
+          },
+      }));
     } catch (e) {
-      notify(
-        e instanceof Error
-          ? `This verification was not saved: ${e.message}`
-          : 'This verification was not saved.',
-        'error',
-      );
+      notify(verificationRefusal(e), 'error');
     } finally {
       setVerifyBusyKey(null);
     }
   };
 
-  // Important 1 / Item 2 fix: same shape and same reasoning as `handleVerify`
-  // above — re-read `latestRunRef.current` after the awaits and merge this
-  // note onto whichever run snapshot is freshest, then reassert that merged
-  // run through the live run's debounced saver, rather than overwriting
-  // `latestRunRef` with the pre-await snapshot and leaving a stale
-  // `scheduleSave` free to reassert it in storage afterward.
+  /** The sentence a refused verification shows. A conflict is a fact the
+   *  reader has to act on rather than an error they caused, and it says what
+   *  to do; everything else carries its own cause. */
+  const verificationRefusal = (e: unknown): string => {
+    if (e instanceof ModelError && e.code === 'conflict') {
+      return 'This finding changed while you were looking at it. Reload the review and try again.';
+    }
+    return e instanceof Error
+      ? `This verification was not saved: ${e.message}`
+      : 'This verification was not saved.';
+  };
+
+  /**
+   * Replaces ONE finding in the freshest run this browser holds, and puts it
+   * on screen.
+   *
+   * The four human-write handlers all did this by hand, each with its own
+   * re-read of `latestRunRef` and its own `withUpdatedFinding` call — which
+   * is the third copy of a pattern this project has six sibling-drift
+   * findings about. `update` is given the CURRENT finding under that key, so
+   * a caller cannot accidentally apply its change to the pre-await snapshot
+   * it was holding.
+   */
+  const applyToFinding = (
+    docId: string, clauseId: string, update: (finding: Finding) => Finding,
+  ): void => {
+    const latest = latestRunRef.current ?? run;
+    if (!latest) return;
+    const key = findingsKeyFor(latest.target, docId);
+    const existing = latest.findings[key]?.[clauseId];
+    if (!existing) return;
+    const merged = withUpdatedFinding(latest, docId, clauseId, update(existing));
+    latestRunRef.current = merged;
+    setRun(merged);
+  };
+
+  /** A note: a person's remark about the clause, and its own row. The actor
+   *  and the instant are the server's — the note that comes back is what was
+   *  stored, and it is what goes on screen. */
   const handleAddNote = async (docId: string, clauseId: string, text: string) => {
     const current = latestRunRef.current ?? run;
-    const matterId = activeMatterId;
-    if (!current || !matterId) return;
-
-    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
-    if (!existing) return;
-
-    // Task 16: same fix as `handleVerify` above — `getProfile()` can now
-    // reject, and this call was outside any `try` (an unhandled rejection,
-    // nothing shown).
-    let profile: UserProfile;
-    try {
-      profile = await getProfile();
-    } catch (e) {
-      notify(e instanceof Error ? `This note was not saved: ${e.message}` : 'This note was not saved.', 'error');
-      return;
-    }
-    const note = makeNote(docId, clauseId, text, profile.id, Date.now(), uid());
-    const updated = withUpdatedFinding(current, docId, clauseId, {
-      ...existing,
-      notes: [...existing.notes, note],
-    });
+    if (!current) return;
+    const key = findingsKeyFor(current.target, docId);
+    if (!current.findings[key]?.[clauseId]) return;
 
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
-      // Minor 2: same reasoning as `handleVerify` above — preserve the
-      // review's original creator rather than reattributing to whoever
-      // just added a note.
-      const userId = createdByUserIdRef.current || profile.id;
-      await saveReview(reviewFromRun(updated, matterId, settings.modelChoiceId, userId));
-      const latest = latestRunRef.current ?? updated;
-      const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
-      const merged = withUpdatedFinding(latest, docId, clauseId, {
-        ...latestExisting,
-        notes: [...latestExisting.notes, note],
-      });
-      latestRunRef.current = merged;
-      setRun(merged);
-      // TASK 18: no debounced saver to reschedule; see `handleVerify`.
+      const note = await addNote(current.id, key, clauseId, text);
+      applyToFinding(docId, clauseId, finding => ({
+        ...finding, notes: [...finding.notes, note],
+      }));
     } catch (e) {
       notify(e instanceof Error ? `This note was not saved: ${e.message}` : 'This note was not saved.', 'error');
     } finally {
@@ -2631,116 +2603,49 @@ function AppShell({ signIn }: { signIn: () => void }) {
 
   /**
    * Accepts a collection clause's synthesised net position as written.
-   * Follows `handleVerify`'s path exactly — build the updated run with
-   * `withUpdatedFinding`, `await saveReview(...)`, and only then `setRun`
-   * and update `latestRunRef`, re-reading `latestRunRef.current` after the
-   * awaits so a live run's own `onUpdate` landing during them is not
-   * discarded (Important 1, same reasoning as `handleVerify`). This call's
-   * own write is the only thing forced to win for `docId`/`clauseId`;
-   * everything else comes from whichever run snapshot is freshest.
    *
-   * There is nothing here that separately calls `carryHumanState` — a
-   * confirmation is protected from the LIVE run's next `onUpdate` by
-   * `handleUpdate` (in `handleStartRun`), which already routes every
-   * engine snapshot through `carryHumanState`, now that it (and
-   * `findingMerge.ts`) know how to carry a net position the same way they
-   * carry a verification. Reuse those helpers; this is not a third copy of
-   * that pattern.
+   * `confirmPosition`/`amendPosition` (`@lexprompt/core`) are still the only
+   * producers of a `NetPosition` — they now run on the SERVER, over the
+   * stored position, with the authenticated actor and the server's clock.
+   * The browser sends the ACTION. A body carrying the object itself could
+   * state a confirmation with anybody's name on it, and *"a net position is
+   * synthesised text no document contains"* is the one output where that
+   * matters most.
    */
   const handleConfirmNetPosition = async (docId: string, clauseId: string) => {
-    const current = latestRunRef.current ?? run;
-    const matterId = activeMatterId;
-    if (!current || !matterId) return;
-
-    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
-    if (!existing?.netPosition) return;
-
-    // Task 16: same fix as `handleVerify` above.
-    let profile: UserProfile;
-    try {
-      profile = await getProfile();
-    } catch (e) {
-      notify(
-        e instanceof Error ? `This confirmation was not saved: ${e.message}` : 'This confirmation was not saved.',
-        'error',
-      );
-      return;
-    }
-    const netPosition = confirmPosition(existing.netPosition, profile.id, Date.now());
-    const updated = withUpdatedFinding(current, docId, clauseId, { ...existing, netPosition });
-
-    setVerifyBusyKey(findingKey(docId, clauseId));
-    try {
-      const userId = createdByUserIdRef.current || profile.id;
-      await saveReview(reviewFromRun(updated, matterId, settings.modelChoiceId, userId));
-      // Re-read the ref rather than trusting `current`/`updated`, which were
-      // captured before the two awaits above and may already be stale.
-      const latest = latestRunRef.current ?? updated;
-      const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
-      const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
-      latestRunRef.current = merged;
-      setRun(merged);
-      // TASK 18: no debounced saver to reschedule; see `handleVerify`.
-    } catch (e) {
-      notify(
-        e instanceof Error ? `This confirmation was not saved: ${e.message}` : 'This confirmation was not saved.',
-        'error',
-      );
-    } finally {
-      setVerifyBusyKey(null);
-    }
+    await writeNetPosition(docId, clauseId, { action: 'confirm' }, 'This confirmation');
   };
 
-  /** Records the human's rewritten net position. Same shape as
-   *  `handleConfirmNetPosition` above; the only difference is building the
-   *  new `NetPosition` through `amendPosition`, which throws on empty text
-   *  the same way `applyVerification` throws on a reasonless rejection —
-   *  the amend dialog already disables its own confirm button on
-   *  whitespace, so this catch is a backstop, not the user's experience of
-   *  the rule. */
+  /** Records the human's rewritten net position — a STRONGER claim than
+   *  confirming, because a person wrote every word. An empty amendment is
+   *  refused by `amendPosition` on the server, exactly as it was refused in
+   *  the browser; the amend dialog already disables its own confirm button
+   *  on whitespace, so that refusal is a backstop rather than the user's
+   *  experience of the rule. */
   const handleAmendNetPosition = async (docId: string, clauseId: string, text: string) => {
+    await writeNetPosition(docId, clauseId, { action: 'amend', text }, 'This amendment');
+  };
+
+  const writeNetPosition = async (
+    docId: string,
+    clauseId: string,
+    action: { action: 'confirm' } | { action: 'amend'; text: string },
+    subject: string,
+  ): Promise<void> => {
     const current = latestRunRef.current ?? run;
-    const matterId = activeMatterId;
-    if (!current || !matterId) return;
-
-    const existing = current.findings[findingsKeyFor(current.target, docId)]?.[clauseId];
-    if (!existing?.netPosition) return;
-
-    // Task 16: same fix as `handleVerify` above.
-    let profile: UserProfile;
-    try {
-      profile = await getProfile();
-    } catch (e) {
-      notify(
-        e instanceof Error ? `This amendment was not saved: ${e.message}` : 'This amendment was not saved.',
-        'error',
-      );
-      return;
-    }
-
-    let netPosition: NetPosition;
-    try {
-      netPosition = amendPosition(existing.netPosition, text, profile.id, Date.now());
-    } catch (e) {
-      notify(e instanceof NetPositionError ? e.message : 'That amendment is not valid.', 'error');
-      return;
-    }
-
-    const updated = withUpdatedFinding(current, docId, clauseId, { ...existing, netPosition });
+    if (!current) return;
+    const key = findingsKeyFor(current.target, docId);
+    // Guarded on the POSITION and not just the finding: a standalone
+    // document's finding has none at all, and absence is not "unconfirmed".
+    if (!current.findings[key]?.[clauseId]?.netPosition) return;
 
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
-      const userId = createdByUserIdRef.current || profile.id;
-      await saveReview(reviewFromRun(updated, matterId, settings.modelChoiceId, userId));
-      const latest = latestRunRef.current ?? updated;
-      const latestExisting = latest.findings[findingsKeyFor(latest.target, docId)]?.[clauseId] ?? existing;
-      const merged = withUpdatedFinding(latest, docId, clauseId, { ...latestExisting, netPosition });
-      latestRunRef.current = merged;
-      setRun(merged);
-      // TASK 18: no debounced saver to reschedule; see `handleVerify`.
+      const { netPosition } = await setNetPosition(current.id, key, clauseId, action);
+      applyToFinding(docId, clauseId, finding => ({ ...finding, netPosition }));
     } catch (e) {
       notify(
-        e instanceof Error ? `This amendment was not saved: ${e.message}` : 'This amendment was not saved.',
+        e instanceof Error ? `${subject} was not saved: ${e.message}` : `${subject} was not saved.`,
         'error',
       );
     } finally {

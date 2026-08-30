@@ -379,3 +379,126 @@ describe('THE GRANT IS THE GUARANTEE: the engine s role cannot write either tabl
     });
   });
 });
+
+const NET_POSITION = '/v1/reviews/r1/findings/d1/c1/net-position';
+
+describe('a net position is confirmed by a human, and by nothing else', () => {
+  async function aPosition(t: Tx, state = 'unconfirmed'): Promise<void> {
+    await t.query(
+      `update finding set net_position = $1::jsonb
+        where review_id = 'r1' and findings_key = 'd1' and clause_id = 'c1'`,
+      [JSON.stringify({
+        proposed: 'Read in order, the tenant has a rolling break on six months notice.',
+        state,
+        trail: [{ documentId: 'd1', kind: 'original', effect: 'Grants the break.', citations: [] }],
+      })]);
+  }
+
+  it('runs confirmPosition on the SERVER, with the server s actor and instant', async () => {
+    await withPg(async t => {
+      await aUser(t, HUMAN, 's-human');
+      await aFinding(t);
+      await aPosition(t);
+      const h = harness(t);
+
+      const before = Date.now();
+      const result = await h.ok('PUT', NET_POSITION, { action: 'confirm', version: 1 });
+      expect(result.netPosition).toMatchObject({ state: 'confirmed', byUserId: HUMAN });
+      expect(result.netPosition.at).toBeGreaterThanOrEqual(before);
+      // The TRAIL survives untouched: confirming does not change what the
+      // documents were read to say, only that a person has now looked.
+      expect(result.netPosition.trail).toHaveLength(1);
+      expect(result.version).toBe(2);
+      await h.app.close();
+    });
+  });
+
+  it('amends it with the person s own words, which is a STRONGER claim', async () => {
+    await withPg(async t => {
+      await aUser(t, HUMAN, 's-human');
+      await aFinding(t);
+      await aPosition(t);
+      const h = harness(t);
+      const result = await h.ok('PUT', NET_POSITION,
+        { action: 'amend', text: 'The break is on three months notice.', version: 1 });
+      expect(result.netPosition).toMatchObject({
+        state: 'confirmed', amended: 'The break is on three months notice.', byUserId: HUMAN,
+      });
+      // `proposed` is KEPT, so the trail can show what changed between the
+      // model's synthesis and the human's correction.
+      expect(result.netPosition.proposed).toMatch(/rolling break/);
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES a body that states the position itself', async () => {
+    /*
+     * The whole reason the body carries an ACTION. A body carrying a
+     * `NetPosition` could say `state: 'confirmed'` with anybody's name on
+     * it — and a net position is synthesised text no document contains,
+     * which makes it the output where a false confirmation costs most.
+     */
+    await withPg(async t => {
+      await aUser(t, HUMAN, 's-human');
+      await aFinding(t);
+      await aPosition(t);
+      const h = harness(t);
+      for (const body of [
+        { action: 'confirm', version: 1, state: 'confirmed' },
+        { action: 'confirm', version: 1, byUserId: OTHER },
+        { action: 'confirm', version: 1, at: 1 },
+        { action: 'amend', text: 'x', version: 1, amended: 'y' },
+      ]) {
+        const res = await h.send('PUT', NET_POSITION, body);
+        expect(res.statusCode, JSON.stringify(body)).toBe(400);
+      }
+      expect((await t.query<{ net_position: { state: string } }>(
+        "select net_position from finding where clause_id = 'c1'"))[0].net_position.state)
+        .toBe('unconfirmed');
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES an empty amendment — a person amending writes every word', async () => {
+    await withPg(async t => {
+      await aUser(t, HUMAN, 's-human');
+      await aFinding(t);
+      await aPosition(t);
+      const h = harness(t);
+      expect((await h.send('PUT', NET_POSITION,
+        { action: 'amend', text: '   ', version: 1 })).statusCode).toBe(400);
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES a clause with no synthesised position — absent is not unconfirmed', async () => {
+    // A standalone finding has none at all, and confirming one that does
+    // not exist would manufacture a synthesis nobody produced.
+    await withPg(async t => {
+      await aUser(t, HUMAN, 's-human');
+      await aFinding(t);
+      const h = harness(t);
+      const res = await h.send('PUT', NET_POSITION, { action: 'confirm', version: 1 });
+      expect(res.statusCode).toBe(404);
+      expect(res.json().error.message).toMatch(/no synthesised position/);
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES a stale version, so a re-run cannot be confirmed out from under', async () => {
+    await withPg(async t => {
+      await aUser(t, HUMAN, 's-human');
+      await aFinding(t);
+      await aPosition(t);
+      const h = harness(t);
+      await h.ok('PUT', NET_POSITION, { action: 'confirm', version: 1 });
+      const res = await h.send('PUT', NET_POSITION,
+        { action: 'amend', text: 'Something else.', version: 1 });
+      expect(res.statusCode).toBe(409);
+      expect((await t.query<{ net_position: { amended?: string } }>(
+        "select net_position from finding where clause_id = 'c1'"))[0].net_position.amended)
+        .toBeUndefined();
+      await h.app.close();
+    });
+  });
+});

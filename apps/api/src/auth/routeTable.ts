@@ -172,6 +172,10 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // should inherit a tested, authorised endpoint rather than write one.
   'PUT /v1/reviews/:id/findings/:findingsKey/:clauseId/disposition': 'reviewer',
   'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/notes': 'reviewer',
+  // §7 names confirming a net position among what a reviewer does, and it
+  // is the same act as recording a disposition — a person's judgement about
+  // one answer — so it sits at the same bar.
+  'PUT /v1/reviews/:id/findings/:findingsKey/:clauseId/net-position': 'reviewer',
   'GET /v1/reviews/:id/findings/:findingsKey/:clauseId/history': 'reviewer',
 
   // §7: a reviewer RUNS reviews. All four at `reviewer`, including cancel —
