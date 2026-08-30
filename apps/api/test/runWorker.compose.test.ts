@@ -132,13 +132,34 @@ function seed(): void {
   const user = sql(`select id from app_user where workspace_id = '${WS}'
                     order by id limit 1`);
   expect(user, 'no app_user exists — sign in once through the browser first').not.toBe('');
-  sql(`insert into run (id, review_id, workspace_id, state, requested_by_user_id, concurrency)
-       values ('${RUN}', '${REVIEW}', '${WS}', 'queued', '${user}', 4)`);
+  /*
+   * THE RUN, ITS CELLS AND ITS FINDINGS IN ONE TRANSACTION - AND THAT IS THE
+   * WHOLE POINT OF THIS BLOCK BEING ONE `sql()` CALL.
+   *
+   * These were three separate `psql -c` invocations, which is three
+   * transactions with roughly half a second between them, against a database
+   * whose worker pool is polling every second and claims the lowest cell it
+   * can see. So the pool claimed `c1`, `c10`, `c100` and `c101` in the
+   * window between the cells being committed and the findings being
+   * committed, and ran them against clauses that had nowhere to record an
+   * answer. The suite failed as `expect(findingsIn('pending')).toBe(0)` -
+   * four findings still `pending` under four cells that had reached `error`
+   * - and it failed INTERMITTENTLY, because it is a race with `docker
+   * compose exec`'s own start-up time.
+   *
+   * `psql -c` runs everything it is given as a single implicit transaction,
+   * so one call is one commit. That is what `POST /v1/reviews/:id/runs` does
+   * (`createRun` takes a `Tx` and writes all three there), and a fixture that
+   * cannot reproduce the state the route leaves behind is testing a state
+   * the product does not have.
+   */
   const keys = CLAUSES.map(c => `('${RUN}', '${DOC}', '${c}', '${WS}', 'queued')`).join(',');
-  sql(`insert into run_cell (run_id, findings_key, clause_id, workspace_id, state) values ${keys}`);
   const findings = CLAUSES.map(c => `('${REVIEW}', '${DOC}', '${c}', '${WS}', 'pending')`).join(',');
-  sql(`insert into finding (review_id, findings_key, clause_id, workspace_id, status)
-       values ${findings}`);
+  sql(`insert into run (id, review_id, workspace_id, state, requested_by_user_id, concurrency)
+       values ('${RUN}', '${REVIEW}', '${WS}', 'queued', '${user}', 4);
+       insert into run_cell (run_id, findings_key, clause_id, workspace_id, state) values ${keys};
+       insert into finding (review_id, findings_key, clause_id, workspace_id, status)
+       values ${findings};`);
 }
 
 const runState = () => sql(`select state from run where id = '${RUN}'`);
@@ -204,8 +225,16 @@ runWorker.compose: cells ${sql(
            select status, count(*)::text as n from finding where review_id = '${REVIEW}'
            group by status order by 1) s`)}
 `);
+      // WITH `attempts` AND `last_error`. Without them the first failure of
+      // this assertion said `c1:error/pending c10:error/pending ...` and
+      // nothing about WHY, and the rows are deleted by `cleanup()` before
+      // anybody can look. The message the cell carries is what named the
+      // cause the one time this bit.
       process.stdout.write(`runWorker.compose: disagreeing ${sql(
-        `select coalesce(string_agg(c.clause_id || ':' || c.state || '/' || f.status, ' '), 'none')
+        `select coalesce(string_agg(c.clause_id || ':' || c.state || '/' || f.status
+                                    || ' attempts=' || c.attempts
+                                    || ' last_error=' || coalesce(c.last_error, '-'),
+                                    E'\\n  '), 'none')
            from run_cell c
            join finding f on f.review_id = '${REVIEW}'
             and f.findings_key = c.findings_key and f.clause_id = c.clause_id

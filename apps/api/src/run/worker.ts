@@ -170,6 +170,47 @@ export async function leaseCell(
         returning version`,
       [run.review_id, cell.findings_key, cell.clause_id, cell.workspace_id]);
 
+    if (!updated[0]) {
+      /*
+       * NO FINDING ROW, SO NOWHERE TO PUT AN ANSWER - AND THIS USED TO BE
+       * SILENT.
+       *
+       * The line above read `Number(updated[0]?.version ?? 0)`, so a cell
+       * whose finding row did not exist was leased anyway, ran a model call,
+       * and then failed at `writeCellResult` - which set `run_cell.state =
+       * 'error'` and left `finding.status = 'pending'`, because there was no
+       * row to move. The result is one of the two states this stage's whole
+       * queue exists to make impossible: a terminal cell whose card spins
+       * forever, on a run the banner calls finished.
+       *
+       * Found by `runWorker.compose.test.ts` failing with
+       * `c1:error/pending c10:error/pending c100:error/pending
+       * c101:error/pending` after an API restart - not by any unit test, and
+       * not by the invariant assertion, which only reads cells that ARE
+       * `done`. The trigger there was that suite's own seed inserting the
+       * run, its cells and its findings in three SEPARATE transactions, so
+       * the pool claimed the first cells in the gap; `createRun` writes all
+       * three in one transaction and cannot produce it. That makes the
+       * missing row a symptom of something already wrong upstream, which is
+       * exactly the case for refusing rather than proceeding.
+       *
+       * The cell is closed rather than left claimable: a lease that rolls
+       * back is a cell the next poll claims again, forever, with no attempt
+       * consumed. `settleRunIfFinished` runs here for the same reason it
+       * runs in `exhaustSpentCells` - a run whose last live cell is the one
+       * just closed has nobody else to notice.
+       */
+      await t.query(
+        `update run_cell set state = 'error', last_error = $4, leased_by = null,
+                             lease_expires_at = null
+          where run_id = $1 and findings_key = $2 and clause_id = $3`,
+        [cell.run_id, cell.findings_key, cell.clause_id,
+          'There is no finding for this clause, so an answer could not be recorded anywhere. '
+          + 'This clause was not attempted.']);
+      await settleRunIfFinished(t, run.id, run.workspace_id);
+      return null;
+    }
+
     await appendEvent(t, {
       workspaceId: cell.workspace_id,
       type: 'finding.running',
@@ -180,7 +221,7 @@ export async function leaseCell(
         reviewId: run.review_id,
         findingsKey: cell.findings_key,
         clauseId: cell.clause_id,
-        version: Number(updated[0]?.version ?? 0),
+        version: Number(updated[0].version),
       },
     });
     return { cell, run };

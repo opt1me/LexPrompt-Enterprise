@@ -116,6 +116,49 @@ describe('the lease', () => {
       expect(await leaseCell(deps.db, deps, 'w#1')).toBeNull();
     });
   });
+
+  it('CLOSES a cell whose finding row is missing instead of running it and losing the answer', async () => {
+    /*
+     * FOUND BY `runWorker.compose.test.ts`, NOT BY A UNIT TEST.
+     *
+     * The lease used to read the finding's new version as
+     * `Number(updated[0]?.version ?? 0)`, so a cell with no finding row was
+     * leased anyway. It then ran a real model call and failed at
+     * `writeCellResult`, which set `run_cell.state = 'error'` and left
+     * `finding.status` wherever it was - and if the row appeared afterwards,
+     * `pending`. A terminal cell over a card that spins forever, on a run
+     * whose banner says it finished: the defect this whole queue is named
+     * after, and the invariant assertion could not see it because that only
+     * reads cells which are `done`.
+     *
+     * `createRun` writes the run, its cells and its findings in ONE
+     * transaction, so a missing row means something upstream is already
+     * wrong - which is the case for refusing rather than proceeding.
+     */
+    await withPg(async t => {
+      await seedOneCell(t, 'nofinding');
+      await t.query(
+        "delete from finding where review_id = 'w-r-nofinding'");
+
+      const { gateway, log } = fakeGateway();
+      const deps = workerDeps(t, gateway);
+      expect(await leaseCell(deps.db, deps, 'w#1')).toBeNull();
+
+      // Not left claimable: a lease that simply rolled back would be
+      // re-claimed by the next poll forever, with no attempt consumed.
+      const c = await cell(t, 'w-run-nofinding', 'c1');
+      expect(c.state).toBe('error');
+      expect(c.leased_by).toBeNull();
+      expect(c.last_error).toMatch(/no finding for this clause/i);
+      // Nothing was asked of the model, so nothing was billed for an answer
+      // with nowhere to go.
+      expect(log.infer).toHaveLength(0);
+      // …and the run settles rather than sitting `running` with a live
+      // heartbeat and no claimable cell.
+      expect((await run(t, 'w-run-nofinding')).state).toBe('succeeded');
+      await assertStatesAgree(t);
+    });
+  });
 });
 
 describe('the two concurrency tiers (P26)', () => {
