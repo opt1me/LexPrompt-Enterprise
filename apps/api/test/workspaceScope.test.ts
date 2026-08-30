@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { ROOT, walk, rel, codeOf, statementsIn } from './sourceScan.ts';
 
@@ -41,6 +42,13 @@ const SCOPED_TABLES = [
   // page and tells a reader how another firm's review is going. `event` is
   // the same one layer down — its payloads name findings by key.
   'run', 'run_cell', 'event',
+  // 005 and 006's four (Stage 3 Task 25). These are the tables a finding, a
+  // lawyer's judgement, its history and a person's remark actually live in
+  // since the flip, and they were outside this guard for the whole of Part
+  // 3A because the guard only read `routes/`. A query over
+  // `finding_disposition` with no workspace predicate fails by showing
+  // another firm's judgements, and nothing on screen would look wrong.
+  'finding_disposition_event', 'finding_disposition', 'finding', 'note',
 ];
 
 /** `from x` / `into x` / `update x` / `join x`, where x is a scoped table.
@@ -69,16 +77,170 @@ const namesScopedTable = (statement: string): string | undefined =>
  * described.
  */
 
+/**
+ * EVERY SOURCE FILE IN THE API, not only `routes/`.
+ *
+ * This read `apps/api/src/routes` alone, and for Stages 1 and 2 that was
+ * where every statement was. Stage 3 moved most of them: the queue
+ * (`run/queue.ts`), the worker (`run/worker.ts`), the reaper, the parse
+ * worker, the findings reader, the disposition service and the import all
+ * issue SQL against tenant-scoped tables, and none of them was scanned.
+ *
+ * That is the failure mode this file's own sanity checks exist for, arriving
+ * from the other direction: not a pattern that matched nothing, but a
+ * pattern pointed at the wrong half of the codebase. The counts below are
+ * asserted so a later move cannot quietly take the statements out of view
+ * again.
+ */
+const SCANNED = path.join(ROOT, 'apps/api/src');
 const ROUTES_DIR = path.join(ROOT, 'apps/api/src/routes');
 
+/**
+ * WHICH MODULES THIS GUARD IS ABOUT, and it is not all of them.
+ *
+ * The rule exists because a REQUEST carries an id out of a URL: `GET
+ * /v1/runs/<someone else's run>` finds the row, renders the page and tells a
+ * reader how another firm's review is going. Everything on that path must
+ * name `workspace_id`.
+ *
+ * Two kinds of module are NOT on it, and saying so precisely is the
+ * difference between a ruling and an excuse:
+ *
+ *  - **The engine.** `run/worker.ts`, `run/reaper.ts`, `run/events.ts` and
+ *    `parse/parseWorker.ts` act on the whole database on nobody's behalf.
+ *    There is no requesting workspace to scope to: the worker leases the
+ *    next claimable cell, whoever owns it, and the reaper sweeps every run
+ *    whose heartbeat has stopped. A `workspace_id = $1` there would need a
+ *    workspace to put in `$1`, and the honest answer is that there isn't
+ *    one. What DOES have to hold is that the engine writes a finding by its
+ *    full key including the workspace, and that is asserted directly below
+ *    rather than left to this scanner.
+ *  - **The migration and the reconciliation.** `findings/backfill.ts` shreds
+ *    every review in the database (007) and `findings/reconcile.ts` compares
+ *    the frozen blob against the rows for a review named by an operator.
+ *    Both are corpus-wide by design; scoping them would make them answer
+ *    about one tenant and call it the corpus.
+ *
+ * Asserted as an exact list, so a NEW module cannot join it by accident: a
+ * file under `apps/api/src` that is neither here nor scanned fails the
+ * "every file is accounted for" test below.
+ */
+const UNSCOPED_BY_DESIGN = [
+  'apps/api/src/run/worker.ts',
+  'apps/api/src/run/reaper.ts',
+  'apps/api/src/run/events.ts',
+  'apps/api/src/parse/parseWorker.ts',
+  'apps/api/src/findings/backfill.ts',
+  'apps/api/src/findings/reconcile.ts',
+];
+
+/**
+ * The statements that identify a row by a key which is ITSELF proven to be
+ * in this workspace, one query earlier.
+ *
+ * Both are `dispositions/service.ts`'s, and the proof is `requireFinding`:
+ * every route that reaches this service calls it first, and it selects the
+ * finding with `workspace_id = $4` and throws when there is none. The key
+ * `(review_id, findings_key, clause_id)` is a finding's primary key, so a
+ * key that survived that check names a row in this workspace. The write is
+ * then an optimistic-concurrency update by key AND `version`, whose whole
+ * point is that it applies to the row that was read or to nothing.
+ *
+ * That gate is asserted below rather than trusted — it is what makes these
+ * two exemptions true, and if a route ever reached the service without it,
+ * this list would be a hole rather than a ruling.
+ *
+ * LISTED AS EXACT STATEMENT TEXT, not as a file exemption. A file-level
+ * exemption hides everything in that file, not the part it was meant to
+ * protect — `PdfCanvas.tsx` shipped three unrestyled states behind one, and
+ * `SCAN_EXEMPT` is empty in the palette guard for that reason. A THIRD
+ * unscoped statement in `dispositions/service.ts` fails this guard, which is
+ * the property a file exemption would have destroyed.
+ */
+const SCOPED_BY_KEY = [
+  'select review_id, findings_key, clause_id, workspace_id, state, reason',
+  'set state = $4, reason = $5, by_user_id = $6, at = $7',
+];
+
+/**
+ * The statements this scanner CANNOT read, and it is not allowed to pretend
+ * otherwise.
+ *
+ * `statementsIn` is a regex over source text, and its own docstring says
+ * what it cannot do: *"a nested template expression containing a backtick
+ * would still confuse it"*. Two statements are built that way — the
+ * finding upsert in `findings/import.ts` and the finding update in
+ * `run/worker.ts`, both of which interpolate `FINDING_COLUMNS` through a
+ * `.map()` whose callback contains its own template literal. The scanner
+ * sees them TRUNCATED, before their `where` clause, so it reports them
+ * unscoped.
+ *
+ * They are not exempted on that basis. The `where` clause each one really
+ * has is asserted against the raw source in the test below, which is the
+ * only honest way to cover a statement a scanner cannot parse: not a
+ * silence, a different assertion.
+ */
+const TRUNCATED_BY_INTERPOLATION: Array<{ file: string; contains: string }> = [
+  { file: 'apps/api/src/findings/import.ts', contains: 'insert into finding (${FINDING_COLUMNS' },
+  { file: 'apps/api/src/run/worker.ts', contains: 'update finding set ${FINDING_COLUMNS' },
+];
+
 describe('the scanner finds something (a guard that matches nothing passes vacuously)', () => {
-  it('walks the route modules and finds statements against scoped tables', () => {
-    const files = walk(ROUTES_DIR);
+  it('walks EVERY api source file and finds statements against scoped tables', () => {
+    const files = walk(SCANNED);
     expect(files.length).toBeGreaterThan(0);
     const scoped = files
       .flatMap(f => statementsIn(codeOf(f)))
       .filter(s => namesScopedTable(s) !== undefined);
     expect(scoped.length).toBeGreaterThanOrEqual(4);
+    // …and it reaches PAST `routes/`, which is the whole of Task 25 Step 1.
+    // Named files rather than a count, so a move shows up as a failure here
+    // rather than as a number that happens to still be met.
+    const reached = files.map(rel);
+    for (const file of [
+      'apps/api/src/run/queue.ts', 'apps/api/src/run/worker.ts',
+      'apps/api/src/dispositions/service.ts', 'apps/api/src/findings/read.ts',
+      'apps/api/src/findings/import.ts', 'apps/api/src/parse/parseWorker.ts',
+    ]) {
+      expect(reached, file).toContain(file);
+    }
+  });
+
+  it('finds a query over each of the six new tables with no workspace predicate', () => {
+    // THE SANITY CHECK Task 25 Step 1 asks for by name. A scanner that
+    // matched nothing reported zero violations repo-wide for a whole
+    // sub-project once (the `PdfCanvas` exemption), and this one had the
+    // same shape for a different reason: the pattern was right and it was
+    // pointed at a directory the statements had left.
+    const unscoped = (statement: string): boolean =>
+      namesScopedTable(statement) !== undefined
+      && !/workspace_id/.test(predicateRegion(statement));
+    expect(unscoped('select * from finding where review_id = $1')).toBe(true);
+    expect(unscoped('select * from note where review_id = $1')).toBe(true);
+    expect(unscoped('update finding_disposition set state = $1 where review_id = $2')).toBe(true);
+    expect(unscoped('select * from finding_disposition_event where review_id = $1')).toBe(true);
+    expect(unscoped('select * from run_cell where run_id = $1')).toBe(true);
+    expect(unscoped('select * from event where run_id = $1')).toBe(true);
+    // …and the same six WITH the predicate are not violations, so the check
+    // above is about the predicate rather than about the table name.
+    expect(unscoped('select * from finding where review_id = $1 and workspace_id = $2'))
+      .toBe(false);
+    expect(unscoped('select * from note where review_id = $1 and workspace_id = $2')).toBe(false);
+  });
+
+  it('exempts statements BY TEXT, and every exemption still matches something', () => {
+    // A stale exemption is an exemption nobody re-reads. Each entry must
+    // still be found in the source, and must still be a statement this
+    // guard would otherwise flag — an exemption that has stopped applying
+    // is one that silently covers whatever moves under it next.
+    const all = walk(SCANNED).flatMap(f => statementsIn(codeOf(f)));
+    for (const allowed of SCOPED_BY_KEY) {
+      const hits = all.filter(s => s.includes(allowed));
+      expect(hits, `no statement matches the exemption ${JSON.stringify(allowed)}`)
+        .toHaveLength(1);
+      expect(namesScopedTable(hits[0])).toBeDefined();
+      expect(/workspace_id/.test(predicateRegion(hits[0]))).toBe(false);
+    }
   });
 
   it('recognises a statement that names a scoped table, and one that does not', () => {
@@ -191,16 +353,90 @@ function predicateRegion(statement: string): string {
 describe('every SQL statement in a route module names workspace_id', () => {
   it('has no statement against a scoped table without a workspace predicate', () => {
     const offenders: string[] = [];
-    for (const file of walk(ROUTES_DIR)) {
+    for (const file of walk(SCANNED)) {
+      if (UNSCOPED_BY_DESIGN.includes(rel(file))) continue;
       for (const statement of statementsIn(codeOf(file))) {
         const table = namesScopedTable(statement);
         if (table === undefined) continue;
+        if (SCOPED_BY_KEY.some(allowed => statement.includes(allowed))) continue;
+        if (TRUNCATED_BY_INTERPOLATION.some(
+          t => rel(file) === t.file && statement.includes(t.contains.split('${')[0]))) continue;
         if (!/workspace_id/.test(predicateRegion(statement))) {
           offenders.push(`${rel(file)} (${table}): ${statement.slice(0, 80)}`);
         }
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('every unscoped-by-design module still exists, and still issues SQL', () => {
+    // A stale ruling is a ruling nobody re-reads. Each module named as
+    // exempt has to still be there and still be a module this guard would
+    // otherwise have something to say about — an entry that has stopped
+    // applying is one that silently covers whatever moves under it next.
+    for (const name of UNSCOPED_BY_DESIGN) {
+      const full = path.join(ROOT, name);
+      expect(existsSync(full), name).toBe(true);
+      const statements = statementsIn(codeOf(full)).filter(s => namesScopedTable(s) !== undefined);
+      expect(statements.length, `${name} issues no scoped-table SQL any more`)
+        .toBeGreaterThan(0);
+    }
+  });
+
+  it('every api source file is either scanned or named as unscoped by design', () => {
+    // The list cannot be joined by accident. A new module under
+    // `apps/api/src` is scanned unless somebody adds it above, and adding it
+    // above is a decision with a reason beside it.
+    const scanned = walk(SCANNED).map(rel);
+    for (const name of UNSCOPED_BY_DESIGN) expect(scanned).toContain(name);
+    expect(scanned.length).toBeGreaterThan(30);
+  });
+
+  it('the ENGINE writes a finding by its full key, workspace included', () => {
+    /*
+     * What the exemption above costs, paid back directly.
+     *
+     * The engine is not on a request path and has no requesting workspace to
+     * scope to — but it still must not write one workspace's finding from
+     * another's cell. It does not: `toFindingRow` builds the row from the
+     * CELL's own `workspace_id`, and the update names all four key columns.
+     *
+     * Asserted against the raw source rather than through `statementsIn`,
+     * because these two statements are exactly the ones that scanner cannot
+     * read (see `TRUNCATED_BY_INTERPOLATION`). A statement a guard cannot
+     * parse gets a different assertion, never a silence.
+     */
+    for (const { file, contains } of TRUNCATED_BY_INTERPOLATION) {
+      const code = codeOf(path.join(ROOT, file));
+      expect(code, `${file} no longer builds the statement this covers`).toContain(contains);
+    }
+    const worker = codeOf(path.join(ROOT, 'apps/api/src/run/worker.ts'));
+    expect(worker).toMatch(
+      /where review_id = \$1 and findings_key = \$2 and clause_id = \$3 and workspace_id = \$4/);
+    // …and the row it writes is built from the CELL's workspace, not from
+    // anything the model or the review body could influence.
+    expect(worker).toMatch(/toFindingRow\(content, run\.review_id, cell\.findings_key, cell\.workspace_id\)/);
+  });
+
+  it('every route reaching the disposition service checks the finding s workspace first', () => {
+    /*
+     * THE GATE THAT MAKES `SCOPED_BY_KEY` TRUE, asserted rather than
+     * trusted. `dispositions/service.ts` identifies a row by
+     * `(review_id, findings_key, clause_id)` with no workspace predicate,
+     * which is safe only because every caller has already proved that key
+     * belongs to this workspace.
+     */
+    const importers = walk(ROUTES_DIR)
+      .filter(f => /from '\.\.\/dispositions\/service\.ts'/.test(codeOf(f)));
+    expect(importers.length, 'no route imports the disposition service').toBeGreaterThan(0);
+    for (const file of importers) {
+      const code = codeOf(file);
+      expect(code, `${rel(file)} reaches the disposition service unchecked`)
+        .toMatch(/requireFinding\(|cellsFor\(/);
+    }
+    // …and the check itself names the workspace, which is the whole of it.
+    expect(codeOf(path.join(ROUTES_DIR, 'findings.ts')))
+      .toMatch(/where review_id = \$1 and findings_key = \$2 and clause_id = \$3 and workspace_id = \$4/);
   });
 
   it('reads the DO UPDATE s own where clause, not the INSERT column list', () => {

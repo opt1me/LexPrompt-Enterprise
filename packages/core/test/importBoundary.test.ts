@@ -87,6 +87,18 @@ describe('import boundary (S14)', () => {
     // renamed — is a client that silently drops the event telling it a run
     // failed.
     'RUN_EVENT_TYPES', 'isRunEventType', 'RUN_STATES', 'RUN_CELL_STATES',
+
+    // "Still being read" is not "read, and it says nothing" (Stage 3 Tasks 9
+    // and 24). `parseState.ts`'s own docstring is the argument for these
+    // being here: the fact is stated by the browser's two hydrations, the
+    // server's two hydrations, the run route's refusal, the matter's
+    // document list and the browser's pre-flight — *"a sentence repeated in
+    // five places is a sentence that will be true in four of them"*. It
+    // shipped once with `parseState` on the wire and no reader anywhere,
+    // and a second copy of the SENTENCE is how the two refusals come to
+    // describe different conditions.
+    'isNotYetRead', 'notYetReadMessage', 'notYetReadMessageFor',
+    'STILL_READING_NOTICE', 'failedToRead', 'couldNotBeReadMessageFor',
   ];
 
   const scanned = (): string[] => [
