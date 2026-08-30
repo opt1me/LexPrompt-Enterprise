@@ -2352,3 +2352,288 @@ previous batch and `routes/reviews.ts` is unchanged since.
 *Cost if wrong: a defect between the wire and the handler — a body shape, a header, an
 error mapping — would not have been seen. Recorded rather than implied away, on Stage
 2's precedent.*
+
+# Server Stage 3, Part 3B — the flip, the freeze and the close (2026-08-30)
+
+Tasks 14–26. The engine moved server-side in Part 3A behind a shadow write; Part 3B
+flipped the reader, flipped the writer, deleted `carryHumanState`, froze the findings
+blob and closed the stage.
+
+## P17–P28, as executed
+
+- **P17 — shadow-write then flip.** Held for the whole of Part 3A and retired here:
+  `writeFindingRows` is deleted with the blob write it shadowed (Task 22). It did its
+  job — there was never only one copy of a judgement inside the change that altered it.
+- **P18 — the blob is frozen, never dropped.** Executed as migration `010`, and **not in
+  the form the plan wrote**. See R-S3B1.
+- **P19 — census first.** Ran, and censused nothing, because the database has never held
+  a review. See "What this stage could not verify".
+- **P20/P21 — the review closure and the extractors in `packages/core`.** Unchanged.
+- **P22 — five event types, in `packages/core/src/api/records.ts`.** Unchanged.
+- **P23 — no `audit_event` in this stage.** Held. Recorded in the README rather than left
+  for an auditor: run starts and cancellations are on the `run` row, which can be
+  updated; a disposition's history is append-only and complete. The two have different
+  guarantees and an audit export covering this period has to say so.
+- **P24 — `Verification.assigneeId` retires with a record.** Executed (Task 22). The
+  field is gone from the type, from `applyVerification`, from `resetVerification` (which
+  now takes no argument, because that field was the only thing it carried across) and
+  from the legacy-record reader. Two modules still name it and both are right to:
+  `findings/backfill.ts`, which NAMES every finding that carried one in the migration
+  report, and `upload/attribution.ts`, which rewrites every person-naming key in an
+  uploaded record's raw JSON — where the key still exists in data exported before this.
+- **P25 — the debounced saver's sticky 409 is removed by deletion, not by a fix.** Held.
+- **P26 — two concurrency tiers.** Unchanged.
+- **P27 — the worker is in-process, behind an interface, leased.** Unchanged.
+- **P28 — no attribution surface in this stage.** Held and now asserted:
+  `stage3DoD.test.ts` fails on a `dispositionLabel`, a `dispositionHistoryLine`, a
+  *"Dispositions as at"* stamp, a *"was Rejected"* line or a *"changed N times"* string
+  anywhere in `src`, `apps` or `packages`.
+
+## R-S3B1 — `revoke update (findings)` does nothing, so the freeze is a revoke-then-grant
+
+The plan's migration was `revoke update (findings) on review from lexprompt_app`. **That
+statement is a no-op** against the table-level `UPDATE` migration 002 granted: Postgres
+keeps table privileges in `relacl` and column privileges in `attacl`, and a column-level
+revoke only removes from the second. No error. No warning. Verified against this
+project's own database before `010` was written:
+
+```
+grant select, insert, update, delete on _probe to lexprompt_app;
+revoke update (b) on _probe from lexprompt_app;
+select has_column_privilege('lexprompt_app','_probe','b','update');  -- t
+```
+
+So `010` revokes the table-level grant and names every column except `findings` (and
+`seq`, which is `generated always as identity` and updatable by nobody). A column added
+to `review` by a later migration is therefore **not updatable until its own migration
+grants it**, which fails loudly rather than quietly — and `frozenBlob.pg.test.ts` asserts
+the updatable set as a whole, so the new column's absence is a named failure.
+
+*Cost if wrong: a freeze that froze nothing, with a suite full of tests asserting about a
+grant that was still there — the exact shape of the seven guards this stage found not
+guarding.*
+
+## R-S3B2 — INSERT on `review.findings` is deliberately NOT revoked
+
+The brief's Interfaces block says Task 22 produces *"a `review.findings` column that no
+application role can write"*. `010` revokes `UPDATE` and leaves `INSERT` table-level, and
+the gap is named rather than papered over.
+
+The verb that can destroy a pre-migration backup is `UPDATE`; an `INSERT` can only write
+that column on a row being **created**, which has no backup to lose. And the suites that
+reconcile the frozen blob — the tool P18 keeps the column for — have to be able to
+construct one inside the rolled-back app-role transaction they all run in. Making that
+impossible would leave `reconcileFindings` testable only through the migrator connection,
+outside every one of those suites' isolation.
+
+The route no longer names `findings` in its `INSERT` either (the column default applies),
+and `stage3DoD.test.ts` scans for any source statement that does.
+
+*Cost if wrong: a future insert path writes a blob nobody reads, on a row created after
+the freeze. It cannot reach an existing row's backup.*
+
+## R-S3B3 — findings in a PUT body are IMPORTED on a create and REFUSED on an update
+
+Task 22 Step 2 says a body carrying a non-empty `findings` answers `400`, because
+accept-and-ignore is the shape of a client that believes it saved sixty findings and did
+not. **The brief did not account for the uploader.** `upload/run.ts` moves an exported
+dataset into a workspace a review at a time, through `saveReview`, and an exported
+review's findings carry verifications, rejection reasons and notes.
+
+A plain refusal would have left the uploader unable to move a review at all; `saveReview`
+silently dropping the key — which is what it does for every other caller — would have
+moved a review into a new workspace with every judgement gone. That is the first entry on
+`CLAUDE.md`'s list, wearing a different hat.
+
+So: a body carrying findings for a review that **already exists** is refused with a `400`
+naming the reason (the old-tab-across-a-deploy case, which is the dangerous one); a body
+carrying them for a review this workspace has **never seen** is an import, and
+`findings/import.ts` writes them as **rows**. The frozen column is written by neither.
+`importReview` in `src/lib/db/reviews.ts` is the one browser call that sends them and its
+only caller is the uploader.
+
+*Cost if wrong: an import path that writes judgements. It is built from
+`readFindingsBlob`, `toFindingRow` and `setDisposition` rather than beside them, so it
+cannot land a disposition with no history behind it — asserted in
+`dispositionWriters.test.ts`.*
+
+## R-S3B4 — the reconciler answers "did the migration lose anything?" AS AT THE FREEZE
+
+A consequence of P18 that neither the spec nor the plan states. From `010` onward the
+rows move and the blob does not, so a review created afterwards has findings its backup
+does not describe, and `reconcileFindings` correctly reports every one as *"a row the
+blob no longer has"*. A sweep in six months will print a long list that means "these
+post-date the freeze", not "the shred lost something".
+
+Recorded three ways rather than left to be rediscovered: as a test in
+`frozenBlob.pg.test.ts` that asserts the post-freeze shape is expected, as the scoping of
+`stage3DoD.pg.test.ts`'s corpus sweep to reviews whose blob is non-empty, and here.
+
+*Cost if wrong: a future operator reads a long discrepancy list as a lost migration, or —
+worse — a future maintainer "fixes" the reconciler to stop reporting them and destroys
+the one question it exists to answer.*
+
+## R-S3B5 — `carryHumanState`'s deletion left one window, closed by a re-read and not a merge
+
+The gate for deleting `carryHumanState` was the grant, and it held: `lexprompt_worker` is
+refused every verb on both disposition tables, proved by attempting them. But the browser
+kept one seam the rows do not close by themselves — a `getFindings` read already **in
+flight** when a human write commits was assembled before it, and applying it puts a
+judgement a lawyer has just made back to "Not checked" until the next poll.
+
+Closed by **discarding and reissuing** the read (`humanWritesRef` in `App.tsx`), never by
+merging: nothing from the browser's copy is put back on top of the store's answer, and
+the second read is issued after the write so it carries the judgement itself.
+
+*Cost if wrong: a sub-second flicker in which a verification appears to vanish. Not data
+loss — the store has it — but it is the exact symptom `carryHumanState` existed to
+prevent, and shipping the deletion with it visible would have read as the deletion being
+wrong.*
+
+## R-S3B6 — five web tests were modelling a server that no longer exists
+
+Deleting `carryHumanState` turned five tests red, and every one of them was asserting
+against a fixture whose premise Task 19 had already retired: a findings map answering
+`unchecked` with no notes for a finding the server had just stored a verification and a
+note on. Their comments said so in as many words — *"until Task 19 a verification reaches
+the store through the review record, not through the findings rows"*.
+
+The fixtures now answer what the store answers. The claim each test makes is unchanged;
+what changed is that the server in the fixture is the one that shipped. The deleted
+assertion — a stale map overwriting a fresh judgement — is replaced by a test of the
+in-flight window above, which the old fixture could not express.
+
+*Cost if wrong: a test suite that passes because its fixture is generous. Named here
+because "the fixture was wrong" is exactly what somebody says when they have quietly
+weakened a test.*
+
+## R-S3B7 — Task 23 required no production change, and that is the answer
+
+The card view, the tabular grid, the DOCX exporter and the CSV exporter were not touched.
+They already read the assembled findings map through `findingsKeyFor`,
+`verificationLabel`/`exportSummaryLine` are unchanged, and no `dispositionLabel` exists.
+Verified by mutation rather than by reading: keying either exporter by a document id
+instead turns named tests red in both.
+
+## R-S3B8 — R-S3A2 is superseded (2026-08-30)
+
+R-S3A2 ruled that the engine's workspace scoping would be checked in the DoD suite rather
+than by extending `workspaceScope.test.ts`, because the reaper legitimately sweeps across
+workspaces and a file-level exemption hides everything in the file.
+
+**Task 25 extended the scanner instead**, and the reasoning that made the earlier ruling
+necessary turned out to be avoidable. `workspaceScope.test.ts` now walks every file under
+`apps/api/src` and covers `finding`, `note`, `finding_disposition` and
+`finding_disposition_event` alongside the nine it had. The 34 statements that came back
+are in three named categories, each with a reason and each asserted to still apply:
+
+- **unscoped by design** — the engine (`run/worker.ts`, `run/reaper.ts`, `run/events.ts`,
+  `parse/parseWorker.ts`) acts on the whole database on nobody's behalf, and the
+  migration and the reconciliation are corpus-wide. Named as an exact module list; every
+  api file is asserted to be either scanned or on it, so the list cannot be joined by
+  accident;
+- **scoped by key** — `dispositions/service.ts`'s two statements identify a row by a
+  finding's primary key that `requireFinding` has already proved is in this workspace.
+  That gate is now asserted rather than assumed;
+- **unreadable by the scanner** — two statements interpolate `FINDING_COLUMNS` through a
+  `.map()` whose callback holds its own template literal, which `statementsIn`'s own
+  docstring says it cannot parse. They get a **different assertion** against the raw
+  source rather than an exemption.
+
+The earlier ruling is left in place above, dated and superseded, rather than edited away.
+
+*Cost if wrong: the exemption lists rot. Each entry is asserted to still match something
+and still be a statement the guard would otherwise flag, so an entry that has stopped
+applying fails rather than silently covering whatever moves under it next.*
+
+## R-S3B9 — a real defect found by the compose gate, not by any unit test
+
+`runWorker.compose.test.ts` failed with four cells at `error` whose findings were still
+`pending` — a terminal cell over a card that spins forever, on a run whose banner says it
+finished. The state-machine invariant could not see it: that assertion only reads cells
+which are `done`.
+
+Two causes. The suite's own seed inserted the run, its cells and its findings in three
+separate `psql -c` calls — three transactions, against a database whose pool polls every
+second — so the pool claimed the first four cells in the gap. `createRun` writes all three
+in one transaction and cannot produce that state. And `leaseCell` read the finding's new
+version as `Number(updated[0]?.version ?? 0)`, so a cell with no finding row was leased
+anyway, ran a real model call, and failed at `writeCellResult` with no row to close.
+
+Both fixed. The lease now refuses such a cell, closes it with a message naming the actual
+condition, settles the run, and asks nothing of the model.
+
+*Cost if wrong: this is the defect the queue is named after — "an abandoned run reopening
+with every cell spinning forever, unfinishable" — and it was reachable in production only
+through a path `createRun` does not take. The fixture was wrong; the silence was not.*
+
+## R-S3B10 — a "Read it again" route, which the plan did not ask for
+
+§11 says a failed parse shows *"the `parse_error`, with a retry"*. There was no retry:
+the failure message told a reviewer to *"add the file again"*, which loses the document's
+id and with it its collection membership and its place in every review that names it.
+
+`POST /v1/documents/:id/reparse` puts the stored bytes back in the queue. Refused by name
+on a `parsed` document — re-reading one blanks the text every review of it was run
+against, which is the founding defect reachable from a button — and on a `pending` one,
+which is already queued and where a `200` that changed nothing would read as progress.
+
+*Cost if wrong: a new write path on `parse_state`, which the parse worker is otherwise
+the only writer of. It moves `failed` to `pending` and nothing else, and the two refusals
+are asserted against a real database.*
+
+## The spec-versus-shipped disagreements, recorded rather than smoothed
+
+1. **§5's `packages/core` inventory does not exist** and §9 tells the worker to run
+   extractors from it. Resolved by P20: the review closure moved, the rest is named for a
+   later stage (interface note 13). A genuine gap between the spec and the repository.
+2. **`extractClause` imported its model client**, so §9's *"a model client that points at
+   the gateway"* was not expressible without a signature change. Resolved by P21.
+3. **§6.2 and §6.5 give the same cell two state machines** (`finding.status`,
+   `run_cell.state`) and do not say which governs. Ruled in Task 8 Step 2, pinned by
+   `assertStatesAgree`, and it is what caught R-S3B9.
+4. **§6.3 states the attribution requirements in the present tense; §13 puts those
+   surfaces in Stage 4.** Ruled by P28 in favour of §13, and now asserted rather than
+   intended. A reader of §6.3 alone would build them here.
+5. **§6.5's `run.provider`/`model`/`jurisdiction` cannot be non-null at creation** — a
+   queued run has called nothing. Nullable, filled from the gateway's own answer.
+6. **`Note.findingId` is `findingKey(documentId, clauseId)`**, a `::`-joined string that
+   does not match `(review_id, findings_key, clause_id)`. Re-keyed by position, checked by
+   parsing, refused on disagreement (Task 6).
+7. **`Verification.assigneeId` has no home in the new schema.** Dropped with a record
+   (P24, R-S3B and Task 22).
+8. **§14's `runLifecycle` suite and §18 item 4 overlap but are not the same list.** Both
+   covered; `stage3DoD.test.ts` maps each §18 clause to the suite that carries it rather
+   than restating it.
+9. **§18 item 4's `REVOKE UPDATE (findings)` does not do what it says.** R-S3B1.
+10. **Task 22's refusal would have broken the uploader.** R-S3B3.
+
+## What this stage could not verify
+
+**No browser was driven.** The Chrome extension is disconnected and the Playwright MCP
+times out, as it has for two entire stages. Everything Part 3B put on screen is untested
+by anything that has looked at a screen: the progressive fill as cells finish, picking a
+run back up after a mid-run reload, *"Still being read"* on a freshly added document and
+the moment it becomes reviewable, "Read it again" on a failed parse, a verification made
+while a run is going, a retry clearing one, and a cancel stopping the cells. Named in the
+README as well as here.
+
+**No request was made over HTTP as a signed-in user.** The shipped realm has
+`directAccessGrantsEnabled: false`, so the only route to a token is the authorisation-code
+flow, which needs a browser. Every route in this part was exercised through its shipped
+handler against a real Postgres, and the wire hop was not re-walked.
+
+**The migration has never seen real data.** `finding_migration_report` says *"Migrated 0
+findings; 0 human-authored records censused"*: the census, the shred, the key-by-key
+reconciliation and the freeze have all been driven by fixtures, because the database has
+never held a review. The corpus sweep in `stage3DoD.pg.test.ts` therefore reconciles zero
+reviews and says so out loud rather than passing quietly.
+
+**The compose stack runs a stale `api` image.** Migration `010` was applied to the
+compose database directly (the migrations run at container start, from the image's own
+copy), so the running container's code predates the freeze and Tasks 21–25. `test:compose`
+passes because nothing it drives goes through the review upsert; a rebuild is needed
+before that container is trusted again.
+
+*Cost if wrong: the part of this rebuild whose correctness matters most has the least
+real evidence behind it, and no test can change that — only a person with a browser.*
