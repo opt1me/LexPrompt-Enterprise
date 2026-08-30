@@ -91,6 +91,31 @@ export interface ApiConfig {
    * row 5's asymmetry rather than an oversight.
    */
   blob: BlobCredentialConfig & { container: string };
+  /**
+   * Spike 1's two knobs (§15, §19), for the code that renders a scanned
+   * PDF's pages to images so a vision model can read them at all.
+   *
+   * Named here rather than hard-coded in `parse/pageImages.ts` because both
+   * of them bound work done on behalf of a signed-in user against a document
+   * whose size this service does not control, and an operator whose reviews
+   * are timing out on a 300-page scan needs a value to change rather than a
+   * rebuild.
+   *
+   * `pageRenderTimeoutMs` is a HARD budget: exceeding it throws
+   * `PageRenderTimeoutError` and the document is reported unreadable, never
+   * returned half-rendered. A partly-rendered scan reads to a model as a
+   * document that is silent on everything the missing pages said, which is
+   * this project's founding defect wearing a successful return value.
+   *
+   * `pageImageMaxPages` is a SOFT cap: the renderer reports
+   * `renderedPages < totalPages` and its caller says so. §15's third key,
+   * `API_PAGE_IMAGE_LRU_BYTES`, is deliberately NOT here — there is no cache
+   * for it to size yet, and a configuration key that changes nothing is a
+   * knob an operator turns and then trusts. It arrives in Task 9, with the
+   * cache it bounds.
+   */
+  pageRenderTimeoutMs: number;
+  pageImageMaxPages: number;
 }
 
 /**
@@ -258,6 +283,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     databasePoolMax: int(env, 'API_DATABASE_POOL_MAX', 10),
     roleMappings: roleMappingsFrom(env),
     blob: blobFrom(env),
+    pageRenderTimeoutMs: int(env, 'API_PAGE_RENDER_TIMEOUT_MS', 120_000),
+    pageImageMaxPages: int(env, 'API_PAGE_IMAGE_MAX_PAGES', 100),
   };
 }
 
@@ -291,6 +318,7 @@ export function describeConfig(cfg: ApiConfig): string {
     `Workspace: ${cfg.workspaceId}`,
     `Gateway: ${cfg.gatewayUrl}${cfg.mtls ? ' (mTLS)' : ''}`,
     `Max request body: ${cfg.maxBodyBytes} bytes`,
+    `Page rendering: up to ${cfg.pageImageMaxPages} page(s) in ${cfg.pageRenderTimeoutMs}ms`,
     `Database: ${redactDsn(cfg.databaseUrl)}`,
     // The SOURCE and the container, never the material. A connection string
     // carries an account key, and a boot banner is the last place it should

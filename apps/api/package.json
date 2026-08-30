@@ -12,8 +12,10 @@
     "@azure/storage-blob": "^12.32.0",
     "@fastify/multipart": "^10.1.1",
     "@lexprompt/core": "*",
+    "@napi-rs/canvas": "^1.0.8",
     "fastify": "^5.2.0",
     "jose": "^6.0.0",
+    "pdfjs-dist": "^6.2.108",
     "pg": "^8.13.0",
     "undici": "^7.2.0"
   }

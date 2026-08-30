@@ -43,6 +43,8 @@ const BASE: ApiConfig = {
     accountUrl: 'https://lexprompt.blob.core.windows.net',
     container: 'documents',
   },
+  pageRenderTimeoutMs: 120_000,
+  pageImageMaxPages: 100,
 };
 
 const MTLS = {
