@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { JWTVerifyGetKey } from 'jose';
 import { loadConfig, describeConfig, type ApiConfig } from './config.ts';
@@ -9,6 +10,10 @@ import { runMigrations } from './db/migrate.ts';
 import { resolveActor, type Actor } from './auth/actor.ts';
 import { roleFor, seedRoleMappings } from './auth/roles.ts';
 import { AzureBlobStore, type BlobStore } from './blob/store.ts';
+import { makePageImageCache } from './parse/hydrate.ts';
+import { startParseWorkers } from './parse/parseWorker.ts';
+import { startWorkerPool } from './run/worker.ts';
+import { startReaper } from './run/reaper.ts';
 
 /** Every startup failure reaches the operator as the same banner, whatever
  *  threw it. `ConfigError` was the only thing caught before, so a missing
@@ -30,6 +35,17 @@ async function main(): Promise<void> {
   let config: ApiConfig;
   let gateway: GatewayClient;
   let db: Db;
+  /**
+   * The ENGINE's connection, on the third role.
+   *
+   * A separate pool because it is a separate ROLE — `lexprompt_worker` holds
+   * no grant on `finding_disposition` or `finding_disposition_event`, and
+   * that separation is the whole of "nothing derives a human judgement" as a
+   * fact about the database rather than about the code. Sharing `db` here
+   * would hand every worker slot the app role and silently undo it, with
+   * every test still green.
+   */
+  let workerDb: Db;
   let blobs: BlobStore;
   try {
     config = loadConfig(process.env);
@@ -41,6 +57,7 @@ async function main(): Promise<void> {
     // not in an unhandled rejection.
     gateway = makeGatewayClient(config);
     db = makeDb(makePool(config.databaseUrl, config.databasePoolMax));
+    workerDb = makeDb(makePool(config.databaseWorkerUrl, config.workerPoolMax));
     // Inside the SAME guard, for the same reason `makeGatewayClient` is:
     // `AzureBlobStore`'s constructor resolves the credential, and
     // `resolveBlobCredential` refuses a configured source with no material
@@ -133,12 +150,78 @@ async function main(): Promise<void> {
     workspaceId: config.workspaceId,
     maxBodyBytes: config.maxBodyBytes,
     resolveActor: resolveActorForRequest,
+    eventPageMax: config.eventPageMax,
     // The SAME store `ensureContainer` ran against above. One instance for
     // the upload path and the delete cascade both: two stores built from
     // one credential would still be two, and a cascade that reached the
     // wrong one would leave every byte behind and report success.
     blobs,
   });
+  // ---- The engine, started AFTER the migrations and BEFORE listen ----
+  //
+  // After the migrations because a worker polling `run_cell` before 008 has
+  // run would fail on every tick with "relation does not exist" — loud, but
+  // loud in a way that says nothing about the real cause. Before `listen`
+  // because a run created by the first request must find a pool already
+  // polling: a queue whose workers start later would leave that run `queued`
+  // for however long the gap is, with nothing on screen to explain it.
+  //
+  // ONE PROCESS, three loops. §9 does not call for a separate worker
+  // deployment and this does not build one: the API is what holds the
+  // gateway's client certificate and the blob credential, and a second
+  // container would need both. What it does need is the pool arithmetic
+  // `assertWorkerPoolFits` already refused a bad value for at load.
+  const cache = makePageImageCache(config.pageImageLruBytes);
+  // THE HOSTNAME, not the pid. `releaseOwnOrphanedLeases` reclaims the
+  // leases this process left behind the last time it died, and it can only
+  // recognise them if the identity survives a restart — a pid does not. A
+  // container's hostname is stable across `docker compose restart` and
+  // unique between replicas, which is exactly the two properties needed:
+  // a process may expire its OWN orphaned lease (whatever held it is gone),
+  // and must never expire another host's (that worker may still be running,
+  // and stealing its cell would put two writers on one finding).
+  const workerId = `api-${hostname()}`;
+  const parseWorkers = startParseWorkers(
+    { db: workerDb, blobs, pollMs: config.runPollMs }, config.parseWorkers);
+  const runWorkers = startWorkerPool({
+    db: workerDb, blobs, gateway, cache, workerId,
+    caps: {
+      runWorkers: config.runWorkers,
+      runLeaseMs: config.runLeaseMs,
+      runCellTimeoutMs: config.runCellTimeoutMs,
+      runHeartbeatMs: config.runHeartbeatMs,
+      runAttemptsMax: config.runAttemptsMax,
+      runPollMs: config.runPollMs,
+      runRetryBackoffMs: config.runRetryBackoffMs,
+      workspaceRunConcurrency: config.workspaceRunConcurrency,
+      pageRenderTimeoutMs: config.pageRenderTimeoutMs,
+      pageImageMaxPages: config.pageImageMaxPages,
+      runImageBytesMax: config.runImageBytesMax,
+    },
+  });
+  // On the APP connection: it deletes from `event`, which the worker role
+  // deliberately cannot do.
+  const reaper = startReaper({
+    db,
+    heartbeatMs: config.runHeartbeatMs,
+    eventRetentionDays: config.eventRetentionDays,
+    attemptsMax: config.runAttemptsMax,
+  });
+
+  // A container stop must let the cell in flight finish its WRITE. Without
+  // this the process dies holding a lease, and the run is only recovered by
+  // the reaper three heartbeats later — correct, but three intervals of a
+  // review that looks stuck for no reason anybody could act on.
+  const shutdown = (signal: string) => {
+    process.stderr.write(`api: ${signal} received; stopping the engine.
+`);
+    void Promise.allSettled([parseWorkers.stop(), runWorkers.stop(), reaper.stop()])
+      .then(() => app.close())
+      .then(() => process.exit(0));
+  };
+  process.once('SIGTERM', () => { shutdown('SIGTERM'); });
+  process.once('SIGINT', () => { shutdown('SIGINT'); });
+
   await app.listen({ port: config.port, host: '0.0.0.0' });
 }
 

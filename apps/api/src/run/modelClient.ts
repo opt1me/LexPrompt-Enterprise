@@ -47,17 +47,21 @@ export function workerModelClient(
   actor: Actor,
 ): ModelClient {
   /**
-   * `signal` is accepted and NOT forwarded, and that is a real limitation
-   * rather than an oversight, so it is written down here where a caller will
-   * look. `GatewayClient.infer` takes no signal — only `stream` does — so a
-   * cancelled server-side run stops issuing NEW calls (`mapWithConcurrency`
-   * checks its signal between cells) while the ones already in flight run to
-   * completion and are discarded. The alternative on offer today is to
-   * pretend otherwise by ignoring the parameter silently.
+   * `signal` is FORWARDED, as of Stage 3 Task 10.
+   *
+   * It used to be accepted and dropped, because `GatewayClient.infer` took
+   * no signal — a real limitation, written down here, whose cost was that a
+   * cancelled server-side run stopped issuing NEW calls while the ones
+   * already in flight ran to completion and were discarded. That cost stops
+   * being acceptable when the run worker declares a per-cell timeout: an
+   * unforwarded signal makes `API_RUN_CELL_TIMEOUT_MS` a number in a boot
+   * banner that bounds nothing, and makes a reader's Cancel a button that
+   * leaves the firm paying for calls nobody will read.
    */
-  const chat = async (req: InferRequest, _signal?: AbortSignal): Promise<InferResponse> => {
+  const chat = async (req: InferRequest, signal?: AbortSignal): Promise<InferResponse> => {
     const { status, json } = await gateway.infer(
       withActor({ ...req } as unknown as Record<string, unknown>, workspaceId, actor),
+      signal,
     );
     if (status >= 400) throw modelErrorFrom(status, json);
     return inferResponseFrom(json);

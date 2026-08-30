@@ -156,10 +156,27 @@ export function makeGatewayClient(config: ApiConfig, getGatewayToken?: () => Pro
   });
 
   return {
-    async infer(body: unknown) {
+    async infer(body: unknown, signal?: AbortSignal) {
       const res = await request(`${config.gatewayUrl}/v1/infer`, {
         method: 'POST', dispatcher, headers: await headers(), body: JSON.stringify(body),
         headersTimeout: GATEWAY_HEADERS_TIMEOUT_MS,
+        // OPTIONAL, and added by Stage 3 Task 10/11 rather than left off.
+        //
+        // `stream` has taken one since Stage 1; `infer` did not, and
+        // `workerModelClient` says at length that it therefore ACCEPTS a
+        // signal and does not forward it. That was an honest limitation
+        // while the only caller was a proxy hop. It stops being one the
+        // moment a server-side run declares a per-cell timeout and a person
+        // can press Cancel: an unforwarded signal makes
+        // `API_RUN_CELL_TIMEOUT_MS` a cap that bounds nothing and makes
+        // Cancel a button that stops the queue while the calls already in
+        // flight run to completion and are billed.
+        //
+        // undici rejects an aborted request with an error whose `name` is
+        // `AbortError`, which is exactly what both extractors already test
+        // for — so an aborted cell resolves to a `cancelled` finding rather
+        // than to a red card with a raw DOMException on it.
+        ...(signal ? { signal } : {}),
       });
       return { status: res.statusCode, json: await readJson(res.statusCode, () => res.body.json()) };
     },
@@ -186,7 +203,11 @@ export function makeGatewayClient(config: ApiConfig, getGatewayToken?: () => Pro
   };
 }
 export interface GatewayClient {
-  infer(body: unknown): Promise<{ status: number; json: unknown }>;
+  /** `signal` is OPTIONAL so the Stage 1 proxy hop, which has no signal to
+   *  give, is unchanged — and is honoured when it is supplied, so a
+   *  server-side run's cell timeout and a reader's Cancel both reach the
+   *  socket rather than stopping at this boundary. */
+  infer(body: unknown, signal?: AbortSignal): Promise<{ status: number; json: unknown }>;
   models(): Promise<{ status: number; json: unknown }>;
   stream(body: unknown, signal: AbortSignal): Promise<StreamResponse>;
 }

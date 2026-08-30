@@ -145,3 +145,126 @@ describe('the run worker cannot write a person s remark', () => {
     });
   });
 });
+
+/**
+ * EVERY STATEMENT THE RUN WORKER AND THE PARSE WORKER ACTUALLY ISSUE, tried
+ * as the worker role.
+ *
+ * ADDED BECAUSE THE PG SUITES COULD NOT SEE THE DEFECT THAT SHIPPED IN THE
+ * FIRST REAL RUN. `run/worker.ts` reads `app_user` to attribute each gateway
+ * call to the person who asked for the run, and `lexprompt_worker` held no
+ * grant on it: every cell of that run failed with *"permission denied for
+ * table app_user"*. That is the system failing in the loud direction — the
+ * run ended, each finding said why — but the whole suite was green
+ * beforehand, because `runWorker.pg.test.ts` drives the worker over the
+ * harness's pinned APP connection.
+ *
+ * That is a real limitation of running a suite inside a rolled-back
+ * transaction: it can prove the SQL is right and can prove nothing at all
+ * about which role may run it. So the statements are listed here and
+ * attempted as the role that will really run them, and each is paired with
+ * the same statement succeeding — a table that did not exist would otherwise
+ * produce failures of roughly the right shape and prove nothing.
+ */
+describe('every table the engine touches, as the role the engine runs as', () => {
+  it('reads the identity columns it needs to attribute a call, and NOT the email', async () => {
+    await withSeed('actor', async ({ userId }) => {
+      // The exact projection `actorForRun` uses.
+      await expect(workerDb().query(
+        'select id::text as id, issuer, subject, display_name, initials, role from app_user '
+        + 'where id = $1', [userId])).resolves.toHaveLength(1);
+      // …and nothing beyond it. The gateway's call body carries the id and
+      // the (issuer, subject) pair and no address, so a worker that could
+      // read one could read something nothing it does needs.
+      await expect(workerDb().query('select email from app_user'))
+        .rejects.toThrow(/permission denied/i);
+    });
+  });
+
+  it('leases, updates and reads a run and its cells', async () => {
+    await withSeed('queue', async ({ userId }) => {
+      const db = workerDb();
+      await db.query(
+        `insert into run (id, review_id, workspace_id, state, requested_by_user_id, concurrency)
+         values ('wg-run-queue', 'wg-r-queue', $1, 'queued', $2, 5)`, [WS, userId]);
+      await db.query(
+        `insert into run_cell (run_id, findings_key, clause_id, workspace_id, state)
+         values ('wg-run-queue', 'd1', 'c1', $1, 'queued')`, [WS]);
+      await expect(db.query(
+        `update run_cell set state = 'leased', leased_by = 'w#1',
+                             lease_expires_at = now() + interval '1 minute', attempts = 1
+          where run_id = 'wg-run-queue'`)).resolves.toBeDefined();
+      await expect(db.query(
+        "update run set state = 'running', heartbeat_at = now() where id = 'wg-run-queue'"))
+        .resolves.toBeDefined();
+      await expect(db.query("select 1 from run where id = 'wg-run-queue'"))
+        .resolves.toHaveLength(1);
+      // The worker may not DELETE a run. Cancel and the reaper both run on
+      // the app connection.
+      await expect(db.query("delete from run where id = 'wg-run-queue'"))
+        .rejects.toThrow(/permission denied/i);
+      await migratorDb().query("delete from run_cell where run_id = 'wg-run-queue'");
+      await migratorDb().query("delete from run where id = 'wg-run-queue'");
+    });
+  });
+
+  it('appends an event and cannot prune one', async () => {
+    await withSeed('event', async ({ userId }) => {
+      const db = workerDb();
+      await db.query(
+        `insert into run (id, review_id, workspace_id, state, requested_by_user_id, concurrency)
+         values ('wg-run-ev', 'wg-r-event', $1, 'running', $2, 5)`, [WS, userId]);
+      await expect(db.query(
+        `insert into event (workspace_id, review_id, run_id, type, payload)
+         values ($1, 'wg-r-event', 'wg-run-ev', 'finding.done', '{"version":1}'::jsonb)`,
+        [WS])).resolves.toBeDefined();
+      // The pruner runs beside the reaper, on the app connection.
+      await expect(db.query("delete from event where run_id = 'wg-run-ev'"))
+        .rejects.toThrow(/permission denied/i);
+      await migratorDb().query("delete from event where run_id = 'wg-run-ev'");
+      await migratorDb().query("delete from run where id = 'wg-run-ev'");
+    });
+  });
+
+  it('reads a collection s reading order', async () => {
+    // `orderedMembers` decides the order and `document_date` never sorts it.
+    // 005 granted the worker four tables and not this one, so a collection
+    // cell would have failed with a permission error naming a table rather
+    // than reading the order it must not guess at.
+    await withSeed('coll', async () => {
+      await expect(workerDb().query('select count(*) from collection')).resolves.toBeDefined();
+    });
+  });
+
+  it('writes a parse result, and only the three columns a parse produces', async () => {
+    await withSeed('parse', async () => {
+      const db = migratorDb();
+      await db.query(
+        `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text,
+                               parse_state, byte_size, mime, blob_key, role, added_at)
+         values ('wg-doc-parse', $1, 'matter', 'wg-m-parse', 'x.pdf', 'pdf', '', 'pending', 1,
+                 'application/pdf', 'k', 'standalone', now())`, [WS]);
+      try {
+        await expect(workerDb().query(
+          `update document set text = 'read', parse_state = 'parsed', parse_error = null
+            where id = 'wg-doc-parse'`)).resolves.toBeDefined();
+        // NOT the disclosure. Detecting tracked changes is still
+        // browser-side, and a worker that could write this column would, on
+        // its first docx, replace "this document carries tracked changes"
+        // with nothing — the counterparty's redline read back as the
+        // contract, which is the second entry on CLAUDE.md's list.
+        await expect(workerDb().query(
+          "update document set markup_notice = null where id = 'wg-doc-parse'"))
+          .rejects.toThrow(/permission denied/i);
+        // …nor rename it, nor move it to another matter, nor delete it.
+        await expect(workerDb().query(
+          "update document set name = 'renamed.pdf' where id = 'wg-doc-parse'"))
+          .rejects.toThrow(/permission denied/i);
+        await expect(workerDb().query("delete from document where id = 'wg-doc-parse'"))
+          .rejects.toThrow(/permission denied/i);
+      } finally {
+        await db.query("delete from document where id = 'wg-doc-parse'");
+      }
+    });
+  });
+});
