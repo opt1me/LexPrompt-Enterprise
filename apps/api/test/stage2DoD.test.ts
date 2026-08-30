@@ -157,6 +157,10 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
     finding_disposition_event: 'apps/api/test/dispositions.pg.test.ts',
     finding_migration_census: 'apps/api/test/findingsBackfill.pg.test.ts',
     finding_migration_report: 'apps/api/test/findingsBackfill.pg.test.ts',
+    // Stage 4 Task 24. A request one person made of another (§6.3, S17) --
+    // created, listed and closed by the suite named here, which also holds
+    // the assertion that keeps it from becoming a disposition.
+    assignment: 'apps/api/test/assignments.pg.test.ts',
     // Stage 3 Task 8's queue. `run` and `run_cell` are covered by the suite
     // that creates a run and by the one that proves a run that died cannot
     // look finished — two files, because "a queue creates the right cells"

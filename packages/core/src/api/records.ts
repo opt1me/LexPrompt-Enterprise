@@ -163,13 +163,14 @@ export function isRunEventType(value: unknown): value is RunEventType {
  * durable record of what happened and one resume protocol, rather than a
  * queue for engine progress and something else for human judgement.
  *
- * `assignment.created` / `assignment.resolved` HAVE NO WRITER YET. Task 24
- * adds the table, the route and the payload; they are named here for the
- * same reason `audit/actions.ts` names its assignment verbs — the
- * vocabulary is a CLOSED SET both sides read, and a type arriving later
- * from a database somebody wrote to by hand would reach a client's switch
- * statement, match nothing and be dropped in silence. A named type with no
- * writer is inert; an unnamed one is a hole.
+ * `assignment.created` / `assignment.resolved` HAVE THEIR WRITER AS OF TASK
+ * 24 — `apps/api/src/routes/assignments.ts`, with `AssignmentEventPayload`
+ * below. They were named here one task early, for the reason
+ * `audit/actions.ts` names its assignment verbs: the vocabulary is a CLOSED
+ * SET both sides read, and a type arriving later from a database somebody
+ * wrote to by hand would reach a client's switch statement, match nothing
+ * and be dropped in silence. A named type with no writer is inert; an
+ * unnamed one is a hole.
  */
 export const EVENT_TYPES = [
   // The five Stage 3 shipped.
@@ -311,13 +312,85 @@ export type RunEventPayload =
   | FindingEventPayload
   | RunFinishedPayload;
 
-/** Every payload the outbox can carry today. The two assignment types have
- *  no payload here because they have no writer here — Task 24 adds both
- *  together, which is the only order in which a payload can be honest. */
+/**
+ * ONE ASSIGNMENT — a person asking another to look at one clause (§6.3, S17).
+ *
+ * ## It is a request, and never a disposition
+ *
+ * Nothing on this shape says what anybody decided. Creating one changes no
+ * `finding_disposition`, writes no `finding_disposition_event` and clears
+ * nothing: overriding somebody's judgement and asking somebody to check one
+ * are different acts and the app keeps them different. A future "flag and
+ * assign in one click" must still write two facts.
+ *
+ * ## Two ids and no names
+ *
+ * `assigneeUserId` / `assignedByUserId` are `app_user` ids, resolved to
+ * names through `src/lib/api/users.ts` like every other actor in this system
+ * (P32). A display name here would be a second copy of a mutable field,
+ * refreshed at different times in different places.
+ *
+ * ## Resolution is a pair or neither
+ *
+ * `resolvedAt` and `resolvedByUserId` are both ABSENT on an open assignment
+ * — never `null`, never `resolvedAt: undefined`, because `structuredClone`
+ * preserves an `undefined`-valued key and an `in` check would then read a
+ * request nobody has closed as one somebody did. The database says the same
+ * thing as a `check` constraint.
+ */
+export interface AssignmentView {
+  id: string;
+  reviewId: string;
+  findingsKey: string;
+  clauseId: string;
+  assigneeUserId: string;
+  assignedByUserId: string;
+  /** What was wanted. Absent, never `''`: a message that renders as a
+   *  message and carries nothing sends the assignee to the clause to find
+   *  out what was asked. */
+  message?: string;
+  /** Epoch milliseconds, like every other timestamp on this wire. */
+  createdAt: number;
+  resolvedAt?: number;
+  resolvedByUserId?: string;
+}
+
+/** The answer to `GET /v1/assignments?state=open`, and to a review's own
+ *  open requests. A wrapper rather than a bare array, for the reason every
+ *  other page in this file is one: a list that later needs a cursor should
+ *  not change shape to get one. */
+export interface AssignmentsPage {
+  assignments: AssignmentView[];
+}
+
+/**
+ * Somebody was asked to look at a clause, or the request was closed.
+ *
+ * The WHOLE row travels, on both types, so a receiving client renders "A.
+ * Trainee asked you to look at this" and the message from one frame with no
+ * second query — the same argument `DispositionChangedPayload` makes for
+ * carrying the disposition and its event together.
+ *
+ * NO `version`. An assignment has no version counter: it is created once and
+ * resolved once, and its own id is its idempotence key — the same reason
+ * `NoteAddedPayload` carries none. Inventing one here would be the second
+ * version number §8 forbids, on a row nothing guards by version.
+ */
+export interface AssignmentEventPayload {
+  reviewId: string;
+  findingsKey: string;
+  clauseId: string;
+  assignment: AssignmentView;
+}
+
+/** Every payload the outbox can carry. The two assignment types gained
+ *  theirs in Task 24, in the same change that added the table and the routes
+ *  — the only order in which a payload can be honest. */
 export type EventPayload =
   | RunEventPayload
   | DispositionChangedPayload
-  | NoteAddedPayload;
+  | NoteAddedPayload
+  | AssignmentEventPayload;
 
 /**
  * ONE EVENT OUT OF THE OUTBOX — the shape the HTTP cursor and the socket

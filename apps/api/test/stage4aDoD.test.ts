@@ -248,19 +248,41 @@ describe('Part 4A: the part boundary, enforced rather than remembered', () => {
     expect(/finding_disposition/.test(sql)).toBe(true);
   });
 
-  it('has no assignment yet — Task 24, not before', () => {
-    // BY PATTERN, not by the plan's fixed `012_assignment.sql`: 012 is
-    // `audit_event`, because `011_close_unused_finding_grants.sql` landed in
-    // Stage 3's fix round and an applied migration is immutable. A check
-    // pinned to a number would pass for the wrong reason forever.
+  it('has assignment, and it is still not a disposition - Task 24 (this guard INVERTED)', () => {
+    /*
+     * This assertion used to be the ABSENCE of assignment, holding the part
+     * boundary until Task 24. Task 24 landed, so it now holds the property
+     * that outlives the boundary: an assignment is a REQUEST and the two
+     * acts stay apart (§6.3).
+     *
+     * BY PATTERN, not by the plan's fixed `012_assignment.sql`: 012 is
+     * `audit_event`, because `011_close_unused_finding_grants.sql` landed in
+     * Stage 3's fix round and an applied migration is immutable. The
+     * migration is 013, and a check pinned to a number would pass for the
+     * wrong reason forever.
+     */
     const migrations = readdirSync(at('apps/api/migrations'));
-    expect(migrations.filter(f => /assignment/i.test(f))).toEqual([]);
-    expect(migrations.length, 'the migrations directory was not read')
-      .toBeGreaterThan(10);
-    expect(migrations).toContain('012_audit_event.sql');
-    // The audit action list ANTICIPATES assignment (it is a closed set, and
-    // Stage 5 adds the writer, not the verb) — but no route serves one.
-    expect(grepRepo(/\/assignments?\b/, API_SOURCES)).toEqual([]);
+    expect(migrations.filter(f => /assignment/i.test(f))).toEqual(['013_assignment.sql']);
+    expect(migrations.length, 'the migrations directory was not read').toBeGreaterThan(10);
+    // The routes exist and are in the authorisation table, so the authz
+    // sweep and the 401 sweep both see them.
+    expect(grepRepo(/\/v1\/assignments/, API_SOURCES)).toContain('apps/api/src/routes/assignments.ts');
+    const policy = codeOf(at('apps/api/src/auth/routeTable.ts'));
+    expect(policy).toContain("'GET /v1/assignments'");
+    expect(policy).toContain("'POST /v1/assignments/:id/resolve'");
+    /*
+     * AND IT IS STILL NOT A DISPOSITION. The route that assigns must not
+     * name either disposition table or the service that writes them: a
+     * "flag and assign in one click" feature would arrive exactly here, and
+     * this is the structural half of `assignments.pg.test.ts`'s behavioural
+     * assertion.
+     */
+    const route = codeOf(at('apps/api/src/routes/assignments.ts'));
+    expect(route).not.toMatch(/finding_disposition|setDisposition|resetVerification/);
+    // The sanity check, so the absence above is a fact about the file rather
+    // than about a scan that read nothing.
+    expect(route).toMatch(/insert into assignment/);
+    expect(route).toMatch(/appendAudit/);
   });
 
   it('ships no assignee field and no second person in the single-user substrate', () => {

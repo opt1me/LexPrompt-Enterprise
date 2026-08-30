@@ -215,6 +215,28 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'PUT /v1/reviews/:id/findings/:findingsKey/:clauseId/net-position': 'reviewer',
   'GET /v1/reviews/:id/findings/:findingsKey/:clauseId/history': 'reviewer',
 
+  // §6.3/S17's assignment (Task 24). Asking a colleague to look at a clause
+  // is a REQUEST, not a disposition, so it sits at the same `reviewer` bar
+  // as the disposition it deliberately does not change.
+  //
+  // A partner-only gate here would invert the owner's own case: it is the
+  // TRAINEE who assigns, when they are not sure -- "a trainee may verify one
+  // clause and be happy, then flag another for a Partner's view". Raising
+  // this bar would take the escape hatch away from the person it exists for.
+  //
+  // The resolve route is `reviewer` for the same reason and is narrowed
+  // INSIDE the handler to the two people it can belong to: the assignee, who
+  // has looked, and the assigner, who no longer needs them to. A role is the
+  // wrong instrument for "is this yours" -- every reviewer holds the same
+  // role and only two of them are party to any one request.
+  //
+  // The list route answers the CALLER'S OWN open requests, from the token
+  // and never from a query parameter. Reading another person's queue would
+  // be a different feature with a different bar.
+  'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/assignments': 'reviewer',
+  'POST /v1/assignments/:id/resolve': 'reviewer',
+  'GET /v1/assignments': 'reviewer',
+
   // The review's whole disposition history (section 6.3.1). `reviewer`: it
   // is the same facts the per-finding history route already returns at the
   // same bar, gathered for one review. A higher bar here would mean a

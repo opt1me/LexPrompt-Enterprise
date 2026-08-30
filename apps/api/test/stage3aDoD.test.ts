@@ -408,6 +408,7 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(READS.test('select * from finding_disposition where review_id = $1')).toBe(false);
     const readers = ROUTE_SOURCES.filter(f => READS.test(codeOf(f))).map(rel);
     expect(readers).toEqual([
+      'apps/api/src/routes/assignments.ts',    // an EXISTENCE check (Task 24)
       'apps/api/src/routes/findings.ts',       // an EXISTENCE check
       'apps/api/src/routes/runs.ts',           // "what did this retry clear?"
     ]);
@@ -435,9 +436,18 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(retryProbe).toHaveLength(1);
     expect(retryProbe[0]).toMatch(/select net_position\s*\n?\s*from finding\b/i);
 
-    // Neither selects what a card renders. That is the property this guard
-    // is actually about, and it is checked over both.
-    for (const statement of [...existence, ...retryProbe]) {
+    // `routes/assignments.ts` (Task 24): ONE column, `clause_id`, and it is
+    // an EXISTENCE check for the same reason `routes/findings.ts` has one.
+    // A request to look at a clause this review does not cover is a request
+    // addressed to nothing, and the assignee would open the review to find
+    // no such clause in it.
+    const assignmentProbe = statementsOver('apps/api/src/routes/assignments.ts');
+    expect(assignmentProbe).toHaveLength(1);
+    expect(assignmentProbe[0]).toMatch(/select clause_id\s*\n?\s*from finding\b/i);
+
+    // NONE of them selects what a card renders. That is the property this
+    // guard is actually about, and it is checked over all three.
+    for (const statement of [...existence, ...retryProbe, ...assignmentProbe]) {
       for (const content of ['summary', 'citations', 'risk_analysis', 'position_rationale']) {
         expect(statement, `a route selects a finding's ${content}`).not.toContain(content);
       }

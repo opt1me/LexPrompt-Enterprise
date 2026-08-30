@@ -25,6 +25,7 @@ import { registerReviews } from './routes/reviews.ts';
 import { registerFindings } from './routes/findings.ts';
 import { registerHistory } from './routes/history.ts';
 import { registerActivity } from './routes/activity.ts';
+import { registerAssignments } from './routes/assignments.ts';
 import { registerRuns } from './routes/runs.ts';
 import { createHub, type Hub } from './realtime/hub.ts';
 import { attachSocket, type SocketCaps } from './realtime/socket.ts';
@@ -351,6 +352,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerFindings(app, deps.db);
   registerHistory(app, deps.db);
   registerActivity(app, deps.db);
+  registerAssignments(app, deps.db);
   registerRuns(app, deps.db, { eventPageMax: deps.eventPageMax });
   registerWorkspaceSettings(app, deps.db, deps.gateway);
 

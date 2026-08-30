@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { appDb, migratorDb, withPg } from './helpers/pgHarness.ts';
+import { appDb, migratorDb, withPg, workerDb } from './helpers/pgHarness.ts';
 import type { Tx } from '../src/db/pool.ts';
 
 const WS = '00000000-0000-0000-0000-000000000001';
@@ -73,6 +73,41 @@ describe('the app role has ordinary read/write on the six mutable record tables'
         [WS]);
       await expect(t.query("update matter set name = 'M2' where id = 'm-rw'")).resolves.toBeDefined();
       await expect(t.query("delete from matter where id = 'm-rw'")).resolves.toBeDefined();
+    }, appDb());
+  });
+});
+
+describe('the engine holds no grant on assignment (Task 24)', () => {
+  it('refuses the worker role a SELECT, and refuses it an INSERT', async () => {
+    /*
+     * The worker performs no act that assigns anything and reads nothing
+     * that depends on one, so it holds nothing on this table -- the same
+     * shape 006 gives the disposition tables and 012 gives `audit_event`,
+     * and stated as an explicit `revoke` in 013 rather than as an absent
+     * grant, because an absent grant is undone by one careless `grant all`.
+     *
+     * Attempted AS THE ROLE. A refusal proved any other way is a refusal
+     * about the code rather than about the database.
+     */
+    await withPg(async t => {
+      await expect(t.query('select id from assignment limit 1'))
+        .rejects.toThrow(/permission denied/i);
+    }, workerDb());
+    await withPg(async t => {
+      await expect(t.query(
+        `insert into assignment
+           (id, review_id, findings_key, clause_id, workspace_id,
+            assignee_user_id, assigned_by_user_id)
+         values ('a1', 'r', 'k', 'c', $1, $1, $1)`, [WS],
+      )).rejects.toThrow(/permission denied/i);
+    }, workerDb());
+  });
+
+  it('…and the app role CAN read it, which is what makes the refusal about the role', async () => {
+    // Without this half, a table that did not exist would pass the test
+    // above for entirely the wrong reason.
+    await withPg(async t => {
+      await expect(t.query('select id from assignment limit 1')).resolves.toBeDefined();
     }, appDb());
   });
 });

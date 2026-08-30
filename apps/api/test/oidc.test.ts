@@ -479,6 +479,25 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
 
   it('discovers the routes it is about to check, so it cannot pass vacuously', () => {
     const urls = routes().map(r => `${r.method} ${r.url}`).sort();
+    /*
+     * THE NEW ROUTES ARE NAMED FIRST, on their own.
+     *
+     * The full list below is the real check, but a `toEqual` over 68 strings
+     * fails the same way whether a route is missing from the scanner or
+     * missing from the list — and the last time this file was wrong, it was
+     * because the SCANNER could not see a route (`app.get(WS_PATH, …)`
+     * rather than a quoted literal) and the sweep passed at a pinned count
+     * with a new route it had never touched. So Task 24's three are asserted
+     * as PRESENT before the list is compared, which is the shape that says
+     * "the scanner found them" rather than "the list agrees with itself".
+     */
+    for (const added of [
+      'GET /v1/assignments',
+      'POST /v1/assignments/:id/resolve',
+      'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/assignments',
+    ]) {
+      expect(urls, `${added} is invisible to the 401 sweep`).toContain(added);
+    }
     expect(urls).toEqual([
       'DELETE /v1/collections/:id',
       'DELETE /v1/documents/:id',
@@ -490,6 +509,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'DELETE /v1/reviews/:id',
       'GET /healthz',
       'GET /v1/admin/blob-orphans',
+      'GET /v1/assignments',
       'GET /v1/changesets/:id',
       'GET /v1/collections/:id',
       'GET /v1/documents/:id',
@@ -531,6 +551,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/ws',
       'PATCH /v1/documents/:id/role',
       'POST /v1/admin/blob-orphans/delete',
+      'POST /v1/assignments/:id/resolve',
       'POST /v1/changesets/:id/publish',
       'POST /v1/documents',
       'POST /v1/documents/:id/reparse',
@@ -540,6 +561,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'POST /v1/playbooks/import',
       'POST /v1/precedent-sets',
       'POST /v1/precedent-sets/:id/documents',
+      'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/assignments',
       'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/notes',
       'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/retry',
       'POST /v1/reviews/:id/runs',
@@ -582,8 +604,11 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // 50 with Task 20's basis read and 54 with Stage 3 Task 8's four run
     // routes, and 62 with Stage 3 Task 24's `POST /v1/documents/:id/reparse`.
     // A DROP in this number without a route being removed is a route that
-    // stopped being registered.
-    expect(checked).toHaveLength(66);
+    // stopped being registered. 69 with Stage 4 Task 24's three assignment
+    // routes -- and the list above names all three explicitly, because a
+    // count alone cannot tell "the scanner found the new route" from "the
+    // scanner found a different one".
+    expect(checked).toHaveLength(69);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {
