@@ -12,6 +12,7 @@ import { NotesPanel } from './NotesPanel';
 import { NetPositionPanel } from './NetPositionPanel';
 import { PositionComparison } from './PositionComparison';
 import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
+import { DispositionHistory } from './DispositionHistory';
 import { dispositionLabel, isVerifiable, type DispositionAudience } from '../../lib/findingOutcome';
 import { formatInstant } from '../../lib/instant';
 
@@ -157,6 +158,7 @@ export function FindingCard({
 }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
   const [trailOpen, setTrailOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   if (status === 'pending') {
     return (
@@ -393,6 +395,27 @@ export function FindingCard({
         {isVerifiable(finding) && (
           <p data-disposition-label className="font-ui text-ui-sm text-ink-4">
             {dispositionLabel(disposition, audience)}
+            {/* §6.3: "the card shows that fact inline and makes the history
+               reachable in one action". ONE action, from the line that
+               states the fact.
+
+               Offered only where there is a history to open — a disposition
+               nobody has moved has no events, and a button that opened an
+               empty panel would be an affordance for nothing. The ids come
+               off the disposition the SERVER stated, so the panel cannot be
+               opened against a cell this card only thinks it is showing. */}
+            {disposition && disposition.disposition.changedCount > 0 && (
+              <>
+                {' '}
+                <button
+                  type="button"
+                  onClick={() => setHistoryOpen(true)}
+                  className="underline underline-offset-2 hover:text-ink-1 transition-colors"
+                >
+                  See what changed
+                </button>
+              </>
+            )}
           </p>
         )}
 
@@ -414,6 +437,16 @@ export function FindingCard({
           />
         )}
       </div>
+
+      {historyOpen && disposition && (
+        <DispositionHistory
+          reviewId={disposition.disposition.reviewId}
+          findingsKey={disposition.disposition.findingsKey}
+          clauseId={disposition.disposition.clauseId}
+          audience={audience}
+          onClose={() => setHistoryOpen(false)}
+        />
+      )}
 
       {finding?.netPosition && (
         <VariationTrailModal

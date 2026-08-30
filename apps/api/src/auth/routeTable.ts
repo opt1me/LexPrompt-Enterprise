@@ -181,9 +181,10 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   //
   // The history route is `reviewer` for the same reason `GET
   // /v1/playbooks/:id/clauses/:clauseId/basis` is: reading the evidence
-  // behind a judgement is the same act as reading the judgement. NOTHING
-  // RENDERS IT IN STAGE 3 (P28) — it is here because Stage 4's history panel
-  // should inherit a tested, authorised endpoint rather than write one.
+  // behind a judgement is the same act as reading the judgement. It had no
+  // caller in Stage 3 (P28); Stage 4's `DispositionHistory` panel is the
+  // one, and inherited a tested, authorised endpoint rather than writing
+  // one against a table it was meeting for the first time.
   'PUT /v1/reviews/:id/findings/:findingsKey/:clauseId/disposition': 'reviewer',
   'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/notes': 'reviewer',
   // §7 names confirming a net position among what a reviewer does, and it

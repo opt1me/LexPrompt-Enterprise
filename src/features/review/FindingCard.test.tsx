@@ -525,3 +525,50 @@ describe('FindingCard — the disposition names who set it and when', () => {
       .toContain('changed 3 times');
   });
 });
+
+describe('FindingCard — the history, reachable in one action (§6.3)', () => {
+  it('offers no opener on a disposition nobody has moved', () => {
+    // A button that opened an empty panel would be an affordance for
+    // nothing, and a reader clicking it would learn only that they had
+    // wasted the click.
+    const container = mount(
+      <FindingCard {...baseProps} finding={doneFinding()}
+        disposition={DISPOSITION_SHAPES['never touched']} audience={TEST_AUDIENCE} />,
+    );
+    expect(Array.from(container.querySelectorAll('button'))
+      .some(b => /what changed/i.test(b.textContent || ''))).toBe(false);
+  });
+
+  it('offers one on a disposition somebody moved, and it is a real control', () => {
+    // NOT a disabled button with a "coming soon" title: half a feature. The
+    // panel exists, so the control opens it.
+    const container = mount(
+      <FindingCard {...baseProps} finding={doneFinding()}
+        disposition={DISPOSITION_SHAPES['rejected with a reason']} audience={TEST_AUDIENCE} />,
+    );
+    const opener = Array.from(container.querySelectorAll('button'))
+      .find(b => /what changed/i.test(b.textContent || ''));
+    expect(opener).toBeTruthy();
+    expect(opener!.disabled).toBe(false);
+  });
+
+  it('opens the history panel in ONE action, keyed by what the SERVER said', () => {
+    const shape = DISPOSITION_SHAPES['rejected with a reason'];
+    const container = mount(
+      <FindingCard {...baseProps} finding={doneFinding()}
+        disposition={shape} audience={TEST_AUDIENCE} />,
+    );
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+    const opener = Array.from(container.querySelectorAll('button'))
+      .find(b => /what changed/i.test(b.textContent || ''))!;
+    act(() => { opener.click(); });
+    // The panel is mounted. What it FETCHES is `DispositionHistory`'s own
+    // suite's business; what matters here is that the card reaches it in one
+    // click, from the ids the disposition itself carries rather than from a
+    // document the viewer pane happens to be showing.
+    const dialog = container.querySelector('[role="dialog"]');
+    expect(dialog).toBeTruthy();
+    expect(dialog!.textContent).toContain('What changed, and who changed it');
+    expect(shape.disposition.findingsKey).toBe('d1');
+  });
+});

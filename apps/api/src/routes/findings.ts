@@ -197,11 +197,23 @@ export function registerFindings(app: FastifyInstance, db: Db): void {
   /**
    * WHO CHANGED THIS, WHEN, AND WHAT FROM — newest first.
    *
-   * **NOTHING RENDERS THIS IN STAGE 3 (P28), and that is deliberate rather
-   * than an oversight.** It lands here because it is one query over a table
-   * this stage created, and because Stage 4's history panel should inherit a
-   * tested endpoint rather than write one against a table it is meeting for
-   * the first time. If you came looking for the caller: there is none yet.
+   * **STAGE 4'S HISTORY PANEL IS THE CALLER**, and it is the only one:
+   * `src/features/review/DispositionHistory.tsx`, opened in one action from
+   * the line beneath a card's state chip (§6.3), through
+   * `getDispositionHistory` in `src/lib/api/findings.ts`.
+   *
+   * Nothing rendered it in Stage 3 (P28), deliberately rather than by
+   * oversight: it landed there because it is one query over a table that
+   * stage created, so the panel could inherit a tested, authorised endpoint
+   * rather than write one against a table it was meeting for the first
+   * time. That sentence is replaced rather than deleted, because "there is
+   * no caller yet" and "here is the caller" are the two states a reader of
+   * this route needs to be able to tell apart.
+   *
+   * It is NOT cached in the browser, and that is the panel's decision worth
+   * knowing here: a history is what somebody asked to see once, about one
+   * clause, and it is the surface most likely to have changed since the page
+   * loaded.
    */
   app.get('/v1/reviews/:id/findings/:findingsKey/:clauseId/history',
     async (req): Promise<DispositionHistory> => {

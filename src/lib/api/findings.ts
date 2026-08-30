@@ -1,6 +1,6 @@
 import type {
-  DispositionWithHistory, DispositionWriteResult, FindingsPage, NetPositionWriteResult, Note,
-  VerificationChange,
+  DispositionHistory, DispositionWithHistory, DispositionWriteResult, FindingsPage,
+  NetPositionWriteResult, Note, VerificationChange,
 } from '@lexprompt/core';
 import { apiGet, apiSend } from './client';
 
@@ -249,6 +249,34 @@ export async function setNetPosition(
   );
   rememberFindingVersion(reviewId, findingsKey, clauseId, result.version);
   return result;
+}
+
+/**
+ * EVERY CHANGE TO ONE FINDING'S DISPOSITION, NEWEST FIRST.
+ *
+ * Reads the route Stage 3 shipped and left with no caller
+ * (`GET …/history`) — a second route would be a second definition of what an
+ * event is, over a table one module writes.
+ *
+ * REJECTS on any failure; it never resolves to an empty history. An empty
+ * history under a disposition somebody moved is indistinguishable from a
+ * change that failed to record itself, which is the exact ambiguity §6.4's
+ * one-transaction rule exists to make impossible — a failed FETCH must not
+ * manufacture it. The caller renders the rejection through
+ * `describeLoadError`/`LoadErrorPanel`.
+ *
+ * NOT CACHED, deliberately, and it is the one read in this module that is
+ * not. The versions and dispositions above are what the browser needs on
+ * every render of every card; a history is what somebody asked to see once,
+ * about one clause, and it is the surface most likely to have changed since
+ * the page loaded — a cached one would show a reader a record that is
+ * missing the change they opened it to check.
+ */
+export async function getDispositionHistory(
+  reviewId: string, findingsKey: string, clauseId: string,
+): Promise<DispositionHistory> {
+  return apiGet<DispositionHistory>(
+    `${findingPath(reviewId, findingsKey, clauseId)}/history`);
 }
 
 /** Re-runs one clause, server-side, clearing the judgement that described
