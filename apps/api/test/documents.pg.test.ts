@@ -151,7 +151,14 @@ describe('uploading a document', () => {
       expect(saved.id).toBe('d1');
       expect(saved.name).toBe('lease.pdf');
       expect(saved.kind).toBe('pdf');
-      expect(saved.text).toBe('The tenant shall…');
+      // CHANGED BY STAGE 3 TASK 9, and the change is that task. The upload
+      // stores the BYTES and returns; the parse worker reads them and is the
+      // only writer of `text` and `parse_state` from here on. The body's own
+      // `text` is discarded rather than stored alongside — keeping it would
+      // mean the row said "pending" while carrying text a reader would be
+      // shown, which is two sources for one fact with the older one winning.
+      expect(saved.text).toBe('');
+      expect(saved.parseState).toBe('pending');
       // The key comes from `blobKeyFor` and from nowhere else. A key derived
       // twice is a blob the cascade cannot find, which makes "deleting a
       // matter deletes its documents' bytes" false in the one direction
@@ -277,22 +284,28 @@ describe('uploading a document', () => {
     });
   });
 
-  it('stores parse_state failed for a record carrying a parseError, and parsed otherwise', async () => {
-    // P12. Stage 3's parse worker reads this column, and a document silently
-    // marked `parsed` with no text is the founding defect wearing a database
-    // column. Never 'pending' in Stage 2 — nothing here is asynchronous.
+  it('stores EVERY upload as pending, whatever the body claimed about parsing', async () => {
+    // P12, CLOSED (Stage 3 Task 9). Stage 2 derived this column from the
+    // body's `parseError` and said "Stage 3 changes only who writes it";
+    // this is that change. `'pending'` has been in the check constraint
+    // since Stage 2 and unused, and it starts being used here.
+    //
+    // The body's claim is IGNORED, including a `parseError`. A browser that
+    // failed to read a file locally has said nothing about whether the
+    // server can read the bytes it just uploaded, and storing 'failed' on
+    // its word would refuse a review of a document that is perfectly
+    // readable — while looking, on screen, exactly like a broken file.
     await withPg(async t => {
       await aMatter(t);
       const h = harness(t, await aUser(t));
       await h.post({ ...RECORD, id: 'd-ok' });
       await h.post({ ...RECORD, id: 'd-bad', text: '', parseError: 'This PDF could not be read.' });
-      const states = await t.query<{ id: string; parse_state: string }>(
-        'select id, parse_state from document where workspace_id = $1 order by id', [WS]);
+      const states = await t.query<{ id: string; parse_state: string; text: string }>(
+        'select id, parse_state, text from document where workspace_id = $1 order by id', [WS]);
       expect(states).toEqual([
-        { id: 'd-bad', parse_state: 'failed' },
-        { id: 'd-ok', parse_state: 'parsed' },
+        { id: 'd-bad', parse_state: 'pending', text: '' },
+        { id: 'd-ok', parse_state: 'pending', text: '' },
       ]);
-      expect(states.some(s => s.parse_state === 'pending')).toBe(false);
       await h.app.close();
     });
   });
@@ -424,7 +437,12 @@ describe('collection membership', () => {
       expect(patched.collectionId).toBe('c1');
       expect(patched.markupNotice).toBe('Tracked changes were accepted.');
       expect(patched.documentDate).toBe(1_600_000_000_000);
-      expect(patched.text).toBe('The tenant shall…');
+      // The text a role change must not touch is whatever the PARSE WORKER
+      // put there — `''` here, because no parse worker is running in this
+      // suite. Written this way rather than as the body's own text since
+      // Stage 3 Task 9: the upload no longer stores what the body claimed.
+      expect(patched.text).toBe('');
+      expect(patched.parseState).toBe('pending');
       const kept = await t.query<{ content_sha256: string; blob_key: string }>(
         'select content_sha256, blob_key from document where id = $1 and workspace_id = $2',
         ['d1', WS]);

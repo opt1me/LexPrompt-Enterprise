@@ -282,6 +282,26 @@ export interface DocumentRecord {
   name: string;
   kind: 'pdf' | 'docx' | 'txt';
   text: string;
+  /**
+   * WHETHER THE TEXT ABOVE IS THE DOCUMENT'S TEXT YET (§9, §11's third load
+   * state).
+   *
+   * The server stores a document's BYTES and returns; a parse worker reads
+   * them and is the only writer of this field. So `text` is `''` and this is
+   * `'pending'` for the moment between the two, and a reader that cannot
+   * tell that apart from a document that genuinely says nothing is looking
+   * at this project's founding defect with a different cause.
+   *
+   * OPTIONAL, because an in-memory `DocumentRecord` built in the browser
+   * (`toDocumentRecord`) has not been anywhere that could answer it. Absent
+   * means "not from a server"; it never means "parsed".
+   *
+   *   'pending' — being read. Refused as a review target, by the API.
+   *   'parsed'  — the text is the document's.
+   *   'failed'  — it could not be read, and `parseError` says why. Also
+   *               refused: a review of no text reports every clause absent.
+   */
+  parseState?: 'pending' | 'parsed' | 'failed';
   parseError?: string;
   /** The provenance caveat recorded at ingest — see `DocumentFile`. Absent,
    *  never `undefined`, on a document that has nothing to disclose and on

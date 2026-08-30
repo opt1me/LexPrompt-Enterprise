@@ -87,15 +87,43 @@ describe('document row mapping', () => {
     byteSize: 1024, addedAt: 1_700_000_000_000, addedByUserId: '', role: 'standalone',
   };
 
-  it('derives parse_state from parseError, and never reads it back onto the wire type', () => {
+  /**
+   * CHANGED BY STAGE 3 TASK 9, and the change is the point of that task.
+   *
+   * `parse_state` used to be derived here and NEVER read back onto the wire
+   * type, because in Stage 2 nothing on the upload path was asynchronous:
+   * the browser had already parsed the file by the time a record existed, so
+   * "is this text the document's text" was not a question anybody could ask.
+   *
+   * It is now. `POST /v1/documents` stores the bytes, writes `'pending'` and
+   * returns; a parse worker reads them. So a caller MUST be able to tell
+   * "still being read" from "read, and it says nothing" — those are the same
+   * empty `text` on screen, and the second is this project's founding
+   * defect. Hiding the column would leave a reader with no way to tell them
+   * apart, which is a worse failure than the round-trip asymmetry this
+   * assertion used to protect.
+   *
+   * `toDocumentRow` still DERIVES the column from `parseError` for callers
+   * that hold a fully-parsed record (the precedent path); the document
+   * upload route overrides it to `'pending'` explicitly, where the reason is
+   * visible beside the write.
+   */
+  it('derives parse_state from parseError, and now reads it back onto the wire type', () => {
     const parsed = toDocumentRow(doc, WS, { mime: 'application/pdf', blobKey: 'k1' });
     expect(parsed.parse_state).toBe('parsed');
     const failed = toDocumentRow({ ...doc, parseError: 'could not read' }, WS,
       { mime: 'application/pdf', blobKey: 'k1' });
     expect(failed.parse_state).toBe('failed');
     const back = fromDocumentRow(failed);
-    expect('parseState' in back).toBe(false);
+    expect(back.parseState).toBe('failed');
     expect(back.parseError).toBe('could not read');
+    // …and a pending row comes back saying so, with no parseError to explain
+    // the empty text — which is exactly the state a reader must not mistake
+    // for a document that says nothing.
+    const pending = fromDocumentRow({ ...parsed, parse_state: 'pending', text: '' });
+    expect(pending.parseState).toBe('pending');
+    expect('parseError' in pending).toBe(false);
+    expect(pending.text).toBe('');
   });
 
   it('turns an absent collectionId/documentDate into NULL, and NULL back into absent', () => {

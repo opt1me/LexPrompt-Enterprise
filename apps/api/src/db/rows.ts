@@ -83,6 +83,13 @@ export interface DocumentRecord {
   name: string;
   kind: 'pdf' | 'docx' | 'txt';
   text: string;
+  /** Whether `text` above is the document's text YET (Stage 3 Task 9). Kept
+   *  in step with `packages/core`'s `DocumentRecord`, which carries the long
+   *  form: the upload returns before the parse worker has read the bytes, so
+   *  a caller must be able to tell "still being read" from "read, and it
+   *  says nothing". Optional on the type for the browser's own in-memory
+   *  records; always set by `fromDocumentRow`. */
+  parseState?: 'pending' | 'parsed' | 'failed';
   parseError?: string;
   markupNotice?: string;
   byteSize: number;
@@ -445,9 +452,23 @@ export function fromDocumentRow(row: DocumentRow): DocumentRecord {
     name: row.name,
     kind: row.doc_type,
     text: row.text,
+    // ON THE WIRE from Stage 3 Task 9. The upload returns before the text
+    // exists, so a caller MUST be able to tell "still being read" from "read,
+    // and it says nothing" — and the row is the only thing that knows.
+    // Always present here (the column is NOT NULL), unlike on the type, where
+    // it is optional for records the browser built for itself.
+    parseState: row.parse_state,
     ...absentUnless('parseError', row.parse_error),
     ...absentUnless('markupNotice', row.markup_notice),
-    byteSize: row.byte_size,
+    // `Number`, because `byte_size` is a `bigint` and `pg` hands a bigint
+    // back as a STRING — the same reason `bigintOf` exists for every
+    // `version` column in this file. Found by reading a real upload's
+    // response, which answered `"byteSize":"376293"` against a wire type
+    // that says `number`: JSON.parse on the browser side would produce a
+    // string where arithmetic is expected, and `bytes > limit` on a string
+    // compares lexicographically. Two documents whose sizes differ by a
+    // digit would sort the wrong way round.
+    byteSize: Number(row.byte_size),
     addedAt: epochOf(row.added_at),
     addedByUserId: useridFromColumn(row.added_by_user_id),
     role: row.role,
