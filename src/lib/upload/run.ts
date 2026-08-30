@@ -8,7 +8,7 @@ import { getCollection, saveCollection } from '../db/collections';
 import { getPlaybook, publishAndPoint, savePlaybook } from '../db/playbooks';
 import { listVersions } from '../db/playbookVersions';
 import { migratePlaybookRecord } from '../db/playbookMigration';
-import { getReview, saveReview } from '../db/reviews';
+import { getReview, importReview } from '../db/reviews';
 import { getChangeset, saveChangeset } from '../db/changesets';
 import { migrateReviewRecord } from '../db/reviewMigration';
 import { rewriteAttributionCounted } from './attribution';
@@ -484,7 +484,13 @@ export async function runUpload(
       }
     }
     // eslint-disable-next-line no-await-in-loop
-    const ok = await send(scanned, () => saveReview(body).then(() => undefined),
+    // `importReview`, NOT `saveReview`. A whole-review save carries no
+    // findings any more (the column is frozen and each finding is its own
+    // row), and an import is the one write that must carry them: an exported
+    // review's findings hold the verifications, rejection reasons and notes
+    // this uploader exists to move. The server writes them as rows, and
+    // accepts them only for a review this workspace does not already have.
+    const ok = await send(scanned, () => importReview(body).then(() => undefined),
       async () => (await getReview(body.id)) !== null);
     if (ok && note) {
       outcomes[outcomes.length - 1].reason = note;

@@ -3,6 +3,7 @@ import {
   unchecked, applyVerification, requiresReason, effectiveReason, resetVerification,
   findingKey, makeNote, VerificationError,
 } from './verification.ts';
+import type { Verification } from './types.ts';
 
 describe('unchecked', () => {
   it('starts with no attribution and no timestamp', () => {
@@ -52,10 +53,24 @@ describe('applyVerification', () => {
     expect(verified.state).toBe('verified');
   });
 
-  it('preserves assigneeId across a state change', () => {
-    const assigned = { ...unchecked(), assigneeId: 'someone' };
-    const v = applyVerification(assigned, { state: 'flagged' }, 'u', 5);
-    expect(v.assigneeId).toBe('someone');
+  it('carries NO assigneeId, however one reaches it (P24, Task 22)', () => {
+    /*
+     * INVERTED, NOT DELETED. This read *"preserves assigneeId across a state
+     * change"* and it was right while the field existed: an assignment
+     * pointed at a clause, not at the decision being made.
+     *
+     * The field is gone. It reached nobody (ruling R1) and has no home in
+     * the server schema - an assignment is a record with an assigner, a
+     * message and a resolution, and that table is Stage 4's. The cast is how
+     * a value that no longer has a type still gets tried: real stored data
+     * carries them, and the question is what this function does with one.
+     */
+    const legacy = { ...unchecked(), assigneeId: 'someone' } as Verification;
+    const v = applyVerification(legacy, { state: 'flagged' }, 'u', 5);
+    expect('assigneeId' in v, 'assigneeId came back').toBe(false);
+    // The sanity check: this call did something, so the absence above is
+    // about the field rather than about a function that returned nothing.
+    expect(v).toEqual({ state: 'flagged', byUserId: 'u', at: 5 });
   });
 
   it('allows every state to reach every other state', () => {
@@ -80,13 +95,23 @@ describe('applyVerification', () => {
 
 describe('resetVerification', () => {
   it('returns a bare unchecked verification, dropping attribution and reason', () => {
+    // The rejection is still built, so the assertion is about a reset that
+    // follows a real judgement rather than about a constant.
     const rejected = applyVerification(unchecked(), { state: 'rejected', reason: 'bad' }, 'u', 1);
-    expect(resetVerification(rejected)).toEqual({ state: 'unchecked' });
+    expect(rejected).toMatchObject({ state: 'rejected', byUserId: 'u', reason: 'bad' });
+    expect(resetVerification()).toEqual({ state: 'unchecked' });
   });
 
-  it('keeps assigneeId, which is about the clause and not about the run', () => {
-    const v = { state: 'verified' as const, byUserId: 'u', at: 1, assigneeId: 'someone' };
-    expect(resetVerification(v)).toEqual({ state: 'unchecked', assigneeId: 'someone' });
+  it('takes no argument at all now, because there was nothing left to carry across', () => {
+    // Was "keeps assigneeId, which is about the clause and not about the
+    // run". `assigneeId` was the ONLY thing this function carried over from
+    // the verification it replaced, so removing the field (P24, Task 22)
+    // left a parameter that was read for nothing. `toEqual` would pass on an
+    // object with an extra `undefined`-valued key, so absence is asserted
+    // the way this project asserts absence.
+    const out = resetVerification();
+    expect(out).toEqual({ state: 'unchecked' });
+    expect(Object.keys(out)).toEqual(['state']);
   });
 });
 

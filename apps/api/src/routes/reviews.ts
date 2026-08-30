@@ -4,8 +4,8 @@ import type { Db } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
 import { fromReviewRow, toReviewRow, type Review, type ReviewRow } from '../db/rows.ts';
 import { refuseForeignDocuments } from './matterMembership.ts';
-import { writeFindingRows } from '../findings/write.ts';
 import { readFindingsForReviews } from '../findings/read.ts';
+import { importFindings } from '../findings/import.ts';
 
 /**
  * The `reviews` repository, server side — Task 9's seven properties, plus
@@ -30,9 +30,12 @@ import { readFindingsForReviews } from '../findings/read.ts';
  * saver - which held its own copy of the review and knew nothing about
  * anyone else's writes - overwriting a verification somebody recorded
  * seconds ago, with nothing on any screen to show it. That saver is gone
- * (Task 18) and a judgement is its own row (Task 19), so the specific route
- * is closed; the general one is not, and any browser holding a stale copy
- * of this record can still try to write it back.
+ * (Task 18), a judgement is its own row (Task 19), and since Task 22 this
+ * route refuses a body carrying findings at all — so a save from here can no
+ * longer reach a judgement by any path. The version check stays: this record
+ * still carries `completedAt`, `cancelledAt`, its target and its playbook
+ * snapshot, and a stale browser overwriting those is still a browser
+ * rewriting what a review claims to have checked.
  *
  * So `where review.version = $N` on the DO UPDATE is load-bearing in the
  * strongest sense in this file: it turns "your colleague's verification was
@@ -102,8 +105,10 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
       'select * from review where id = $1 and workspace_id = $2',
       [id, req.actor!.workspaceId]);
     if (!rows[0]) throw new ModelError('There is no such review.', 'not_found', 404);
-    const { findings: _blob, ...review } = fromReviewRow(rows[0]);
-    return review;
+    // `fromReviewRow` stopped carrying the blob in Task 22 (010). This used
+    // to destructure it off here, which was the right shape while the column
+    // was still on the record and the wrong place to decide it.
+    return fromReviewRow(rows[0]);
   });
 
   // NOT `app.put<{ Params: … }>(…)` — see `matters.ts`'s note.
@@ -199,6 +204,35 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
         'select document_ids, target from review where id = $1 and workspace_id = $2',
         [row.id, ws]);
       const already = new Set(held[0] ? documentIdsIn(held[0]) : []);
+
+      /*
+       * FINDINGS IN THE BODY: AN IMPORT ON A CREATE, A REFUSAL ON AN UPDATE.
+       *
+       * Refused on an update because that is the dangerous case and the only
+       * one that actually arises from a browser: a tab left open across a
+       * deploy, still running the code that put the whole review on the wire,
+       * would otherwise believe it had saved sixty findings when the store
+       * took none of them. Accept-and-ignore is the wrong answer to that —
+       * it is the shape of half the defects on CLAUDE.md's list — so it is a
+       * 400 that says what to do.
+       *
+       * Accepted on a CREATE because the uploader moves an exported dataset
+       * into a workspace a review at a time, and an exported review's
+       * findings carry verifications, rejection reasons and notes. Refusing
+       * them would leave the uploader unable to move a review; ignoring them
+       * would drop a lawyer's judgements without saying so. They are written
+       * as ROWS (`importFindings`), below, after the review row exists.
+       */
+      const importing = input.findings !== undefined
+        && Object.keys(input.findings as Record<string, unknown>).length > 0;
+      if (importing && held[0]) {
+        throw new ModelError(
+          'LexPrompt could not save this review (findings are no longer saved with the review '
+          + 'record. Each finding is its own record now, written by the run that produced it and '
+          + 'by the verification, note and net-position routes. Nothing has been saved. This '
+          + 'browser is running code from before that change — reload the page).',
+          'unknown', 400);
+      }
       const ids = documentIdsIn(input).filter(docId => !already.has(docId));
       if (ids.length > 0) {
         const found = await t.query<{ id: string }>(
@@ -217,21 +251,27 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
       // wrong is a cryptic type error at run time rather than at typecheck.
       // `document_ids` and a finding's citation arrays are both arrays.
       const rows = await t.query<ReviewRow>(
+        // NO `findings`, ON EITHER SIDE. The column is frozen (010, P18):
+        // a new row takes the `'{}'::jsonb` default, and an existing row's
+        // blob is the pre-migration backup that nothing may overwrite.
+        // `lexprompt_app` holds no UPDATE grant on it, so a `findings =
+        // excluded.findings` put back here would fail loudly on every save
+        // rather than quietly destroying a backup.
         `insert into review (id, workspace_id, matter_id, playbook_snapshot, playbook_version_id,
-                             document_ids, target, findings, model_id, started_at, completed_at,
+                             document_ids, target, model_id, started_at, completed_at,
                              cancelled_at, created_by_user_id)
-         values ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8::jsonb, $9, $10, $11, $12, $14)
+         values ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7::jsonb, $8, $9, $10, $11, $13)
          on conflict (id) do update set
            playbook_snapshot = excluded.playbook_snapshot,
            playbook_version_id = excluded.playbook_version_id,
            document_ids = excluded.document_ids, target = excluded.target,
-           findings = excluded.findings, model_id = excluded.model_id,
+           model_id = excluded.model_id,
            completed_at = excluded.completed_at, cancelled_at = excluded.cancelled_at,
            version = review.version + 1
-         where review.workspace_id = $2 and review.version = $13
+         where review.workspace_id = $2 and review.version = $12
          returning *`,
         [row.id, ws, row.matter_id, row.playbook_snapshot, row.playbook_version_id,
-          row.document_ids, row.target, row.findings, row.model_id, row.started_at,
+          row.document_ids, row.target, row.model_id, row.started_at,
           row.completed_at, row.cancelled_at, input.version ?? null, row.created_by_user_id]);
       if (!rows[0]) {
         // THE REFUSAL THAT MATTERS. The row moved on — another tab, another
@@ -244,21 +284,30 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
         throw new ConflictError(current[0] ? fromReviewRow(current[0]) : undefined);
       }
 
-      // P17, and it is temporary by design (deleted in Task 22). The browser
-      // still owns the findings blob for the whole of Part 3A; these rows are
-      // its shadow, written in the SAME transaction so a crash cannot leave
-      // them disagreeing. The blob stays authoritative until Task 14 flips
-      // the reader.
+      // The import, AFTER the upsert so the `review` row a finding's foreign
+      // key names exists, and after the version check so a refused save
+      // writes no findings either. `importFindings` refuses a map it cannot
+      // store faithfully — a note naming nobody, a rejection with no reason,
+      // a findings key this review's own target does not explain — with a
+      // 400 naming the cell, rather than letting Postgres answer with a
+      // constraint name.
+      if (importing) {
+        await importFindings(t, row.id, ws, input.target as never, input.findings);
+      }
+
+      // TASK 22: THE SHADOW WRITER IS GONE, WITH THE BLOB WRITE IT SHADOWED.
       //
-      // After the upsert, so the `review` row a finding's foreign key names
-      // exists; after the version check, so a refused save writes no rows
-      // either. `writeFindingRows` refuses a body it cannot store faithfully
-      // — a note naming nobody, a rejection with no reason, a findings key
-      // this review's own target does not explain — with a 400 that says
-      // which cell, rather than letting Postgres answer with a constraint
-      // name.
-      await writeFindingRows(t, { id: row.id, target: input.target, findings: input.findings },
-        ws, req.actor!);
+      // `writeFindingRows` kept the rows in step with `review.findings` for
+      // the whole of Part 3A, in this transaction, so there was never only
+      // one copy of a judgement inside the change that altered it (P17).
+      // There is now one copy and it is the rows: a verification, a note and
+      // a net position are each their own write to their own route (Tasks 15,
+      // 16, 19), and this route no longer receives findings at all — a body
+      // carrying any is REFUSED above rather than accepted and ignored.
+      //
+      // `reconcileFindings` deliberately survives (P18, interface note 11):
+      // it is the tool for any future doubt about the migration, and it works
+      // for exactly as long as the frozen column does.
 
       return fromReviewRow(rows[0]);
     });
@@ -345,11 +394,23 @@ export function parseReview(id: string, body: unknown): Review & { version?: num
     || !b.documentIds.every(v => typeof v === 'string' && v !== '')) {
     bad('documentIds is missing or contains something that is not a document id');
   }
-  if (typeof b.findings !== 'object' || b.findings === null || Array.isArray(b.findings)) {
-    // An ARRAY of findings would be a different record shape entirely, and
-    // the `jsonb_typeof(findings) = 'object'` check would refuse it anyway —
-    // named here so the refusal says which field.
-    bad('findings is missing or is not an object');
+  /*
+   * FINDINGS ARE NEVER SAVED INTO THIS RECORD ANY MORE (P18, Task 22).
+   *
+   * The column is frozen and `toReviewRow` does not produce it. What a body
+   * may still carry is an IMPORT: the uploader moving an exported review into
+   * this workspace, findings and all, for a review nobody here has seen. That
+   * is handled by the route — accepted on a CREATE and refused on an UPDATE —
+   * because whether the review already exists is a question about the
+   * database, and this function only reads the body.
+   *
+   * So the shape is checked here and the decision is made there. An ARRAY is
+   * refused outright: it is a different record shape entirely, and the
+   * `jsonb_typeof(findings) = 'object'` check would refuse it anyway.
+   */
+  if (b.findings !== undefined
+    && (typeof b.findings !== 'object' || b.findings === null || Array.isArray(b.findings))) {
+    bad('findings is present and is not an object');
   }
   if (typeof b.modelId !== 'string' || !b.modelId) bad('modelId is missing or empty');
   if (typeof b.startedAt !== 'number' || !Number.isFinite(b.startedAt)) {
@@ -372,7 +433,11 @@ export function parseReview(id: string, body: unknown): Review & { version?: num
       ? { playbookVersionId: b.playbookVersionId } : {}),
     documentIds: b.documentIds as string[],
     target: b.target,
-    findings: b.findings,
+    // ABSENT when the body had none, not `findings: undefined`.
+    // `structuredClone` preserves an undefined-valued key, and "the caller
+    // said nothing about findings" is a different fact from "the caller sent
+    // an empty map" — which is what decides whether an import happens.
+    ...(b.findings === undefined ? {} : { findings: b.findings }),
     modelId: b.modelId,
     startedAt: b.startedAt,
     ...time('completedAt'),

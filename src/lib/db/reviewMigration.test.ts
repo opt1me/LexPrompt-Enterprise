@@ -504,7 +504,6 @@ describe('reviewMigration — migrateFinding carries every Finding field (regres
       byUserId: 'user-1',
       at: 12345,
       reason: 'not applicable here',
-      assigneeId: 'user-2',
     },
     notes: [
       { id: 'note-1', findingId: 'doc-1::clause-full', text: 'a human note', byUserId: 'user-1', at: 999 },

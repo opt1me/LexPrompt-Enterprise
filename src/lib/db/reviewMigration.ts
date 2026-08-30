@@ -33,7 +33,13 @@ function readVerification(v: unknown): Verification {
   if (typeof src.byUserId === 'string') out.byUserId = src.byUserId;
   if (typeof src.at === 'number' && Number.isFinite(src.at)) out.at = src.at;
   if (src.state === 'rejected' && typeof src.reason === 'string') out.reason = src.reason.trim();
-  if (typeof src.assigneeId === 'string') out.assigneeId = src.assigneeId;
+  // `assigneeId` IS DROPPED, not carried (P24, Stage 3 Task 22). The field
+  // reached nobody and has no home in the server schema; an assignment is a
+  // record with an assigner, a message and a resolution, and that table is
+  // Stage 4's. Dropping it here is what makes this reader agree with
+  // `findings/read.ts`, which does not synthesise one either. A legacy record
+  // that carried one is not lost: the migration report names every one, and
+  // the frozen `review.findings` blob still holds them.
   return out;
 }
 

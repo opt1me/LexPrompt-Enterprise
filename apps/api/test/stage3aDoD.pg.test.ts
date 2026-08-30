@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { appDb, migratorDb, workerDb, withPg } from './helpers/pgHarness.ts';
 import type { Db, Tx } from '../src/db/pool.ts';
-import { writeFindingRows } from '../src/findings/write.ts';
+import { importFindings } from '../src/findings/import.ts';
 import { describeDiscrepancies, reconcileFindings } from '../src/findings/reconcile.ts';
 
 /**
@@ -183,8 +183,13 @@ async function withACommittedReview(
                              model_id, started_at, created_by_user_id)
          values ($1, $2, $3, '{}'::jsonb, $4::jsonb, $5::jsonb, 'm', now(), $6)`,
         [REVIEW, WS, MATTER, JSON.stringify(TARGET), JSON.stringify(bodyFor(me, other)), me]);
-      await writeFindingRows(
-        t, { id: REVIEW, target: TARGET, findings: bodyFor(me, other) }, WS, { id: me });
+      // `importFindings`, NOT THE SHADOW WRITER. `writeFindingRows` is gone
+      // with the blob write it shadowed (Task 22). This is the surviving
+      // path from a whole findings map to rows — the one the uploader uses
+      // to move an exported review — and it is the honest fixture for a
+      // review that carries a blob AND rows, which is the pre-freeze shape
+      // this sweep is about.
+      await importFindings(t, REVIEW, WS, TARGET as never, bodyFor(me, other));
     });
     await body({ me, other });
   } finally {
@@ -220,28 +225,39 @@ describe('the rows and the blob agree for EVERY review in the database (P17)', (
     });
   });
 
-  it('leaves review.findings byte-identical — Part 3A changes the rows, never the blob', async () => {
+  it('leaves review.findings byte-identical, and now by GRANT rather than by care', async () => {
     /*
-     * "The blob is unmodified by anything in Part 3A." The shadow writer
-     * runs inside the same transaction as the blob write and its whole job
-     * is the OTHER copy; if it ever touched `review.findings`, P17's second
-     * copy would be a copy of the thing it is meant to be checked against.
+     * "The blob is unmodified." Part 3A proved this by observing that the
+     * shadow writer did not touch it; TASK 22 MAKES IT UNTOUCHABLE.
+     * Migration 010 converted `lexprompt_app`'s table-level UPDATE on
+     * `review` into a column list that does not name `findings`, so the
+     * question is no longer whether some code path happens to write it.
      *
      * `version` is asserted alongside the checksum because the review row's
-     * optimistic-concurrency token is what a browser holds: a shadow write
-     * that bumped it would make the next save from a live tab fail as stale,
-     * mid-run, with no user-visible cause. That is a user-visible change,
-     * and it is the shape this part promises not to have.
+     * optimistic-concurrency token is what a browser holds: a write that
+     * bumped it would make the next save from a live tab fail as stale,
+     * mid-run, with no user-visible cause.
+     *
+     * `frozenBlob.pg.test.ts` carries the freeze's own suite - the grant, the
+     * refusal, the route's 400. What is here is the corpus claim this file
+     * exists for, over a committed review with real human state in it.
      */
-    await withACommittedReview(async ({ me, other }) => {
+    await withACommittedReview(async () => {
       const read = async () => (await migratorDb().query<{ md5: string; v: string }>(
         'select md5(findings::text) md5, version::text v from review where id = $1',
         [REVIEW]))[0];
       const before = await read();
       expect(before.md5).toMatch(/^[0-9a-f]{32}$/);
 
-      await appDb().tx(t => writeFindingRows(
-        t, { id: REVIEW, target: TARGET, findings: bodyFor(me, other) }, WS, { id: me }));
+      // Attempted as the role a request runs as, and REFUSED. Paired with a
+      // column the same role may write, so a `review` table that did not
+      // exist could not produce a refusal of the right shape.
+      await expect(appDb().query(
+        "update review set findings = '{}'::jsonb where id = $1", [REVIEW]))
+        .rejects.toThrow(/permission denied/i);
+      await expect(appDb().query(
+        'update review set model_id = model_id where id = $1', [REVIEW]))
+        .resolves.toBeDefined();
 
       expect(await read()).toEqual(before);
     });

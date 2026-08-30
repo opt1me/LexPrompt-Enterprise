@@ -54,10 +54,16 @@ export interface VerificationChange {
  * Every state can reach every other state — a reviewer who verified in error
  * must be able to flag it, and a rejection can be withdrawn. What is NOT
  * free-form is the shape of the result: attribution and timestamp are always
- * rewritten by the human action that caused the change, a reason is required
- * on `rejected` and dropped on everything else (a stale "wrong clause" left
- * hanging on a now-verified finding would read as if it still applied), and
- * `assigneeId` — which is about the clause, not this decision — survives.
+ * rewritten by the human action that caused the change, and a reason is
+ * required on `rejected` and dropped on everything else (a stale "wrong
+ * clause" left hanging on a now-verified finding would read as if it still
+ * applied).
+ *
+ * There used to be a third rule here — *"`assigneeId`, which is about the
+ * clause and not this decision, survives"*. The field is gone (P24, Task
+ * 22): it reached nobody, and an assignment is a record with an assigner, a
+ * message and a resolution rather than a string carried on somebody else's
+ * judgement.
  */
 export function applyVerification(
   current: Verification,
@@ -73,7 +79,6 @@ export function applyVerification(
 
   const next: Verification = { state: change.state, byUserId, at };
   if (requiresReason(change.state) && reason) next.reason = reason;
-  if (current.assigneeId !== undefined) next.assigneeId = current.assigneeId;
   return next;
 }
 
@@ -83,13 +88,16 @@ export function applyVerification(
  * and reason all go: they described a judgement about text that no longer
  * exists, and keeping them would let an export claim a human checked
  * something they never saw. This is the single most important rule in this
- * sub-project. `assigneeId` stays because it points at a clause, not at a
- * particular run's output.
+ * sub-project.
+ *
+ * It carried `assigneeId` across, on the grounds that an assignment points
+ * at a clause rather than at a run's output. The field is gone (P24, Task
+ * 22) and the parameter with it, so a reset is now the whole of
+ * `unchecked()` and nothing else - which is what the sentence above always
+ * described.
  */
-export function resetVerification(current: Verification): Verification {
-  const next = unchecked();
-  if (current.assigneeId !== undefined) next.assigneeId = current.assigneeId;
-  return next;
+export function resetVerification(): Verification {
+  return unchecked();
 }
 
 /** The stable key identifying one finding across a review: a review holds

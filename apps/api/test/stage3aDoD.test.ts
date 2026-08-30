@@ -101,14 +101,15 @@ describe('the scanners find something (a guard that matches nothing passes vacuo
       'src/App.tsx', 'src/lib/db/reviews.ts',
       'src/features/review/runReview.ts', 'src/lib/api/client.ts',
       'apps/api/src/routes/reviews.ts', 'apps/api/src/routes/runs.ts',
-      'apps/api/src/findings/write.ts', 'apps/api/src/findings/reconcile.ts',
+      'apps/api/src/findings/reconcile.ts',
       'apps/api/src/findings/backfill.ts', 'apps/api/src/findings/read.ts',
       'apps/api/src/dispositions/service.ts', 'apps/api/src/routes/findings.ts',
       'src/lib/api/findings.ts', 'src/lib/api/runs.ts', 'src/lib/loadError.ts',
       'src/lib/documents.ts', 'apps/api/src/parse/hydrate.ts',
       'apps/api/src/run/worker.ts', 'apps/api/src/run/queue.ts', 'apps/api/src/run/reaper.ts',
       'apps/api/src/main.ts',
-      'apps/api/test/dispositions.pg.test.ts', 'apps/api/test/shadowWrite.pg.test.ts',
+      'apps/api/test/dispositions.pg.test.ts', 'apps/api/test/frozenBlob.pg.test.ts',
+      'apps/api/src/findings/import.ts',
       'apps/api/test/workerGrants.pg.test.ts', 'apps/api/test/runWorker.compose.test.ts',
       'apps/api/test/stage3aDoD.pg.test.ts',
     ]) {
@@ -179,19 +180,36 @@ describe('Part 3A: the new machinery exists and is sound', () => {
      * type system carries the rest — `writeFindingRows` takes a `Tx`, and a
      * `Db` will not type-check in its place.
      */
-    const callers = ALL_SOURCES.filter(f => /await\s+writeFindingRows\s*\(/.test(codeOf(f)))
-      .map(rel).sort();
-    expect(callers).toEqual(['apps/api/src/routes/reviews.ts']);
-    // `await` rather than the bare name, because the bare name also matches
-    // the `export async function` that declares it — a scan that counted its
-    // own definition as a caller would report two and be relaxed to `.length
-    // <= 2`, which would then admit a real second caller silently.
-    expect(codeOf(at('apps/api/src/findings/write.ts'))).toContain('export async function writeFindingRows');
+    /*
+     * TASK 22 HAS LANDED AND THE SHADOW IS GONE, so this asserts the
+     * opposite — inverted rather than deleted, because a guard that
+     * disappears when the thing it guarded happens has stopped guarding.
+     *
+     * `writeFindingRows` existed so there was never only one copy of a
+     * judgement inside the change that altered it. The blob is frozen now
+     * (010), no application role may update it, and the rows are the one
+     * copy. A `writeFindingRows` anywhere in this repository would be a
+     * second writer of a finding, which is the thing this whole stage
+     * exists to end.
+     */
+    const callers = ALL_SOURCES.filter(f => /writeFindingRows/.test(codeOf(f))).map(rel).sort();
+    expect(callers, 'the shadow writer is back').toEqual([]);
+    // THE SANITY CHECK. The scan above bites on the name it is looking for,
+    // and it is running over a real corpus rather than an empty one.
+    expect(ALL_SOURCES.filter(f => /reconcileFindings/.test(codeOf(f))).map(rel).sort())
+      .toContain('apps/api/src/findings/reconcile.ts');
+    expect(there('apps/api/src/findings/write.ts')).toBe(false);
     const route = codeOf(at('apps/api/src/routes/reviews.ts'));
-    expect(route).toMatch(/await\s+writeFindingRows\(\s*t\s*,/);
     expect(route).toMatch(/await\s+t\.query<ReviewRow>\(\s*`?\s*insert into review/);
-    // …and the blob write is inside a transaction at all.
+    // …and the review write is inside a transaction at all.
     expect(route).toContain('return db.tx(async t => {');
+    // The reconciler survives the deletion DELIBERATELY (P18, interface note
+    // 11): it is the tool for a future doubt about the migration, and it
+    // works for exactly as long as the frozen column exists. It kept the
+    // blob reader with it.
+    const reconcile = codeOf(at('apps/api/src/findings/reconcile.ts'));
+    expect(reconcile).toContain('export async function reconcileFindings');
+    expect(reconcile).toContain('export function readFindingsBlob');
   });
 
   it('runs the engine as its own role, and starts all three loops', () => {
@@ -422,10 +440,27 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     // It would have gone on passing after the flip for a reason that had
     // nothing to do with the flip: one more guard that was not guarding
     // what it claimed.
+    //
+    // TASK 22 MOVED WHERE THIS IS DECIDED. The route used to destructure the
+    // blob off (`const { findings: _blob, ...review }`); `fromReviewRow`
+    // stopped producing it, so the whole mapping carries none and no caller
+    // has to remember to strip it. Asserted over the MAPPER as well as the
+    // route, because that is where the decision now lives.
     const route = codeOf(at('apps/api/src/routes/reviews.ts'));
     expect(route).toContain('readFindingsForReviews');
-    expect(route).toMatch(/const \{ findings: _blob, \.\.\.review \} = fromReviewRow\(rows\[0\]\)/);
-    expect(route).toMatch(/return review;/);
+    // NOT `findings: row.findings` — the response must never carry the frozen
+    // blob. `parseReview`'s `findings: b.findings` IS still there and should
+    // be: it reads a body's map so an IMPORT can be written as rows, and it
+    // is the line the previous form of this assertion was accidentally
+    // matching instead of the one it named. Scoped to `row` for that reason.
+    expect(route).not.toMatch(/findings:\s*row\.findings/);
+    const rows = codeOf(at('apps/api/src/db/rows.ts'));
+    expect(rows).not.toMatch(/findings:\s*parsedJson\(row\.findings\)/);
+    expect(rows).not.toMatch(/findings:\s*JSON\.stringify\(x\.findings\)/);
+    // The sanity check: the mapper still maps, so the two absences above are
+    // about `findings` rather than about a file that emptied.
+    expect(rows).toMatch(/target:\s*parsedJson\(row\.target\)/);
+    expect(rows).toMatch(/target:\s*JSON\.stringify\(x\.target\)/);
   });
 
   it('and a whole-review save can no longer DELETE a finding row (Task 14 s ruling)', () => {
@@ -440,43 +475,78 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
      * behaviour; this proves the statement is not there to be re-enabled by
      * a later edit that "restores" it.
      */
-    const write = codeOf(at('apps/api/src/findings/write.ts'));
     const DELETES_FINDING = /delete\s+from\s+finding\b/i;
     // The scan bites on the statement it is looking for.
     expect(DELETES_FINDING.test('await t.query(`delete from finding f where f.review_id = $1`)'))
       .toBe(true);
     expect(DELETES_FINDING.test('delete from note where review_id = $1')).toBe(false);
-    expect(DELETES_FINDING.test(write), 'the Task 14 delete is back').toBe(false);
-    // The file still writes findings, so the check above is not passing
-    // because the file emptied.
-    expect(write).toMatch(/insert into finding\b/i);
+    /*
+     * TASK 22 WIDENED THIS FROM ONE FILE TO EVERY ROUTE. It read
+     * `findings/write.ts`, which is now deleted with the shadow writer — and
+     * a guard whose only target has gone is a guard that passes because
+     * there is nothing to look at. So the question is asked of every route
+     * instead: no request handler may delete a finding row.
+     *
+     * `findings/backfill.ts` is the one legitimate deleter and is not a
+     * route: 007's shred owns the migration, and a re-run of it clears what
+     * it is about to rewrite.
+     */
+    const deleters = ROUTE_SOURCES.filter(f => DELETES_FINDING.test(codeOf(f))).map(rel).sort();
+    expect(deleters, 'a route deletes a finding row').toEqual([]);
+    // THE SANITY CHECK: the routes were read, and the scan finds the DELETEs
+    // that are legitimately there (a review, a matter).
+    expect(ROUTE_SOURCES.filter(f => /delete\s+from\s+review\b/i.test(codeOf(f))).map(rel))
+      .toContain('apps/api/src/routes/reviews.ts');
   });
 
-  it('review.findings is untouched by every migration in this part — P18 is Task 22', () => {
+  it('review.findings is FROZEN AND KEPT — P18 has landed and nothing dropped it', () => {
     /*
-     * "The blob is unmodified." Two halves, and the second is the one that
-     * could be quietly false: no migration in Part 3A alters, drops or
-     * revokes anything on that column, and the freeze itself has not arrived
-     * early either. P18 is deliberate and it belongs with the writer flip —
-     * revoking UPDATE while a browser is still the writer would break every
-     * save in the app.
+     * TASK 22 HAS LANDED. This read *"review.findings is untouched by every
+     * migration in this part — P18 is Task 22"*, and the flip is the point:
+     * the column is now revoked, and the assertion that must never go green
+     * is the OTHER one — that no migration ever DROPS it.
+     *
+     * "Never delete what you cannot read" (CLAUDE.md). The blob is the
+     * pre-migration backup and the only thing that can still answer "did the
+     * shred lose anything?", which `reconcileFindings` asks key by key. It
+     * is dropped by a later release, after the owner confirms the rows are
+     * good — the same release that deletes the browser's IndexedDB database.
+     * A migration that drops it is the one change in this stage that cannot
+     * be undone.
      */
     const sql = migrationSql();
-    // The scan bites on each shape the change would take.
-    const TOUCHES = /alter\s+table\s+review[^;]*\bfindings\b|drop\s+column[^;]*\bfindings\b|revoke[^;]*\(\s*findings\s*\)[^;]*review/i;
-    expect(TOUCHES.test('alter table review drop column findings;')).toBe(true);
-    expect(TOUCHES.test('revoke update (findings) on review from lexprompt_app;')).toBe(true);
-    expect(TOUCHES.test('create table finding (review_id text not null);')).toBe(false);
-    expect(TOUCHES.test(sql), 'a migration in Part 3A changes review.findings').toBe(false);
-    // By CONTENT of the name, not by its number. This read
-    // `there('apps/api/migrations/009_freeze_findings.sql')`, and 009 is now
-    // taken (`009_evidence_and_indexes.sql`), so Task 22's file will be 010
-    // and the old assertion would have gone vacuously true — a guard that
-    // stops guarding the moment somebody adds an unrelated migration.
+    const DROPS = /drop\s+column[^;]*\bfindings\b|alter\s+table\s+review[^;]*drop[^;]*\bfindings\b/i;
+    // The scan bites on each shape the drop would take.
+    expect(DROPS.test('alter table review drop column findings;')).toBe(true);
+    expect(DROPS.test('alter table review drop column if exists findings;')).toBe(true);
+    expect(DROPS.test('revoke update (findings) on review from lexprompt_app;')).toBe(false);
+    expect(DROPS.test(sql), 'a migration DROPS the frozen blob').toBe(false);
+    // The freeze itself is here, by CONTENT of the name rather than by its
+    // number — 009 was taken by `009_evidence_and_indexes.sql`, so this is
+    // 010, and a guard keyed on a number stops guarding the moment somebody
+    // adds an unrelated migration.
     const freezes = readdirSync(MIGRATIONS).filter(f => /freeze_findings/.test(f));
-    expect(freezes, 'Task 22 arrived early').toEqual([]);
+    expect(freezes).toHaveLength(1);
+    /*
+     * THE FORM MATTERS, AND THE OBVIOUS ONE DOES NOTHING.
+     * `revoke update (findings) on review from lexprompt_app` is a NO-OP
+     * against the table-level UPDATE 002 granted: Postgres keeps table
+     * privileges in `relacl` and column privileges in `attacl`, and a
+     * column-level revoke only touches the second. No error, no warning, and
+     * a freeze that froze nothing. Verified against this project's own
+     * database before the migration was written. So the table-level grant is
+     * revoked and the columns are granted back BY NAME.
+     */
+    expect(sql).toMatch(/revoke\s+update\s+on\s+review\s+from\s+lexprompt_app/i);
+    const grants = sql.match(/grant\s+update\s*\(([^)]*)\)\s*on\s+review\s+to\s+lexprompt_app/i);
+    expect(grants, 'the columns were not granted back by name').not.toBeNull();
+    expect(grants![1]).not.toMatch(/\bfindings\b/);
+    expect(grants![1]).toMatch(/\bplaybook_snapshot\b/);   // the sanity check
     // The column and the check that keeps it an object are still there.
     expect(sql).toMatch(/jsonb_typeof\(findings\)\s*=\s*'object'/);
+    // …and it says, in the database itself, what it is and what not to do
+    // with it. A comment is what the next person reads before dropping it.
+    expect(sql).toMatch(/comment\s+on\s+column\s+review\.findings/i);
   });
 });
 

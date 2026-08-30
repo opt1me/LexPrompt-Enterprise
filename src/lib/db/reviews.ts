@@ -164,16 +164,62 @@ export async function getReview(id: string): Promise<Review | null> {
  * A stale write REJECTS with a `conflict` `ModelError` rather than being
  * applied. Every caller must surface it — silently losing a colleague's
  * verification is the failure this refusal exists to prevent.
+ *
+ * ## THE FINDINGS ARE NOT SENT (Task 22, P18)
+ *
+ * `Review.findings` is still the shape this browser holds a review in, and
+ * the map in it is real — read from `GET /v1/reviews/:id/findings`, which
+ * assembles it from the `finding`, `finding_disposition` and `note` rows.
+ * What it is NOT is anything this route should be told about. Each finding
+ * is written by the run that produced it; each judgement by its own route.
+ *
+ * So the key is REMOVED from the body rather than sent and ignored — and the
+ * server refuses a non-empty one with a 400 rather than accepting it, which
+ * is the half of this that protects a browser running older code. Sending
+ * `{}` would be sending a claim ("this review found nothing") that happens
+ * to be harmless today; sending nothing is the honest shape of "this write
+ * is not about findings".
  */
 export async function saveReview(r: Review): Promise<Review> {
   const known = lastSeenVersion.get(r.id);
-  const body: Review = {
-    ...r,
+  const { findings: _findings, ...rest } = r;
+  const body = {
+    ...rest,
     playbookSnapshot: structuredClone(r.playbookSnapshot),
     ...(known === undefined ? {} : { version: known }),
   };
   const saved = await apiSend<Review>('PUT', `/v1/reviews/${encodeURIComponent(r.id)}`, body);
+  // The response carries no findings either (`fromReviewRow` stopped
+  // producing them), so the caller's own map is what stays on screen.
   return remember(saved);
+}
+
+/**
+ * A review moving in from an EXPORT — the one write that still carries its
+ * findings, and the only caller is `upload/run.ts`.
+ *
+ * An exported review's findings hold verifications, rejection reasons and
+ * notes: a lawyer's judgements, which is the content this application exists
+ * to record. `saveReview` above drops the key because a whole-review save
+ * has nothing to say about findings and the server refuses one that claims
+ * otherwise — but an import has everything to say about them, and dropping
+ * them here would move a review into a new workspace with every judgement
+ * silently gone. That is the failure this project's own list opens with.
+ *
+ * The server accepts them ONLY on a review it does not already have, and
+ * writes them as ROWS (`findings/import.ts`); the frozen `review.findings`
+ * column is not written by this or by anything else. A second import of the
+ * same id is refused with a 400 the uploader reports, rather than quietly
+ * overwriting the judgements already here.
+ *
+ * NO REMEMBERED VERSION IS STAMPED, deliberately: an import is a create, and
+ * a create that carried a version this browser remembers from some earlier
+ * life of the same id would be refused as stale against a row that does not
+ * exist.
+ */
+export async function importReview(r: Review): Promise<Review> {
+  const body: Review = { ...r, playbookSnapshot: structuredClone(r.playbookSnapshot) };
+  return remember(await apiSend<Review>('PUT', `/v1/reviews/${encodeURIComponent(r.id)}`, body));
 }
 
 /** A 404 RESOLVES — the caller asked for the review to be gone and it is

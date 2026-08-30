@@ -659,16 +659,22 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
      * presence, and an affordance implying otherwise is a promise the app
      * cannot keep.
      *
-     * `assigneeId` is the awkward case and it is handled by scope rather
-     * than by pretending it is gone. It is a field on `Verification`, inside
-     * a `Finding`, inside a `review.findings` jsonb column, and S17 retires
-     * it in Stage 3 when findings become rows — retiring it now would mean a
-     * jsonb migration immediately followed by the real one. So four modules
-     * legitimately CARRY it: the type that declares it, the two verification
-     * helpers that preserve it across a reset (it points at a clause, not at
-     * a decision), the migration that reads it off an old record, and the
-     * uploader's attribution rewrite that treats it as one of the `*UserId`
-     * family.
+     * `assigneeId` WAS the awkward case, and S17's promise has been kept:
+     * **Stage 3 Task 22 retired the field.** `Verification` no longer
+     * declares it, `applyVerification` no longer carries it across a state
+     * change, `resetVerification` takes no argument because that was the
+     * only thing it carried, and `reviewMigration` DROPS it off a legacy
+     * record rather than reading it through. Not a discard — Task 6's
+     * migration report names every finding that carried a non-empty value,
+     * and the frozen `review.findings` blob still holds them all (P18).
+     *
+     * ONE carrier is left and it is a different kind of thing: the
+     * uploader's attribution rewrite, which walks an uploaded record's raw
+     * JSON and rewrites every key naming a person. That code reads DATA, not
+     * the type — an uploaded review exported before this change still has
+     * the key in it, and leaving exactly one dangling local id behind on the
+     * argument that nobody is looking is the argument that stops being true
+     * the moment somebody does.
      *
      * The rule is therefore: **no `.tsx` may name it at all.** A field
      * carried through a data structure is invisible; a field a component
@@ -678,14 +684,12 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
      * exists to avoid.
      */
     const ASSIGNEE_CARRIERS = [
-      // `Verification.assigneeId` and the function that mints an unchecked
-      // one moved into `packages/core` with the rest of the review closure
-      // (Stage 3 Task 2). The field still reaches nobody; it has simply
-      // stopped being declared only in the browser's half of the codebase,
-      // which is if anything the more important half to keep watching.
-      'packages/core/src/domain/types.ts',
-      'packages/core/src/domain/verification.ts',
-      'src/lib/db/reviewMigration.ts',
+      // The list was four (the type, the two verification helpers, the
+      // legacy-record reader, the uploader's attribution rewrite). Stage 3
+      // Task 22 retired the field and the first three stopped carrying it.
+      // Shrinking this list is the point of the "every carrier still carries
+      // it" assertion below: a stale exemption is an exemption nobody
+      // re-reads.
       'src/lib/upload/attribution.ts',
     ];
     const ASSIGNEE = /\bassigneeId\b|\bassignedTo\b/;

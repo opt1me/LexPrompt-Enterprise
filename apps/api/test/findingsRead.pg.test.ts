@@ -4,6 +4,7 @@ import { withPg, dbOn } from './helpers/pgHarness.ts';
 import { buildTestApi } from './helpers/apiHarness.ts';
 import type { Tx } from '../src/db/pool.ts';
 import { reconcileFindings, describeDiscrepancies } from '../src/findings/reconcile.ts';
+import { importFindings as seedFindingRows } from '../src/findings/import.ts';
 
 /**
  * TASK 14: FINDINGS ARE READ FROM ROWS.
@@ -76,17 +77,36 @@ const finding = (over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/**
+ * TASK 22: NO `findings` KEY. The route refuses a body carrying any, because
+ * the blob is frozen and each finding is its own row. The rows these tests
+ * read are seeded by `seedFindingRows` — the state a finished run leaves
+ * behind — rather than by a PUT that the shadow writer used to shred.
+ */
 const REVIEW = (over: Record<string, unknown> = {}) => ({
   id: 'r1', matterId: 'm1',
   playbookSnapshot: SNAPSHOT,
   documentIds: ['d1'],
   target: { kind: 'documents', documentIds: ['d1'] },
-  findings: { d1: { c1: finding() } },
   modelId: 'test/model',
   startedAt: 1_700_000_000_000,
   createdByUserId: '',
   ...over,
 });
+
+const DOCS_TARGET = { kind: 'documents' as const, documentIds: ['d1'] };
+
+/** Creates the review, then plants its findings AS ROWS. Two writes, because
+ *  they are two writes in the product: a review record is created by one
+ *  request and its findings are written by the run. */
+async function aReviewWith(
+  t: Tx, h: Harness, blob: unknown, over: Record<string, unknown> = {},
+): Promise<any> {
+  const review = REVIEW(over);
+  const saved = await h.put('/v1/reviews/r1', review);
+  await seedFindingRows(t, 'r1', WS, review.target as never, blob);
+  return saved;
+}
 
 interface Harness {
   app: FastifyInstance;
@@ -131,7 +151,7 @@ describe('the findings route assembles three tables into the shape every caller 
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW());
+      await aReviewWith(t, h, { d1: { c1: finding() } });
 
       // Nobody has touched it: `changed_count = 0`, so the reading is
       // `unchecked()` and it names nobody. §6.3.
@@ -158,7 +178,7 @@ describe('the findings route assembles three tables into the shape every caller 
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW());
+      await aReviewWith(t, h, { d1: { c1: finding() } });
       const f = (await read(h)).findings.d1.c1;
       // `toEqual` cannot see the difference between an absent key and an
       // `undefined` one, and `structuredClone` — how the browser's own
@@ -184,14 +204,13 @@ describe('the findings route assembles three tables into the shape every caller 
       await aDocument(t, 'd2');
       await aCollection(t, 'col-1', 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW({
+      await aReviewWith(t, h, { 'col-1': { c1: finding({ netPosition: {
+        text: 'Read in order, the tenant has a rolling break on six months notice.',
+        state: 'unconfirmed', trail: [],
+      } }) } }, {
         documentIds: ['d1', 'd2'],
         target: { kind: 'collection', collectionId: 'col-1', documentIds: ['d1', 'd2'] },
-        findings: { 'col-1': { c1: finding({ netPosition: {
-          text: 'Read in order, the tenant has a rolling break on six months notice.',
-          state: 'unconfirmed', trail: [],
-        } }) } },
-      }));
+      });
       const page = await read(h);
       expect(Object.keys(page.findings)).toEqual(['col-1']);
       expect(page.findings['col-1'].c1.netPosition.state).toBe('unconfirmed');
@@ -204,12 +223,12 @@ describe('the findings route assembles three tables into the shape every caller 
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW({ findings: { d1: {
+      await aReviewWith(t, h, { d1: {
         c1: finding({ notes: [
           { id: 'n2', findingId: 'd1::c1', text: 'Second.', byUserId: HUMAN, at: 1_700_000_020_000 },
           { id: 'n1', findingId: 'd1::c1', text: 'First.', byUserId: HUMAN, at: 1_700_000_010_000 },
         ] }),
-      } } }));
+      } });
       const notes = (await read(h)).findings.d1.c1.notes;
       expect(notes.map((n: { text: string }) => n.text)).toEqual(['First.', 'Second.']);
       expect(notes[0]).toEqual({
@@ -224,7 +243,7 @@ describe('the findings route assembles three tables into the shape every caller 
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW());
+      await aReviewWith(t, h, { d1: { c1: finding() } });
       expect((await read(h)).dispositionVersions).toEqual({ d1: { c1: 1 } });
       await t.query(
         `update finding_disposition set state = 'flagged', by_user_id = $1, at = now(),
@@ -239,9 +258,9 @@ describe('the findings route assembles three tables into the shape every caller 
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW({ findings: { d1: { c1: finding({
+      await aReviewWith(t, h, { d1: { c1: finding({
         verification: { state: 'flagged', byUserId: HUMAN, at: 1_700_000_009_000 },
-      }) } } }));
+      }) } });
       expect('assigneeId' in (await read(h)).findings.d1.c1.verification).toBe(false);
       await h.app.close();
     });
@@ -255,11 +274,11 @@ describe('the findings route assembles three tables into the shape every caller 
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW({ findings: { d1: { c1: finding({ notes: [
+      await aReviewWith(t, h, { d1: { c1: finding({ notes: [
         { id: 'n1', findingId: 'd1::c1', text: 'a', byUserId: HUMAN, at: 1 },
         { id: 'n2', findingId: 'd1::c1', text: 'b', byUserId: HUMAN, at: 2 },
         { id: 'n3', findingId: 'd1::c1', text: 'c', byUserId: HUMAN, at: 3 },
-      ] }) } } }));
+      ] }) } });
       const page = await read(h);
       expect(Object.keys(page.findings.d1)).toEqual(['c1']);
       expect(page.findings.d1.c1.notes).toHaveLength(3);
@@ -288,7 +307,7 @@ describe('empty is not broken, at the new load path', () => {
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW({ findings: {} }));
+      await h.put('/v1/reviews/r1', REVIEW());
       expect(await read(h)).toMatchObject({ findings: {}, dispositionVersions: {} });
       await h.app.close();
     });
@@ -301,7 +320,7 @@ describe('the review record itself no longer carries the blob to a reader', () =
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW());
+      await aReviewWith(t, h, { d1: { c1: finding() } });
       const review = await h.get('/v1/reviews/r1');
       expect('findings' in review).toBe(false);
       await h.app.close();
@@ -313,7 +332,7 @@ describe('the review record itself no longer carries the blob to a reader', () =
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW());
+      await aReviewWith(t, h, { d1: { c1: finding() } });
       // A judgement recorded in the ROWS and nowhere in the blob — which is
       // exactly what a disposition written through its own route is.
       await t.query(
@@ -326,21 +345,54 @@ describe('the review record itself no longer carries the blob to a reader', () =
     });
   });
 
-  it('and the two agree on a review saved through the blob — P17 s reconciliation, at the read', async () => {
+  it('and the rows still reconcile against a blob that HAS one — the pre-freeze case', async () => {
+    /*
+     * TASK 22 CHANGED WHAT THIS CAN ASSERT, AND SAYING SO IS THE POINT.
+     *
+     * It used to save a review THROUGH the blob and check that the rows the
+     * shadow writer produced agreed with it. The route refuses a body with
+     * findings now and the column is frozen, so a review created today has
+     * rows and an EMPTY blob — which `reconcileFindings` correctly reports
+     * as "a row the blob no longer has". That is not a loss; it is what a
+     * frozen backup looks like once the record has moved on.
+     *
+     * So the fixture plants the pre-freeze shape directly — a blob written
+     * by a migrator-era INSERT, with rows built from it — and asserts what
+     * the reconciler is FOR: that a review carrying a real blob still
+     * reconciles clean against its rows, key by key and field by field.
+     * That is the question P18 keeps the column to answer, and Task 26 asks
+     * it once over the whole corpus.
+     */
     await withPg(async t => {
       await aMatter(t);
       await aDocument(t, 'd1');
       const h = harness(t);
-      await h.put('/v1/reviews/r1', REVIEW({ findings: { d1: { c1: finding({
+      const blob = { d1: { c1: finding({
         verification: { state: 'rejected', reason: 'Wrong clause.', byUserId: HUMAN,
           at: 1_700_000_009_000 },
         notes: [{ id: 'n1', findingId: 'd1::c1', text: 'Checked.', byUserId: HUMAN, at: 5 }],
-      }) } } }));
-      const blob = (await t.query<{ findings: unknown }>(
+      }) } };
+      // THE REVIEW ROW IS INSERTED DIRECTLY, blob and all, because there is
+      // no longer any other way to produce one. `update review set findings`
+      // is refused for the app role by migration 010 — the freeze biting in
+      // a test is the freeze working — and the route has never carried the
+      // blob since Task 14. An INSERT still may, which is deliberate (010's
+      // own note): the verb that could destroy a pre-migration backup is
+      // UPDATE, and a suite that reconciles the frozen blob has to be able
+      // to construct one.
+      await t.query(
+        `insert into review (id, workspace_id, matter_id, playbook_snapshot, document_ids,
+                             target, findings, model_id, started_at)
+         values ('r1', $1, 'm1', $2::jsonb, '["d1"]'::jsonb, $3::jsonb, $4::jsonb,
+                 'test/model', now())`,
+        [WS, JSON.stringify(SNAPSHOT), JSON.stringify(DOCS_TARGET), JSON.stringify(blob)]);
+      await seedFindingRows(t, 'r1', WS, DOCS_TARGET, blob);
+
+      const stored = (await t.query<{ findings: unknown }>(
         "select findings from review where id = 'r1'"))[0].findings as
         Record<string, Record<string, unknown>>;
       const rows = (await read(h)).findings;
-      expect(rows).toEqual(blob);
+      expect(rows).toEqual(stored);
       const found = await reconcileFindings(t, 'r1');
       expect(found, describeDiscrepancies(found)).toEqual([]);
       await h.app.close();
@@ -350,12 +402,20 @@ describe('the review record itself no longer carries the blob to a reader', () =
 
 describe('a stale whole-review save can no longer destroy an authoritative row', () => {
   /*
-   * TASK 14'S RULING ON `writeFindingRows`'s DELETE. See the long form in
-   * `findings/write.ts`: the delete was correct while the blob was the
-   * record of truth and is not correct now, because a body that omits a key
-   * is a body that is BEHIND — which is precisely what Part 3A's gate named
-   * as the window this task closes ("a run started via the new route
-   * produces rows that the next browser save would delete").
+   * TASK 14'S RULING ON `writeFindingRows`'s DELETE, and TASK 22 CLOSED IT
+   * FROM THE OTHER END.
+   *
+   * The delete was correct while the blob was the record of truth and was
+   * not correct afterwards, because a body that omits a key is a body that
+   * is BEHIND — which is precisely what Part 3A's gate named as the window
+   * Task 14 closed ("a run started via the new route produces rows that the
+   * next browser save would delete"). Task 22 removed the whole path: a
+   * whole-review save carries no findings, and one that tries is refused.
+   *
+   * Both halves are asserted, because the second does not make the first
+   * redundant. `writeFindingRows` is deleted, but the rows are still there
+   * for a route to delete, and the route that saves a review is the one that
+   * would.
    */
   it('keeps a finding, its disposition AND its history when a save omits the key', async () => {
     await withPg(async t => {
@@ -363,24 +423,19 @@ describe('a stale whole-review save can no longer destroy an authoritative row',
       await aDocument(t, 'd1');
       await aDocument(t, 'd2');
       const h = harness(t);
-      const first = await h.put('/v1/reviews/r1', REVIEW({
-        documentIds: ['d1', 'd2'],
-        target: { kind: 'documents', documentIds: ['d1', 'd2'] },
-        findings: {
-          d1: { c1: finding() },
-          d2: { c1: finding({ verification: { state: 'verified', byUserId: HUMAN,
-            at: 1_700_000_030_000 } }) },
-        },
-      }));
+      const target = { kind: 'documents' as const, documentIds: ['d1', 'd2'] };
+      const first = await h.put('/v1/reviews/r1', REVIEW({ documentIds: ['d1', 'd2'], target }));
+      await seedFindingRows(t, 'r1', WS, target, {
+        d1: { c1: finding() },
+        d2: { c1: finding({ verification: { state: 'verified', byUserId: HUMAN,
+          at: 1_700_000_030_000 } }) },
+      });
       expect(await t.query('select 1 from finding')).toHaveLength(2);
 
-      // The stale save: the same review, with d2 missing from the body.
+      // The stale save: the same review again, saying nothing about findings
+      // — which is now the ONLY thing a whole-review save can say about them.
       await h.put('/v1/reviews/r1', {
-        ...REVIEW({
-          documentIds: ['d1', 'd2'],
-          target: { kind: 'documents', documentIds: ['d1', 'd2'] },
-          findings: { d1: { c1: finding() } },
-        }),
+        ...REVIEW({ documentIds: ['d1', 'd2'], target }),
         version: first.version,
       });
 
@@ -393,6 +448,56 @@ describe('a stale whole-review save can no longer destroy an authoritative row',
         .toBe('verified');
       // …and the reader still sees it, which is the fact a person would act on.
       expect((await read(h)).findings.d2.c1.verification.state).toBe('verified');
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES a save that carries findings, rather than accepting and ignoring them', async () => {
+    /*
+     * THE HALF THAT PROTECTS AN OLD TAB. Accept-and-ignore is the wrong
+     * answer and it is the shape of half the defects on CLAUDE.md's list: a
+     * client that believes it saved sixty findings and did not. The way it
+     * would happen is ordinary — a browser left open across a deploy, still
+     * running the code that put the whole review on the wire.
+     */
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      const first = await h.put('/v1/reviews/r1', REVIEW());
+      await seedFindingRows(t, 'r1', WS, DOCS_TARGET, { d1: { c1: finding({
+        verification: { state: 'verified', byUserId: HUMAN, at: 1_700_000_030_000 },
+      }) } });
+
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        version: first.version,
+        findings: { d1: { c1: finding({ verification: { state: 'unchecked' } }) } },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.message).toMatch(/findings are no longer saved with the review/i);
+      expect(res.json().error.message).toMatch(/reload the page/i);
+
+      // NOTHING was written — not the findings it tried to send, and not the
+      // review either. A refusal that half-applied would be worse than an
+      // accept-and-ignore.
+      expect((await read(h)).findings.d1.c1.verification.state).toBe('verified');
+      const version = (await h.get('/v1/reviews/r1')).version;
+      expect(version).toBe(first.version);
+      await h.app.close();
+    });
+  });
+
+  it('ACCEPTS an empty findings object, which claims nothing', async () => {
+    // The other side of the refusal, so it cannot be read as "any `findings`
+    // key is refused". A caller with nothing to say about findings is not
+    // making a claim about them.
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      const res = await h.raw('PUT', '/v1/reviews/r1', { ...REVIEW(), findings: {} });
+      expect(res.statusCode, res.body).toBe(200);
       await h.app.close();
     });
   });

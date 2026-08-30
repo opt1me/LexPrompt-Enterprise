@@ -164,9 +164,22 @@ export interface Verification {
   /** Required when `state` is 'rejected'. A rejection with no reason is a
    *  silent disagreement, useless to whoever reads the export. */
   reason?: string;
-  /** Exists so the field survives into later sub-projects. Reaches nobody:
-   *  there is no second user and nothing notifies (ruling R1). */
-  assigneeId?: string;
+  /*
+   * `assigneeId` IS GONE (P24, S17, Stage 3 Task 22), and it is not to come
+   * back here.
+   *
+   * It existed "so the field survives into later sub-projects" and reached
+   * nobody (ruling R1). The new schema has no home for it: a disposition is
+   * one person's judgement about one finding, and an assignment is a
+   * different record with an assigner, a message and a resolution - the
+   * `assignment` table, which is Stage 4's.
+   *
+   * It is a removal WITH A RECORD rather than a discard. Task 6's migration
+   * report names every finding that carried a non-empty value (`what:
+   * 'assigneeId'`, `findingsBackfill.pg.test.ts` asserts it), and the frozen
+   * `review.findings` blob still holds them all (P18). `findings/read.ts`
+   * does NOT synthesise one.
+   */
 }
 
 export interface Note {

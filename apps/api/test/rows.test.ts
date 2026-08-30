@@ -248,10 +248,32 @@ describe('review row mapping', () => {
     expect('cancelledAt' in back).toBe(false);
   });
 
-  it('round-trips the jsonb map exactly, findings key survives whole', () => {
+  it('CARRIES NO FINDINGS, in either direction (Task 22, P18)', () => {
+    /*
+     * Was "round-trips the jsonb map exactly, findings key survives whole",
+     * and that was the right assertion while the blob was the record.
+     *
+     * `review.findings` is a frozen backup now (migration 010) that no
+     * application role may update, and the authoritative findings are the
+     * `finding`, `finding_disposition` and `note` rows. So the mapper
+     * produces the key on NEITHER side: not on the way in, because the
+     * upsert may not write that column; not on the way out, because a
+     * response carrying a stale copy of every judgement beside the
+     * authoritative one is the shape of every quiet wrong answer in this
+     * project's list.
+     *
+     * `toEqual` cannot tell an absent key from an `undefined` one and
+     * `structuredClone` preserves the second, so absence is asserted with
+     * `in`.
+     */
     const row = toReviewRow(review, WS);
-    expect(fromReviewRow(row).findings).toEqual(review.findings);
-    expect(fromReviewRow(row).documentIds).toEqual(['d1']);
+    expect('findings' in row, 'toReviewRow still produces the blob').toBe(false);
+    const back = fromReviewRow({ ...row, findings: JSON.stringify(review.findings) });
+    expect('findings' in back, 'fromReviewRow still returns the blob').toBe(false);
+    // The sanity check: the round trip works, so the two absences are about
+    // `findings` and not about a mapper that returned nothing.
+    expect(back.documentIds).toEqual(['d1']);
+    expect(back.target).toEqual(review.target);
   });
 
   it('maps an empty-string createdByUserId to NULL and back', () => {

@@ -744,7 +744,12 @@ export interface ReviewRow {
   playbook_version_id: string | null;
   document_ids: unknown;
   target: unknown;
-  findings: unknown;
+  /**
+   * FROZEN (010, P18). Still SELECTed by `select *`, and still read by
+   * `reconcileFindings` through its own query - but optional here, because
+   * `toReviewRow` no longer produces it. No application role may UPDATE it.
+   */
+  findings?: unknown;
   model_id: string;
   started_at: Date;
   completed_at: Date | null;
@@ -763,7 +768,10 @@ export function toReviewRow(x: Review, workspaceId: string): ReviewRow {
     playbook_version_id: x.playbookVersionId ?? null,
     document_ids: JSON.stringify(x.documentIds),
     target: JSON.stringify(x.target),
-    findings: JSON.stringify(x.findings),
+    // `findings` IS NOT PRODUCED. The column is frozen (010): the review
+    // upsert neither inserts nor updates it, the column default `'{}'::jsonb`
+    // covers a brand-new row, and `lexprompt_app` holds no UPDATE grant on it
+    // to use if this line came back.
     model_id: x.modelId,
     started_at: dateOf(x.startedAt),
     completed_at: x.completedAt === undefined ? null : dateOf(x.completedAt),
@@ -784,7 +792,13 @@ export function fromReviewRow(row: ReviewRow): Review {
     ...absentUnless('playbookVersionId', row.playbook_version_id),
     documentIds: parsedJson(row.document_ids) as string[],
     target: parsedJson(row.target),
-    findings: parsedJson(row.findings),
+    // NOT `findings`. A review response has not carried the blob since Task
+    // 14, and since 010 the blob is a frozen backup nothing but
+    // `reconcileFindings` reads. Returning it here would put a stale copy of
+    // every judgement on the wire beside the authoritative one, which is the
+    // shape of every quiet wrong answer in this project's list. The list
+    // route adds the ASSEMBLED map under this key; the single-review route
+    // deliberately carries none.
     modelId: row.model_id,
     startedAt: epochOf(row.started_at),
     ...absentUnless('completedAt', row.completed_at === null ? null : epochOf(row.completed_at)),

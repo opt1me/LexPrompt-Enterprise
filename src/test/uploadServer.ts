@@ -228,7 +228,17 @@ export function playbookVersionsModule(): Record<string, unknown> {
 export function reviewsModule(actual: Record<string, unknown>): Record<string, unknown> {
   return {
     ...actual,
-    async saveReview(r: Review): Promise<Review> {
+    /**
+     * `importReview` IS THE UPLOADER'S CALL NOW (Stage 3 Task 22), and the
+     * distinction is the whole point of it: `saveReview` drops the findings
+     * key because a whole-review save has nothing to say about findings and
+     * the real route refuses one that claims otherwise, while an import
+     * carries them and the route writes them as ROWS for a review this
+     * workspace has never seen. This fake stores the map verbatim under the
+     * same key, which is why the uploader still has to rewrite the
+     * attributions inside it.
+     */
+    async importReview(r: Review): Promise<Review> {
       note('reviews', r.id);
       checkFail('reviews', r.id);
       if (server.reviews.has(r.id)) throw conflict();
