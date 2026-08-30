@@ -68,15 +68,46 @@ const SNAPSHOT = JSON.stringify({
   clauses: CLAUSES.map(id => ({ id, title: id, extractPrompt: `What does ${id} say?` })),
 });
 
+/**
+ * The workspace's settings row as it was BEFORE this test touched it, so it
+ * can be put back.
+ *
+ * Found the hard way: this suite upserts `model_choice_id = 'offline'` and
+ * left it there, and `workspaceSettings.pg.test.ts` — which asserts a fresh
+ * workspace has no model chosen — then failed three ways in a run that had
+ * nothing to do with it. These suites share one committed database, and a
+ * test that leaves state behind is a test that breaks a different file's
+ * assertions with a message pointing at the wrong feature.
+ *
+ * `null` means "there was no row", which is restored by deleting the one
+ * this test created rather than by writing an empty one — the route creates
+ * it lazily, and a row that exists is not the same fact as a row that does
+ * not.
+ */
+let settingsBefore: string | null = null;
+
 function cleanup(): void {
   sql(`delete from event where review_id = '${REVIEW}'`);
   sql(`delete from run where review_id = '${REVIEW}'`);
   sql(`delete from review where id = '${REVIEW}'`);
   sql(`delete from document where id = '${DOC}'`);
   sql(`delete from matter where id = '${MATTER}'`);
+  if (settingsBefore === null) {
+    sql(`delete from workspace_setting where workspace_id = '${WS}'`);
+  } else {
+    const [model, concurrency] = settingsBefore.split('|');
+    sql(`update workspace_setting
+            set model_choice_id = ${model === '' ? 'null' : `'${model}'`},
+                concurrency = ${concurrency}
+          where workspace_id = '${WS}'`);
+  }
 }
 
 function seed(): void {
+  // Read BEFORE the upsert below, and before `cleanup()` could act on it.
+  const held = sql(`select coalesce(model_choice_id, '') || '|' || concurrency
+                      from workspace_setting where workspace_id = '${WS}'`);
+  settingsBefore = held === '' ? null : held;
   cleanup();
   sql(`insert into matter (id, workspace_id, name, created_at, updated_at)
        values ('${MATTER}', '${WS}', 'Restart', now(), now())`);
