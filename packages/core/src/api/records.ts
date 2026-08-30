@@ -484,6 +484,49 @@ export interface DispositionHistory {
 }
 
 /**
+ * One change in a REVIEW's history — the same event, plus the cell it
+ * belongs to (§6.3.1).
+ *
+ * The per-finding panel already knows which clause it is showing, so its
+ * events carry no key. A review-wide chronology has to say which clause each
+ * row is about or it is a list of state changes with no subjects.
+ */
+export interface ReviewHistoryEvent extends DispositionEventView {
+  findingsKey: string;
+  clauseId: string;
+  /**
+   * The clause's title, from the review's own playbook snapshot.
+   *
+   * ABSENT — never `clauseTitle: undefined` — for a clause the snapshot does
+   * not name. That happens for real: a clause removed from a later playbook
+   * version still had judgements made about it, and DROPPING the row would
+   * make the history quietly shorter than what happened. The row survives
+   * and the reader is shown its id instead, labelled as one.
+   */
+  clauseTitle?: string;
+}
+
+/**
+ * The answer to `GET /v1/reviews/:id/history` — OLDEST FIRST.
+ *
+ * The opposite order to `DispositionHistory` above, and both are right for
+ * their reader: a per-finding panel answers "what happened to this, most
+ * recently", and a chronology of a whole review reads forward, the way
+ * somebody reconstructing what a report would have said on the day it was
+ * signed reads it.
+ *
+ * PAGED, because a year of a busy matter's history is not a response. The
+ * cursor is the last event's `id`, which is a monotonic identity column on
+ * an insert-only table — so a page boundary cannot shift under a reader the
+ * way an offset into a mutable list can.
+ */
+export interface ReviewHistory {
+  events: ReviewHistoryEvent[];
+  nextCursor?: number;
+  hasMore: boolean;
+}
+
+/**
  * What a per-clause retry cleared, so the browser can say so in the words it
  * has always used.
  *

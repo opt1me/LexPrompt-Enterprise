@@ -542,6 +542,22 @@ describe('every SQL statement in a route module names workspace_id', () => {
     expect(worker).toMatch(/toFindingRow\(content, run\.review_id, cell\.findings_key, cell\.workspace_id\)/);
   });
 
+  /**
+   * Routes that reach the disposition service WITHOUT a per-finding check,
+   * each with the predicate that scopes them instead.
+   *
+   * `GET /v1/reviews/:id/history` reads a whole review's events, so there is
+   * no single finding key for `requireFinding` to prove ownership of. What
+   * it does instead — refuse a review this workspace cannot see, and read
+   * events through a function whose own WHERE clause names `workspace_id` —
+   * is asserted here by text, so the exemption cannot cover anything else
+   * the file does.
+   */
+  const SCOPES_ITSELF: Record<string, RegExp> = {
+    'apps/api/src/routes/history.ts':
+      /select playbook_snapshot from review where id = \$1 and workspace_id = \$2/,
+  };
+
   it('every route reaching the disposition service checks the finding s workspace first', () => {
     /*
      * THE GATE THAT MAKES `SCOPED_BY_KEY` TRUE, asserted rather than
@@ -555,9 +571,27 @@ describe('every SQL statement in a route module names workspace_id', () => {
     expect(importers.length, 'no route imports the disposition service').toBeGreaterThan(0);
     for (const file of importers) {
       const code = codeOf(file);
+      const scopesItself = SCOPES_ITSELF[rel(file)];
+      if (scopesItself) {
+        // NAMED, per file, with its OWN assertion — never a relaxed pattern
+        // (CLAUDE.md: a file-level exemption hides everything in the file,
+        // not just the part you meant to protect). This route reaches the
+        // service through a function that carries `workspace_id` in its own
+        // predicate rather than one keyed by `(review, findingsKey,
+        // clauseId)`, so `requireFinding` has nothing to check — but the
+        // scoping still has to be somewhere, and this says where.
+        expect(code, `${rel(file)} no longer scopes its own read`).toMatch(scopesItself);
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       expect(code, `${rel(file)} reaches the disposition service unchecked`)
         .toMatch(/requireFinding\(|cellsFor\(/);
     }
+    // …and the self-scoping function really does scope itself. Drop
+    // `workspace_id = $2` from `readReviewDispositionEvents` and this goes
+    // red, which is the half a per-file exemption would otherwise hide.
+    expect(codeOf(path.join(ROOT, 'apps/api/src/dispositions/service.ts')))
+      .toMatch(/where review_id = \$1 and workspace_id = \$2/);
     // …and the check itself names the workspace, which is the whole of it.
     expect(codeOf(path.join(ROUTES_DIR, 'findings.ts')))
       .toMatch(/where review_id = \$1 and findings_key = \$2 and clause_id = \$3 and workspace_id = \$4/);

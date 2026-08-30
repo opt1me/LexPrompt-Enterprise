@@ -50,7 +50,8 @@ export type {
 export type {
   FindingsPage, DispositionView, DispositionCause, DispositionEventView,
   DispositionWithHistory,
-  DispositionWriteResult, DispositionHistory, RetryCleared, RetryResult,
+  DispositionWriteResult, DispositionHistory, ReviewHistory, ReviewHistoryEvent,
+  RetryCleared, RetryResult,
   NetPositionAction, NetPositionWriteResult,
 } from './api/records.ts';
 // The domain logic that decides what a published playbook version SAYS,

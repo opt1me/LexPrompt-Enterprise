@@ -193,6 +193,13 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'PUT /v1/reviews/:id/findings/:findingsKey/:clauseId/net-position': 'reviewer',
   'GET /v1/reviews/:id/findings/:findingsKey/:clauseId/history': 'reviewer',
 
+  // The review's whole disposition history (section 6.3.1). `reviewer`: it
+  // is the same facts the per-finding history route already returns at the
+  // same bar, gathered for one review. A higher bar here would mean a
+  // reviewer could see each change one at a time and not all of them
+  // together, which is a distinction with no reader.
+  'GET /v1/reviews/:id/history': 'reviewer',
+
   // §7: a reviewer RUNS reviews. All four at `reviewer`, including cancel —
   // stopping a run you started is part of running one, and a bar that let a
   // reviewer start work nobody but a partner could stop would leave the

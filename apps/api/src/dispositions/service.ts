@@ -90,12 +90,63 @@ export async function readDispositionEvents(
   t: Tx, key: FindingKey, workspaceId: string, limit = 200,
 ): Promise<DispositionEventRow[]> {
   return t.query<DispositionEventRow>(
-    `select id, from_state, to_state, reason, cause, by_user_id::text as by_user_id, at
+    `select ${EVENT_COLUMNS}
        from finding_disposition_event
       where review_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $4
       order by id desc
       limit $5`,
     [key.reviewId, key.findingsKey, key.clauseId, workspaceId, limit]);
+}
+
+/**
+ * The columns an event is read as, ONCE.
+ *
+ * Two readers now — one finding's history and a whole review's — and the
+ * second was written the week the first was. `by_user_id::text` is the
+ * load-bearing part: `pg` hands a `uuid` back as a string either way, but
+ * the cast is what makes that a property of the query rather than of the
+ * driver's current type parser. A second reader spelling this list itself is
+ * how the two come to disagree about what an event is.
+ */
+const EVENT_COLUMNS
+  = 'id, from_state, to_state, reason, cause, by_user_id::text as by_user_id, at';
+
+/** One event of a review, with the cell it belongs to. */
+export interface ReviewEventRow extends DispositionEventRow {
+  findings_key: string;
+  clause_id: string;
+}
+
+/**
+ * EVERY DISPOSITION CHANGE IN ONE REVIEW — OLDEST FIRST, PAGED (§6.3.1).
+ *
+ * In this module for `readDispositionEvents`'s reason: it reads the table
+ * this module is the only writer of, and a route composing its own query
+ * over `finding_disposition_event` is how the two come to disagree about
+ * what an event is.
+ *
+ * OLDEST FIRST, unlike the per-finding read directly above, and both are
+ * right for their reader — §6.3.1's question is *"reconstruct what this
+ * report would have said on the day it was signed"*, which is read forward.
+ *
+ * `after` is an event id, not an offset. The table is insert-only with a
+ * monotonic identity column, so a cursor cannot shift under a reader the way
+ * an offset into a mutable list can — and the history is exactly the surface
+ * most likely to grow while somebody is paging through it.
+ *
+ * `limit + 1` rows are fetched so the caller can say `hasMore` without a
+ * second count over a table that is only going to get bigger.
+ */
+export async function readReviewDispositionEvents(
+  t: Tx, reviewId: string, workspaceId: string, after: number | undefined, limit: number,
+): Promise<ReviewEventRow[]> {
+  return t.query<ReviewEventRow>(
+    `select ${EVENT_COLUMNS}, findings_key, clause_id
+       from finding_disposition_event
+      where review_id = $1 and workspace_id = $2 and ($3::bigint is null or id > $3::bigint)
+      order by id asc
+      limit $4`,
+    [reviewId, workspaceId, after ?? null, limit + 1]);
 }
 
 /**

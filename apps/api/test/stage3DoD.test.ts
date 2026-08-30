@@ -387,16 +387,18 @@ describe('the attribution surface Stage 3 promised NOT to build (P28, §13), now
     // …and both exporters DO carry it, which is the half a scanner reading
     // one file would miss. A stamp defined once and called nowhere is the
     // silent failure section 19 names.
-    expect(grepRepo('dispositionsAsAtLine')).toEqual([
+    // THREE exporters as of Task 10: the report, the grid, and the history
+    // itself — which is also a point-in-time claim, because the history can
+    // GROW after the file is taken and a reader holding it has no way to
+    // know whether it is still the whole of it.
+    const EXPORTERS = [
       'src/features/review/exportDocx.ts',
+      'src/features/review/exportHistoryCsv.ts',
       'src/features/tabular/csv.ts',
       'src/lib/findingOutcome.ts',
-    ]);
-    expect(grepRepo('dispositionsMayChangeLine')).toEqual([
-      'src/features/review/exportDocx.ts',
-      'src/features/tabular/csv.ts',
-      'src/lib/findingOutcome.ts',
-    ]);
+    ];
+    expect(grepRepo('dispositionsAsAtLine')).toEqual(EXPORTERS);
+    expect(grepRepo('dispositionsMayChangeLine')).toEqual(EXPORTERS);
     expect(ALL_SOURCES.length).toBeGreaterThan(180);
   });
 

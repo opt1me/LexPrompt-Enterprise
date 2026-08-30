@@ -1,5 +1,5 @@
 import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import { Table, Mail, FileDown, Loader, FileText, X } from 'lucide-react';
+import { Table, Mail, FileDown, History, Loader, FileText, X } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun } from '../../types';
 import { isAuthFailure } from '@lexprompt/core';
 import {
@@ -27,6 +27,8 @@ import { RejectReasonModal } from './RejectReasonModal';
 import { useVerifyKeys } from './useVerifyKeys';
 import { exportDocx } from './exportDocx';
 import { downloadTabularCsv } from '../tabular/csv';
+import { downloadHistoryCsv } from './exportHistoryCsv';
+import { getAllReviewHistory } from '../../lib/api/history';
 import { draftEmail } from '../assistant/draftEmail';
 import { suggestRevision } from '../assistant/suggestRevision';
 import { RevisionModal, type RevisionData } from '../assistant/RevisionModal';
@@ -237,6 +239,7 @@ export function ResultsView({
   const [emailContent, setEmailContent] = useState<string | null>(null);
 
   const [exportLoading, setExportLoading] = useState(false);
+  const [historyExportLoading, setHistoryExportLoading] = useState(false);
 
   const [revisionLoadingClauseId, setRevisionLoadingClauseId] = useState<string | null>(null);
   const [revisionData, setRevisionData] = useState<RevisionData | null>(null);
@@ -395,6 +398,38 @@ export function ResultsView({
       reportError('Could not draft the email.', error);
     } finally {
       setEmailLoading(false);
+    }
+  };
+
+  /**
+   * THE REVIEW'S WHOLE DISPOSITION HISTORY, AS A FILE (section 6.3.1's
+   * fourth requirement).
+   *
+   * Beside the other two exports, because it answers the question they
+   * cannot: they say what the dispositions ARE as at an instant, and this
+   * says how they got there. A firm reconstructing what a report would have
+   * said on the day it was signed needs the second.
+   *
+   * `getAllReviewHistory` follows the cursor to the end and THROWS rather
+   * than returning a partial history — a document titled "full history" that
+   * silently stops at page one is the failure this whole project is about,
+   * on the surface least likely to be checked by hand. The throw surfaces
+   * here as a notice rather than as a file.
+   */
+  const handleExportHistory = async () => {
+    setHistoryExportLoading(true);
+    try {
+      const events = await getAllReviewHistory(run.id);
+      downloadHistoryCsv(events, {
+        readAt: exportContext?.readAt,
+        timeZone: exportContext?.timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
+        audience: exportContext?.audience ?? NO_EXPORT_CONTEXT.audience,
+        reviewName: run.templateSnapshot.name,
+      });
+    } catch (error) {
+      reportError('Could not export this review s history.', error);
+    } finally {
+      setHistoryExportLoading(false);
     }
   };
 
@@ -683,6 +718,23 @@ export function ResultsView({
                   className="p-2 bg-chip-fill rounded-control hover:bg-paper transition-colors text-ink-2"
                 >
                   <Table className="w-4 h-4" aria-hidden="true" />
+                </button>
+                {/* Section 6.3.1's fourth requirement, reachable. A route
+                    with no caller is what Stage 3 shipped and P28 warns
+                    about; a history nobody can take out of the app answers
+                    "what did this say when it was signed" only for as long
+                    as somebody has the app open. */}
+                <button
+                  onClick={() => { void handleExportHistory(); }}
+                  disabled={historyExportLoading}
+                  title="Export history"
+                  className="p-2 bg-chip-fill rounded-control hover:bg-paper transition-colors text-ink-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {historyExportLoading ? (
+                    <span data-busy="true" aria-live="polite" className="flex items-center">
+                      <Loader className="w-4 h-4 animate-spin" aria-hidden="true" />
+                    </span>
+                  ) : <History className="w-4 h-4" aria-hidden="true" />}
                 </button>
               </div>
             </div>
