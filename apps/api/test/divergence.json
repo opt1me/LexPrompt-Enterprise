@@ -52,7 +52,10 @@
     {
       "n": 2,
       "what": "Inference provider and credential",
-      "keys": []
+      "keys": [
+        "GATEWAY_RECORDED_CREDENTIAL"
+      ],
+      "why": "The divergence lives INSIDE models.json — each entry's `credential.source` is `env`/`file` locally and `managed-identity`/`key-vault` in Azure — and models.json is mounted as a file in both environments under the same GATEWAY_MODELS_FILE key. GATEWAY_RECORDED_CREDENTIAL is the one application variable this row does carry, and it exists in ONE environment only, which is why it is a divergence rather than a sameEverywhere key: it is the credential the `recorded` provider names and never uses. `callModel`'s prepare() resolves a credential for every model before any adapter sees the request — one resolution path, no per-provider branch, because \"this provider needs no key, so skip the resolver\" is one edit away from \"managed identity failed, so read the env var instead\", which §10 forbids — so a recorded entry must still name a variable and that variable must be non-empty. Set by the compose file with a literal default, because the offline path is the one that is supposed to work with no keys at all; set by nothing in Azure, where there is no recorded provider to configure."
     },
     {
       "n": 3,
@@ -122,7 +125,6 @@
     }
   ],
   "rowsWithNoKeys": {
-    "2": "The divergence lives INSIDE models.json — each entry's `credential.source` is `env`/`file` locally and `managed-identity`/`key-vault` in Azure — and models.json is mounted as a file in both environments under the same GATEWAY_MODELS_FILE key. No application environment variable varies. The file's own content is the operator's, and is gitignored in both.",
     "7": "Infrastructure, not application code: compose networks versus Container Apps egress rules. Asserted by apps/api/test/egress.compose.test.ts (Task 24) and, in Azure, by Spike 2 — which has not been done, and which the README says plainly is not done.",
     "8": "The gateway writes the same JSON lines to stdout in both environments (§10.5). What differs is the collector that reads them; no application key varies. Ruling L1 records why there is no log-sink configuration at all to diverge."
   },

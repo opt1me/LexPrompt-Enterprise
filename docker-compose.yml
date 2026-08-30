@@ -240,6 +240,25 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # THE OFFLINE PATH NEEDS A CREDENTIAL IT NEVER USES, and without this
+      # line it does not work at all.
+      #
+      # `callModel`'s `prepare()` resolves a credential for EVERY model
+      # before any adapter sees the request — deliberately: one resolution
+      # path with no per-provider branch, because "this provider needs no
+      # key, so skip the resolver" is one edit away from "managed identity
+      # failed, so read the env var instead", which §10 forbids. The
+      # `recorded` adapter then discards what it is handed.
+      #
+      # So a recorded entry must still NAME a variable, and that variable
+      # must be non-empty or the gateway refuses every call with *"could not
+      # obtain the credential for this model"* — which reads as a defect in
+      # the queue rather than as a missing environment variable. It has cost
+      # two sessions a compose run each: `models.local-recorded.example.json`
+      # named `UNUSED`, and nothing set it. Set HERE with a default rather
+      # than left to the operator, because the offline path is precisely the
+      # one that is supposed to work with no keys at all.
+      GATEWAY_RECORDED_CREDENTIAL: "recorded-responses-need-no-credential"
     volumes:
       - "./certs:/certs:ro"
       - "./models.json:/config/models.json:ro"

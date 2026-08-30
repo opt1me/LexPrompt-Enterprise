@@ -15,7 +15,7 @@
       "supportsStructuredOutput": true,
       "isDefault": true,
       "endpoint": "file:///recorded",
-      "credential": { "source": "env", "var": "UNUSED" }
+      "credential": { "source": "env", "var": "GATEWAY_RECORDED_CREDENTIAL" }
     }
   ]
 }
