@@ -182,6 +182,10 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // Reading a run and its events is the same act as reading the review, and
   // both are scoped to the caller's workspace inside the handler.
   'POST /v1/reviews/:id/runs': 'reviewer',
+  // §9.1: re-running ONE clause. The same bar as starting a run, because it
+  // IS one — a run over a single cell — and because clearing the judgement
+  // that described the answer being replaced is part of re-running it.
+  'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/retry': 'reviewer',
   'GET /v1/runs/:id': 'reviewer',
   'POST /v1/runs/:id/cancel': 'reviewer',
   'GET /v1/runs/:id/events': 'reviewer',

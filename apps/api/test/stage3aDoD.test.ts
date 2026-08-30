@@ -288,31 +288,48 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(read).toMatch(/left join finding_disposition/i);
     expect(read).toMatch(/from note/i);
 
-    // No route composes its own findings read: they all come through the
-    // one assembler, so a second query cannot drift from it.
+    // NO ROUTE ASSEMBLES ITS OWN FINDINGS. Every read a caller is SERVED
+    // comes through the one assembler, so a second query cannot drift from
+    // it.
     //
-    // `routes/findings.ts` is the one file that touches the table directly,
-    // and it is NOT exempted as a file — the specific statement is named
-    // instead. A file-level exemption hides everything in that file rather
-    // than the part it meant to protect (`PdfCanvas.tsx`'s lesson), and this
-    // file will grow.
+    // Two routes do touch `finding` directly, and both are named as
+    // STATEMENTS rather than exempted as files. A file-level exemption hides
+    // everything in that file rather than the part it meant to protect
+    // (`PdfCanvas.tsx`'s lesson), and both these files will grow.
     const READS = /\bfrom\s+finding\b/i;
     expect(READS.test('select * from finding where review_id = $1')).toBe(true);
     expect(READS.test('select * from finding_disposition where review_id = $1')).toBe(false);
     const readers = ROUTE_SOURCES.filter(f => READS.test(codeOf(f))).map(rel);
-    expect(readers).toEqual(['apps/api/src/routes/findings.ts']);
+    expect(readers).toEqual([
+      'apps/api/src/routes/findings.ts',       // an EXISTENCE check
+      'apps/api/src/routes/runs.ts',           // "what did this retry clear?"
+    ]);
     expect(ROUTE_SOURCES.length).toBeGreaterThan(10);       // the sanity check
 
-    // …and what it reads is an EXISTENCE check, not an assembly: a
+    const statementsOver = (file: string): string[] =>
+      codeOf(at(file)).match(/\bselect\b[^`]*?\bfrom\s+finding\b[^`]*/gi) ?? [];
+
+    // `routes/findings.ts`: one identifying column and NO content. A
     // disposition or a note about a finding that does not exist is a
     // judgement about nothing, and that has to be answerable before a write.
-    // It reads one identifying column and no content.
-    const findingsRoute = codeOf(at('apps/api/src/routes/findings.ts'));
-    const statements = findingsRoute.match(/\bselect\b[^`]*?\bfrom\s+finding\b[^`]*/gi) ?? [];
-    expect(statements).toHaveLength(1);
-    expect(statements[0]).toMatch(/select clause_id\s*\n?\s*from finding\b/i);
-    for (const content of ['summary', 'citations', 'net_position', 'risk_level']) {
-      expect(statements[0], `a route selects a finding's ${content}`).not.toContain(content);
+    const existence = statementsOver('apps/api/src/routes/findings.ts');
+    expect(existence).toHaveLength(1);
+    expect(existence[0]).toMatch(/select clause_id\s*\n?\s*from finding\b/i);
+
+    // `routes/runs.ts`: ONE column, `net_position`, read INSIDE the retry's
+    // own write transaction to answer what that transaction is about to
+    // clear — the sentence the browser shows the person who clicked. It is
+    // never served as findings, and it reads nothing else.
+    const retryProbe = statementsOver('apps/api/src/routes/runs.ts');
+    expect(retryProbe).toHaveLength(1);
+    expect(retryProbe[0]).toMatch(/select net_position\s*\n?\s*from finding\b/i);
+
+    // Neither selects what a card renders. That is the property this guard
+    // is actually about, and it is checked over both.
+    for (const statement of [...existence, ...retryProbe]) {
+      for (const content of ['summary', 'citations', 'risk_analysis', 'position_rationale']) {
+        expect(statement, `a route selects a finding's ${content}`).not.toContain(content);
+      }
     }
 
     // …and no route hands the blob back to a reader. The single-review GET
@@ -404,23 +421,34 @@ describe('Part 3A does not claim Stage 3 is done, and says which clauses are ope
      *    review, M9: the route is registered, authenticated and shipped, so
      *    leaving the judgement behind re-attached a person's verification to
      *    text nobody had seen). What remains Task 16's is
-     *    `POST /v1/runs/:id/retry` — one clause rather than a review — which
-     *    is what the assertion below still watches for.
+     *    the PER-CLAUSE retry — **which TASK 16 has now landed**, as
+     *    `POST /v1/reviews/:id/findings/:findingsKey/:clauseId/retry` in
+     *    `routes/runs.ts`. So the first clause is MET, in both its forms,
+     *    and the assertions below have flipped with it rather than being
+     *    deleted.
      *  - *"`carryHumanState` is deleted and nothing regressed"* — Task 21,
      *    and the test above exists to keep it from arriving early.
      *
      * This test is here so that a reader of a green Part 3A gate cannot
-     * mistake it for a green Stage 3 gate. It fails when either task lands
-     * without this list being revisited, which is the point: the list is
-     * only honest while it is maintained.
+     * mistake it for a green Stage 3 gate. It fails when the remaining task
+     * lands without this list being revisited, which is the point: the list
+     * is only honest while it is maintained.
      */
     expect(there('src/lib/findingMerge.ts'), 'Task 21 landed; revisit §18 item 4 here').toBe(true);
-    const app = codeOf(at('src/App.tsx'));
-    // The browser's own reset, still the only one there is.
-    expect(app).toMatch(/resetVerification|resetPosition/);
-    // Task 16's route has not landed.
+
+    // Task 16's route HAS landed, and the reset it performs goes through the
+    // one writer of both disposition tables rather than a second UPDATE of
+    // its own — which is what makes the history row impossible to forget.
     const runs = codeOf(at('apps/api/src/routes/runs.ts'));
-    expect(runs, 'Task 16 landed; revisit §18 item 4 here').not.toMatch(/\/retry/);
+    expect(runs).toMatch(/\/retry/);
+    expect(runs).toContain("import { dispositionFor } from '../dispositions/service.ts'");
+    expect(runs).not.toMatch(/update\s+finding_disposition/i);
+    // …and the reset itself is `createRun`'s, over one cell — one
+    // implementation of "re-running a clause clears its verification", not
+    // two.
+    const queue = codeOf(at('apps/api/src/run/queue.ts'));
+    expect(queue).toMatch(/only\?: CellKey\[\]/);
+    expect(queue).toMatch(/'rerun_reset'/);
   });
 
   it('markup_notice is still browser-derived, and the grant is what makes that safe', () => {

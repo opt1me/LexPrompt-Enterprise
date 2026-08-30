@@ -198,10 +198,21 @@ export interface CreateRunActor { id: string; workspaceId: string }
  * tell "not started" from "started, silent".
  */
 export async function createRun(
-  t: Tx, review: CreateRunInput, actor: CreateRunActor,
+  t: Tx, review: CreateRunInput, actor: CreateRunActor, only?: CellKey[],
 ): Promise<RunView> {
   const ws = actor.workspaceId;
-  const cells = cellsFor(review.target, review.playbookSnapshot);
+  // `only` is the per-clause RETRY (Task 16): the same run, the same cell
+  // seeding, the same finding reset and the same `rerun_reset` disposition
+  // clearing — over one cell instead of all of them.
+  //
+  // A parameter rather than a second function, deliberately. §9.1's retry
+  // transaction is character for character what this one already does for a
+  // whole review, and a second implementation of "re-running a clause clears
+  // its verification and its net position, and records that it did" is
+  // exactly the sibling drift this project has paid for six times. The
+  // caller validates `only` against `cellsFor` before it gets here, so a key
+  // this review's target does not explain cannot become a cell.
+  const cells = only ?? cellsFor(review.target, review.playbookSnapshot);
   if (cells.length === 0) {
     // A run with nothing to do would sit `queued` forever with no cell for a
     // worker to lease and no reason on screen. Refused with the cause: a

@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import {
   ModelError, notYetReadMessageFor, targetDocumentIds,
-  type ReviewTarget, type RunEventPage, type RunView,
+  type RetryCleared, type RetryResult, type ReviewTarget, type RunEventPage, type RunView,
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
-import { createRun, readRun, settleRunIfFinished, type RunRow } from '../run/queue.ts';
+import { cellsFor, createRun, readRun, settleRunIfFinished, type RunRow } from '../run/queue.ts';
+import { dispositionFor } from '../dispositions/service.ts';
 import { readEvents } from '../run/events.ts';
 import { cancelPendingCells } from '../run/lifecycle.ts';
 
@@ -100,6 +101,132 @@ export function registerRuns(app: FastifyInstance, db: Db, config: RunRoutesConf
     reply.code(201);
     return run;
   });
+
+  /**
+   * ONE CLAUSE, RE-RUN — and the reset that goes with it, in ONE transaction
+   * (§9.1, §18 item 4).
+   *
+   * This is `handleRetryCell`'s rule moved to where the row is. The browser
+   * did it in three writes it could not make atomic; here the finding is
+   * blanked, the disposition is cleared and the clearing is RECORDED, all in
+   * the transaction that queues the work — so there is no instant at which a
+   * `verified` disposition sits beside content nobody has seen.
+   *
+   * Three things it must not do, each of which the shipped browser code gets
+   * right and a fresh implementation would get wrong:
+   *
+   *  - **It runs in the request handler, never in the worker** (S21). A
+   *    person asked for this. The worker's role holds no grant on either
+   *    disposition table, so putting it there would not merely be wrong — it
+   *    would fail, which is the point of the grant.
+   *  - **It attributes to the person who asked**, not to `'system'` and not
+   *    to whoever last held the disposition. §9.1: that is what lets an
+   *    export say *"unchecked — re-run by A. Gray at 11:07, previously
+   *    verified by R. Okafor"*.
+   *  - **The disposition row is UPDATED, never deleted.** Deleting it would
+   *    lose who last held it and leave the history's `from_state` with
+   *    nothing to be read against.
+   *
+   * A COLLECTION clause is retried through the collection extractor, and
+   * there is no path by which it is not: the cell's `findings_key` is the
+   * collection id, because that is the only key `cellsFor` produces for a
+   * collection target, and Task 10's dispatch reads the review's own target.
+   * The browser's own comment says what the alternative costs — *"replace
+   * that synthesis with a one-document answer, on screen indistinguishable
+   * from a correct re-run."*
+   *
+   * Notes are NOT touched: a note is a person's remark about the clause, not
+   * a component of their judgement on one answer.
+   */
+  app.post('/v1/reviews/:id/findings/:findingsKey/:clauseId/retry',
+    async (req, reply): Promise<RetryResult> => {
+      const ws = req.actor!.workspaceId;
+      const p = req.params as { id: string; findingsKey: string; clauseId: string };
+
+      const result = await db.tx(async t => {
+        const reviews = await t.query<{
+          id: string; matter_id: string; target: unknown; playbook_snapshot: unknown;
+        }>(
+          `select id, matter_id, target, playbook_snapshot from review
+            where id = $1 and workspace_id = $2`, [p.id, ws]);
+        if (!reviews[0]) throw new ModelError('There is no such review.', 'not_found', 404);
+        const review = reviews[0];
+        const target = parsedJson(review.target) as ReviewTarget;
+        const snapshot = parsedJson(review.playbook_snapshot);
+
+        // THE SAME REFUSAL A WHOLE-REVIEW RUN MAKES, for the same reason:
+        // two writers per finding is what this stage exists to end. A retry
+        // while a run is live would also race that run's own answer for this
+        // very cell.
+        const live = await t.query<{ id: string; state: string }>(
+          `select id, state from run where review_id = $1 and workspace_id = $2
+            and state in ('queued','running','cancelling')`, [p.id, ws]);
+        if (live[0]) {
+          throw new ModelError(
+            `This review is already running (run ${live[0].id} is ${live[0].state}). Wait for it `
+            + 'to finish, or cancel it, before re-running a clause.', 'conflict', 409);
+        }
+
+        // THE KEY AND THE CLAUSE, CHECKED AGAINST WHAT THIS REVIEW CLAIMS TO
+        // COVER — through `cellsFor`, which goes through `findingsKeyFor`
+        // and is the only place a findings key is decided. One check answers
+        // three questions: is this clause in the snapshot the review ran
+        // against, does this key belong to this target, and — for a
+        // collection — is it the COLLECTION's key rather than one of its
+        // documents'. Six defects in sub-project C came from code that
+        // answered the third by picking a document.
+        const cell = cellsFor(target, snapshot).find(
+          c => c.findingsKey === p.findingsKey && c.clauseId === p.clauseId);
+        if (!cell) {
+          throw new ModelError(
+            `Clause ${p.clauseId} under ${p.findingsKey} is not one this review covers, so there `
+            + 'is nothing to re-run.', 'not_found', 404);
+        }
+
+        // The finding has to exist before its judgement can be cleared, and
+        // WHAT IT HELD is read here — before anything is written — because
+        // the browser composes its notice from what was actually cleared
+        // rather than from its own copy.
+        const findings = await t.query<{ net_position: unknown }>(
+          `select net_position from finding
+            where review_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $4`,
+          [p.id, p.findingsKey, p.clauseId, ws]);
+        if (!findings[0]) {
+          throw new ModelError(
+            `There is no finding for clause ${p.clauseId} under ${p.findingsKey} in this review, `
+            + 'so there is nothing to re-run.', 'not_found', 404);
+        }
+        const disposition = await dispositionFor(
+          t, { reviewId: p.id, findingsKey: p.findingsKey, clauseId: p.clauseId });
+        const position = parsedJson(findings[0].net_position) as { state?: string } | null;
+        const cleared: RetryCleared = {
+          verification: disposition !== undefined && disposition.state !== 'unchecked',
+          // The browser's own predicate: an UNCONFIRMED position is not a
+          // judgement anybody made, so clearing it clears nothing.
+          netPosition: position !== null && position !== undefined
+            && position.state !== 'unconfirmed',
+        };
+
+        await refuseUnparsedDocuments(t, ws, target);
+
+        // ONE TRANSACTION, and it is `createRun`'s — the finding back to
+        // `pending` with its net position cleared, the disposition cleared
+        // through `setDisposition` with cause `rerun_reset`, the event that
+        // records the clearing, the cell queued and `run.started` appended.
+        // Over ONE cell rather than all of them; see `createRun`'s `only`.
+        const run = await createRun(t, {
+          reviewId: review.id,
+          matterId: review.matter_id,
+          target,
+          playbookSnapshot: snapshot,
+        }, { id: req.actor!.id, workspaceId: ws }, [cell]);
+
+        return { run, cleared };
+      });
+
+      reply.code(201);
+      return result;
+    });
 
   app.get('/v1/runs/:id', async (req): Promise<RunView> => {
     const { id } = req.params as { id: string };
