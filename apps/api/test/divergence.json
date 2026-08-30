@@ -66,13 +66,13 @@
     },
     {
       "n": 5,
-      "what": "Document storage (Stage 2 Task 10 — Azurite exists only in compose so far)",
+      "what": "Blob store",
       "keys": [
-        "API_BLOB_CREDENTIAL_SOURCE",
         "API_BLOB_CONNECTION_STRING",
-        "API_BLOB_CONTAINER"
+        "API_BLOB_ACCOUNT_URL",
+        "AZURE_CLIENT_ID"
       ],
-      "why": "The bytes live in Azure Blob Storage in a firm deployment and in Azurite locally, and what diverges is WHICH IDENTITY reaches them. Locally the source is `connection-string` and the material is the well-known, published, non-secret Azurite development credential; in Azure the source is `managed-identity` with an API_BLOB_ACCOUNT_URL and NO connection string at all, which is why API_BLOB_CONNECTION_STRING is a local-only key rather than a same-everywhere pair. API_BLOB_CREDENTIAL_SOURCE and API_BLOB_CONTAINER are tabled here rather than as sameEverywhere for the same reason the two Postgres DSNs in row 11 are: infra/modules/containerApps.bicep does not set them yet (Task 25), so there is no Azure value for them to differ FROM. API_BLOB_CREDENTIAL_SOURCE is expected to become sameEverywhere the day it does — the same key, a different value — while API_BLOB_CONNECTION_STRING stays local-only permanently, because its absence in Azure is the point (S2's stronger property: no key is an environment variable, a parameter, or an output). There is NO FALLBACK between the two sources; a source configured with no material refuses to start."
+      "why": "Azurite cannot authenticate by managed identity (§5.1's own 'what local does not prove' list says so), so the two environments genuinely need different credential MATERIAL — and that is the whole of the divergence. API_BLOB_CREDENTIAL_SOURCE and API_BLOB_CONTAINER are now set in BOTH environments under identical names and moved to sameEverywhere when Task 24's infra/modules/storage.bicep and the api Container App's env block landed; the source key's VALUE selects which material is used, and resolveBlobCredential never falls back from one to the other (P14). What is left here is one key per environment, plus one that is easy to miss. The connection string exists only locally, and its material is the well-known, published, non-secret Azurite development credential; the account URL exists only in Azure. AZURE_CLIENT_ID is the one that is easy to miss and is tabled deliberately rather than treated as infrastructure noise: apps/api/src/blob/store.ts constructs `new DefaultAzureCredential()` with no options, and the managed-identity leg of that chain resolves a USER-ASSIGNED identity's client id from process.env.AZURE_CLIENT_ID and from nowhere else (@azure/identity 4.13.1, createDefaultManagedIdentityCredential — read in this repository's own node_modules). The api Container App has a user-assigned identity and no system-assigned one, so without this key every document byte read and write fails in Azure with every unit test green. It is read by a LIBRARY rather than by a configuration module, which is why it does not appear in the 'every key a config module reads is classified' check and why it needed tabling by hand. The absence of a connection-string OUTPUT in storage.bicep is S2's stronger property expressed as an absence, exactly as Stage 1 expressed it for provider keys — and it is more than a convention there: the account is created with shared-key authentication switched off, so an account key authenticates nothing even if one leaked."
     },
     {
       "n": 7,
@@ -112,15 +112,13 @@
     },
     {
       "n": 11,
-      "what": "Database (Stage 2 Task 1 — Postgres exists only in compose so far)",
+      "what": "Relational store",
       "keys": [
-        "API_DATABASE_URL",
-        "API_DATABASE_MIGRATION_URL",
         "POSTGRES_USER",
         "POSTGRES_PASSWORD",
         "POSTGRES_DB"
       ],
-      "why": "This task adds a `postgres` service to docker-compose.yml and the two DSNs apps/api/src/config.ts reads to reach it, and stops there — infra/modules/postgres.bicep and the matching Container Apps env entries are Task 24's work, named in this project's own migration-runner comments and not yet written. Until that lands, these five keys exist ONLY in the local stack, which is a genuine divergence and not a same-everywhere pair the way the identity keys in row 1 are: there is no Azure value yet for either DSN to differ FROM. API_DATABASE_URL and API_DATABASE_MIGRATION_URL are expected to move to sameEverywhere (row 1's pattern) the day Task 24 sets an Azure equivalent under the same names — same key, different value, exactly as apps/api/src/config.ts's own doc comment on `databaseUrl` already says. POSTGRES_USER/PASSWORD/DB are consumed by the postgres image itself at first boot (docker-entrypoint-initdb.d), not read by any application configuration module, so they stay local-only permanently: Azure Postgres Flexible Server provisions its admin credential through Bicep parameters, never through these container-image bootstrap variables."
+      "why": "API_DATABASE_URL and API_DATABASE_MIGRATION_URL are set in BOTH environments with different VALUES and identical NAMES, so they are sameEverywhere — exactly like the identity keys in row 1 — and they moved out of this row when Task 24's infra/modules/postgres.bicep and the api Container App's two secretRef entries landed. API_DATABASE_POOL_MAX is defaultedInBothEnvironments: apps/api/src/config.ts falls back to 10 and neither environment sets it. What exists in only one environment is the Postgres container's own bootstrap. Locally the database is a container this stack runs and these three variables are consumed by the postgres image itself at first boot (docker-entrypoint-initdb.d); in a tenant it is a Flexible Server somebody provisioned, whose admin credential comes from a Key Vault secret read with getSecret(), never through a container-image bootstrap variable. The two roles P10 requires — lexprompt_migrator and lexprompt_app — are created by infra/postgres/init.sql locally and by ONE psql run by the Flexible Server admin in Azure; 000_preconditions.sql refuses the migration, naming that step, when they are absent, rather than letting a GRANT fail with 'role does not exist'. One thing that is NOT a divergence and is worth saying so: max_connections is declared explicitly in BOTH — docker-compose.yml's `command:` and postgres.bicep's configuration child resource — rather than inherited from an image default in one and a SKU default in the other, because three of this project's defects have been an undeclared cap."
     }
   ],
   "rowsWithNoKeys": {
@@ -138,6 +136,10 @@
     "API_ROLE_MAPPINGS",
     "API_WORKSPACE_ID",
     "API_GATEWAY_URL",
+    "API_DATABASE_URL",
+    "API_DATABASE_MIGRATION_URL",
+    "API_BLOB_CREDENTIAL_SOURCE",
+    "API_BLOB_CONTAINER",
     "GATEWAY_PORT",
     "GATEWAY_MODELS_FILE",
     "GATEWAY_ALLOWED_JURISDICTIONS",
@@ -189,8 +191,19 @@
     "postgres",
     "azurite"
   ],
-  "awaitingAzureTemplate": [
-    "API_BLOB_ACCOUNT_URL"
+  "awaitingAzureTemplate": [],
+  "awaitingAzureTemplateEmptyNote": [
+    "EMPTY, AND THAT IS THE POINT OF THE LIST RATHER THAN A REASON TO DELETE",
+    "IT. It held exactly one key — API_BLOB_ACCOUNT_URL — from Task 10, when",
+    "apps/api could already be pointed at a managed-identity blob store and no",
+    "Azure template set the account URL it would need. Task 24 set it, so the",
+    "key moved into row 5 and this list emptied, which is what the note below",
+    "said would happen. The list stays because the NEXT key of this kind will",
+    "arrive the same way: read by a config module, required by one",
+    "environment's posture, with no default and no fallback, and set by",
+    "neither environment yet. Filing such a key as 'defaulted' would say the",
+    "software has an opinion it must not have; leaving it unclassified would",
+    "fail the suite with no honest place to put it."
   ],
   "awaitingAzureTemplateNote": [
     "Read by a configuration module and set by NEITHER environment — but NOT",

@@ -397,6 +397,51 @@ describe('the configuration diff is exactly §5.1s divergence list (S30)', () =>
     expect(dupes.sort()).toEqual([]);
   });
 
+  /**
+   * The one key in this table that NO configuration module reads, and the
+   * blind spot it sits in.
+   *
+   * Every other check in this file works because a configuration module is
+   * the only thing that reads the environment (§18 item 10(a)), so the set
+   * of keys that matter is knowable by scanning three files.
+   * `AZURE_CLIENT_ID` breaks that assumption, and it is the only key that
+   * does: `apps/api/src/blob/store.ts` constructs
+   * `new DefaultAzureCredential()` with no options, and the managed-identity
+   * leg of that chain resolves a USER-ASSIGNED identity's client id from
+   * `process.env.AZURE_CLIENT_ID` and from nowhere else (@azure/identity
+   * 4.13.1, `createDefaultManagedIdentityCredential`). The api Container App
+   * has a user-assigned identity and no system-assigned one, so without that
+   * variable set, every document byte read and write fails in Azure — with
+   * every unit test in this repository green, because nothing in this
+   * repository reads the key.
+   *
+   * That is the deployment-only failure this suite exists to catch a class
+   * of, and the classification checks above cannot see it: the key is not
+   * `declared` by any config module, so "every key a config module reads is
+   * classified" passes whether it is set or not. Two assertions instead,
+   * pinned to the two facts that make it necessary:
+   *
+   *  1. The Azure template sets it. Deleting the line fails here.
+   *  2. `store.ts` still takes the no-options constructor. If someone later
+   *     passes an explicit `managedIdentityClientId`, the ENVIRONMENT
+   *     VARIABLE stops being the mechanism, and this test should be the
+   *     thing that says so rather than a key quietly outliving its reason.
+   */
+  it('AZURE_CLIENT_ID is set by the Azure template, because the credential chain reads it and no config module does', () => {
+    expect(deployed.has('AZURE_CLIENT_ID')).toBe(true);
+    expect(tabled.has('AZURE_CLIENT_ID')).toBe(true);
+    // Not local: Azurite authenticates by connection string, and there is no
+    // managed identity on a laptop to name.
+    expect(localAll.has('AZURE_CLIENT_ID')).toBe(false);
+    // …and it is genuinely invisible to the config-module scan, which is the
+    // reason this test exists rather than being covered by the ones above.
+    expect(declared.has('AZURE_CLIENT_ID')).toBe(false);
+
+    const store = codeOf(path.join(ROOT, 'apps/api/src/blob/store.ts'));
+    expect(store).toContain('new DefaultAzureCredential()');
+    expect(store).not.toContain('managedIdentityClientId');
+  });
+
   // P4 / owner decision 5, asserted here as well as in `stage1DoD`, both
   // through ONE shared predicate.
   it('GATEWAY_ALLOWED_JURISDICTIONS is the same-everywhere kind, and is defaulted nowhere', () => {
