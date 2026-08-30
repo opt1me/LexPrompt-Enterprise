@@ -164,28 +164,29 @@ const UNSCOPED_BY_DESIGN = [
  * The statements that identify a row by a key which is ITSELF proven to be
  * in this workspace, one query earlier.
  *
- * Both are `dispositions/service.ts`'s, and the proof is `requireFinding`:
- * every route that reaches this service calls it first, and it selects the
- * finding with `workspace_id = $4` and throws when there is none. The key
- * `(review_id, findings_key, clause_id)` is a finding's primary key, so a
- * key that survived that check names a row in this workspace. The write is
- * then an optimistic-concurrency update by key AND `version`, whose whole
- * point is that it applies to the row that was read or to nothing.
+ * TWO OF THESE ARE GONE, and their absence is the point. `dispositions/
+ * service.ts`'s read and its optimistic-concurrency update were exempt on
+ * the argument that `requireFinding` had already checked the workspace one
+ * query earlier — true of every caller, and still no reason for the module
+ * that WRITES a table holding every firm's judgements to issue a statement
+ * without the predicate. `readDispositionEvents`, two functions down in the
+ * same file, had carried `workspace_id` all along and said why: *"the key
+ * alone is a text triple, and a route that had already checked the finding
+ * would still be issuing an unscoped read."* The same argument applied
+ * verbatim two functions up and had not been applied. It has been now, so
+ * the exemptions are deleted rather than left standing over statements that
+ * no longer need them — a stale exemption is one nobody re-reads, and the
+ * test below exists to make exactly that failure loud.
  *
- * That gate is asserted below rather than trusted — it is what makes these
- * two exemptions true, and if a route ever reached the service without it,
- * this list would be a hole rather than a ruling.
+ * The `requireFinding` gate is still asserted below. It was the reason for
+ * the exemption; it is now defence in depth on both sides.
  *
  * LISTED AS EXACT STATEMENT TEXT, not as a file exemption. A file-level
  * exemption hides everything in that file, not the part it was meant to
  * protect — `PdfCanvas.tsx` shipped three unrestyled states behind one, and
- * `SCAN_EXEMPT` is empty in the palette guard for that reason. A THIRD
- * unscoped statement in `dispositions/service.ts` fails this guard, which is
- * the property a file exemption would have destroyed.
+ * `SCAN_EXEMPT` is empty in the palette guard for that reason.
  */
 const SCOPED_BY_KEY = [
-  'select review_id, findings_key, clause_id, workspace_id, state, reason',
-  'set state = $4, reason = $5, by_user_id = $6, at = $7',
   // `PUT /v1/me`, the one thing §7 lets a person change about themselves.
   // It identifies the row by `app_user.id` — the actor's OWN id, which the
   // authentication hook resolved from a validated token and which nothing a

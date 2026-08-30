@@ -1,6 +1,6 @@
 import {
   subscriptionKey,
-  WS_BEARER_PREFIX, WS_PATH, WS_SUBPROTOCOL,
+  WS_BEARER_PREFIX, WS_CLOSE_UNAUTHENTICATED, WS_PATH, WS_SUBPROTOCOL,
   type AppEvent, type ClientFrame, type PresenceMember, type PresenceScreen,
   type ServerFrame, type SubscriptionRef,
 } from '@lexprompt/core';
@@ -177,6 +177,51 @@ function armStale(): void {
   staleTimer = setTimeout(() => { setState('stale'); }, WS_STALE_AFTER_MS);
 }
 
+/**
+ * A SOCKET THAT NEVER OPENS MUST STILL GO STALE.
+ *
+ * `armStale` used to have two callers — `ws.onopen` and `heard()` — so
+ * `stale` was reachable only from a connection that had once succeeded.
+ * Every failure of the UPGRADE ITSELF lands on `onclose` or the `catch`
+ * below, both of which set `connecting` and schedule a retry, and
+ * `connecting` renders no banner and disables no control. A 429 from
+ * `API_WS_MAX_CONNECTIONS`, a 403 from a role below `reviewer`, or a proxy
+ * that does not forward `Upgrade` therefore left a reviewer looking at a
+ * full set of live-looking findings and live Verify/Flag/Reject controls
+ * with not one colleague's change ever arriving — this project's founding
+ * defect wearing a websocket, and the exact state the `stale` banner was
+ * built to prevent.
+ *
+ * IF IDLE, and that half is load-bearing too. `ensureSocket` runs again on
+ * every backoff tick; re-arming there would push the deadline out on each
+ * retry and `stale` would never fire at all — the same silence by a
+ * different route. So the countdown starts at the FIRST attempt and is
+ * reset only by evidence of a live connection: `onopen`, and any frame.
+ */
+function armStaleIfIdle(): void {
+  if (staleTimer !== null) return;
+  armStale();
+}
+
+/**
+ * `connecting` NEVER OVERWRITES `stale`.
+ *
+ * Both `ensureSocket` and `ws.onclose` announce `connecting`, and both run
+ * on every backoff tick — so a tab that has been stale for ten minutes
+ * against a server refusing every upgrade flipped back to `connecting` on
+ * each retry, which renders no banner and disables no control. The reader
+ * would have seen the warning for a few seconds in every reconnect cycle and
+ * a normal-looking review the rest of the time, which is worse than never
+ * showing it: an intermittent warning is one people learn to disbelieve.
+ *
+ * A retry attempt is not evidence of anything. Only a frame from the server
+ * clears `stale`, and `hello`/`caught_up` are where that happens.
+ */
+function setConnecting(): void {
+  if (state === 'stale') return;
+  setState('connecting');
+}
+
 function heard(): void {
   armStale();
 }
@@ -340,13 +385,29 @@ function scheduleReconnect(): void {
 async function ensureSocket(): Promise<void> {
   if (opening || socket !== null || entries.size === 0 || closedByUs) return;
   opening = true;
-  setState('connecting');
+  setConnecting();
+  // BEFORE the token, before the constructor. `getAccessToken()` can hang or
+  // reject, and the upgrade can be refused outright; neither of those paths
+  // ever reaches `onopen`, and both used to leave this tab in `connecting`
+  // for the life of the page. See `armStaleIfIdle`.
+  armStaleIfIdle();
   try {
-    // THE TOKEN AT CONNECT TIME, in the subprotocol. A token expiring
-    // mid-connection closes the socket; the client refreshes and reconnects,
-    // which is the same path as any other drop. There is deliberately no
-    // re-authentication of a live socket: one path, exercised constantly,
-    // beats two of which one runs hourly.
+    // THE TOKEN AT CONNECT TIME, in the subprotocol.
+    //
+    // A token expiring mid-connection closes the socket — the SERVER closes
+    // it, with `WS_CLOSE_UNAUTHENTICATED`, off the `exp` it carried away
+    // from the upgrade (`apps/api/src/realtime/socket.ts`). The client then
+    // refreshes and reconnects, which is the same path as any other drop.
+    // There is deliberately no re-authentication of a live socket from this
+    // end: one path, exercised constantly, beats two of which one runs
+    // hourly.
+    //
+    // That sentence was here before anything implemented it — nothing closed
+    // an expired socket at all, so a signed-out or disabled person's open
+    // tab went on receiving the workspace's live changes until it was
+    // closed. A justification for omitting a mechanism, resting on a
+    // mechanism that does not exist, is its own defect; the server now
+    // closes on `exp` and re-checks the account on its own timer.
     const token = await getAccessToken();
     const base = config.apiBaseUrl.startsWith('http')
       ? config.apiBaseUrl
@@ -361,8 +422,25 @@ async function ensureSocket(): Promise<void> {
     };
     ws.onmessage = (event: MessageEvent) => { onFrame(String(event.data)); };
     ws.onerror = () => { debug('socket: transport error'); };
-    ws.onclose = () => {
+    ws.onclose = (closed?: { code?: number }) => {
       socket = null;
+      /*
+       * 4001 IS THE ONE THIS CLIENT ACTS ON DIFFERENTLY, and now it can.
+       *
+       * `WS_CLOSE_UNAUTHENTICATED` means the token this socket was upgraded
+       * with has expired, or the account behind it is no longer allowed —
+       * not that the network or the server is in trouble. Backing off from
+       * 500 ms to fifteen seconds over an expiry the very next
+       * `getAccessToken()` refreshes would leave a reader watching a stale
+       * review for no reason, so the attempt counter is reset and the
+       * ordinary first-retry delay applies. The refusal, if the account
+       * really is gone, arrives as a plain 401 at the upgrade.
+       *
+       * The constant was exported and documented as "the one the browser
+       * acts on differently" while nothing sent it and nothing read it.
+       * Both ends of that sentence are now true.
+       */
+      if (closed?.code === WS_CLOSE_UNAUTHENTICATED) attempt = 0;
       // NOBODY IS HERE THAT THIS TAB CAN VOUCH FOR. The roster it last held
       // was a claim about a few seconds ago on a connection that is now
       // gone; keeping it on screen is exactly the stale indicator S6 exists
@@ -374,7 +452,7 @@ async function ensureSocket(): Promise<void> {
       // must not flash a banner; `armStale`'s timer is what decides, and it
       // is still running.
       if (!closedByUs) {
-        setState('connecting');
+        setConnecting();
         scheduleReconnect();
       }
     };

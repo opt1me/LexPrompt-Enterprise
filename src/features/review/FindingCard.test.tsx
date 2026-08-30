@@ -767,6 +767,85 @@ describe('a request one person made of another (§6.3, Task 25)', () => {
     expect(container.textContent).not.toContain('asked you to look at this');
   });
 
+  /*
+   * THE THIRD PERSON IN THE ROOM (C1).
+   *
+   * `assignment.created` is a REVIEW-scoped event, so the push reaches every
+   * tab with the review open. The card's render was a binary — assignee, or
+   * "you asked" — so a reader who was neither fell into the `else` and was
+   * told, in the first person, that they had made a request they had never
+   * heard of, under the message its real author wrote, beside a live
+   * "Withdraw the request" button.
+   *
+   * That is `CLAUDE.md`'s R1 rule failing at Stage 4's one new surface: an
+   * affordance offering an action on another person's act. There were two
+   * cases in the code and three in the world.
+   */
+  it('tells a BYSTANDER nothing at all about a request between two other people', () => {
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        localUserId="c-the-bystander"
+        audience={TEST_AUDIENCE}
+        assignments={[{ ...ASK, assigneeUserId: 'u2', assignedByUserId: 'u1' }]}
+        onResolveAssignment={() => { /* … */ }}
+      />,
+    );
+    // Not the sentence, not the message, and not the button.
+    expect(container.textContent).not.toContain('You asked');
+    expect(container.textContent).not.toContain('asked you to look at this');
+    expect(container.textContent).not.toContain('Not sure the cap survives 14.2.');
+    expect(container.textContent).not.toContain('Withdraw the request');
+    expect(container.querySelector('[data-assignments]')).toBeNull();
+  });
+
+  it('says nothing in the assignee s own window before the profile has resolved', () => {
+    // `localUserId={profile?.id ?? ''}` — for the frames before `GET /v1/me`
+    // answers, this tab does not know whose it is. The old binary made the
+    // REAL assignee's card read "You asked B. Trainee to look at this" during
+    // exactly that window, because `mine` was false.
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        localUserId=""
+        audience={TEST_AUDIENCE}
+        assignments={[ASK]}
+      />,
+    );
+    expect(container.textContent).not.toContain('You asked');
+    expect(container.querySelector('[data-assignments]')).toBeNull();
+  });
+
+  it('offers Withdraw only to the asker and I have looked at this only to the assignee', () => {
+    const asker = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        localUserId="u1"
+        audience={TEST_AUDIENCE}
+        assignments={[{ ...ASK, assigneeUserId: 'u2', assignedByUserId: 'u1' }]}
+        onResolveAssignment={() => { /* … */ }}
+      />);
+    expect(asker.textContent).toContain('Withdraw the request');
+    expect(asker.textContent).not.toContain('I have looked at this');
+    cleanup?.();
+    cleanup = null;
+
+    const assignee = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        localUserId="me"
+        audience={TEST_AUDIENCE}
+        assignments={[ASK]}
+        onResolveAssignment={() => { /* … */ }}
+      />);
+    expect(assignee.textContent).toContain('I have looked at this');
+    expect(assignee.textContent).not.toContain('Withdraw the request');
+  });
+
   it('offers the assign action only where there is somewhere to persist it', () => {
     const without = mount(
       <FindingCard {...baseProps} finding={doneFinding()} audience={TEST_AUDIENCE} />);

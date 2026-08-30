@@ -43,10 +43,17 @@ export async function resolveAssignment(id: string): Promise<AssignmentView> {
 }
 
 /**
- * What has been asked of ME, open, within one review.
+ * The open requests I AM A PARTY TO — asked of me, and made by me — within
+ * one review.
  *
- * Scoped to a review because that is the Stage 4 surface: the assignee sees
- * what has been asked of them within the review they are in. The firm-wide
+ * BOTH DIRECTIONS, because this is the only read there is. A request the
+ * caller made used to exist in this tab's memory and nowhere else, so it
+ * disappeared on reload along with its "Withdraw the request" control, while
+ * the assignee went on seeing it open. It is a third party who is told
+ * nothing, which the server enforces and `assignmentParty` mirrors on the
+ * push.
+ *
+ * Scoped to a review because that is the Stage 4 surface. The firm-wide
  * "assigned to me" counter is Stage 5 (S18) — a different screen over the
  * same mechanism, not a different truth.
  */

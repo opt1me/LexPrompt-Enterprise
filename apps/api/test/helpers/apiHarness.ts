@@ -104,7 +104,7 @@ export interface TestApiOptions {
    *  ceiling must not have to open twenty of them, and one proving the
    *  heartbeat must not have to wait twenty-five seconds. */
   socketCaps?: Partial<{ pingMs: number; maxConnections: number; maxSubscriptions: number;
-    maxFrameBytes: number }>;
+    maxFrameBytes: number; reauthMs: number }>;
 }
 
 export interface CallLog {

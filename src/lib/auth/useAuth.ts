@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { User } from 'oidc-client-ts';
 import { userManager } from './oidc';
 import { closeSocket } from '../api/socket';
+import { forgetDirectory } from '../api/users';
 
 export interface AuthAccount {
   oid: string;
@@ -166,8 +167,17 @@ export function useAuth(): UseAuthResult {
     // shown. Here rather than in `App.tsx` because this is the one place
     // sign-out is expressed, and a second caller is how one of them comes to
     // be forgotten.
+    // AND THE DIRECTORY. `users.ts` caches this workspace's people in a
+    // module map, and its own docstring named a sign-in path that did not
+    // exist — nothing called `forgetDirectory` outside tests. Moot while
+    // `signoutRedirect()` reloads the document, and that is exactly the
+    // argument that stops being true the first time somebody signs out
+    // without a navigation: the next person's tab would resolve actor ids
+    // through the previous person's directory, which is a name on a card
+    // sourced from a session that has ended.
     signOut: () => {
       closeSocket();
+      forgetDirectory();
       void userManager.signoutRedirect();
     },
     retry: load,

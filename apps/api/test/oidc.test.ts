@@ -7,7 +7,7 @@ import {
   makeTokenVerifier, assertIssuerUsable, discoverJwks, type AuthConfig,
 } from '../src/oidc.ts';
 import { walk, codeOf } from './sourceScan.ts';
-import { buildTestApi } from './helpers/apiHarness.ts';
+import { buildTestApi, collectRoutes } from './helpers/apiHarness.ts';
 
 const ENTRA: AuthConfig = {
   issuer: 'https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0',
@@ -42,12 +42,20 @@ beforeAll(async () => {
   otherKey = (await generateKeyPair('RS256')).privateKey;
 });
 
-const sign = (cfg: AuthConfig, claims: Record<string, unknown>, key?: CryptoKey, expIn = '10m') =>
-  new SignJWT(claims)
+/** `expIn` takes jose's relative form ('10m', '-1m') or an absolute epoch in
+ *  SECONDS; `null` mints a token with NO `exp` claim at all, which is the one
+ *  case `Principal.expiresAt` has to answer with an absent key. */
+const sign = (
+  cfg: AuthConfig, claims: Record<string, unknown>, key?: CryptoKey,
+  expIn: string | number | null = '10m',
+) => {
+  const jwt = new SignJWT(claims)
     .setProtectedHeader({ alg: 'RS256', kid: 'k1' })
     .setIssuer(cfg.issuer).setAudience(cfg.audience)
-    .setIssuedAt().setExpirationTime(expIn)
-    .sign(key ?? privateKey);
+    .setIssuedAt();
+  if (expIn !== null) jwt.setExpirationTime(expIn);
+  return jwt.sign(key ?? privateKey);
+};
 
 const entraToken = (over: Record<string, unknown> = {}) => sign(ENTRA, {
   tid: '11111111-1111-1111-1111-111111111111',
@@ -62,15 +70,39 @@ describe('one code path, two issuers (§7, S28)', () => {
   it('validates an Entra token and reads oid as the subject', async () => {
     expect(await makeTokenVerifier(ENTRA, jwks)(await entraToken())).toEqual({
       issuer: ENTRA.issuer, subject: 'oid-1', groups: ['group-a'],
-      name: 'A. Gray', email: 'a@firm.com',
+      name: 'A. Gray', email: 'a@firm.com', expiresAt: expect.any(Number),
     });
   });
 
   it('validates a Keycloak token and reads sub as the subject, with the SAME function', async () => {
     expect(await makeTokenVerifier(KEYCLOAK, jwks)(await keycloakToken())).toEqual({
       issuer: KEYCLOAK.issuer, subject: 'kc-sub-1', groups: ['/reviewers'],
-      name: 'A. Trainee', email: 't@firm.local',
+      name: 'A. Trainee', email: 't@firm.local', expiresAt: expect.any(Number),
     });
+  });
+
+  /*
+   * THE TOKEN'S DEADLINE, CARRIED OFF THE PRINCIPAL (M3).
+   *
+   * An HTTP request re-verifies on every call, so nothing needed `exp`
+   * before. A SOCKET is authenticated once, at the upgrade, and then lives
+   * as long as the tab — so without this the token's lifetime meant nothing
+   * to a live connection and a disabled or signed-out person's open tab went
+   * on receiving the workspace's changes. `realtime/socket.ts` closes on it.
+   */
+  it('carries exp forward, in MILLISECONDS, so a socket can close on it', async () => {
+    const at = Math.floor(Date.now() / 1000) + 900;
+    const principal = await makeTokenVerifier(KEYCLOAK, jwks)(
+      await sign(KEYCLOAK, { sub: 'kc-sub-1', groups: [] }, undefined, at));
+    expect(principal.expiresAt).toBe(at * 1_000);
+  });
+
+  it('carries NO expiresAt key at all for a token with no exp', async () => {
+    // Absent, not `undefined`-valued: `'expiresAt' in principal` is what the
+    // socket asks, and an undefined-valued key would read as an expiry.
+    const principal = await makeTokenVerifier(KEYCLOAK, jwks)(
+      await sign(KEYCLOAK, { sub: 'kc-sub-1', groups: [] }, undefined, null));
+    expect('expiresAt' in principal).toBe(false);
   });
 
   // The point of S28: neither issuer's token is accepted by the other's
@@ -463,13 +495,37 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     'x-auth-request-user': 'sub-a-colleague',
   };
 
-  const routes = (): { method: string; url: string }[] => {
-    const found: { method: string; url: string }[] = [];
-    for (const file of walk(SRC)) {
-      for (const m of codeOf(file).matchAll(/app\.(get|post|put|patch|delete)\(\s*'([^']+)'/g)) {
-        found.push({ method: m[1].toUpperCase(), url: m[2] });
-      }
-    }
+  /**
+   * THE ROUTES FASTIFY ACTUALLY REGISTERED, from its own `onRoute` event.
+   *
+   * This was a REGEX over the source — `app.get('...')` with a single-quoted
+   * literal — and its blindness had already cost this suite once: `GET
+   * /v1/ws` was registered through the `WS_PATH` constant, the scanner did
+   * not see it, and the sweep passed at its old count with a new route it
+   * had never touched, on the one route whose entire design claim is that it
+   * is authenticated. That was patched by quoting the registration and
+   * hard-coding three assignment routes into the list below — a snapshot,
+   * not a mechanism: the next route registered with a constant, a template
+   * literal or double quotes would have been invisible again, and a `toEqual`
+   * over 69 strings cannot tell "missing from the scanner" from "missing
+   * from the list".
+   *
+   * `registerRoleGate`'s `onRoute` hook sees every registration however it is
+   * written, because it is Fastify telling it rather than a pattern guessing.
+   * `authz.route.test.ts` already reads the same table; this is the second
+   * reader, not a second mechanism.
+   */
+  const routes = async (): Promise<{ method: string; url: string }[]> => {
+    const { app } = buildTestApi({ principal: null });
+    await app.ready();
+    // Fastify's synthesised HEAD routes are dropped, exactly as
+    // `routeKey` folds them onto the GET they shadow: a HEAD runs the GET's
+    // own handler and discards the body, so the GET below sweeps it, and a
+    // HEAD injection answers 401 with no body for `res.json()` to read.
+    const found = collectRoutes(app)
+      .filter(r => r.method !== 'HEAD')
+      .map(r => ({ method: r.method, url: r.url }));
+    await app.close();
     return found;
   };
 
@@ -477,8 +533,8 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
   // named here so it cannot grow into a list quietly.
   const AUTH_EXEMPT = ['/healthz'];
 
-  it('discovers the routes it is about to check, so it cannot pass vacuously', () => {
-    const urls = routes().map(r => `${r.method} ${r.url}`).sort();
+  it('discovers the routes it is about to check, so it cannot pass vacuously', async () => {
+    const urls = (await routes()).map(r => `${r.method} ${r.url}`).sort();
     /*
      * THE NEW ROUTES ARE NAMED FIRST, on their own.
      *
@@ -580,7 +636,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
 
   it('refuses EVERY non-health route with 401 when no token is sent, whatever headers are', async () => {
     const checked: string[] = [];
-    for (const route of routes()) {
+    for (const route of await routes()) {
       if (AUTH_EXEMPT.includes(route.url)) continue;
       const { app, calls } = buildTestApi({ principal: null });
       const res = await app.inject({

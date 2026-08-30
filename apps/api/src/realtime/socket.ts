@@ -3,8 +3,9 @@ import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   ModelError, isClientFrame, uid,
-  WS_BEARER_PREFIX, WS_CLOSE_UNRESPONSIVE, WS_PATH, WS_SUBPROTOCOL,
-  type AppEvent, type ClientFrame, type PresenceScreen, type ServerFrame, type SubscriptionRef,
+  WS_BEARER_PREFIX, WS_CLOSE_UNAUTHENTICATED, WS_CLOSE_UNRESPONSIVE, WS_PATH, WS_SUBPROTOCOL,
+  type AppEvent, type ClientFrame, type PresenceScreen, type Role, type ServerFrame,
+  type SubscriptionRef,
 } from '@lexprompt/core';
 import type { Principal } from '../oidc.ts';
 import type { Actor } from '../auth/actor.ts';
@@ -86,6 +87,14 @@ export interface SocketCaps {
   presenceHeartbeatMs: number;
   /** `API_PRESENCE_TTL_MS` — how often the sweep runs is derived from it. */
   presenceTtlMs: number;
+  /**
+   * How often a live socket's ACCOUNT is re-read. Optional and defaulted to
+   * `REAUTH_EVERY_MS`, deliberately: it is not an operator's dial and has no
+   * environment variable, so a deployment cannot turn revocation off by
+   * setting it to an hour. It is here at all so a test can reach the branch
+   * without waiting a minute of wall-clock time.
+   */
+  reauthMs?: number;
 }
 
 /** The role a socket needs, read from the SAME table every route reads. */
@@ -171,6 +180,31 @@ export function attachSocket(server: Server, deps: SocketDeps): () => Promise<vo
     for (const ws of wss.clients) {
       const state = STATE.get(ws);
       if (!state) continue;
+      /*
+       * THE TOKEN RAN OUT (M3).
+       *
+       * A socket was authenticated at its upgrade and never again: no
+       * expiry, no revocation, no re-resolve. The browser's own source
+       * asserted the opposite as its reason for having no re-authentication
+       * — *"a token expiring mid-connection closes the socket"* — and
+       * nothing closed it, so a signed-out or disabled person's open tab
+       * went on receiving every disposition change, note and assignment in
+       * the workspace until somebody closed the tab.
+       *
+       * Closed with 4001 rather than left to the ping: an unresponsive
+       * socket and an expired one are different facts, and the client acts
+       * on this one differently (it reconnects on a refreshed token
+       * immediately rather than backing off).
+       */
+      if (state.expiresAt !== undefined && Date.now() >= state.expiresAt) {
+        ws.close(WS_CLOSE_UNAUTHENTICATED, 'token expired');
+        continue;
+      }
+      state.sinceRecheck += deps.caps.pingMs;
+      if (state.sinceRecheck >= (deps.caps.reauthMs ?? REAUTH_EVERY_MS)) {
+        state.sinceRecheck = 0;
+        void closeIfNoLongerAllowed(ws, state, deps);
+      }
       if (state.missedPings >= 2) {
         // Two unanswered pings. Closed rather than left open: a socket the
         // server believes in and the client is not reading is precisely a
@@ -217,7 +251,44 @@ interface SocketState {
   conn: Connection;
   missedPings: number;
   subs: Map<string, SubscriptionRef>;
+  /** The actor this socket was upgraded as. Kept so the account behind it
+   *  can be re-read; the ROLE here is the one checked at the upgrade, and a
+   *  change to it is one of the two things the re-check looks for. */
+  actor: Actor;
+  /** `exp`, in milliseconds, or `undefined` for a token that carried none. */
+  expiresAt?: number;
+  /** Ping ticks since this socket's account was last re-read. See
+   *  `REAUTH_EVERY_MS`. */
+  sinceRecheck: number;
 }
+
+/**
+ * HOW OFTEN A LIVE SOCKET'S ACCOUNT IS RE-READ.
+ *
+ * A socket is authenticated at the upgrade and then lives as long as the
+ * tab. Expiry alone bounds that by the token's own lifetime, which is right
+ * for a token but says nothing about an administrator who disabled an
+ * account or dropped somebody below `reviewer` five minutes ago — that
+ * decision takes effect on the next HTTP request and used to take effect on
+ * a live socket NEVER. One cheap read per socket per minute closes it.
+ *
+ * A MINUTE, not a tick: the ping runs every 25s and 500 sockets re-resolving
+ * on every one of them is a needless 20 reads a second, for a fact that
+ * changes about once a year.
+ */
+const REAUTH_EVERY_MS = 60_000;
+
+/**
+ * How many pages of replay one `subscribe` will read before it stops and
+ * tells the client to re-read instead.
+ *
+ * `API_EVENT_PAGE_MAX` is 500, so this is 10,000 events — comfortably more
+ * than a busy review accumulates inside the seven-day retention window, and
+ * still a bound: this runs inside a frame handler, and a subscription
+ * arriving with `lastEventId: 0` against a workspace with a million rows
+ * must not turn into an unbounded read on the socket's own thread.
+ */
+const REPLAY_PAGES_MAX = 20;
 
 /** Per-socket state, off to the side so `WebSocket` is not decorated with
  *  fields `ws`'s own types do not know about. */
@@ -251,8 +322,13 @@ async function authenticateAndUpgrade(
   }
 
   let actor: Actor;
+  // The token's own deadline, carried off the verified principal so the
+  // socket can be closed when it passes. `undefined` for a token with no
+  // `exp`; the periodic account re-check is what covers that case.
+  let expiresAt: number | undefined;
   try {
     const principal = await deps.verify(token);
+    expiresAt = principal.expiresAt;
     actor = await deps.resolveActor(principal);
   } catch (err) {
     if (err instanceof ModelError) {
@@ -282,17 +358,58 @@ async function authenticateAndUpgrade(
     return;
   }
 
-  wss.handleUpgrade(req, socket, head, ws => { onConnection(ws, actor, deps); });
+  wss.handleUpgrade(req, socket, head, ws => { onConnection(ws, actor, expiresAt, deps); });
 }
 
-function onConnection(ws: WebSocket, actor: Actor, deps: SocketDeps): void {
+/**
+ * IS THIS PERSON STILL ALLOWED TO BE HERE?
+ *
+ * A read, never a write. `resolveActor` UPSERTS `app_user` — correct at a
+ * sign-in, wrong on a timer, where it would rewrite a row once a minute per
+ * open tab for a question that only needs reading. This asks the two things
+ * the upgrade asked: is the account still active, and does it still hold the
+ * role the socket route requires.
+ *
+ * A FAILED READ LEAVES THE SOCKET OPEN, deliberately. Closing every live
+ * connection in the firm because the database blinked would turn a brief
+ * outage into a self-inflicted one, and the exposure this closes is a person
+ * whose access was withdrawn — bounded already by the token's own expiry
+ * above. It is reported rather than swallowed.
+ */
+async function closeIfNoLongerAllowed(
+  ws: WebSocket, state: SocketState, deps: SocketDeps,
+): Promise<void> {
+  let rows: { role: Role; status: string }[];
+  try {
+    rows = await deps.db.query<{ role: Role; status: string }>(
+      'select role, status from app_user where id = $1 and workspace_id = $2',
+      [state.actor.id, state.actor.workspaceId]);
+  } catch (err) {
+    process.stderr.write(
+      `api: could not re-check socket ${state.conn.id} (${(err as Error).message}); `
+      + 'it stays open until its token expires\n');
+    return;
+  }
+  const row = rows[0];
+  const required = ROUTE_POLICY[POLICY_KEY];
+  const allowed = row !== undefined && row.status === 'active'
+    && (required === 'public' || ROLE_RANK[row.role] >= ROLE_RANK[required]);
+  if (!allowed) ws.close(WS_CLOSE_UNAUTHENTICATED, 'no longer permitted');
+}
+
+function onConnection(
+  ws: WebSocket, actor: Actor, expiresAt: number | undefined, deps: SocketDeps,
+): void {
   const conn: Connection = {
     id: uid(),
     workspaceId: actor.workspaceId,
     userId: actor.id,
     send: frame => send(ws, frame),
   };
-  const state: SocketState = { conn, missedPings: 0, subs: new Map() };
+  const state: SocketState = {
+    conn, missedPings: 0, subs: new Map(), actor, sinceRecheck: 0,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
+  };
   STATE.set(ws, state);
   deps.hub.open(conn);
 
@@ -516,22 +633,48 @@ async function subscribe(
   deps.hub.join(collector, sub, lastEventId);
 
   try {
-    // 2. REPLAY from the cursor.
-    const page = await readEvents(deps.db, {
-      workspaceId: state.conn.workspaceId,
-      subscription: sub,
-      after: lastEventId,
-      limit: deps.caps.eventPageMax,
-    });
-    if (page.resyncRequired) {
+    /*
+     * 2. REPLAY from the cursor — EVERY PAGE OF IT.
+     *
+     * `readEvents` fetches `limit + 1` so `hasMore` is *"a fact rather than
+     * a guess"*, and its own docstring says **"silently short is the
+     * failure"**. This read one page and sent `caught_up` regardless: past
+     * `API_EVENT_PAGE_MAX` the client was told it was current while sitting
+     * 500+ events behind — and with a second connection already in the
+     * bucket, the shared feed cursor is ahead of the gap, so the missing
+     * events are never delivered at all. A colleague's rejection lands in
+     * that hole and the card never shows it, with no `resync_required` and
+     * no `stale`. A 250-clause run emits about 500 events on its own.
+     *
+     * BOUNDED, because this runs inside a frame handler: at
+     * `REPLAY_PAGES_MAX` pages the client is told `resync_required` instead
+     * of `caught_up` and re-reads the state those events described. That is
+     * the honest end — the same answer the retention gap gets — rather than
+     * either a lie or an unbounded read.
+     */
+    let cursor = lastEventId;
+    let resync = false;
+    let truncated = false;
+    for (let page = 0; page < REPLAY_PAGES_MAX; page += 1) {
+      const read = await readEvents(deps.db, {
+        workspaceId: state.conn.workspaceId,
+        subscription: sub,
+        after: cursor,
+        limit: deps.caps.eventPageMax,
+      });
+      if (read.resyncRequired) resync = true;
+      cursor = Math.max(cursor, read.nextCursor);
+      for (const event of read.events) {
+        send(ws, { t: 'event', sub, event });
+        cursor = Math.max(cursor, event.id);
+      }
+      if (!read.hasMore) { truncated = false; break; }
+      truncated = true;
+    }
+    if (resync) {
       // NEVER a silently short replay. The client re-reads the state those
       // events described rather than pretending it saw them.
       send(ws, { t: 'resync_required', sub });
-    }
-    let cursor = page.nextCursor;
-    for (const event of page.events) {
-      send(ws, { t: 'event', sub, event });
-      cursor = Math.max(cursor, event.id);
     }
     cursorSeen = cursor;
     // 3. FLUSH what arrived during the replay, de-duplicated by id.
@@ -541,7 +684,13 @@ async function subscribe(
       cursor = Math.max(cursor, event.id);
     }
     cursorSeen = cursor;
-    send(ws, { t: 'caught_up', sub, cursor });
+    if (truncated) {
+      // NOT `caught_up`, because it is not caught up. Saying so at a cursor
+      // the read itself reported was not the end is the whole finding.
+      send(ws, { t: 'resync_required', sub });
+    } else {
+      send(ws, { t: 'caught_up', sub, cursor });
+    }
   } finally {
     // 4. Swap the collector for the real connection, whatever happened. A
     // replay that threw must not leave a buffer in the hub forever.

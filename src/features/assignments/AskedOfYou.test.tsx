@@ -16,6 +16,7 @@ import { AskedOfYou } from './AskedOfYou';
 
 const audience: DispositionAudience = {
   nameOf: (id: string) => (id === 'u1' ? 'A Trainee' : undefined),
+  initialsOf: (id: string) => (id === 'u1' ? 'AT' : undefined),
   timeOf: () => 'now',
 };
 

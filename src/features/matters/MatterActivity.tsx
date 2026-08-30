@@ -153,19 +153,35 @@ export function MatterActivity({
 }: MatterActivityProps) {
   const [fetched, setFetched] = useState<ActivityRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * THE THIRD STATE. Loading, error, empty — and only two were rendered.
+   *
+   * While `getMatterActivity` was in flight, `fetched` was `null`, `entries`
+   * was built from `[]` plus whatever notes the reviews carried, and a
+   * matter with no notes rendered *"Nothing recorded in this matter yet"* —
+   * the empty/loading conflation this codebase's own load rule exists to
+   * prevent, on the matter home screen. Transient and self-correcting, and
+   * still a sentence claiming a fact nothing had checked.
+   */
+  const [reading, setReading] = useState(matterId !== undefined && rows === undefined);
 
   useEffect(() => {
-    if (matterId === undefined || rows !== undefined) return;
+    if (matterId === undefined || rows !== undefined) {
+      setReading(false);
+      return;
+    }
     let live = true;
     setError(null);
+    setReading(true);
     getMatterActivity(matterId)
-      .then(got => { if (live) setFetched(got); })
+      .then(got => { if (live) { setFetched(got); setReading(false); } })
       // NOT swallowed into an empty feed. The disposition changes, the runs
       // and the audited acts all live server-side now, so a failed read
       // removes most of this list — and a shorter list is indistinguishable
       // from a quieter matter.
       .catch((e: unknown) => {
         if (live) {
+          setReading(false);
           setError(describeLoadError(
             e, 'This matter s activity could not be read.'));
         }
@@ -183,7 +199,13 @@ export function MatterActivity({
           {error} Checks, runs and changes to this matter are not shown below.
         </p>
       )}
-      {entries.length === 0 && !error ? (
+      {entries.length === 0 && !error && reading ? (
+        // NOT "nothing recorded yet" — nothing has been read yet, which is a
+        // different fact and the only one this screen can honestly state.
+        <p data-activity-loading className="mt-2 font-ui text-ui text-ink-3">
+          Reading this matter s activity…
+        </p>
+      ) : entries.length === 0 && !error ? (
         <p className="mt-2 font-ui text-ui text-ink-2">Nothing recorded in this matter yet.</p>
       ) : (
         <ul className="mt-3 space-y-3">

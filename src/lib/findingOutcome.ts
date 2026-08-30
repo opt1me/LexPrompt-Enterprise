@@ -550,6 +550,16 @@ export interface DispositionAudience {
    * it does not say the person has left the firm.
    */
   nameOf: (id: string | undefined) => string | undefined;
+  /**
+   * The same person's initials, on exactly the same terms.
+   *
+   * Here rather than imported directly by whoever needs it: `PresenceRoster`
+   * took the name from this object and the initials from `users.ts` itself,
+   * which is one component holding two resolvers where P32's rule is one —
+   * and a caller passing an audience got a name from it and initials from
+   * somewhere else. One object, one directory, one answer.
+   */
+  initialsOf: (id: string | undefined) => string | undefined;
   /** Epoch milliseconds to a human instant. */
   timeOf: (at: number) => string;
 }
@@ -612,7 +622,21 @@ function describeChange(
   change: {
     toState: VerificationState;
     fromState?: VerificationState;
-    cause: DispositionCause;
+    /**
+     * WHAT MOVED IT — a person, or the engine re-running the clause.
+     *
+     * OPTIONAL, because there is one caller that genuinely does not know.
+     * A 409 refusal carries the winning `DispositionView` and no event
+     * (`rememberConflict` drops the cached one deliberately: it described
+     * the movement into the state this row has just left), and a
+     * `DispositionView` has no cause field. This used to read
+     * `cause: last?.cause ?? 'human'` under a comment calling the fallback
+     * unreachable — so a conflict lost to a re-run rendered as
+     * "cleared by A. Trainee", which is §6.3's forbidden flattening of the
+     * two, asserted by a `??` rather than by anything that had looked.
+     * Absent now says absent, and the sentence below says less.
+     */
+    cause?: DispositionCause;
     byUserId: string | undefined;
     at: number | undefined;
   },
@@ -648,6 +672,14 @@ function describeChange(
   // alone is what a finding nobody has touched says, and these two must
   // never read the same.
   if (change.toState === 'unchecked') {
+    // WITH NO CAUSE IN HAND, neither sentence may be said. "Cleared by" is a
+    // claim that a person withdrew a judgement and "was re-run by" is a
+    // claim that the engine did; the honest line names the actor and the
+    // instant, which is all the refusal actually carried, and the next
+    // findings read replaces it with one that knows.
+    if (change.cause === undefined) {
+      return `${STATE_WORD.unchecked} - last changed by ${who}${when ? `, ${when}` : ''}${was}`;
+    }
     return `${STATE_WORD.unchecked} - cleared by ${who}${when ? `, ${when}` : ''}${was}`;
   }
   const head = `${STATE_WORD[change.toState]} by ${who}${when ? `, ${when}` : ''}`;
@@ -708,7 +740,9 @@ export function dispositionLabel(
     // `setDisposition` writes in one transaction to make impossible — so
     // the "was X" clause is simply omitted rather than guessed at.
     ...(last ? { fromState: last.fromState } : {}),
-    cause: last?.cause ?? 'human',
+    // ABSENT, not guessed. `last` is what carries the cause, and a 409's
+    // refusal carries no event at all.
+    ...(last ? { cause: last.cause } : {}),
     byUserId: disposition.byUserId,
     at: disposition.at ?? last?.at,
   }, audience);
@@ -965,7 +999,10 @@ export const NO_EXPORT_CONTEXT: ExportContext = {
   readAt: undefined,
   timeZone: 'UTC',
   dispositionOf: () => undefined,
-  audience: { nameOf: () => undefined, timeOf: (at: number) => new Date(at).toISOString() },
+  audience: {
+    nameOf: () => undefined, initialsOf: () => undefined,
+    timeOf: (at: number) => new Date(at).toISOString(),
+  },
 };
 
 /**

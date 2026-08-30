@@ -62,7 +62,7 @@ export type { AssignmentView, AssignmentsPage } from './api/records.ts';
 // resync_required, the one frame that says a hole exists.
 export {
   WS_SUBPROTOCOL, WS_BEARER_PREFIX, WS_PATH,
-  WS_CLOSE_UNAUTHENTICATED, WS_CLOSE_UNRESPONSIVE, WS_CLOSE_TOO_MANY,
+  WS_CLOSE_UNAUTHENTICATED, WS_CLOSE_UNRESPONSIVE,
   isClientFrame, isSubscriptionRef,
   // §8's heartbeat (Stage 4 Task 22). `PresenceMember` is declared beside
   // `ServerFrame` rather than in `apps/api/src/realtime/presence.ts`, where

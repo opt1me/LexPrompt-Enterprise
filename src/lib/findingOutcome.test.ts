@@ -659,7 +659,10 @@ describe('dispositionLabel', () => {
   it('does not throw when the audience can name nobody at all', () => {
     // A card rendered before the directory has loaded. It must degrade to a
     // true sentence, not to a crash and not to silence.
-    const blind = { nameOf: () => undefined, timeOf: (at: number) => String(at) };
+    const blind = {
+      nameOf: () => undefined, initialsOf: () => undefined,
+      timeOf: (at: number) => String(at),
+    };
     for (const shape of Object.values(DISPOSITION_SHAPES)) {
       expect(dispositionLabel(shape, blind)).not.toBe('');
     }

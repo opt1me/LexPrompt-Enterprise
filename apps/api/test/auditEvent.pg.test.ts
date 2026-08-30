@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { appDb, migratorDb, withPg, workerDb } from './helpers/pgHarness.ts';
 import { appendAudit } from '../src/audit/write.ts';
 import { AUDIT_ACTIONS } from '../src/audit/actions.ts';
+import { ensureAuditPartitions } from '../src/audit/partitions.ts';
 import type { Tx } from '../src/db/pool.ts';
 
 /**
@@ -156,6 +157,56 @@ describe('audit_event fails loudly rather than quietly', () => {
          values ($1, $2, '2999-01-01T00:00:00Z', 'matter.created', 'matter', 'm-far')`,
         [WS, ACTOR])).message).toMatch(/no partition of relation/i);
     }, appDb());
+  });
+
+  /*
+   * …AND THE HORIZON IS ROLLED FORWARD, so "loudly" never has to happen (M2).
+   *
+   * `012_audit_event.sql` created twelve partitions ONCE and said the routine
+   * keeping the horizon rolling was "a deployment concern named in the
+   * README". It was not named in the README and no such routine existed —
+   * so twelve months after a deployment's first migration, the refusal above
+   * stops being a safety property and becomes an outage: `appendAudit` runs
+   * in the CALLER'S transaction, so the failure rolls back the matter, the
+   * document, the run or the assignment that produced it. Verified live
+   * against the running stack, where the last partition ended 2027-08-01.
+   */
+  it('creates every missing monthly partition out to the horizon, and is idempotent', async () => {
+    await withPg(async t => {
+      const before = (await partitions(t)).length;
+      const made = await ensureAuditPartitions(t, 30);
+      expect(before + made).toBe((await partitions(t)).length);
+      // Idempotent: the second call creates nothing, so a startup on every
+      // replica of every deploy is free.
+      expect(await ensureAuditPartitions(t, 30)).toBe(0);
+    }, migratorDb());
+  });
+
+  it('makes a write beyond the ORIGINAL twelve months land instead of rolling an act back', async () => {
+    // Two halves, and the first is what makes the second mean anything: the
+    // instant is genuinely outside what the migration created once.
+    await withPg(async t => {
+      await anActor(t);
+      const far = new Date();
+      far.setUTCMonth(far.getUTCMonth() + 20);
+      const insert = `insert into audit_event
+           (workspace_id, actor_user_id, at, action, subject_type, subject_id)
+         values ($1, $2, $3, 'matter.created', 'matter', 'm-horizon')`;
+      expect((await refusal(t, insert, [WS, ACTOR, far])).message)
+        .toMatch(/no partition of relation/i);
+      await ensureAuditPartitions(t, 30);
+      await expect(t.query(insert, [WS, ACTOR, far])).resolves.toBeDefined();
+    }, migratorDb());
+  });
+
+  it('refuses a horizon of nothing rather than silently making no partitions', async () => {
+    // A caller that passed 0 would get a green "did nothing" and a database
+    // that stops accepting audit rows next month.
+    await withPg(async t => {
+      await expect(t.tx(async s => {
+        await ensureAuditPartitions(s, 0);
+      })).rejects.toThrow(/at least one month/i);
+    }, migratorDb());
   });
 
   it('refuses a detail that is not an object', async () => {

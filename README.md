@@ -577,6 +577,22 @@ The app targets browsers from roughly **2024 onward**: Chrome 122+, Firefox 131+
 
 **`audit_event` exists now — and the gap it used to describe is historical and permanent.** There is an append-only audit log as of this release: insert-only by database grant, partitioned by month, and holding the acts a person asked for (a matter created or deleted, a document added, a playbook published, a run started or cancelled, an assignment made or closed, a workspace setting or a role changed). Its retention is a partition `DETACH`, never a `DELETE`.
 
+**The audit log's monthly partitions are kept twelve months ahead, at every API start.** `apps/api/src/main.ts` calls `ensure_audit_partitions(12)` on the migrator connection immediately after the migrations, and the function (`014_audit_partitions.sql`) creates whatever is missing between the current month and the horizon. This matters more than it sounds: a write with no partition covering its instant fails loudly — correctly — but `appendAudit` runs inside the transaction of the act it is recording, so a missing partition does not merely lose an audit row, it **rolls back the matter, document, run or assignment that produced it**. The first release created twelve partitions once and nothing rolled them forward; a deployment left running long enough would have stopped being able to create anything at all, on a date nobody had written down.
+
+The residual case is an API process that runs for longer than the horizon without restarting. If that is your deployment, or if the startup line `api: COULD NOT ROLL THE audit_event PARTITION HORIZON FORWARD` appears in the log, run this against the database **as `lexprompt_migrator`** (the app role cannot, and should not, create a partition):
+
+```sql
+select ensure_audit_partitions(12);
+```
+
+It is idempotent, safe to run at any time, and returns how many partitions it created. To see the current horizon:
+
+```sql
+select max(pg_get_expr(c.relpartbound, c.oid)) from pg_class c
+  join pg_inherits i on i.inhrelid = c.oid
+  join pg_class p on p.oid = i.inhparent where p.relname = 'audit_event';
+```
+
 **Run starts and cancellations from before this release are on the run's own row and are not in that log** — a row that can be updated, recording who asked, when it started, when it finished and how it ended. An audit export covering that earlier period still has to say where its run history came from, because the two have different guarantees, and no later release can fill it in: the events were never written. That sentence stays here for as long as data from that period does.
 
 **A disposition change is recorded once, in `finding_disposition_event`, and is deliberately NOT also written to `audit_event`.** Two append-only accounts of one fact is how a card and an export come to disagree in front of an auditor. The activity feed and the audit export read three sources — the disposition history, the audit log and the run table — and union them rather than duplicating any of them.

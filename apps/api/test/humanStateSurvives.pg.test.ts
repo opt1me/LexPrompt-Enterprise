@@ -92,14 +92,14 @@ describe('a verification made mid-run is still there when the run ends', () => {
       const key = { reviewId: REVIEW, findingsKey: KEY, clauseId: 'c3' };
       const before = await ensureDisposition(t, key, WS);
       await setDisposition(
-        t, key, { state: 'verified' }, 'human', { id: userId }, new Date(),
+        t, key, { state: 'verified' }, 'human', { id: userId, workspaceId: WS }, new Date(),
         Number(before.version));
 
       // Fifteen unrelated cells finish.
       await completeCells(t, 15);
       expect(await doneCount(t)).toBe(20);
 
-      const after = await dispositionFor(t, key);
+      const after = await dispositionFor(t, key, WS);
       expect(after).toMatchObject({ state: 'verified', by_user_id: userId });
       // …and the history says it moved exactly once. A disposition that was
       // cleared and re-set would satisfy `state: 'verified'` too.
@@ -110,7 +110,7 @@ describe('a verification made mid-run is still there when the run ends', () => {
       // The neighbours are untouched, which is the other half of "nothing
       // clobbered it": a run that reset every disposition would also pass
       // the assertion above if it happened to reset c3 back to verified.
-      const c4 = await dispositionFor(t, { ...key, clauseId: 'c4' });
+      const c4 = await dispositionFor(t, { ...key, clauseId: 'c4' }, WS);
       expect(c4?.state ?? 'unchecked').toBe('unchecked');
 
       await assertStatesAgree(t);
@@ -169,7 +169,7 @@ describe('...and it cannot be lost, because the worker has no grant to lose it w
       const key = { reviewId: 'hs-r-grant', findingsKey: 'hs-d-grant', clauseId: 'c1' };
       const row = await ensureDisposition(t, key, WS);
       await expect(setDisposition(
-        t, key, { state: 'verified' }, 'human', { id: userId }, new Date(),
+        t, key, { state: 'verified' }, 'human', { id: userId, workspaceId: WS }, new Date(),
         Number(row.version))).resolves.toBeDefined();
       expect((await readDispositionEvents(t, key, WS)).length).toBe(1);
     });

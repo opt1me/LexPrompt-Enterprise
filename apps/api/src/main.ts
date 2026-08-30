@@ -7,6 +7,7 @@ import { buildServer } from './server.ts';
 import { makeGatewayClient, type GatewayClient } from './gatewayClient.ts';
 import { makeDb, makePool, type Db } from './db/pool.ts';
 import { runMigrations } from './db/migrate.ts';
+import { ensureAuditPartitionsOrWarn } from './audit/partitions.ts';
 import { resolveActor, type Actor } from './auth/actor.ts';
 import { roleFor, seedRoleMappings } from './auth/roles.ts';
 import { AzureBlobStore, type BlobStore } from './blob/store.ts';
@@ -99,6 +100,12 @@ async function main(): Promise<void> {
       // and the replacement not, which is an outage; or the grant applied and
       // the revocation not, which is worse and silent.
       await migrator.tx(t => seedRoleMappings(t, config.workspaceId, config.roleMappings));
+      // THE AUDIT HORIZON, rolled forward on the one connection that owns
+      // the schema. A migration runs once; the calendar does not. See
+      // `audit/partitions.ts` — a failure here is a sentence and not a
+      // refusal to start, because the partitions covering today already
+      // exist on any deployment that has ever run.
+      await ensureAuditPartitionsOrWarn(migrator, s => process.stdout.write(s));
     } finally {
       await migrationPool.end();
     }

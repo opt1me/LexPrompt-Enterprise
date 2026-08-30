@@ -41,6 +41,7 @@ const DIRECTORY: WorkspaceUsers = {
 const ME = 'u1';
 const audience: DispositionAudience = {
   nameOf: (id: string) => DIRECTORY.users.find(u => u.id === id)?.displayName,
+  initialsOf: (id: string) => DIRECTORY.users.find(u => u.id === id)?.initials,
   timeOf: () => 'now',
 };
 

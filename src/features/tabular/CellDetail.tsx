@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, FileText, BookOpen } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding } from '../../types';
-import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
+import type { AssignmentView, DispositionWithHistory, VerificationChange } from '@lexprompt/core';
 import type { DispositionAudience } from '../../lib/findingOutcome';
 import { Button } from '../../components/Button';
 import { FindingCard } from '../review/FindingCard';
@@ -68,6 +68,16 @@ export interface CellDetailProps {
    *  omitted, no such affordance renders rather than a button that goes
    *  nowhere. */
   onOpenInReview?: () => void;
+  /** The open requests about THIS cell, already narrowed by the caller. The
+   *  card filters them by party — a request between two other people reaches
+   *  every tab with the review open and must not be rendered in the first
+   *  person. */
+  assignments?: AssignmentView[];
+  /** Where a new request would be addressed. Omitted, the card offers no
+   *  "Ask a colleague" affordance rather than a button that goes nowhere. */
+  assignTarget?: { reviewId: string; findingsKey: string };
+  onAssigned?: (assignment: AssignmentView) => void;
+  onResolveAssignment?: (id: string) => void;
 }
 
 /**
@@ -82,6 +92,7 @@ export function CellDetail({
   doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, stale = false, onAddNote,
   authorInitials, localUserId, disposition, audience, conflict, onReapplyConflict,
   onDismissConflict, onOpenInReview,
+  assignments, assignTarget, onAssigned, onResolveAssignment,
 }: CellDetailProps) {
   const [highlights, setHighlights] = useState<string[]>([]);
   /** Set when a clicked citation belongs to a document other than `doc`. */
@@ -153,6 +164,10 @@ export function CellDetail({
           conflict={conflict}
           onReapplyConflict={onReapplyConflict}
           onDismissConflict={onDismissConflict}
+          assignments={assignments}
+          assignTarget={assignTarget}
+          onAssigned={onAssigned}
+          onResolveAssignment={onResolveAssignment}
         />
       </div>
 

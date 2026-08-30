@@ -20,6 +20,7 @@ const OKAFOR = '00000000-0000-0000-0000-0000000000a2';
 
 const AUDIENCE: DispositionAudience = {
   nameOf: id => (id === OKAFOR ? 'R. Okafor' : undefined),
+  initialsOf: id => (id === OKAFOR ? 'RO' : undefined),
   timeOf: () => '14:22',
 };
 
@@ -53,7 +54,7 @@ describe('a refused change says whose won', () => {
 
   it('never prints a raw id when the directory cannot name the winner', () => {
     const container = mount(
-      <ConflictNotice {...props} audience={{ nameOf: () => undefined, timeOf: () => '14:22' }} />);
+      <ConflictNotice {...props} audience={{ nameOf: () => undefined, initialsOf: () => undefined, timeOf: () => '14:22' }} />);
     expect(container.textContent).not.toContain(OKAFOR);
     expect(container.textContent).toContain('someone this workspace does not name');
     expect(container.textContent).toContain('Your change was not applied');

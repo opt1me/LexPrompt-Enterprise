@@ -535,7 +535,7 @@ async function move(
 ): Promise<void> {
   await setDisposition(
     t, { reviewId: 'r1', findingsKey: 'd1', clauseId },
-    change as never, cause, { id: actor }, new Date(at), expectedVersion);
+    change as never, cause, { id: actor, workspaceId: WS }, new Date(at), expectedVersion);
 }
 
 describe('the findings read carries the disposition and the event that produced it', () => {

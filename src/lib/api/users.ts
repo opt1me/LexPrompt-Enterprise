@@ -91,9 +91,11 @@ export function userInitials(id: string | undefined): string | undefined {
   return userIn(id)?.initials;
 }
 
-/** Puts this module back into the state a fresh tab is in. Tests, and a
- *  401-driven sign-in — a different person's session must not inherit the
- *  previous one's directory. */
+/** Puts this module back into the state a fresh tab is in. Called by
+ *  `useAuth.signOut` beside `closeSocket()`, and by tests — a different
+ *  person's session must not inherit the previous one's directory. The
+ *  sign-in path this comment used to name did not exist; the sign-out one
+ *  does. */
 export function forgetDirectory(): void {
   byId = null;
   inFlight = null;

@@ -358,7 +358,7 @@ async function resetDispositions(
       { reviewId, findingsKey: row.findings_key, clauseId: row.clause_id },
       { state: 'unchecked' },
       'rerun_reset',
-      { id: actor.id },
+      { id: actor.id, workspaceId },
       at,
       typeof row.version === 'number' ? row.version : Number(row.version));
   }

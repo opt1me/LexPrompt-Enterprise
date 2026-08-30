@@ -79,7 +79,7 @@ export function registerFindings(app: FastifyInstance, db: Db): void {
           // NOT FROM THE BODY EITHER. The actor and the instant are the
           // server's; a client that could state them could put somebody
           // else's name on a rejection.
-          { id: req.actor!.id }, new Date(), body.version));
+          { id: req.actor!.id, workspaceId: ws }, new Date(), body.version));
         const events = await readDispositionEvents(t, key, ws, 1);
         const event = eventWritten(events[0]);
         /*

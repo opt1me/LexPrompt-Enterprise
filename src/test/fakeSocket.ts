@@ -23,7 +23,7 @@ export interface FakeSocket {
   readyState: number;
   onopen: (() => void) | null;
   onmessage: ((e: { data: string }) => void) | null;
-  onclose: (() => void) | null;
+  onclose: ((e?: { code?: number }) => void) | null;
   onerror: (() => void) | null;
   send(data: string): void;
   close(): void;
@@ -31,8 +31,10 @@ export interface FakeSocket {
   open(): void;
   /** Hands the module one server frame. */
   deliver(frame: ServerFrame): void;
-  /** Closes it the way a network does — from the other end. */
-  drop(): void;
+  /** Closes it the way a network does — from the other end. A `code` for
+   *  the cases the client is meant to tell apart (`WS_CLOSE_UNAUTHENTICATED`
+   *  is the one it acts on differently); omitted, it is an ordinary drop. */
+  drop(code?: number): void;
 }
 
 export interface SocketHarness {
@@ -83,10 +85,10 @@ export function installFakeSockets(): SocketHarness {
         ws.onopen?.();
       },
       deliver(frame: ServerFrame) { ws.onmessage?.({ data: JSON.stringify(frame) }); },
-      drop() {
+      drop(code?: number) {
         if (ws.readyState === 3) return;
         ws.readyState = 3;
-        ws.onclose?.();
+        ws.onclose?.(code === undefined ? undefined : { code });
       },
     };
     sockets.push(ws);

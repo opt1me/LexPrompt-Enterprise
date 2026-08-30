@@ -149,5 +149,6 @@ export const RERUN_EVENT = {
  */
 export const TEST_AUDIENCE: DispositionAudience = {
   nameOf: (id?: string) => ({ u1: 'A. Trainee', u2: 'R. Okafor' } as Record<string, string>)[id ?? ''],
+  initialsOf: (id?: string) => ({ u1: 'AT', u2: 'RO' } as Record<string, string>)[id ?? ''],
   timeOf: (at: number) => new Date(at).toISOString().slice(11, 16),
 };

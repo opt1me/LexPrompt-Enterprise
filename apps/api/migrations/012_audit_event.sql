@@ -36,9 +36,17 @@
 -- Twelve months are created ahead. Creating them here rather than by a job
 -- means a deployment that never runs the job still records a year of audit;
 -- a deployment that runs past the last one fails loudly on the next write,
--- which is a page rather than a silence. The partition-creation routine that
--- keeps that horizon rolling is a deployment concern named in the README,
--- not something the API does on its own behalf.
+-- which is a page rather than a silence.
+--
+-- THIS COMMENT USED TO SAY the routine that keeps the horizon rolling was
+-- "a deployment concern named in the README, not something the API does on
+-- its own behalf". It was not named in the README and no such routine
+-- existed anywhere, so twelve months after a deployment's first migration
+-- every audited act would fail -- and, because `appendAudit` runs in the
+-- caller's transaction, would take the act it was recording down with it.
+-- `014_audit_partitions.sql` ships the routine and `main.ts` calls it at
+-- startup; the README now describes the manual form for a process that
+-- outlives its own horizon.
 --
 --
 -- ## The primary key includes `at`

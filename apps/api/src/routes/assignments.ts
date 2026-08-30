@@ -205,17 +205,31 @@ export function registerAssignments(app: FastifyInstance, db: Db): void {
   });
 
   /**
-   * WHAT HAS BEEN ASKED OF ME — the caller's own open requests.
+   * WHAT HAS BEEN ASKED OF ME, AND WHAT I HAVE ASKED OF OTHERS — the
+   * caller's own open requests, in both directions.
    *
-   * The CALLER'S, always: `assignee_user_id = req.actor!.id`, from the token
-   * and never from a query parameter. A `?assignee=` would be a route that
-   * reads another person's queue, which is a different feature with a
-   * different bar, and the id is right there in the token.
+   * The CALLER'S, always: the id comes from the token and never from a query
+   * parameter. A `?assignee=` would be a route that reads another person's
+   * queue, which is a different feature with a different bar. Reading BOTH
+   * directions is not that: a request you made is your own act, and the
+   * card's own prop doc promises both — *"one you made reads 'You asked
+   * R. Okafor to look at this'"*.
+   *
+   * IT USED TO READ ONLY `assignee_user_id`, and this is the only read of
+   * `assignment` there is. So a request you made lived in memory and nowhere
+   * else: it vanished on reload, taking the **Withdraw the request** control
+   * with it, while the assignee still saw the row open. One party could
+   * close it and the other could not, which is not a queue anybody can
+   * work.
+   *
+   * A THIRD PARTY IS STILL TOLD NOTHING. `resolve` refuses anybody but these
+   * two, and the browser filters the review-scoped push to the same pair
+   * (`assignmentParty`), so what a card shows live is what it shows after a
+   * reload.
    *
    * `?review=` narrows it to one review, which is what Stage 4's surface
-   * needs (Task 25): the assignee sees what has been asked of them WITHIN
-   * the review they are in. The firm-wide "assigned to me" counter is Stage
-   * 5 (S18) and is a different screen, not a different truth.
+   * needs (Task 25). The firm-wide "assigned to me" counter is Stage 5 (S18)
+   * and is a different screen, not a different truth.
    */
   app.get('/v1/assignments', async (req): Promise<AssignmentsPage> => {
     const ws = req.actor!.workspaceId;
@@ -231,11 +245,13 @@ export function registerAssignments(app: FastifyInstance, db: Db): void {
     const rows = query.review === undefined
       ? await db.query<AssignmentRow>(
         `select * from assignment
-          where workspace_id = $1 and assignee_user_id = $2 and resolved_at is null
+          where workspace_id = $1 and resolved_at is null
+            and (assignee_user_id = $2 or assigned_by_user_id = $2)
           order by created_at desc`, [ws, req.actor!.id])
       : await db.query<AssignmentRow>(
         `select * from assignment
-          where workspace_id = $1 and assignee_user_id = $2 and resolved_at is null
+          where workspace_id = $1 and resolved_at is null
+            and (assignee_user_id = $2 or assigned_by_user_id = $2)
             and review_id = $3
           order by created_at desc`, [ws, req.actor!.id, query.review]);
     return { assignments: rows.map(toAssignmentView) };

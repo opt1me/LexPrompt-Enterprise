@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { AppEvent, PresenceMember, SubscriptionRef } from '@lexprompt/core';
-import { WS_SUBPROTOCOL } from '@lexprompt/core';
+import { WS_CLOSE_UNAUTHENTICATED, WS_SUBPROTOCOL } from '@lexprompt/core';
 import {
   closeSocket, connectionState, onConnectionState, onPresence, reportPresence, subscribe,
   WS_STALE_AFTER_MS,
@@ -217,6 +217,82 @@ describe('the connection state, and the backoff', () => {
     await vi.advanceTimersByTimeAsync(WS_STALE_AFTER_MS);
     expect(connectionState()).toBe('stale');
     off();
+  });
+
+  /*
+   * A SOCKET THAT NEVER OPENS MUST STILL GO STALE (C2).
+   *
+   * `armStale` had exactly two callers — `ws.onopen` and `heard()` — so
+   * `stale` was reachable only from a connection that had once succeeded.
+   * A 429 from `API_WS_MAX_CONNECTIONS`, a 403 from a role below `reviewer`,
+   * or a proxy that does not forward `Upgrade` all land on `onclose` or the
+   * `catch`, which set `connecting` and retry. `connecting` renders no
+   * banner and disables no control, so the reviewer sat in front of a full
+   * set of live-looking findings and live Verify/Flag/Reject controls with
+   * not one colleague's change ever arriving — for the life of the page.
+   *
+   * EVERY OTHER TEST IN THIS FILE CALLS `opened()` FIRST, which is why the
+   * fourteenth guard could not fail: `heard()` re-arms on the `hello` frame
+   * one line later, so deleting the `armStale()` in `onopen` left the suite
+   * green. These two do not open anything.
+   */
+  it('goes stale when the socket NEVER opens - a refused upgrade is not a quiet review', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    await flushMicrotasks(() => fakeSockets.length === 1, 'the socket was never constructed');
+    expect(connectionState()).toBe('connecting');
+    // Nothing ever completes the handshake, exactly as a 429/403/proxy
+    // refusal leaves it.
+    await vi.advanceTimersByTimeAsync(WS_STALE_AFTER_MS + 1_000);
+    expect(connectionState()).toBe('stale');
+  });
+
+  it('goes stale even while it is still retrying a refused upgrade', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    await flushMicrotasks(() => fakeSockets.length === 1, 'the socket was never constructed');
+    // `ensureSocket` runs again on every backoff tick. Re-arming there would
+    // push the deadline out on each retry and `stale` would never fire at
+    // all — the same silence by a different route, which is why the timer is
+    // armed only IF IDLE.
+    for (let i = 0; i < 6; i += 1) {
+      fakeSockets[fakeSockets.length - 1].drop();
+      await vi.advanceTimersByTimeAsync(20_000);
+    }
+    expect(fakeSockets.length).toBeGreaterThan(3);
+    expect(connectionState()).toBe('stale');
+  });
+
+  it('restarts the countdown when the socket actually opens', async () => {
+    // The other half of the same rule: opening IS evidence of a live
+    // connection, so a slow connect must not spend the reader's staleness
+    // budget. Delete `armStale()` from `ws.onopen` and this fails at 55s
+    // from the first attempt, ten seconds after a socket that opened fine.
+    subscribe({ review: 'r1' }, handlers());
+    await flushMicrotasks(() => fakeSockets.length === 1, 'the socket was never constructed');
+    await vi.advanceTimersByTimeAsync(WS_STALE_AFTER_MS - 5_000);
+    expect(connectionState()).toBe('connecting');
+    fakeSockets[0].open();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(connectionState()).not.toBe('stale');
+  });
+
+  it('reconnects promptly after a 4001 close rather than backing off (m1, M3)', async () => {
+    // `WS_CLOSE_UNAUTHENTICATED` was exported and documented as "the one the
+    // browser acts on differently" while nothing sent it and the client's
+    // `onclose` took no event at all. The server now closes an expired or
+    // no-longer-permitted socket with it, and a token the next
+    // `getAccessToken()` refreshes is not a reason to wait fifteen seconds.
+    subscribe({ review: 'r1' }, handlers());
+    await flushMicrotasks(() => fakeSockets.length === 1, 'the socket was never constructed');
+    // Three ordinary failures, so the backoff has genuinely grown.
+    for (const delay of [1_000, 2_000, 3_000]) {
+      fakeSockets[fakeSockets.length - 1].drop();
+      await vi.advanceTimersByTimeAsync(delay);
+    }
+    const grown = fakeSockets.length;
+    // The NEXT ordinary retry would be ~5s away. This one is not ordinary.
+    fakeSockets[grown - 1].drop(WS_CLOSE_UNAUTHENTICATED);
+    await vi.advanceTimersByTimeAsync(700);
+    expect(fakeSockets.length).toBe(grown + 1);
   });
 
   it('calls a new listener immediately with the state it is already in', () => {

@@ -69,7 +69,7 @@ import {
   getFindings, rememberConflict, rememberPushedDisposition, setDisposition, setNetPosition,
   verificationFromDisposition,
 } from './lib/api/findings';
-import { loadDirectory, userName } from './lib/api/users';
+import { loadDirectory, userInitials, userName } from './lib/api/users';
 import { formatInstant } from './lib/instant';
 import { debug } from './lib/debug';
 import { getVersion, listVersions } from './lib/db/playbookVersions';
@@ -905,7 +905,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
    * has to say WHO set the state it is showing, and the `byUserId` on a
    * disposition is a foreign key rather than a name. `userName` reads a
    * module cache, so the load needs a state change to bring the names onto
-   * a screen already rendered — that is all `directoryLoads` is.
+   * a screen already rendered — see `moduleCacheEpoch` below.
    *
    * A FAILURE IS SWALLOWED HERE ON PURPOSE, and it is not the "empty is not
    * broken" rule being broken. `loadDirectory` rejects and stays unloaded
@@ -915,10 +915,27 @@ function AppShell({ signIn }: { signIn: () => void }) {
    * alternative, blocking the review screen on a directory fetch, would make
    * a name the precondition for reading a contract.
    */
-  const [directoryLoads, setDirectoryLoads] = useState(0);
+  /**
+   * A COUNTER THAT EXISTS ONLY TO RE-RENDER WHEN A MODULE CACHE MOVES.
+   *
+   * Two of them move outside React: the workspace directory above
+   * (`users.ts`), and the last-seen disposition (`findings.ts`, written by
+   * `rememberConflict` when a 409 tells this browser what actually won).
+   * Neither is React state, so a screen already rendered would go on showing
+   * what it read before.
+   *
+   * It was called `directoryLoads`, documented as *"how many times the
+   * directory loaded — that is all `directoryLoads` is"*, and then bumped by
+   * a disposition conflict as well. Harmless behaviourally and a name that
+   * had stopped being true: the next reader would have taken a count of
+   * conflicts for a count of directory loads. Renamed rather than given a
+   * second counter, because there is one thing being expressed — *"something
+   * a render reads has changed underneath it"*.
+   */
+  const [moduleCacheEpoch, bumpModuleCache] = useState(0);
   useEffect(() => {
     loadDirectory()
-      .then(() => setDirectoryLoads(n => n + 1))
+      .then(() => bumpModuleCache(n => n + 1))
       .catch(() => { /* names stay unresolved, and the label says so */ });
   }, []);
 
@@ -930,9 +947,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
    * supply one, which is what keeps "the card names an actor because a
    * disposition says so" true no matter what this object holds.
    */
-  const audience = useMemo(() => ({ nameOf: userName, timeOf: formatInstant }),
+  const audience = useMemo(
+    () => ({ nameOf: userName, initialsOf: userInitials, timeOf: formatInstant }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [directoryLoads]);
+    [moduleCacheEpoch]);
 
   /** The disposition the server last reported for one cell of the open
    *  review — `undefined` until this browser has read it, which the card
@@ -2871,7 +2889,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
           findingsKey: won.findingsKey, clauseId: won.clauseId, docId,
           current: { disposition: won }, attempted: change,
         });
-        setDirectoryLoads(n => n + 1);
+        // The module cache `dispositionOf` reads has just moved
+        // (`rememberConflict`), and it is not React state. Without this the
+        // card would go on rendering the row that lost.
+        bumpModuleCache(n => n + 1);
       } else {
         notify(verificationRefusal(e), 'error');
       }
@@ -3042,6 +3063,17 @@ function AppShell({ signIn }: { signIn: () => void }) {
        * `resolved` must remove the row it names rather than sit beside it.
        * The socket's own guards drop a duplicate before this runs; this is
        * the second one, for the reason the note handler has a second one.
+       *
+       * NOT FILTERED BY ACTOR HERE, deliberately, and the filter is not
+       * missing — it is applied where the local id is a LIVE value
+       * (`ResultsView.assignmentsByClause`, `FindingCard`, both through
+       * `assignmentParty`). This closure is captured by the subscription
+       * effect at the moment the review opens, which is routinely before
+       * `GET /v1/me` has answered; filtering on the id it could read there
+       * would silently DROP a request addressed to the reader, and a
+       * request that never arrives is the failure §18 item 5 is about.
+       * Held here, filtered at render: the request appears the moment the
+       * profile lands, and a bystander is told nothing either way.
        */
       setAssignments(held => {
         const without = held.filter(a => a.id !== payload.assignment.id);
@@ -4945,6 +4977,9 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     verifyConflict={verifyConflict}
                     onReapplyConflict={handleReapplyConflict}
                     onDismissConflict={() => setVerifyConflict(null)}
+                    assignments={assignments}
+                    onAssigned={handleAssigned}
+                    onResolveAssignment={(id) => { void handleResolveAssignment(id); }}
                   />
                 )}
               </div>

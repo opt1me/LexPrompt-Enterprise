@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { WS_PATH } from '@lexprompt/core';
+import { WS_CLOSE_UNAUTHENTICATED, WS_PATH } from '@lexprompt/core';
 import { buildTestApi } from './helpers/apiHarness.ts';
 import { appDb, migratorDb } from './helpers/pgHarness.ts';
 import { appendEvent } from '../src/run/events.ts';
@@ -49,6 +49,9 @@ const ACTOR = {
   id: '00000000-0000-0000-0000-0000000000aa', displayName: 'Socket Tester', initials: 'ST',
   role: 'reviewer' as const, workspaceId: WS,
 };
+
+/** A person an administrator disables mid-connection. */
+const DISABLED_ID = '00000000-0000-0000-0000-0000000000ad';
 
 const servers: FastifyInstance[] = [];
 const sockets: TestSocket[] = [];
@@ -194,6 +197,47 @@ describe('the socket replays from the cursor and then says caught_up', () => {
     expect(frames.some(f => f.t === 'resync_required')).toBe(true);
   });
 
+  /*
+   * A REPLAY LONGER THAN ONE PAGE IS STILL A WHOLE REPLAY (M1).
+   *
+   * `readEvents` fetches `limit + 1` so `hasMore` is *"a fact rather than a
+   * guess"*, and its docstring says **"silently short is the failure"**.
+   * `subscribe` read ONE page and sent `caught_up` regardless: past
+   * `API_EVENT_PAGE_MAX` the client was told it was current while sitting a
+   * page behind — and with a second connection already in the bucket, the
+   * shared feed cursor is ahead of the gap, so those events are never
+   * delivered at all. A 250-clause run emits about 500 events on its own.
+   */
+  it('replays EVERY page, not the first one, and says caught_up at the real end', async () => {
+    const { reviewId } = await seedReview('pages');
+    const ids = await seedEvents(reviewId, 7);
+    // Two per page, so seven events is four pages.
+    const { url } = await listening({ eventPageMax: 2 });
+    const socket = await open(url);
+
+    socket.send({ t: 'subscribe', sub: { review: reviewId }, lastEventId: 0 });
+    const frames = await socket.collectUntil(f => f.t === 'caught_up');
+    expect(eventIds(frames)).toEqual(ids);
+    expect(frames.at(-1)).toMatchObject({ t: 'caught_up', cursor: ids[6] });
+    // Not a resync either: nothing was lost, it was merely paged.
+    expect(frames.some(f => f.t === 'resync_required')).toBe(false);
+  });
+
+  it('says resync_required rather than caught_up when the replay hits its page bound', async () => {
+    // The bound is 20 pages. One event per page and 25 events puts the
+    // replay past it — and the honest answer at that point is the same one
+    // the retention gap gets: re-read the state those events described.
+    // NEVER `caught_up` at a cursor the read itself said was not the end.
+    const { reviewId } = await seedReview('bounded');
+    await seedEvents(reviewId, 25);
+    const { url } = await listening({ eventPageMax: 1 });
+    const socket = await open(url);
+
+    socket.send({ t: 'subscribe', sub: { review: reviewId }, lastEventId: 0 });
+    const frames = await socket.collectUntil(f => f.t === 'resync_required');
+    expect(frames.some(f => f.t === 'caught_up')).toBe(false);
+  });
+
   it('serves a matter subscription, which has no HTTP equivalent at all', async () => {
     const { matterId, reviewId } = await seedReview('matter');
     const ids = await seedEvents(reviewId, 2);
@@ -266,6 +310,73 @@ describe('the socket closes a client that stops answering', () => {
     // This client never sends `pong`. Two unanswered pings and it is closed.
     await socket.idleFor(400);
     expect(socket.open).toBe(false);
+  });
+
+  /*
+   * …AND ONE WHOSE TOKEN HAS RUN OUT, OR WHOSE ACCOUNT HAS (M3).
+   *
+   * A socket was authenticated at the upgrade and NEVER AGAIN: no expiry, no
+   * revocation, no re-resolve. The browser's own source asserted the
+   * opposite as its justification for having no re-authentication — *"a
+   * token expiring mid-connection closes the socket"* — and nothing closed
+   * it. A disabled or signed-out person's open tab went on receiving every
+   * disposition change, note and assignment in the workspace for as long as
+   * the tab stayed open. A false justification is its own finding.
+   */
+  it('closes a socket whose token has expired, with the code the client acts on', async () => {
+    const { url } = await listening({
+      principal: { ...PRINCIPAL, expiresAt: Date.now() - 1_000 },
+      socketCaps: { pingMs: 60 },
+    });
+    const socket = await open(url);
+    // A live tab answers every ping, so the unresponsive close above would
+    // never reach this one.
+    const timer = setInterval(() => {
+      if (socket.open) socket.send({ t: 'pong' });
+    }, 20);
+    try {
+      await socket.idleFor(400);
+      expect(socket.open).toBe(false);
+      expect(socket.closeCode).toBe(WS_CLOSE_UNAUTHENTICATED);
+    } finally {
+      clearInterval(timer);
+    }
+  });
+
+  it('closes a socket whose account has been disabled, without waiting for the token', async () => {
+    // Expiry alone bounds the exposure by the token's lifetime and says
+    // nothing about an administrator who disabled an account five minutes
+    // ago — which takes effect on the next HTTP request and used to take
+    // effect on a live socket never.
+    const db = migratorDb();
+    await withWorkspace(db);
+    await db.query(
+      `insert into app_user (id, workspace_id, issuer, subject, display_name, initials, role, status)
+       values ($1, $2, 'i', 's-disabled-socket', 'D Disabled', 'DD', 'reviewer', 'active')
+       on conflict (id) do update set status = 'active'`, [DISABLED_ID, WS]);
+    try {
+      const { url } = await listening({
+        actor: { ...ACTOR, id: DISABLED_ID },
+        // The re-check interval, shortened. It has no environment variable
+        // — an operator must not be able to turn revocation off — and this
+        // is the one seam that reaches the branch without waiting a minute.
+        socketCaps: { pingMs: 60, reauthMs: 50 },
+      });
+      const socket = await open(url);
+      await db.query("update app_user set status = 'disabled' where id = $1", [DISABLED_ID]);
+      const timer = setInterval(() => {
+        if (socket.open) socket.send({ t: 'pong' });
+      }, 20);
+      try {
+        await socket.idleFor(600);
+        expect(socket.open).toBe(false);
+        expect(socket.closeCode).toBe(WS_CLOSE_UNAUTHENTICATED);
+      } finally {
+        clearInterval(timer);
+      }
+    } finally {
+      await db.query('delete from app_user where id = $1', [DISABLED_ID]);
+    }
   });
 
   it('keeps a socket that DOES answer, so the close above is about the pong', async () => {

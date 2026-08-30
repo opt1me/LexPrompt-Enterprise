@@ -67,6 +67,22 @@ export interface Principal {
   groups: string[];
   name?: string;
   email?: string;
+  /**
+   * WHEN THIS TOKEN STOPS BEING ONE, in epoch milliseconds — the `exp` claim
+   * `jwtVerify` has already enforced, carried forward rather than discarded.
+   *
+   * An HTTP request re-verifies on every call, so it has never needed this.
+   * A WEBSOCKET is authenticated once, at the upgrade, and then lives as
+   * long as the tab: without an expiry to close it on, a token's lifetime
+   * meant nothing to a socket and revocation had no effect on a live
+   * connection at all. `realtime/socket.ts` closes on it.
+   *
+   * ABSENT rather than `undefined`-valued when the token carries no `exp`
+   * (nothing this deployment's issuers mint, but a claim is a claim): the
+   * socket then falls back to re-checking the account, and an `in` test must
+   * be able to tell "no expiry" from "expires at undefined".
+   */
+  expiresAt?: number;
 }
 
 /**
@@ -329,6 +345,11 @@ export function makeTokenVerifier(
     return {
       issuer: config.issuer,
       subject,
+      // `exp` is SECONDS in a JWT and milliseconds everywhere in this
+      // codebase. Spread-on-condition so a token with no `exp` produces no
+      // key at all rather than one valued `undefined`.
+      ...(typeof payload.exp === 'number'
+        ? { expiresAt: payload.exp * 1_000 } : {}),
       groups: readGroups(raw, config.groupsClaim),
       name: typeof payload.name === 'string' ? payload.name : undefined,
       email: typeof payload.email === 'string' ? payload.email

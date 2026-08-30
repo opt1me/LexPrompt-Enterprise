@@ -209,7 +209,7 @@ export function registerRuns(app: FastifyInstance, db: Db, config: RunRoutesConf
             + 'so there is nothing to re-run.', 'not_found', 404);
         }
         const disposition = await dispositionFor(
-          t, { reviewId: p.id, findingsKey: p.findingsKey, clauseId: p.clauseId });
+          t, { reviewId: p.id, findingsKey: p.findingsKey, clauseId: p.clauseId }, ws);
         const position = parsedJson(findings[0].net_position) as { state?: string } | null;
         const cleared: RetryCleared = {
           verification: disposition !== undefined && disposition.state !== 'unchecked',

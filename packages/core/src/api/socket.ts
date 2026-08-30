@@ -171,17 +171,28 @@ export type ServerFrame =
 /**
  * The close codes this server uses, and what each means to a client.
  *
- * 4001 is the one the browser acts on differently: the token expired or was
- * refused mid-connection, so the client refreshes and reconnects rather than
- * backing off as it would from a transport failure. Every other close is the
- * ordinary drop path.
+ * 4001 is the one the browser acts on differently: the token expired, or the
+ * account behind it stopped being allowed, so the client resets its backoff
+ * and reconnects on a refreshed token rather than treating it as a transport
+ * failure. 4002 is two unanswered pings. Every other close is the ordinary
+ * drop path.
  *
  * In the 4000-4999 range, which RFC 6455 reserves for the application: a
  * code below 4000 would collide with a meaning the protocol already gives it.
+ *
+ * ## There is no 4003, and there must not be one
+ *
+ * A `WS_CLOSE_TOO_MANY = 4003` was exported here, under the sentence "the
+ * close codes this server uses", with nothing sending it and nothing reading
+ * it — and nothing could: `API_WS_MAX_CONNECTIONS` is enforced BEFORE the
+ * upgrade (`authenticateAndUpgrade`), as a plain HTTP 429 carrying a
+ * sentence, precisely so a refused connection is legible rather than
+ * arriving as a close event with no readable cause. A close code for a
+ * socket that never comes into being cannot be sent, so it is gone rather
+ * than left standing as documentation of behaviour that does not exist.
  */
 export const WS_CLOSE_UNAUTHENTICATED = 4001;
 export const WS_CLOSE_UNRESPONSIVE = 4002;
-export const WS_CLOSE_TOO_MANY = 4003;
 
 /** Whether a parsed value is a frame this server will act on. Narrowing
  *  rather than casting: a frame arriving from a client is untrusted input,

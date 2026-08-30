@@ -21,6 +21,7 @@ import {
   dispositionLabel, heldUpdateLine, isVerifiable, type DispositionAudience,
 } from '../../lib/findingOutcome';
 import { formatInstant } from '../../lib/instant';
+import { assignmentParty, isPartyTo } from '../../lib/assignmentParty';
 
 export interface FindingCardProps {
   clause: PlaybookClause;
@@ -189,6 +190,7 @@ export interface FindingCardProps {
  */
 const NO_DIRECTORY: DispositionAudience = {
   nameOf: () => undefined,
+  initialsOf: () => undefined,
   timeOf: formatInstant,
 };
 
@@ -231,6 +233,19 @@ export function FindingCard({
   assignments, assignTarget, onAssigned, onResolveAssignment,
 }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
+  /**
+   * THE REQUESTS THIS READER IS A PARTY TO — mine to answer, or mine to give.
+   *
+   * The caller filters too (`ResultsView.assignmentsByClause`), and this is
+   * not the same filter twice for the sake of it: a request between two
+   * OTHER people arrives on this tab's socket because the event is
+   * review-scoped, and the sentence below is FIRST PERSON. A component that
+   * renders "You asked X" from a list it did not filter is one careless
+   * caller away from telling a bystander they made a request they never
+   * made, which is exactly what shipped. `assignmentParty` is the one place
+   * the comparison lives.
+   */
+  const mineToAnswerOrGive = (assignments ?? []).filter(a => isPartyTo(a, localUserId));
   const [trailOpen, setTrailOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [ownRejectOpen, setOwnRejectOpen] = useState(false);
@@ -608,10 +623,14 @@ export function FindingCard({
            controls, because it is neither: a note is a remark on the record
            and a disposition is a judgement, and this is a request one person
            made of another (§6.3). */}
-        {isVerifiable(finding) && (assignments ?? []).length > 0 && (
+        {isVerifiable(finding) && mineToAnswerOrGive.length > 0 && (
           <div data-assignments className="space-y-2 border-l-2 border-l-draft pl-3">
-            {(assignments ?? []).map(a => {
-              const mine = a.assigneeUserId === localUserId;
+            {mineToAnswerOrGive.map(a => {
+              // THREE CASES, not two. The `bystander` rows are already gone
+              // — filtered above — and the party decides both the sentence
+              // and the button, from one comparison rather than two.
+              const party = assignmentParty(a, localUserId);
+              const mine = party === 'assignee';
               const asker = audience.nameOf(a.assignedByUserId)
                 ?? 'Someone this workspace does not name';
               const asked = audience.nameOf(a.assigneeUserId)

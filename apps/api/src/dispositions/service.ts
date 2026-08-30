@@ -47,16 +47,28 @@ export interface DispositionChange {
 const SELECT = `select review_id, findings_key, clause_id, workspace_id, state, reason,
                        by_user_id, at, changed_count, version
                 from finding_disposition
-                where review_id = $1 and findings_key = $2 and clause_id = $3`;
+                where review_id = $1 and findings_key = $2 and clause_id = $3
+                  and workspace_id = $4`;
 
 function versionOf(row: DispositionRow): number {
   return typeof row.version === 'number' ? row.version : Number(row.version);
 }
 
-/** The current disposition, or `undefined` when the finding has none yet. */
-export async function dispositionFor(t: Tx, key: FindingKey): Promise<DispositionRow | undefined> {
+/**
+ * The current disposition, or `undefined` when the finding has none yet.
+ *
+ * SCOPED BY WORKSPACE, on the argument `readDispositionEvents` two functions
+ * down already makes and this one was not making: *"the key alone is a text
+ * triple, and a route that had already checked the finding would still be
+ * issuing an unscoped read of a table holding every firm's judgements."*
+ * Every caller does check — `requireFinding` is workspace-scoped — so this
+ * is the defence in depth that was missing, not a live cross-tenant read.
+ */
+export async function dispositionFor(
+  t: Tx, key: FindingKey, workspaceId: string,
+): Promise<DispositionRow | undefined> {
   const rows = await t.query<DispositionRow>(SELECT,
-    [key.reviewId, key.findingsKey, key.clauseId]);
+    [key.reviewId, key.findingsKey, key.clauseId, workspaceId]);
   return rows[0];
 }
 
@@ -213,7 +225,7 @@ export async function ensureDisposition(
      values ($1, $2, $3, $4, 'unchecked', 0)
      on conflict (review_id, findings_key, clause_id) do nothing`,
     [key.reviewId, key.findingsKey, key.clauseId, workspaceId]);
-  const row = await dispositionFor(t, key);
+  const row = await dispositionFor(t, key, workspaceId);
   if (!row) {
     // Unreachable through the insert above; named rather than non-null
     // asserted, because the failure it would replace is `undefined.state`
@@ -284,7 +296,12 @@ export async function setDisposition(
   key: FindingKey,
   change: DispositionChange,
   cause: DispositionCause,
-  actor: { id: string },
+  // THE ACTOR'S WORKSPACE, and it is not decoration: the read and the update
+  // below both carry `workspace_id` now. Taking it off the actor rather than
+  // as a seventh positional parameter means every caller already has it in
+  // the object it was passing, and there is no call site where the two could
+  // be made to disagree.
+  actor: { id: string; workspaceId: string },
   at: Date,
   expectedVersion: number,
 ): Promise<DispositionRow> {
@@ -315,7 +332,7 @@ export async function setDisposition(
   // history row on every autosave.
   const nextReason = effectiveReason(change.state, reason);
 
-  const before = await dispositionFor(t, key);
+  const before = await dispositionFor(t, key, actor.workspaceId);
   if (!before) {
     throw new ModelError(
       `There is no finding ${key.reviewId}/${key.findingsKey}/${key.clauseId} to record a `
@@ -330,14 +347,15 @@ export async function setDisposition(
         set state = $4, reason = $5, by_user_id = $6, at = $7,
             changed_count = changed_count + 1, version = version + 1
       where review_id = $1 and findings_key = $2 and clause_id = $3 and version = $8
+        and workspace_id = $9
       returning review_id, findings_key, clause_id, workspace_id, state, reason,
                 by_user_id, at, changed_count, version`,
     [key.reviewId, key.findingsKey, key.clauseId, change.state, nextReason,
-      actor.id, at, expectedVersion]);
+      actor.id, at, expectedVersion, actor.workspaceId]);
   if (!updated[0]) {
     // The row moved between the read and the update — a second writer inside
     // the same instant. Same refusal, re-read so the caller sees what won.
-    throw new ConflictError(await dispositionFor(t, key));
+    throw new ConflictError(await dispositionFor(t, key, actor.workspaceId));
   }
 
   // The half whose absence §14 names as the mutation to try: delete this and

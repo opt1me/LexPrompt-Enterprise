@@ -229,7 +229,7 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
   it('records the change and the event that explains it', async () => {
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const actor = { id: await aUser(t) };
+      const actor = { id: await aUser(t), workspaceId: WS };
       const start = await ensureDisposition(t, key('c1'), WS);
       expect(start).toMatchObject({ state: 'unchecked', changed_count: 0, by_user_id: null, at: null });
 
@@ -254,13 +254,13 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
   it('refuses a rejection with no reason before it reaches the database', async () => {
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const actor = { id: await aUser(t) };
+      const actor = { id: await aUser(t), workspaceId: WS };
       await ensureDisposition(t, key('c1'), WS);
       await expect(setDisposition(
         t, key('c1'), { state: 'rejected', reason: '  ' }, 'human', actor, new Date(), 1))
         .rejects.toThrow(/needs a reason/);
       // Nothing was written — not the state, and not a half-history.
-      expect((await dispositionFor(t, key('c1')))?.state).toBe('unchecked');
+      expect((await dispositionFor(t, key('c1'), WS))?.state).toBe('unchecked');
       expect(await t.query('select 1 from finding_disposition_event')).toEqual([]);
     });
   });
@@ -268,7 +268,7 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
   it('DROPS a reason on any state but rejected, so a stale one cannot keep reading as current', async () => {
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const actor = { id: await aUser(t) };
+      const actor = { id: await aUser(t), workspaceId: WS };
       await ensureDisposition(t, key('c1'), WS);
       await setDisposition(t, key('c1'), { state: 'rejected', reason: 'The cap is wrong.' },
         'human', actor, new Date(), 1);
@@ -281,7 +281,7 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
   it('refuses a rerun_reset to anything but unchecked, in code as well as in the schema', async () => {
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const actor = { id: await aUser(t) };
+      const actor = { id: await aUser(t), workspaceId: WS };
       await ensureDisposition(t, key('c1'), WS);
       await expect(setDisposition(
         t, key('c1'), { state: 'verified' }, 'rerun_reset', actor, new Date(), 1))
@@ -292,15 +292,15 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
   it('REFUSES a stale change and applies nothing, rather than overwriting a judgement nobody saw', async () => {
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const partner = { id: await aUser(t, 'Partner') };
-      const trainee = { id: await aUser(t, 'Trainee') };
+      const partner = { id: await aUser(t, 'Partner'), workspaceId: WS };
+      const trainee = { id: await aUser(t, 'Trainee'), workspaceId: WS };
       await ensureDisposition(t, key('c1'), WS);
       await setDisposition(t, key('c1'), { state: 'rejected', reason: 'Wrong schedule.' },
         'human', partner, new Date(), 1);
       // The trainee was looking at version 1.
       await expect(setDisposition(t, key('c1'), { state: 'verified' }, 'human', trainee, new Date(), 1))
         .rejects.toThrow(/changed since you opened it/i);
-      const now = await dispositionFor(t, key('c1'));
+      const now = await dispositionFor(t, key('c1'), WS);
       expect(now?.state).toBe('rejected');
       expect(now?.by_user_id).toBe(partner.id);
       expect(await t.query('select 1 from finding_disposition_event')).toHaveLength(1);
@@ -310,8 +310,8 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
   it('names WHO SET THE CURRENT STATE, never who set the first', async () => {
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const trainee = { id: await aUser(t, 'Trainee') };
-      const partner = { id: await aUser(t, 'Partner') };
+      const trainee = { id: await aUser(t, 'Trainee'), workspaceId: WS };
+      const partner = { id: await aUser(t, 'Partner'), workspaceId: WS };
       await ensureDisposition(t, key('c1'), WS);
       await setDisposition(t, key('c1'), { state: 'verified' }, 'human', trainee, new Date(1), 1);
       const after = await setDisposition(t, key('c1'), { state: 'verified' }, 'human', partner, new Date(2), 2);
@@ -330,8 +330,8 @@ describe('the current state and its history cannot disagree', () => {
     // between what a card says a person judged and what actually happened.
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1', 'c2', 'c3', 'c4']);
-      const a = { id: await aUser(t, 'A') };
-      const b = { id: await aUser(t, 'B') };
+      const a = { id: await aUser(t, 'A'), workspaceId: WS };
+      const b = { id: await aUser(t, 'B'), workspaceId: WS };
       for (const clause of ['c1', 'c2', 'c3', 'c4']) await ensureDisposition(t, key(clause), WS);
 
       await setDisposition(t, key('c1'), { state: 'verified' }, 'human', a, new Date(1_000), 1);
@@ -372,7 +372,7 @@ describe('a disposition belongs to the finding it is about', () => {
     // who may trigger it is.
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const actor = { id: await aUser(t) };
+      const actor = { id: await aUser(t), workspaceId: WS };
       await ensureDisposition(t, key('c1'), WS);
       await setDisposition(t, key('c1'), { state: 'verified' }, 'human', actor, new Date(), 1);
       await t.query("delete from finding where review_id = 'dr1' and clause_id = 'c1'");
@@ -394,7 +394,7 @@ describe('a disposition belongs to the finding it is about', () => {
   it('and goes when the REVIEW goes, so the evidence is retained rather than immortal', async () => {
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const actor = { id: await aUser(t) };
+      const actor = { id: await aUser(t), workspaceId: WS };
       await ensureDisposition(t, key('c1'), WS);
       await setDisposition(t, key('c1'), { state: 'verified' }, 'human', actor, new Date(), 1);
       await t.query("delete from review where id = 'dr1'");
@@ -405,7 +405,7 @@ describe('a disposition belongs to the finding it is about', () => {
   it('refuses to record a judgement about a finding that has no disposition row yet', async () => {
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
-      const actor = { id: await aUser(t) };
+      const actor = { id: await aUser(t), workspaceId: WS };
       await expect(setDisposition(t, key('c1'), { state: 'verified' }, 'human', actor, new Date(), 1))
         .rejects.toThrow(/no finding .* to record a judgement about/);
     });

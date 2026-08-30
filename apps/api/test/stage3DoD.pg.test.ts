@@ -71,7 +71,7 @@ describe('§18 item 4, end to end: a run cancelled mid-flight', () => {
       await ensureDispositions(t, 'dod-r', WS,
         ['dod-d', 'dod-d', 'dod-d', 'dod-d'], ['c1', 'c2', 'c3', 'c4']);
       await setDisposition(
-        t, key, { state: 'verified' }, 'human', { id: userId },
+        t, key, { state: 'verified' }, 'human', { id: userId, workspaceId: WS },
         new Date(1_700_000_009_000), 1);
 
       // …and then somebody stops the run. The two statements the cancel
@@ -104,7 +104,7 @@ describe('§18 item 4, end to end: a run cancelled mid-flight', () => {
 
       // THE JUDGEMENT. Untouched by the cancellation, with its own instant
       // and its own author, and its history says it moved exactly once.
-      const disposition = await dispositionFor(t, key);
+      const disposition = await dispositionFor(t, key, WS);
       expect(disposition).toMatchObject({ state: 'verified', by_user_id: userId });
       expect((await readDispositionEvents(t, key, WS))
         .map(e => `${e.from_state}->${e.to_state}/${e.cause}`))

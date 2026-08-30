@@ -1,7 +1,6 @@
 import React from 'react';
 import type { PresenceMember } from '@lexprompt/core';
 import type { DispositionAudience } from '../lib/findingOutcome';
-import { userInitials } from '../lib/api/users';
 
 export interface PresenceRosterProps {
   /** The server's roster for this subscription, as it last stated it. */
@@ -34,11 +33,20 @@ export interface PresenceRosterProps {
  * about a few seconds ago. The title says so in a sentence a reader can act
  * on, because a roster that looks authoritative is one somebody defers to.
  *
- * ## You are not on it
+ * ## You are not on it — and if it does not know who you are, it says
+ * nothing
  *
  * You already know you are here. A roster including you is a roster that is
  * never empty, which makes *"is anyone else here?"* — the one question it
  * exists to answer — unanswerable at a glance.
+ *
+ * `meId` is `profile?.id ?? ''` at the caller, so before `GET /v1/me`
+ * answers it matches nobody and the filter excluded nothing — putting YOU on
+ * the roster this docstring says you must never be on, with your own
+ * initials, for as long as the profile took. Nothing renders until the tab
+ * knows whose it is: "who else is here" is not a question that can be
+ * answered without that, and a blank for a frame is the honest form of not
+ * knowing.
  *
  * ## Nothing renders when nobody is here
  *
@@ -47,6 +55,7 @@ export interface PresenceRosterProps {
  * the non-empty case with it.
  */
 export function PresenceRoster({ members, meId, audience }: PresenceRosterProps) {
+  if (!meId) return null;
   const others = members.filter(m => m.userId !== meId);
   if (others.length === 0) return null;
 
@@ -77,7 +86,12 @@ export function PresenceRoster({ members, meId, audience }: PresenceRosterProps)
  */
 function PresenceDot({ member, audience }: { member: PresenceMember; audience?: DispositionAudience }) {
   const name = audience?.nameOf(member.userId);
-  const initials = userInitials(member.userId);
+  // FROM THE SAME RESOLVER AS THE NAME. This read `userInitials` off the
+  // module directly while taking the name from the injected `audience`, so
+  // one component held two resolvers where P32's rule is one — and a caller
+  // that supplied an audience got a name from it and initials from
+  // somewhere else, which is how "R. Okafor" comes to wear "?".
+  const initials = audience?.initialsOf(member.userId);
   const label = name ?? 'Someone this workspace does not name';
   return (
     <span
@@ -137,7 +151,7 @@ export function ClausePresence({ members, audience }: ClausePresenceProps) {
           className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-presence-tint text-presence font-mono text-pin uppercase leading-none"
           aria-hidden="true"
         >
-          {userInitials(member.userId)?.slice(0, 1) ?? '?'}
+          {audience?.initialsOf(member.userId)?.slice(0, 1) ?? '?'}
         </span>
       ))}
       <span className="sr-only">{sentence}</span>

@@ -189,7 +189,7 @@ export async function importFindings(
         // already been refused above unless it IS this one; passing the
         // actor rather than the (now equal) body value is what leaves no
         // expression here that a forged name could travel through.
-        actor,
+        { id: actor.id, workspaceId },
         new Date(cell.verification.at!),
         Number(row.version));
     }

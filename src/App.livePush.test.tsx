@@ -107,6 +107,19 @@ vi.mock('./lib/api/users', () => ({
   ],
 }));
 
+/**
+ * THE ASSIGNMENTS READ. Mocked so a review opens with a known list rather
+ * than a rejected fetch — the push tests below are about what ARRIVES, and a
+ * failed read would render the error panel instead.
+ */
+const getOpenAssignmentsMock = vi.fn().mockResolvedValue([]);
+vi.mock('./lib/api/assignments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/assignments')>()),
+  getOpenAssignments: (...args: unknown[]) => getOpenAssignmentsMock(...args),
+  createAssignment: vi.fn(),
+  resolveAssignment: vi.fn(),
+}));
+
 const getFindingsMock = vi.fn();
 const setDispositionMock = vi.fn();
 const addNoteMock = vi.fn();
@@ -487,6 +500,70 @@ describe('a push held under an open control', () => {
   afterEach(() => {
     act(() => { root.unmount(); });
     container.remove();
+  });
+
+  /*
+   * AN ASSIGNMENT ARRIVES ON A REVIEW-SCOPED PUSH (C1).
+   *
+   * This file contained the string "assignment" zero times: the push path
+   * for `assignment.created` had no test at all, which is how a bystander
+   * came to be told they had made a request. `applyPush` still appends every
+   * pushed assignment — deliberately, because the local id may not have
+   * resolved yet and a dropped request reaches nobody — so the actor filter
+   * is at render, and that is what these assert.
+   */
+  const assignmentPush = (
+    id: string, assigneeUserId: string, assignedByUserId: string, message: string,
+  ): AppEvent => ({
+    id: 900, type: 'assignment.created',
+    workspaceId: 'ws-1', matterId: 'm1', reviewId: 'r1', at: T_1604,
+    payload: {
+      reviewId: 'r1', findingsKey: 'd1', clauseId: 'c1',
+      assignment: {
+        id, reviewId: 'r1', findingsKey: 'd1', clauseId: 'c1',
+        assigneeUserId, assignedByUserId, message, createdAt: T_1604,
+      },
+    },
+  } as unknown as AppEvent);
+
+  async function openTheReview(): Promise<void> {
+    window.history.pushState(null, '', '/matters/m1/reviews/r1');
+    act(() => { root.render(<App />); });
+    await flushUntil(
+      () => !(container.textContent ?? '').includes('Loading review'),
+      'the review to finish loading');
+    await flush();
+  }
+
+  it('shows a request ADDRESSED TO YOU the moment it is pushed', async () => {
+    // The local profile is `u1`.
+    await openTheReview();
+    act(() => { deliverPush!(assignmentPush('as1', 'u1', 'u2', 'Check the cap.')); });
+    await flush();
+    expect(container.textContent).toContain('asked you to look at this');
+    expect(container.textContent).toContain('Check the cap.');
+  });
+
+  it('tells a BYSTANDER nothing about a request between two other people', async () => {
+    // `u1` is neither the assignee nor the assigner. The event still reaches
+    // this tab, because it is scoped to the REVIEW and the socket has no
+    // per-recipient filter — and should not grow one.
+    await openTheReview();
+    act(() => { deliverPush!(assignmentPush('as2', 'u2', 'u3', 'Not sure about 14.2.')); });
+    await flush();
+    expect(container.textContent).not.toContain('You asked');
+    expect(container.textContent).not.toContain('asked you to look at this');
+    expect(container.textContent).not.toContain('Not sure about 14.2.');
+    expect(container.textContent).not.toContain('Withdraw the request');
+  });
+
+  it('shows a request YOU MADE, with the control only you should have', async () => {
+    await openTheReview();
+    act(() => { deliverPush!(assignmentPush('as3', 'u2', 'u1', 'Please look at the cap.')); });
+    await flush();
+    expect(container.textContent).toContain('You asked');
+    expect(container.textContent).toContain('R. Okafor');
+    expect(container.textContent).toContain('Withdraw the request');
   });
 
   it('holds the state under an open reject dialog, and announces it instead', async () => {

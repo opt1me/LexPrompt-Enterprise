@@ -376,24 +376,58 @@ describe('closing a request', () => {
   });
 });
 
-describe('what has been asked of me', () => {
-  it('lists the CALLER s own open requests, and nobody else s', async () => {
+describe('what has been asked of me, and what I have asked of others', () => {
+  it('lists BOTH directions for the caller, and nothing at all for a third party', async () => {
     await withPg(async t => {
       await seed(t);
+      // The trainee asks the partner about c1; the partner asks the trainee
+      // about c2. Each of them is a party to both.
       await as(t, TRAINEE).send('POST', ASSIGN, { assigneeUserId: PARTNER });
       await as(t, PARTNER).send('POST', '/v1/reviews/ar1/findings/d1/c2/assignments',
         { assigneeUserId: TRAINEE });
 
       const mine = await as(t, PARTNER).send('GET', '/v1/assignments?state=open');
       expect(mine.statusCode, mine.body).toBe(200);
-      expect(mine.json().assignments).toHaveLength(1);
-      expect(mine.json().assignments[0].clauseId).toBe('c1');
-      // The caller's own, FROM THE TOKEN. Reading another person's queue
-      // would be a different feature with a different bar, and there is no
-      // query parameter that could ask for one.
+      expect(mine.json().assignments.map((a: { clauseId: string }) => a.clauseId).sort())
+        .toEqual(['c1', 'c2']);
       const theirs = await as(t, TRAINEE).send('GET', '/v1/assignments?state=open');
-      expect(theirs.json().assignments).toHaveLength(1);
-      expect(theirs.json().assignments[0].clauseId).toBe('c2');
+      expect(theirs.json().assignments.map((a: { clauseId: string }) => a.clauseId).sort())
+        .toEqual(['c1', 'c2']);
+
+      // …and NOBODY ELSE'S. The caller's id comes from the token and there
+      // is no query parameter that could ask for another person's queue.
+      const outsider = await as(t, OUTSIDER).send('GET', '/v1/assignments?state=open');
+      expect(outsider.json().assignments).toEqual([]);
+    });
+  });
+
+  /*
+   * A REQUEST YOU MADE SURVIVES A RELOAD (M4).
+   *
+   * This was the ONLY read of `assignment`, and it filtered by
+   * `assignee_user_id` alone — so the "You asked R. Okafor to look at this"
+   * line and its **Withdraw the request** control existed in the assigner's
+   * tab and nowhere else. On reload they were gone, while the assignee went
+   * on seeing the request open: one party could close it and the other could
+   * not, from anywhere in the UI.
+   */
+  it('gives the ASSIGNER back the request they made, with the id Withdraw needs', async () => {
+    await withPg(async t => {
+      await seed(t);
+      const made = (await as(t, TRAINEE).send('POST', ASSIGN,
+        { assigneeUserId: PARTNER, message: 'Not sure the cap survives 14.2.' })).json();
+
+      // The trainee reloads. Nothing is held in memory now.
+      const afterReload = await as(t, TRAINEE).send('GET', '/v1/assignments?state=open&review=ar1');
+      const found = afterReload.json().assignments
+        .find((a: { id: string }) => a.id === made.id);
+      expect(found, 'the request the caller made was not in their own read').toBeDefined();
+      expect(found.assignedByUserId).toBe(TRAINEE);
+      expect(found.message).toBe('Not sure the cap survives 14.2.');
+
+      // And it can still be withdrawn, which is the control that vanished.
+      expect((await as(t, TRAINEE).send('POST', `/v1/assignments/${found.id}/resolve`))
+        .statusCode).toBe(200);
     });
   });
 

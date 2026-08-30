@@ -103,12 +103,23 @@ describe('an assignment reaches the person it was addressed to', () => {
     };
     expect(assignments.filter(a => a.id === payload.assignment.id)).toHaveLength(1);
 
-    // …and it is NOT in the assigner's own list. "What has been asked of me"
-    // is the caller's own queue, from the token; a route that answered with
-    // everybody's would be a different feature with a different bar.
+    // …AND IT IS IN THE ASSIGNER'S OWN LIST TOO, which it was not (M4).
+    //
+    // This assertion used to read `toEqual([])`, on the argument that "what
+    // has been asked of me" is the caller's own queue. The queue is still
+    // the caller's own — the id comes from the token and no query parameter
+    // can ask for anybody else's — but a request you MADE is your own act,
+    // and this was the only read of `assignment` there is. So the "You asked
+    // R. Okafor to look at this" line and its **Withdraw the request**
+    // control lived in the assigner's tab and nowhere else: they vanished on
+    // reload, while the assignee went on seeing the request open.
     const mine = await asUser(trainee, 'GET', '/v1/assignments?state=open');
-    const theirs = await mine.json() as { assignments: { id: string }[] };
-    expect(theirs.assignments.filter(a => a.id === payload.assignment.id)).toEqual([]);
+    const theirs = await mine.json() as {
+      assignments: { id: string; assignedByUserId: string }[];
+    };
+    const own = theirs.assignments.filter(a => a.id === payload.assignment.id);
+    expect(own, 'the assigner could not read back the request they made').toHaveLength(1);
+    expect(own[0].assignedByUserId).toBe(trainee.userId);
   }, 60_000);
 
   it('changes no disposition on the way, on the running stack', async () => {

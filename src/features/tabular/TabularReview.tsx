@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { AlignLeft, Download, FileText, Info, Loader, LayoutList, RotateCcw, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { DocumentFile, Finding, Review, ReviewRun, RiskLevel } from '../../types';
 import { findingKey, findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
-import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
+import type { AssignmentView, DispositionWithHistory, VerificationChange } from '@lexprompt/core';
 import {
   verificationCounts, isVerifiable, positionOutcomeCounts, NO_RISK_DATA_LABEL,
   NO_EXPORT_CONTEXT, type DispositionAudience, type ExportContext,
@@ -66,6 +66,22 @@ export interface TabularReviewProps {
    *  `onAddNote` — omitted, `CellDetail` renders with no such affordance
    *  rather than a button that goes nowhere. */
   onOpenInReview?: (docId: string, clauseId: string) => void;
+  /**
+   * THE OPEN REQUESTS ON THIS REVIEW, so the grid is not a surface where a
+   * request addressed to you is invisible.
+   *
+   * The grid wired NO assignments at all: a reader working here could not
+   * see one and could not make one, even though the detail panel mounts the
+   * ordinary `FindingCard`. That is distinct from the stated §6.3 grid limit
+   * (which is about the actor line) and was on no known-limits list, so it
+   * was simply a surface where a colleague's request reached nobody.
+   *
+   * The whole list, unfiltered by clause: the panel picks out the open cell's
+   * own, and `FindingCard` filters by party (`assignmentParty`).
+   */
+  assignments?: AssignmentView[];
+  onAssigned?: (assignment: AssignmentView) => void;
+  onResolveAssignment?: (id: string) => void;
 }
 
 interface SelectedCell {
@@ -95,7 +111,7 @@ const RISK_CELL: Record<RiskLevel, string> = {
 export function TabularReview({
   run, documents, onRetryCell, onOpenCards, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, stale = false, authorInitials, localUserId,
-  dispositionOf, audience, exportContext,
+  dispositionOf, audience, exportContext, assignments, onAssigned, onResolveAssignment,
   verifyConflict, onReapplyConflict, onDismissConflict, onOpenInReview,
 }: TabularReviewProps) {
   const [wrapText, setWrapText] = useState(false);
@@ -268,6 +284,17 @@ export function TabularReview({
             onReapplyConflict={onReapplyConflict}
             onDismissConflict={onDismissConflict}
             onOpenInReview={onOpenInReview ? () => onOpenInReview(selected.docId, selected.clauseId) : undefined}
+            // KEYED THROUGH `findingsKeyFor`, like the disposition above and
+            // for the same reason: `selected.docId` names the document the
+            // viewer pane is showing, not the cell that owns the answer.
+            assignments={(assignments ?? []).filter(
+              a => a.clauseId === selected.clauseId
+                && a.findingsKey === findingsKeyFor(run.target, selected.docId))}
+            assignTarget={onAssigned
+              ? { reviewId: run.id, findingsKey: findingsKeyFor(run.target, selected.docId) }
+              : undefined}
+            onAssigned={onAssigned}
+            onResolveAssignment={onResolveAssignment}
           />
         )}
       </div>

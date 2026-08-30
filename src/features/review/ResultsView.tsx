@@ -17,6 +17,7 @@ import { reportPresence } from '../../lib/api/socket';
 import { PresenceRoster } from '../../components/PresenceRoster';
 import { AskedOfYou } from '../assignments/AskedOfYou';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
+import { assignmentParty, isPartyTo } from '../../lib/assignmentParty';
 import {
   isVerifiable, NO_EXPORT_CONTEXT, type DispositionAudience, type ExportContext,
 } from '../../lib/findingOutcome';
@@ -616,19 +617,34 @@ export function ResultsView({
     return out;
   }, [presence, localUserId]);
 
-  /** Clause id -> the open requests about it, from the one list. */
+  /**
+   * Clause id -> the open requests about it THIS READER IS A PARTY TO.
+   *
+   * The actor filter is the point. `assignment.created` is a review-scoped
+   * event, so a request between two other people reaches every tab with the
+   * review open — and the card's line is first person. Without this a third
+   * reviewer was told "You asked B. Trainee to look at this", under a
+   * message B's assigner wrote, beside a live "Withdraw the request"
+   * button: an action offered on somebody else's act.
+   *
+   * The same set `GET /v1/assignments` answers with, so what a card shows
+   * live is what it shows after a reload — the two used to disagree, and a
+   * control that vanishes on refresh is its own defect.
+   */
   const assignmentsByClause = useMemo(() => {
     const out: Record<string, AssignmentView[]> = {};
     for (const a of assignments ?? []) {
       if (findingsKey && a.findingsKey !== findingsKey) continue;
+      if (!isPartyTo(a, localUserId)) continue;
       (out[a.clauseId] ??= []).push(a);
     }
     return out;
-  }, [assignments, findingsKey]);
+  }, [assignments, findingsKey, localUserId]);
 
-  /** Only the ones addressed to YOU, for the panel that says so. */
+  /** Only the ones addressed to YOU, for the panel that says so. Through
+   *  the same comparison the cards use, rather than a second copy of it. */
   const askedOfMe = useMemo(
-    () => (assignments ?? []).filter(a => a.assigneeUserId === localUserId),
+    () => (assignments ?? []).filter(a => assignmentParty(a, localUserId) === 'assignee'),
     [assignments, localUserId]);
 
   const clauseTitles = useMemo(
