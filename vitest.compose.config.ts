@@ -24,5 +24,12 @@ export default defineConfig({
     // the prober's, which names what it could not reach, rather than
     // Vitest's, which names only the clock.
     testTimeout: 30_000,
+    // ONE STACK, ONE FILE AT A TIME. These suites all drive the same running
+    // containers, and Stage 3 Task 11 added one that RESTARTS `api`
+    // mid-test — which, run in parallel, made `egress.compose.test.ts`'s
+    // probe fail with "could not reach the api" and read as though the
+    // egress block had changed. A shared, mutable, restartable dependency is
+    // the one thing file parallelism cannot be given.
+    fileParallelism: false,
   },
 });

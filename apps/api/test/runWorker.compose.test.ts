@@ -158,6 +158,31 @@ describe('the run worker, against the real stack', () => {
       const finishMs = await waitFor('the run to finish', () => runState() === 'succeeded',
         420_000);
 
+      // Printed BEFORE the assertions, always. A failure here is a claim
+      // about which cell and which finding disagree, and an assertion that
+      // says only "expected 11 to be 0" sends the next reader back to the
+      // database to find out what the eleven were.
+      process.stdout.write(`
+runWorker.compose: cells ${sql(
+        `select string_agg(state || '=' || n, ' ') from (
+           select state, count(*)::text as n from run_cell where run_id = '${RUN}'
+           group by state order by 1) s`)}
+`);
+      process.stdout.write(`runWorker.compose: findings ${sql(
+        `select string_agg(status || '=' || n, ' ') from (
+           select status, count(*)::text as n from finding where review_id = '${REVIEW}'
+           group by status order by 1) s`)}
+`);
+      process.stdout.write(`runWorker.compose: disagreeing ${sql(
+        `select coalesce(string_agg(c.clause_id || ':' || c.state || '/' || f.status, ' '), 'none')
+           from run_cell c
+           join finding f on f.review_id = '${REVIEW}'
+            and f.findings_key = c.findings_key and f.clause_id = c.clause_id
+          where c.run_id = '${RUN}'
+            and ((c.state in ('done','error') and f.status in ('pending','running'))
+                 or (c.state = 'cancelled' and f.status <> 'cancelled'))`)}
+`);
+
       // NOTHING is left in flight, and nothing is left `pending`: "an
       // abandoned run reopening with every cell spinning forever,
       // unfinishable" is the defect this whole task is named after.

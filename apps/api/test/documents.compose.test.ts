@@ -115,10 +115,18 @@ describe('a document uploaded through the real route comes back byte-identical',
       'console.log("TYPE " + got.headers["content-type"]);',
       'console.log("LENGTH " + got.headers["content-length"] + " of " + bytes.length);',
       'console.log("EQUAL " + Buffer.compare(got.rawPayload, bytes));',
-      // P12: a scan with no text layer stores `parse_state = failed`, which
-      // is what Stage 3's parse worker will read.
-      'const state = await db.query("select parse_state from document where id = $1 and workspace_id = $2", [DOC, WS]);',
+      // P12, CLOSED (Stage 3 Task 9). Every upload now stores
+      // `parse_state = 'pending'` and the PARSE WORKER writes what it found;
+      // the body's own `parseError` is discarded, because a browser that
+      // failed to read a file locally has said nothing about whether the
+      // server can read the bytes it just uploaded.
+      //
+      // Read immediately after the POST rather than after a wait, so this
+      // test asks what the ROUTE wrote and not what the worker did with it
+      // afterwards — the worker's own behaviour is `hydrate.pg.test.ts`'s.
+      'const state = await db.query("select parse_state, text from document where id = $1 and workspace_id = $2", [DOC, WS]);',
       'console.log("STATE " + state[0].parse_state);',
+      'console.log("TEXTLEN " + state[0].text.length);',
     ].join('\n'));
     expect(r.out, r.out).toContain('POST 201');
     expect(r.out, r.out).toMatch(/KEY workspace\/[^/]+\/document\/upload-/);
@@ -128,7 +136,8 @@ describe('a document uploaded through the real route comes back byte-identical',
     // 0 means byte-identical. Anything else is a document that lies about
     // what the firm uploaded.
     expect(r.out, r.out).toContain('EQUAL 0');
-    expect(r.out, r.out).toContain('STATE failed');
+    expect(r.out, r.out).toContain('STATE pending');
+    expect(r.out, r.out).toContain('TEXTLEN 0');
     expect(r.out).not.toContain('THREW');
     expect(r.code).toBe(0);
   });
