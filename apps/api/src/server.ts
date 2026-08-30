@@ -12,6 +12,7 @@ import { registerRoleGate } from './auth/requireRole.ts';
 import { registerInfer } from './routes/infer.ts';
 import { registerInferStream } from './routes/inferStream.ts';
 import { registerMe } from './routes/me.ts';
+import { registerUsers } from './routes/users.ts';
 import { registerMatters } from './routes/matters.ts';
 import { registerDocuments } from './routes/documents.ts';
 import { registerCollections } from './routes/collections.ts';
@@ -305,6 +306,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerInfer(app, deps.gateway, deps.workspaceId);
   registerInferStream(app, deps.gateway, deps.workspaceId);
   registerMe(app, deps.db);
+  registerUsers(app, deps.db);
   registerMatters(app, deps.db, deps.blobs);
   registerDocuments(app, deps.db, deps.blobs);
   registerCollections(app, deps.db);

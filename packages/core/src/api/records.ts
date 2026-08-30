@@ -29,6 +29,49 @@ export interface MeResponse {
 }
 
 /**
+ * ONE PERSON IN THE WORKSPACE'S DIRECTORY (§6.3, P32).
+ *
+ * The answer to `GET /v1/workspace/users`, which is the ONE place a user id
+ * becomes a name. `GET /v1/me` answers only for the caller, so before this
+ * existed a card could not say who verified a finding even if it wanted to
+ * — an id and nothing that could become a name.
+ *
+ * ## Why a directory rather than a name on every payload
+ *
+ * A `byUserId` on a `finding_disposition` is a FOREIGN KEY; a display name
+ * is a MUTABLE field on `app_user` that a person changes through
+ * `PUT /v1/me`. Putting the name into every disposition payload and every
+ * event would be a second copy of a mutable field, refreshed at different
+ * times in different places — this project's most repeated defect, landing
+ * on the field a reader trusts most.
+ *
+ * ## A disabled person is LISTED, not hidden
+ *
+ * Someone who has left the firm still verified things last March, and a card
+ * rendering "Verified by (unknown)" for them is worse than one that names
+ * them and says the account is turned off. Hiding the row is how history
+ * loses a name.
+ */
+export interface WorkspaceUser {
+  id: string;
+  displayName: string;
+  initials: string;
+  role: Role;
+  status: 'active' | 'disabled';
+  /** ABSENT when the record holds none. Never an empty string, and never
+   *  `email: undefined` — `structuredClone` preserves an undefined-valued
+   *  key, so an `in` check would read it as an address that is there. */
+  email?: string;
+}
+
+/** The whole directory. An object rather than a bare array, for the reason
+ *  `RunEventPage` is one: a response that is a top-level array has nowhere
+ *  to put the next fact anybody needs about the whole answer. */
+export interface WorkspaceUsers {
+  users: WorkspaceUser[];
+}
+
+/**
  * §6.6: `Settings.modelChoiceId` becomes workspace configuration an admin
  * sets from the gateway's allowlist, and `Settings.concurrency` becomes a
  * value STORED here (the server-side per-run bound it becomes is Stage 3's

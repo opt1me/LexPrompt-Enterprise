@@ -24,16 +24,36 @@ import { ROOT, walk, rel, codeOf, statementsIn } from './sourceScan.ts';
  * The tables `002_records.sql` gives a `workspace_id`, and therefore the
  * tables a statement must scope.
  *
- * `app_user` is deliberately NOT here even though it carries the column: a
- * request never looks a user up by anything but the identity the
- * authentication hook already resolved — `(issuer, subject)`, which is
- * unique across the whole table — so the row is reached through the actor
- * rather than searched for within a workspace. `workspace` and
- * `role_mapping` are absent for the same kind of reason (`role_mapping`'s
- * own docstring in `roles.ts` says why a workspace filter there could only
- * ever remove a row the lookup should have seen).
+ * `workspace` and `role_mapping` are absent, and for a reason rather than an
+ * omission: `role_mapping`'s own docstring in `roles.ts` says why a
+ * workspace filter there could only ever remove a row the lookup should have
+ * seen.
+ *
+ * ## `app_user` JOINED THIS LIST IN STAGE 4, AND THE REASON IT WAS OUT OF IT
+ * ## STOPPED BEING TRUE
+ *
+ * It used to say: *"a request never looks a user up by anything but the
+ * identity the authentication hook already resolved — `(issuer, subject)`,
+ * which is unique across the whole table — so the row is reached through the
+ * actor rather than searched for within a workspace."* Every word of that
+ * was true until `GET /v1/workspace/users` (§6.3, P32), which is the first
+ * query in this codebase that SEARCHES `app_user` within a workspace: it
+ * answers "who are the people here" for a card that has to turn a
+ * `byUserId` into a name. A missing predicate there does not fail — it
+ * answers, with every other firm's people in it, and nothing on screen would
+ * look wrong. That is exactly the shape this guard exists for, so the table
+ * is now scanned like any other and the two statements that legitimately do
+ * not carry the predicate are exempted BY TEXT below.
+ *
+ * A stale docstring is the more dangerous half of this change: a rule that
+ * explains why something is safe, kept beside code that no longer makes it
+ * safe, is read as a decision rather than as a fossil.
  */
 const SCOPED_TABLES = [
+  // §6.3/P32's directory reads it within a workspace — see the paragraph
+  // above. The two statements that identify a row by the ACTOR's own
+  // identity are in `SCOPED_BY_KEY`.
+  'app_user',
   'matter', 'document', 'collection', 'playbook', 'playbook_version', 'review', 'changeset',
   'precedent_set', 'position_basis',
   // 008's three (Stage 3 Task 8). `run` and `run_cell` carry a workspace and
@@ -160,6 +180,23 @@ const UNSCOPED_BY_DESIGN = [
 const SCOPED_BY_KEY = [
   'select review_id, findings_key, clause_id, workspace_id, state, reason',
   'set state = $4, reason = $5, by_user_id = $6, at = $7',
+  // `PUT /v1/me`, the one thing §7 lets a person change about themselves.
+  // It identifies the row by `app_user.id` — the actor's OWN id, which the
+  // authentication hook resolved from a validated token and which nothing a
+  // caller sends can name (`authz.route.test.ts`: `req.actor` is written in
+  // exactly one place). A `workspace_id` predicate here would add nothing:
+  // the id already names one row, and it is the caller's.
+  'update app_user set display_name = $2, initials = $3 where id = $1',
+  // Just-in-time provisioning (`resolveActor`). The conflict target is
+  // `(issuer, subject)` — UNIQUE across the whole table, and exactly the
+  // identity `jwtVerify` just proved — so the row this reaches is the one
+  // the caller's own token names, not one found by searching a workspace.
+  // `workspace_id` is in the INSERT and NOT in the DO UPDATE list, so this
+  // statement cannot move a person between workspaces however it is
+  // reached; a `where` here could only ever refuse the row the sign-in is
+  // about. Exempt only because `app_user` joined SCOPED_TABLES in Stage 4 —
+  // it was never a violation, it was previously invisible.
+  'on conflict (issuer, subject) do update set',
 ];
 
 /**
@@ -249,7 +286,13 @@ describe('the scanner finds something (a guard that matches nothing passes vacuo
     expect(namesScopedTable('delete from document where id = $1')).toBe('document');
     expect(namesScopedTable('select * from playbook_version where id = $1'))
       .toBe('playbook_version');
-    expect(namesScopedTable('update app_user set display_name = $2')).toBeUndefined();
+    // `app_user` IS scoped as of Stage 4 (see SCOPED_TABLES) — the negative
+    // example moved to a table that genuinely is not, rather than being
+    // deleted. A guard whose only negative case disappears when the answer
+    // changes has stopped being able to tell the two apart.
+    expect(namesScopedTable('update app_user set display_name = $2')).toBe('app_user');
+    expect(namesScopedTable('select role from role_mapping where issuer = $1')).toBeUndefined();
+    expect(namesScopedTable('select id from workspace where id = $1')).toBeUndefined();
     expect(namesScopedTable('SAVEPOINT sp1')).toBeUndefined();
   });
 

@@ -519,6 +519,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/runs/:id/events',
       'GET /v1/versions/:id',
       'GET /v1/workspace/settings',
+      'GET /v1/workspace/users',
       'PATCH /v1/documents/:id/role',
       'POST /v1/admin/blob-orphans/delete',
       'POST /v1/changesets/:id/publish',
@@ -573,7 +574,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // routes, and 62 with Stage 3 Task 24's `POST /v1/documents/:id/reparse`.
     // A DROP in this number without a route being removed is a route that
     // stopped being registered.
-    expect(checked).toHaveLength(62);
+    expect(checked).toHaveLength(63);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

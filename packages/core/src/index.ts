@@ -28,6 +28,12 @@ export {
 export type { Frame, StreamEnd } from './model/sse.ts';
 export { ROLES, isRole } from './api/records.ts';
 export type { Role, MeResponse, WorkspaceSettings } from './api/records.ts';
+// §6.3/P32: the workspace's people. The ONE place a user id becomes a name,
+// declared here because the browser resolves through it and `apps/api`
+// answers it — a name carried on every disposition payload instead would be
+// a second copy of a mutable field, refreshed at different times in
+// different places.
+export type { WorkspaceUser, WorkspaceUsers } from './api/records.ts';
 // §8/§9's run outbox, P22: one payload vocabulary, two transports. Declared
 // here because the browser reads these and `apps/api` writes them, and
 // Stage 4's socket sends exactly the same five.

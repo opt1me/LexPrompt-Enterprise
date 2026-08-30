@@ -65,6 +65,16 @@ export const ROUTE_POLICY: RoutePolicyTable = {
 
   'GET /v1/me': 'reviewer',
   'PUT /v1/me': 'reviewer',
+
+  // §6.3's attribution requirement needs a NAME for an id, and `GET /v1/me`
+  // answers only for the caller — so before this route a card could show
+  // that a finding had been rejected and could not say by whom.
+  // `reviewer`: a person who cannot resolve the name on a disposition they
+  // are being shown cannot read their own screen, and S10 has no per-matter
+  // ACLs for a directory to respect. It is a READ; nothing about it can
+  // assert an attribution, which is the property `findings/import.ts`'s fix
+  // round makes worth stating out loud.
+  'GET /v1/workspace/users': 'reviewer',
   'POST /v1/infer': 'reviewer',
   'POST /v1/infer/stream': 'reviewer',
   'GET /v1/models': 'reviewer',
