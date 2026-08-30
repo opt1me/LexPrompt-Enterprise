@@ -137,6 +137,18 @@ export interface FindingCardProps {
    * the other half, and both feed one gate.
    */
   rejectModalOpen?: boolean;
+  /**
+   * The client cannot vouch for what is on screen (section 3's fourth load
+   * state, Task 20).
+   *
+   * Passed straight through to every control that composes a HUMAN-AUTHORED
+   * write — the disposition, a note, a net-position confirmation. The
+   * findings themselves stay on screen: blanking them is the OTHER failure,
+   * a reviewer who loses their place because the wifi blinked. The rule is
+   * "never show disconnected data AS THOUGH IT WERE CURRENT", not "show
+   * nothing".
+   */
+  stale?: boolean;
 }
 
 /**
@@ -188,7 +200,7 @@ export function FindingCard({
   onVerify, verifyBusy, onAddNote, noteBusy, authorInitials, localUserId,
   onConfirmNetPosition, onAmendNetPosition, netPositionBusy, documentInfo,
   disposition, audience = NO_DIRECTORY, conflict, onReapplyConflict, onDismissConflict,
-  rejectModalOpen = false,
+  rejectModalOpen = false, stale = false,
 }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
   const [trailOpen, setTrailOpen] = useState(false);
@@ -434,6 +446,7 @@ export function FindingCard({
         <NetPositionPanel
           netPosition={finding?.netPosition}
           busy={netPositionBusy}
+          stale={stale}
           onConfirm={onConfirmNetPosition}
           onAmend={onAmendNetPosition}
           onOpenTrail={() => setTrailOpen(true)}
@@ -524,6 +537,7 @@ export function FindingCard({
           <VerificationControls
             verification={finding.verification}
             busy={verifyBusy}
+            stale={stale}
             // THE VERSION THIS CARD WAS SHOWING, not the one the module
             // cache last heard (P36). A change held off the screen still
             // moved that cache, so a judgement submitted from here would
@@ -541,6 +555,7 @@ export function FindingCard({
             authorInitials={authorInitials ?? 'ME'}
             localUserId={localUserId ?? ''}
             busy={noteBusy}
+            stale={stale}
             onAddNote={onAddNote}
           />
         )}
@@ -563,6 +578,7 @@ export function FindingCard({
           netPosition={finding.netPosition}
           documents={documentInfo ?? {}}
           busy={netPositionBusy}
+          stale={stale}
           onConfirm={onConfirmNetPosition}
           onAmend={onAmendNetPosition}
         />

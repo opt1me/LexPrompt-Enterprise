@@ -25,6 +25,11 @@ export interface VariationTrailModalProps {
    *  is exactly the case a net position must not silently absorb. */
   documents: Record<string, TrailDocumentInfo>;
   busy?: boolean;
+  /** The terminal card inside this trail is a NetPositionPanel with live
+   *  controls on it, so the fourth load state has to reach it here too --
+   *  a modal is exactly where a dead control would otherwise still look
+   *  alive. */
+  stale?: boolean;
   onConfirm?: () => void;
   onAmend?: (text: string) => void;
 }
@@ -121,7 +126,9 @@ function TrailStepCard({ step, info, index, isLast }: {
  * copy of its badge/Confirm/Amend markup — `onOpenTrail` is simply not
  * passed, so its own "see trail" control has nothing to reopen.
  */
-export function VariationTrailModal({ open, onClose, netPosition, documents, busy = false, onConfirm, onAmend }: VariationTrailModalProps) {
+export function VariationTrailModal({
+  open, onClose, netPosition, documents, busy = false, stale = false, onConfirm, onAmend,
+}: VariationTrailModalProps) {
   return (
     <Modal isOpen={open} onClose={onClose} title="Variation trail" size="lg">
       <div>
@@ -139,7 +146,13 @@ export function VariationTrailModal({ open, onClose, netPosition, documents, bus
             <NetNode />
           </div>
           <div className="flex-1 min-w-0">
-            <NetPositionPanel netPosition={netPosition} busy={busy} onConfirm={onConfirm} onAmend={onAmend} />
+            <NetPositionPanel
+              netPosition={netPosition}
+              busy={busy}
+              stale={stale}
+              onConfirm={onConfirm}
+              onAmend={onAmend}
+            />
           </div>
         </div>
       </div>

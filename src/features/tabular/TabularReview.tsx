@@ -32,6 +32,13 @@ export interface TabularReviewProps {
   ) => Promise<void>;
   onAddNote?: (docId: string, clauseId: string, text: string) => Promise<void>;
   verifyBusyKey?: string | null;
+  /**
+   * The client cannot vouch for what is on screen (section 3's fourth load
+   * state, Task 20). Passed to every card so the controls that compose a
+   * human-authored write go dead, with a sentence saying why — the
+   * findings themselves stay exactly where they are.
+   */
+  stale?: boolean;
   authorInitials?: string;
   /** The local profile's id, for deciding which notes read as "yours". */
   localUserId?: string;
@@ -87,7 +94,7 @@ const RISK_CELL: Record<RiskLevel, string> = {
  */
 export function TabularReview({
   run, documents, onRetryCell, onOpenCards, interrupted = false,
-  onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId,
+  onVerify, onAddNote, verifyBusyKey, stale = false, authorInitials, localUserId,
   dispositionOf, audience, exportContext,
   verifyConflict, onReapplyConflict, onDismissConflict, onOpenInReview,
 }: TabularReviewProps) {
@@ -243,6 +250,7 @@ export function TabularReview({
               : undefined}
             onAddNote={onAddNote ? (text) => onAddNote(selected.docId, selected.clauseId, text) : undefined}
             verifyBusy={verifyBusyKey === findingKey(selected.docId, selected.clauseId)}
+            stale={stale}
             authorInitials={authorInitials}
             localUserId={localUserId}
             // Through `findingsKeyFor`, the ONE place a findings key is

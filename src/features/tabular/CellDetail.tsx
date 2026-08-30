@@ -43,6 +43,9 @@ export interface CellDetailProps {
   onVerify?: (change: VerificationChange, atVersion?: number) => Promise<void>;
   /** True while this finding's verification or note write is in flight. */
   verifyBusy?: boolean;
+  /** Section 3 fourth load state -- passed to the card so the controls that
+   *  compose a human-authored write go dead with a reason. */
+  stale?: boolean;
   /** Persists a new note against this finding (Task 10). */
   onAddNote?: (text: string) => Promise<void>;
   /** The local profile's initials, for a note's author placeholder. */
@@ -76,7 +79,7 @@ export interface CellDetailProps {
  * to it, exactly as `ResultsView` wires `FindingCard` to `DocumentViewer`.
  */
 export function CellDetail({
-  doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote,
+  doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, stale = false, onAddNote,
   authorInitials, localUserId, disposition, audience, conflict, onReapplyConflict,
   onDismissConflict, onOpenInReview,
 }: CellDetailProps) {
@@ -139,6 +142,7 @@ export function CellDetail({
           onRetry={onRetry}
           onVerify={onVerify}
           verifyBusy={verifyBusy}
+          stale={stale}
           onAddNote={onAddNote}
           noteBusy={verifyBusy}
           documentNames={documentNames}

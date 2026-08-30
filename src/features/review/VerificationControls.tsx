@@ -3,6 +3,7 @@ import { CheckCircle2, Flag, XCircle, RotateCcw } from 'lucide-react';
 import type { Verification } from '../../types';
 import type { VerificationChange } from '@lexprompt/core';
 import { RejectReasonModal } from './RejectReasonModal';
+import { STALE_CONTROL_NOTICE } from '../../lib/loadError';
 
 export interface VerificationControlsProps {
   verification: Verification;
@@ -10,6 +11,22 @@ export interface VerificationControlsProps {
    *  action is disabled: the UI must not offer a second state change before
    *  the first is known to have persisted (spec section 9). */
   busy?: boolean;
+  /**
+   * The client cannot vouch for what is on screen (§3's fourth load state,
+   * Task 20).
+   *
+   * SEPARATE FROM `busy`, and the two say different sentences. `busy` means
+   * YOUR write is in flight and will land; `stale` means a change submitted
+   * against a version that may be minutes old WOULD BE REFUSED ANYWAY (§8).
+   * Rendering them identically would tell a reviewer to wait for something
+   * that is not coming.
+   *
+   * DISABLED, never hidden: a hidden control is indistinguishable from a
+   * finding that cannot be verified, which is the `isVerifiable` case and
+   * already hides them. Disabled-with-a-reason is the only rendering that
+   * says "you may do this, but not right now, and here is why."
+   */
+  stale?: boolean;
   onChange: (change: VerificationChange) => void;
   /**
    * Reports whether the reject-reason dialog this owns is open (P36).
@@ -39,7 +56,7 @@ const ACTION = 'font-ui text-ui-sm px-2.5 py-1 rounded-control border transition
  * this feature can have.
  */
 export function VerificationControls({
-  verification, busy = false, onChange, onRejectOpenChange,
+  verification, busy = false, stale = false, onChange, onRejectOpenChange,
 }: VerificationControlsProps) {
   const [rejectOpen, setRejectOpen] = useState(false);
   const active = verification.state;
@@ -61,7 +78,7 @@ export function VerificationControls({
         <div className="flex flex-wrap gap-1.5" data-busy={busy || undefined} aria-live="polite">
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || stale}
             onClick={() => onChange({ state: 'verified' })}
             className={`${ACTION} ${active === 'verified' ? 'bg-accent text-page border-accent' : 'border-accent-edge text-accent hover:bg-accent-tint'}`}
           >
@@ -69,7 +86,7 @@ export function VerificationControls({
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || stale}
             onClick={() => onChange({ state: 'flagged' })}
             className={`${ACTION} ${active === 'flagged' ? 'bg-risk-med text-page border-risk-med' : 'border-risk-med-edge text-risk-med hover:bg-risk-med-tint'}`}
           >
@@ -77,7 +94,7 @@ export function VerificationControls({
           </button>
           <button
             type="button"
-            disabled={busy}
+            disabled={busy || stale}
             onClick={() => setReject(true)}
             className={`${ACTION} ${active === 'rejected' ? 'bg-risk-high text-page border-risk-high' : 'border-risk-high-edge text-risk-high hover:bg-risk-high-tint'}`}
           >
@@ -86,7 +103,7 @@ export function VerificationControls({
           {active !== 'unchecked' && (
             <button
               type="button"
-              disabled={busy}
+              disabled={busy || stale}
               onClick={() => onChange({ state: 'unchecked' })}
               className={`${ACTION} bg-transparent text-ink-4 border-transparent hover:text-ink-2`}
             >
@@ -94,6 +111,16 @@ export function VerificationControls({
             </button>
           )}
         </div>
+        {stale && (
+          /* The REASON, beside the dead controls. A greyed-out button with no
+             sentence is a control a reviewer presses twice and then reports
+             as broken — and the sentence has to say what is wrong with the
+             SAVE, not with the connection, or it reads as "try again in a
+             moment", which is the one instruction that is not true here. */
+          <p className="font-ui text-ui-sm text-risk-med leading-relaxed">
+            {STALE_CONTROL_NOTICE}
+          </p>
+        )}
       </div>
 
       <RejectReasonModal

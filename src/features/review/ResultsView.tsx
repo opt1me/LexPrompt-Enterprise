@@ -110,6 +110,13 @@ export interface ResultsViewProps {
    *  mutate the same `Finding` record, and a second concurrent write to it
    *  is exactly what this key exists to prevent. */
   verifyBusyKey?: string | null;
+  /**
+   * The client cannot vouch for what is on screen (section 3's fourth load
+   * state, Task 20). Passed to every card so the controls that compose a
+   * human-authored write go dead, with a sentence saying why — the
+   * findings themselves stay exactly where they are.
+   */
+  stale?: boolean;
   /** The local profile's initials, for a note's author placeholder. */
   authorInitials?: string;
   /** The local profile's id, for deciding which notes read as "yours". */
@@ -214,7 +221,7 @@ type Tab = 'findings' | 'chat';
  */
 export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
-  onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId,
+  onVerify, onAddNote, verifyBusyKey, stale = false, authorInitials, localUserId,
   dispositionOf, audience, exportContext, verifyConflict, onReapplyConflict, onDismissConflict,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
   playbookVersion, onShowVersionHistory, matterId,
@@ -787,6 +794,7 @@ export function ResultsView({
                         : undefined}
                       onAddNote={onAddNote ? (text) => onAddNote(activeDocId, clause.id, text) : undefined}
                       verifyBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
+                      stale={stale}
                       noteBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}
                       documentNames={documentNames}
                       authorInitials={authorInitials}

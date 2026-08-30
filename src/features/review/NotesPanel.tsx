@@ -3,6 +3,7 @@ import { MessageSquarePlus } from 'lucide-react';
 import type { Note } from '../../types';
 import { Button } from '../../components/Button';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
+import { STALE_CONTROL_NOTICE } from '../../lib/loadError';
 
 export interface NotesPanelProps {
   notes: Note[];
@@ -20,6 +21,10 @@ export interface NotesPanelProps {
    *  correctly. */
   localUserId: string;
   busy?: boolean;
+  /** §3 lists a NOTE among the human-authored writes a stale client must not
+   *  offer -- "not for a disposition change, a note, a net-position
+   *  confirmation, or an assignment". One flag, one sentence, all four. */
+  stale?: boolean;
   onAddNote: (text: string) => void;
 }
 
@@ -37,7 +42,9 @@ function formatWhen(at: number): string {
  * Ordered oldest-first, deliberately: notes read as a thread, and a thread
  * that starts at the end is unreadable.
  */
-export function NotesPanel({ notes, authorInitials, localUserId, busy = false, onAddNote }: NotesPanelProps) {
+export function NotesPanel({
+  notes, authorInitials, localUserId, busy = false, stale = false, onAddNote,
+}: NotesPanelProps) {
   const [draft, setDraft] = useState('');
   const trimmed = draft.trim();
 
@@ -91,13 +98,18 @@ export function NotesPanel({ notes, authorInitials, localUserId, busy = false, o
         />
         <Button
           variant="ghost"
-          disabled={busy || trimmed === ''}
+          disabled={busy || stale || trimmed === ''}
           onClick={() => { onAddNote(trimmed); setDraft(''); }}
           className="text-[10px] shrink-0"
         >
           <MessageSquarePlus className="w-3 h-3" aria-hidden="true" /> Add note
         </Button>
       </div>
+      {stale && (
+        <p className="font-ui text-ui-sm text-risk-med leading-relaxed">
+          {STALE_CONTROL_NOTICE}
+        </p>
+      )}
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { positionText } from '@lexprompt/core';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
+import { STALE_CONTROL_NOTICE } from '../../lib/loadError';
 
 export interface NetPositionPanelProps {
   /** Absent for a standalone-document finding, or a collection finding that
@@ -14,6 +15,10 @@ export interface NetPositionPanelProps {
   /** True while a write for this net position is in flight. Every action is
    *  disabled, exactly as `VerificationControls` does for a verification. */
   busy?: boolean;
+  /** §3's fourth load state. A net-position confirmation is the most
+   *  dangerous human write in the app -- it accepts synthesised text no
+   *  document contains -- so it goes dead with the rest. */
+  stale?: boolean;
   /** Reports the human's intent to accept the model's synthesis as written.
    *  Optional, same reasoning as `FindingCard`'s `onVerify`: a panel with no
    *  way to persist (a preview) shows the position and its state but no
@@ -128,7 +133,9 @@ function AmendPositionModal({ open, initialText, onCancel, onConfirm }: {
  * is deliberate — an empty panel would read as "we tried and found nothing",
  * which is a different, false claim.
  */
-export function NetPositionPanel({ netPosition, busy = false, onConfirm, onAmend, onOpenTrail }: NetPositionPanelProps) {
+export function NetPositionPanel({
+  netPosition, busy = false, stale = false, onConfirm, onAmend, onOpenTrail,
+}: NetPositionPanelProps) {
   const [amendOpen, setAmendOpen] = useState(false);
 
   if (!netPosition) return null;
@@ -173,21 +180,32 @@ export function NetPositionPanel({ netPosition, busy = false, onConfirm, onAmend
 
       <div className="flex flex-wrap gap-1.5 pt-1">
         {netPosition.state === 'unconfirmed' && onConfirm && (
-          <Button variant="ghost" disabled={busy} onClick={onConfirm} className="text-button py-1 px-2.5">
+          <Button variant="ghost" disabled={busy || stale} onClick={onConfirm} className="text-button py-1 px-2.5">
             <CheckCircle2 className="w-3 h-3" aria-hidden="true" /> Confirm
           </Button>
         )}
         {onAmend && (
-          <Button variant="ghost" disabled={busy} onClick={() => setAmendOpen(true)} className="text-button py-1 px-2.5">
+          <Button variant="ghost" disabled={busy || stale} onClick={() => setAmendOpen(true)} className="text-button py-1 px-2.5">
             <PencilLine className="w-3 h-3" aria-hidden="true" /> Amend
           </Button>
         )}
         {onOpenTrail && hasTrail && (
+          // NOT disabled while stale, and that is the line worth pausing on:
+          // opening the trail is a READ. §3's rule is about human-authored
+          // WRITES — a disposition, a note, a net-position confirmation, an
+          // assignment — and disabling a read as well would take a reader's
+          // ability to understand what they are looking at away at exactly
+          // the moment the screen stopped explaining itself.
           <Button variant="ghost" disabled={busy} onClick={onOpenTrail} className="text-button py-1 px-2.5">
             <History className="w-3 h-3" aria-hidden="true" /> See the variation trail
           </Button>
         )}
       </div>
+      {stale && (
+        <p className="font-ui text-ui-sm text-risk-med leading-relaxed">
+          {STALE_CONTROL_NOTICE}
+        </p>
+      )}
 
       {onAmend && (
         <AmendPositionModal

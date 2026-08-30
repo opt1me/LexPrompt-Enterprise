@@ -52,6 +52,8 @@ import {
 } from './lib/db/reviews';
 import { getProfile } from './lib/db/profile';
 import { describeLoadError, describeRunEnding } from './lib/loadError';
+import { StalePanel } from './components/StalePanel';
+import { onConnectionState, type ConnectionState } from './lib/api/socket';
 // Task 17/18: the browser asks about a run instead of performing one.
 import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
@@ -571,6 +573,32 @@ function AppShell({ signIn }: { signIn: () => void }) {
    * Incremented in `applyToFinding`, which every human-write handler already
    * funnels through.
    */
+  /**
+   * SECTION 3'S FOURTH LOAD STATE (Task 20, P42).
+   *
+   * `loading`, `error` and `empty` are all about a READ that has already
+   * happened. This is about whether what is already on screen is still
+   * being kept current, which is a different question and the one section 19
+   * calls "the defect this design is most likely to ship in the app": a live
+   * view that has quietly stopped being live looks exactly like a quiet
+   * review.
+   *
+   * Held here rather than read per component so there is ONE answer to "am
+   * I connected?" on the screen. The socket reports it (`onConnectionState`
+   * fires immediately with the current value, so a mount during a stale
+   * period renders stale rather than waiting for a change that has already
+   * happened).
+   */
+  const [liveState, setLiveState] = useState<ConnectionState>('connecting');
+  useEffect(() => onConnectionState(setLiveState), []);
+  /**
+   * A resync is in progress: the events between this client's cursor and
+   * now are gone, so the screen is being RE-READ rather than merely waited
+   * on. A different fact from `stale` and the banner says so.
+   *
+   * Cleared by the refresh that answers it, in `attachRun`'s `onResync`.
+   */
+  const [resyncing, setResyncing] = useState(false);
   const humanWritesRef = useRef(0);
   // Tracks the latest `run` state, for every path that cannot just read the
   // `run` state variable: the watch's callbacks, and the human-write
@@ -2464,7 +2492,13 @@ function AppShell({ signIn }: { signIn: () => void }) {
       // event would have finished it.
       {
         onResync: () => {
-          detach(refreshFindings(view.reviewId), 'resyncing the findings');
+          // SAID OUT LOUD. A silent re-read is indistinguishable from a
+          // screen that has stopped updating, which is the state this
+          // whole task exists to make visible.
+          setResyncing(true);
+          detach(
+            refreshFindings(view.reviewId).finally(() => setResyncing(false)),
+            'resyncing the findings');
           detach(
             getRun(view.id).then(fresh => (isRunOver(fresh.state)
               ? finishRun(view.id, view.reviewId, matterId)
@@ -4564,6 +4598,23 @@ function AppShell({ signIn }: { signIn: () => void }) {
               // nothing.
               className="h-full flex flex-col"
             >
+              {/* SECTION 3'S FOURTH LOAD STATE, and it sits ABOVE the run
+                 banners because it is about the whole screen rather than
+                 about this run: a review nobody is running can go stale
+                 too, and the push it stops receiving is somebody else
+                 changing a judgement on it.
+
+                 Rendered BESIDE the findings, never instead of them.
+                 Blanking them is the other failure — a reviewer who loses
+                 their place because the wifi blinked — and the rule is
+                 "never show disconnected data AS THOUGH IT WERE CURRENT",
+                 not "show nothing".
+
+                 A resync takes precedence over stale: both mean "not
+                 current", and only one of them is being fixed right now.
+                 Telling a reader which is the whole of the difference. */}
+              {resyncing && <StalePanel kind="resyncing" />}
+              {!resyncing && liveState === 'stale' && <StalePanel kind="stale" />}
               {isRunning && <RunProgressBar run={run} onCancel={handleCancelRun} />}
               {!isRunning && run.cancelledAt && !run.completedAt && <RunCancelledBanner run={run} />}
               {/* Important 1: `isInterrupted` (derived above, at render, not
@@ -4608,6 +4659,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     onVerify={handleVerify}
                     onAddNote={handleAddNote}
                     verifyBusyKey={verifyBusyKey}
+                    stale={liveState === 'stale'}
                     authorInitials={profile?.initials ?? 'ME'}
                     localUserId={profile?.id ?? ''}
                     dispositionOf={dispositionOf}
@@ -4633,6 +4685,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     onVerify={handleVerify}
                     onAddNote={handleAddNote}
                     verifyBusyKey={verifyBusyKey}
+                    stale={liveState === 'stale'}
                     authorInitials={profile?.initials ?? 'ME'}
                     localUserId={profile?.id ?? ''}
                     dispositionOf={dispositionOf}

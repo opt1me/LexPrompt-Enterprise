@@ -123,3 +123,62 @@ export function describeRunEnding(
   }
   return null;
 }
+
+/**
+ * §3'S FOURTH LOAD STATE — and it is a SIBLING of `describeLoadError`, not a
+ * branch inside it.
+ *
+ * `describeLoadError` is a function over an ERROR. `stale` is not an error:
+ * nothing failed, nothing is broken, and a reviewer told the review failed
+ * to load will reload a review that is fine. What `stale` says is narrower
+ * and worse — **the app cannot vouch for what is on screen** — and §19 calls
+ * that "the defect this design is most likely to ship in the app", because a
+ * live view that has quietly stopped being live looks exactly like a quiet
+ * review.
+ *
+ * ## Why the wording lives here rather than in the components
+ *
+ * Four surfaces say it: the persistent banner, the disposition controls, the
+ * notes box and the net-position panel. `verificationLabel`'s lesson is that
+ * four callers is three more than it takes for a second copy to appear, and
+ * the copy that drifts is always the one nobody was looking at.
+ */
+
+/** The banner. PERSISTENT and NON-MODAL: a reviewer reading a finding must
+ *  be able to keep reading it, and a toast that fades leaves the app looking
+ *  normal while it is not — which is the entire defect §19 names. */
+export const STALE_NOTICE =
+  'LexPrompt has lost touch with this review. What is on screen is what was last '
+  + 'received, and it is no longer being updated.';
+
+/** What a dead control says, and it is DISABLED rather than hidden: a hidden
+ *  control is indistinguishable from a finding that cannot be verified (the
+ *  `isVerifiable` case, which already hides them). Disabled-with-a-reason is
+ *  the only rendering that says "you may do this, but not right now, and
+ *  here is why." */
+export const STALE_CONTROL_NOTICE =
+  'LexPrompt has lost touch with this review. Your judgement would not be saved '
+  + 'against a state anyone can vouch for, so this is unavailable until the '
+  + 'connection is back.';
+
+/** During a resync — the events between the cursor and now are gone, so the
+ *  screen is being re-read rather than merely waited on. A different fact
+ *  from `stale` and it says so. */
+export const RESYNCING_NOTICE = 'Reconnecting — refreshing this review…';
+
+/**
+ * WHY `stale` IS NOT `busy`, stated where both are read.
+ *
+ * `busy` means YOUR write is in flight and will land. `stale` means the app
+ * cannot vouch for what is on screen, and a change submitted against a
+ * version that may be minutes old would be refused anyway (§8). Rendering
+ * the two identically would tell a reviewer to wait for something that is
+ * not coming.
+ */
+export function controlDisabledReason(
+  { busy, stale }: { busy?: boolean; stale?: boolean },
+): string | undefined {
+  if (stale) return STALE_CONTROL_NOTICE;
+  if (busy) return undefined;
+  return undefined;
+}
