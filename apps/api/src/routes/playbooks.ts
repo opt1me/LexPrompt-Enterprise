@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { appendAudit } from '../audit/write.ts';
 import { ModelError, uid } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
@@ -211,7 +212,22 @@ export function registerPlaybooks(app: FastifyInstance, db: Db): void {
     const ws = req.actor!.workspaceId;
     const { id } = req.params as { id: string };
     const { playbook, draft, basis } = parsePublish(id, req.body);
-    return db.tx(t => publishInto(t, ws, req.actor!.id, playbook, draft, basis));
+    return db.tx(async t => {
+      const published = await publishInto(t, ws, req.actor!.id, playbook, draft, basis);
+      // In `publishAndPoint`'s own transaction (S11). A publish is the act
+      // this system is least able to undo — `publishVersion` mints a fresh
+      // uid and never reuses one — so the record of who published what has
+      // to commit with it or not at all.
+      await appendAudit(t, {
+        workspaceId: ws, actorUserId: req.actor!.id, action: 'playbook.published',
+        subjectType: 'playbook_version', subjectId: published.version.id,
+        detail: {
+          playbookId: published.playbook.id,
+          versionNumber: published.version.version,
+        },
+      });
+      return published;
+    });
   });
 
   /**
@@ -232,7 +248,15 @@ export function registerPlaybooks(app: FastifyInstance, db: Db): void {
       Record<string, unknown>;
     const playbook = parsePlaybookValue(body.playbook);
     const draft = parseDraft(body.draft);
-    return db.tx(t => publishInto(t, ws, req.actor!.id, playbook, draft));
+    return db.tx(async t => {
+      const imported = await publishInto(t, ws, req.actor!.id, playbook, draft);
+      await appendAudit(t, {
+        workspaceId: ws, actorUserId: req.actor!.id, action: 'playbook.imported',
+        subjectType: 'playbook', subjectId: imported.playbook.id,
+        detail: { name: imported.playbook.name, versionId: imported.version.id },
+      });
+      return imported;
+    });
   });
 
   /**

@@ -191,12 +191,24 @@ describe('uploading a document', () => {
     await withPg(async t => {
       await aMatter(t);
       const real = dbOn(t);
+      // The interception has to reach INSIDE the transaction as well as
+      // outside it. The route wraps its insert in `db.tx` since Stage 4 (the
+      // audit row and the document row commit together), so a fake that only
+      // wrapped `query` would hand the route the REAL `Tx` and quietly stop
+      // failing anything — a test passing because it no longer touches the
+      // path it names.
+      const failOnInsert = <R>(
+        run: (text: string, values?: unknown[]) => Promise<R[]>,
+      ) => async (text: string, values?: unknown[]): Promise<R[]> => {
+        if (/insert into document/i.test(text)) throw new Error('the database fell over');
+        return run(text, values);
+      };
       const failing: Db = {
-        query: async <R>(text: string, values?: unknown[]): Promise<R[]> => {
-          if (/insert into document/i.test(text)) throw new Error('the database fell over');
-          return real.query<R>(text, values);
-        },
-        tx: run => real.tx(run),
+        query: failOnInsert((text, values) => real.query(text, values)) as Db['query'],
+        tx: run => real.tx(inner => run({
+          query: failOnInsert((text, values) => inner.query(text, values)) as Tx['query'],
+          tx: nested => inner.tx(nested),
+        })),
       };
       const h = harness(t, await aUser(t), { db: failing });
       const res = await h.rawPost(RECORD);

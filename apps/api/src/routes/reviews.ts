@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { appendAudit } from '../audit/write.ts';
 import { ModelError } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
@@ -316,15 +317,42 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
       // it is the tool for any future doubt about the migration, and it works
       // for exactly as long as the frozen column does.
 
+      // AUDITED ONLY ON A CREATE, for `matters.ts`'s reason: a record with
+      // no version claims to be a create, and an edit is not `review.created`.
+      if (input.version === undefined) {
+        await appendAudit(t, {
+          workspaceId: ws, actorUserId: req.actor!.id, action: 'review.created',
+          subjectType: 'review', subjectId: row.id,
+          ...(row.matter_id ? { matterId: row.matter_id } : {}),
+          reviewId: row.id,
+          detail: { modelId: row.model_id },
+        });
+      }
+
       return fromReviewRow(rows[0]);
     });
   });
 
   app.delete('/v1/reviews/:id', async (req, reply): Promise<void> => {
     const { id } = req.params as { id: string };
-    const rows = await db.query<{ id: string }>(
-      'delete from review where id = $1 and workspace_id = $2 returning id',
-      [id, req.actor!.workspaceId]);
+    const ws = req.actor!.workspaceId;
+    const rows = await db.tx(async t => {
+      const deleted = await t.query<{ id: string; matter_id: string | null }>(
+        'delete from review where id = $1 and workspace_id = $2 returning id, matter_id',
+        [id, ws]);
+      if (deleted[0]) {
+        // The cascade takes the findings, the dispositions and their history
+        // with it (006). This row is the only thing left saying the review
+        // ever existed, which is precisely why it commits with the delete.
+        await appendAudit(t, {
+          workspaceId: ws, actorUserId: req.actor!.id, action: 'review.deleted',
+          subjectType: 'review', subjectId: id,
+          ...(deleted[0].matter_id ? { matterId: deleted[0].matter_id } : {}),
+          reviewId: id,
+        });
+      }
+      return deleted;
+    });
     if (!rows[0]) throw new ModelError('There is no such review.', 'not_found', 404);
     await reply.code(204).send();
   });

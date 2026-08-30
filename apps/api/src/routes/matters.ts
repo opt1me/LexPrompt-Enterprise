@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { appendAudit } from '../audit/write.ts';
 import { ModelError } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
@@ -97,17 +98,36 @@ export function registerMatters(app: FastifyInstance, db: Db, blobs: BlobStore):
     // is NULL, never true, so an insert that collides with an existing row
     // is refused rather than overwriting it — which is the right answer for
     // a retried create whose first attempt actually landed.
-    const rows = await db.query<MatterRow>(
-      `insert into matter (id, workspace_id, name, client, reference, owner_id, created_at, updated_at)
-       values ($1, $2, $3, $4, $5, $6, $7, now())
-       on conflict (id) do update set
-         name = excluded.name, client = excluded.client, reference = excluded.reference,
-         updated_at = now(), version = matter.version + 1
-       where matter.workspace_id = $2 and matter.version = $8
-       returning *`,
-      [row.id, ws, row.name, row.client, row.reference, row.owner_id, row.created_at,
-        input.version ?? null],
-    );
+    // ONE TRANSACTION, so the audit row and the act it records commit
+    // together or not at all (S11). An audit row committed beside a write
+    // that rolled back is a log that says something happened which did not,
+    // which is the one failure mode an audit log cannot have.
+    const rows = await db.tx(async t => {
+      const written = await t.query<MatterRow>(
+        `insert into matter (id, workspace_id, name, client, reference, owner_id, created_at, updated_at)
+         values ($1, $2, $3, $4, $5, $6, $7, now())
+         on conflict (id) do update set
+           name = excluded.name, client = excluded.client, reference = excluded.reference,
+           updated_at = now(), version = matter.version + 1
+         where matter.workspace_id = $2 and matter.version = $8
+         returning *`,
+        [row.id, ws, row.name, row.client, row.reference, row.owner_id, row.created_at,
+          input.version ?? null],
+      );
+      // AUDITED ONLY ON A CREATE. A record with no version claims to be a
+      // create (see the note above), and an edit is not `matter.created` —
+      // an audit log that recorded every rename as a creation would answer
+      // "when was this matter opened" with the last time somebody fixed a
+      // typo in its name.
+      if (written[0] && input.version === undefined) {
+        await appendAudit(t, {
+          workspaceId: ws, actorUserId: req.actor!.id, action: 'matter.created',
+          subjectType: 'matter', subjectId: row.id, matterId: row.id,
+          detail: { name: row.name },
+        });
+      }
+      return written;
+    });
     if (!rows[0]) {
       // Two situations, one shape: the row moved on (a stale write), or the
       // id belongs to another workspace (P6's id collision). Both are
@@ -145,8 +165,22 @@ export function registerMatters(app: FastifyInstance, db: Db, blobs: BlobStore):
     const keys = await db.query<{ blob_key: string }>(
       `select blob_key from document
        where matter_id = $1 and workspace_id = $2 and kind = 'matter'`, [id, ws]);
-    const rows = await db.query<{ id: string }>(
-      'delete from matter where id = $1 and workspace_id = $2 returning id', [id, ws]);
+    const rows = await db.tx(async t => {
+      const deleted = await t.query<{ id: string }>(
+        'delete from matter where id = $1 and workspace_id = $2 returning id', [id, ws]);
+      if (deleted[0]) {
+        // Written INSIDE the delete's transaction, and before the blobs go:
+        // the rows and the record of their going commit together, and the
+        // blob failure below happens after both — which is why it says so
+        // loudly rather than pretending the delete did not happen.
+        await appendAudit(t, {
+          workspaceId: ws, actorUserId: req.actor!.id, action: 'matter.deleted',
+          subjectType: 'matter', subjectId: id, matterId: id,
+          detail: { documentCount: keys.length },
+        });
+      }
+      return deleted;
+    });
     if (!rows[0]) throw new ModelError('There is no such matter.', 'not_found', 404);
     // Every key is attempted even after one fails — `deleteBlobs` does not
     // stop at the first, because a single throw aborting the rest is the

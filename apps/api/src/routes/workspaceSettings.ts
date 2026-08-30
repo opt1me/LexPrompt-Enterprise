@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { appendAudit } from '../audit/write.ts';
 import { ModelError, type AllowedModel, type WorkspaceSettings } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import type { GatewayClient } from '../gatewayClient.ts';
@@ -176,7 +177,10 @@ export function registerWorkspaceSettings(app: FastifyInstance, db: Db, gateway:
     // be a create, so `workspace_setting.version = NULL` is never true and
     // an existing row refuses rather than being silently overwritten by a
     // caller that never stated which version it read.
-    const rows = await db.query<WorkspaceSettingRow>(
+    // ONE TRANSACTION with its audit row (S11): a record of a settings
+    // change that did not happen is worse than no record.
+    const rows = await db.tx(async t => {
+      const written = await t.query<WorkspaceSettingRow>(
       `insert into workspace_setting
          (workspace_id, model_choice_id, model_choice_label, model_choice_model,
           concurrency, updated_by_user_id)
@@ -193,7 +197,25 @@ export function registerWorkspaceSettings(app: FastifyInstance, db: Db, gateway:
        returning *`,
       [ws, chosen.id, chosen.label ?? null, chosen.model ?? null, concurrency, req.actor!.id,
         typeof body.version === 'number' ? body.version : null],
-    );
+      );
+      // Which SETTING changed is in `detail` rather than in the action:
+      // `workspace.settings_changed` is one act with a shape, and a verb per
+      // column would be a log of function calls rather than a record of
+      // decisions.
+      if (written[0]) {
+        await appendAudit(t, {
+          workspaceId: ws, actorUserId: req.actor!.id, action: 'workspace.settings_changed',
+          subjectType: 'workspace', subjectId: ws,
+          detail: {
+            modelChoiceId: chosen.id,
+            concurrency,
+            modelChanged: hasModelChoice && chosen.id !== before.model_choice_id,
+            concurrencyChanged: concurrency !== before.concurrency,
+          },
+        });
+      }
+      return written;
+    });
     if (!rows[0]) {
       const current = await db.query<WorkspaceSettingRow>(
         'select * from workspace_setting where workspace_id = $1', [ws]);

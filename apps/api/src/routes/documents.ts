@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { appendAudit } from '../audit/write.ts';
 import { ModelError } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import { workspacePrefix, type BlobStore } from '../blob/store.ts';
@@ -190,21 +191,36 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
         // `kind` is NAMED, never left to a default — migration 003 drops the
         // one it needed to backfill with, so an insert that forgets it fails
         // loudly rather than quietly producing a matter document.
-        const rows = await db.query<DocumentRow>(
-          `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text,
-                                 parse_state, parse_error, markup_notice, byte_size, mime,
-                                 blob_key, content_sha256, role, collection_id, document_date,
-                                 added_at, added_by_user_id)
-           values ($1, $2, 'matter', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-                   $16, $17, $18)
-           on conflict (id) do nothing
-           returning *`,
-          [row.id, ws, row.matter_id, row.name, row.doc_type, row.text, row.parse_state,
-            row.parse_error, row.markup_notice, row.byte_size, row.mime, row.blob_key,
-            row.content_sha256, row.role, row.collection_id, row.document_date, row.added_at,
-            row.added_by_user_id],
-        );
-        return rows[0];
+        // ONE TRANSACTION with its audit row (S11): a log that records an
+        // upload which rolled back is worse than no log.
+        return db.tx(async t => {
+          const rows = await t.query<DocumentRow>(
+            `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text,
+                                   parse_state, parse_error, markup_notice, byte_size, mime,
+                                   blob_key, content_sha256, role, collection_id, document_date,
+                                   added_at, added_by_user_id)
+             values ($1, $2, 'matter', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+                     $16, $17, $18)
+             on conflict (id) do nothing
+             returning *`,
+            [row.id, ws, row.matter_id, row.name, row.doc_type, row.text, row.parse_state,
+              row.parse_error, row.markup_notice, row.byte_size, row.mime, row.blob_key,
+              row.content_sha256, row.role, row.collection_id, row.document_date, row.added_at,
+              row.added_by_user_id],
+          );
+          // `on conflict do nothing` means a retried upload writes nothing —
+          // and audits nothing. Two `document.added` rows for one document
+          // would make the log disagree with the store about how many
+          // documents a matter has.
+          if (rows[0] && row.matter_id) {
+            await appendAudit(t, {
+              workspaceId: ws, actorUserId: req.actor!.id, action: 'document.added',
+              subjectType: 'document', subjectId: row.id, matterId: row.matter_id,
+              detail: { name: row.name, byteSize: row.byte_size },
+            });
+          }
+          return rows[0];
+        });
       },
     });
     // `reply.code(201)` and NOT `await reply.code(201)`. A `FastifyReply` is
@@ -329,10 +345,21 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
     // for the reason written there: a blob deleted before a committed row
     // delete rolls back would leave a document pointing at bytes that no
     // longer exist, which is visible and worse than a leak.
-    const rows = await db.query<{ blob_key: string }>(
-      `delete from document
-       where id = $1 and workspace_id = $2 and kind = 'matter' and matter_id is not null
-       returning blob_key`, [id, ws]);
+    const rows = await db.tx(async t => {
+      const deleted = await t.query<{ blob_key: string; matter_id: string | null; name: string }>(
+        `delete from document
+         where id = $1 and workspace_id = $2 and kind = 'matter' and matter_id is not null
+         returning blob_key, matter_id, name`, [id, ws]);
+      if (deleted[0]) {
+        await appendAudit(t, {
+          workspaceId: ws, actorUserId: req.actor!.id, action: 'document.deleted',
+          subjectType: 'document', subjectId: id,
+          ...(deleted[0].matter_id ? { matterId: deleted[0].matter_id } : {}),
+          detail: { name: deleted[0].name },
+        });
+      }
+      return deleted;
+    });
     if (!rows[0]) throw new ModelError('There is no such document.', 'not_found', 404);
     const failed = await deleteBlobs(blobs, rows.map(r => r.blob_key));
     if (failed.length > 0) throw blobDeleteFailure(failed);

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { appendAudit } from '../audit/write.ts';
 import {
   ModelError, couldNotBeReadMessageFor, notYetReadMessageFor, targetDocumentIds,
   type RetryCleared, type RetryResult, type ReviewTarget, type RunEventPage, type RunView,
@@ -86,12 +87,23 @@ export function registerRuns(app: FastifyInstance, db: Db, config: RunRoutesConf
       // nobody would see.
       await refuseUnparsedDocuments(t, ws, target);
 
-      return createRun(t, {
+      const created = await createRun(t, {
         reviewId: review.id,
         matterId: review.matter_id,
         target,
         playbookSnapshot: parsedJson(review.playbook_snapshot),
       }, { id: req.actor!.id, workspaceId: ws });
+      // In `createRun`'s own transaction (S11), so a run that failed to
+      // start records nothing. `run.started` is the act; the run's own
+      // `event` rows are its progress, and the two are not the same log.
+      await appendAudit(t, {
+        workspaceId: ws, actorUserId: req.actor!.id, action: 'run.started',
+        subjectType: 'run', subjectId: created.id,
+        ...(review.matter_id ? { matterId: review.matter_id } : {}),
+        reviewId: review.id,
+        detail: { runState: created.state },
+      });
+      return created;
     });
 
     // `reply.code(201)` and NOT `await reply.code(201)` — a `FastifyReply`
@@ -316,6 +328,16 @@ export function registerRuns(app: FastifyInstance, db: Db, config: RunRoutesConf
       // notice. There may be no worker: the pool can be busy, or the API can
       // have restarted since.
       await settleRunIfFinished(t, id, ws);
+
+      // AFTER the state moved and only when this request is what moved it —
+      // the already-ended branch above returns before reaching here, so a
+      // second cancel of a finished run audits nothing.
+      await appendAudit(t, {
+        workspaceId: ws, actorUserId: req.actor!.id, action: 'run.cancelled',
+        subjectType: 'run', subjectId: id,
+        reviewId: run.review_id,
+        detail: { stateBefore: run.state },
+      });
 
       const settled = await readRun(dbOnTx(t), id, ws);
       return settled!;

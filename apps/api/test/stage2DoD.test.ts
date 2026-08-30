@@ -54,7 +54,16 @@ function tablesInMigrations(): string[] {
   const found: string[] = [];
   for (const file of readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql')).sort()) {
     const sql = readFileSync(path.join(MIGRATIONS, file), 'utf8');
-    for (const m of sql.matchAll(/create table (?:if not exists )?([a-z_]+)/gi)) found.push(m[1]);
+    for (const m of sql.matchAll(/create table (?:if not exists\s+)?([a-z_][a-z0-9_]*)/gi)) {
+      // `create table if not exists %I` — 012's DO block, which creates
+      // `audit_event`'s monthly partitions by a name it FORMATS. The
+      // optional group is optional, so the regex backtracks and captures the
+      // keyword `if`, which then reads as a table with no suite named for
+      // it. Skipped rather than matched, because the partition names are
+      // genuinely not in the source and the parent they belong to is.
+      if (/^if$/i.test(m[1])) continue;
+      found.push(m[1]);
+    }
   }
   return found;
 }
@@ -158,6 +167,11 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
     run: 'apps/api/test/runQueue.pg.test.ts',
     run_cell: 'apps/api/test/runLifecycle.pg.test.ts',
     event: 'apps/api/test/events.pg.test.ts',
+    // Stage 4 Task 11. `audit_event` is the one table in this map whose
+    // suite is mostly about what the app role CANNOT do to it: the round
+    // trip is one insert, and everything else is the grant that makes the
+    // insert the only thing possible.
+    audit_event: 'apps/api/test/auditEvent.pg.test.ts',
   };
 
   it('every table in the migrations has a named suite, and every named suite exists', () => {

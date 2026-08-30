@@ -361,6 +361,15 @@ ${b.body}`).toEqual([200, 200]);
       // leaves rows behind is the "assumes it runs alone" failure, and with
       // five more suites landing that gets worse rather than better.
       await db.query('delete from playbook where id = $1 and workspace_id = $2', [id, WS]);
+      // THE AUDIT ROWS GO FIRST, and this is a fact about the schema rather
+      // than about the test: `audit_event.actor_user_id` references
+      // `app_user(id)` with no cascade and no SET NULL, so a person who has
+      // audited acts CANNOT be deleted. That is deliberate — an audit row
+      // whose actor was erased is a record of an act nobody performed — and
+      // the product's own removal mechanism is `status = 'disabled'`, not a
+      // delete. As the MIGRATOR, because the app role holds no delete on
+      // `audit_event` at all, which is the whole of 012.
+      if (actorId) await admin.query('delete from audit_event where actor_user_id = $1', [actorId]);
       if (actorId) await admin.query('delete from app_user where id = $1', [actorId]);
       await pool.end();
       await adminPool.end();
