@@ -5,6 +5,7 @@ import { ConflictError } from '../errors.ts';
 import { fromReviewRow, toReviewRow, type Review, type ReviewRow } from '../db/rows.ts';
 import { refuseForeignDocuments } from './matterMembership.ts';
 import { writeFindingRows } from '../findings/write.ts';
+import { readFindingsForReviews } from '../findings/read.ts';
 
 /**
  * The `reviews` repository, server side — Task 9's seven properties, plus
@@ -54,6 +55,7 @@ import { writeFindingRows } from '../findings/write.ts';
  */
 export function registerReviews(app: FastifyInstance, db: Db): void {
   app.get('/v1/matters/:id/reviews', async (req): Promise<Review[]> => {
+    const ws = req.actor!.workspaceId;
     const { id } = req.params as { id: string };
     // Most recently started first, tiebroken on write sequence descending —
     // the order `listReviews` sorted for itself, moved to where the database
@@ -61,17 +63,46 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
     const rows = await db.query<ReviewRow>(
       `select * from review where matter_id = $1 and workspace_id = $2
        order by started_at desc, seq desc`,
-      [id, req.actor!.workspaceId]);
-    return rows.map(fromReviewRow);
+      [id, ws]);
+
+    // TASK 14: THE LISTING'S FINDINGS COME FROM ROWS TOO.
+    //
+    // This route could not simply drop `findings` the way the single-review
+    // read below does. Five callers read a LISTED review's findings —
+    // `positionHealthMap`, `matterStats`, `matterActivity`, `MatterHome`'s
+    // progress label and `fewShot` — and dropping the field would leave
+    // every one of them reporting nothing, silently, on a screen that has
+    // no way to say so.
+    //
+    // Nor could it go on serving the blob. Position health counts VERIFIED
+    // findings to say what a standard position has actually been tested
+    // against, and a disposition cleared through its own route from here on
+    // does not touch the blob at all — so the editor would report a
+    // position as tested by a verification that no longer exists. One
+    // statement for the whole matter, assembled exactly as the single
+    // review's is, rather than one query per review.
+    const assembled = await readFindingsForReviews(db, rows.map(r => r.id), ws);
+    return rows.map(row => ({ ...fromReviewRow(row), findings: assembled[row.id] ?? {} }));
   });
 
+  /**
+   * The review WITHOUT its findings, from Task 14 onwards.
+   *
+   * ABSENT, not `findings: {}`. An empty object is the claim "this review
+   * found nothing", which is what a reader would act on; absence is "this
+   * response does not carry them — ask `GET /v1/reviews/:id/findings`",
+   * which is what is true. `structuredClone` preserves an
+   * `undefined`-valued key, so the two would be indistinguishable to an
+   * `in` check if this returned one.
+   */
   app.get('/v1/reviews/:id', async (req): Promise<Review> => {
     const { id } = req.params as { id: string };
     const rows = await db.query<ReviewRow>(
       'select * from review where id = $1 and workspace_id = $2',
       [id, req.actor!.workspaceId]);
     if (!rows[0]) throw new ModelError('There is no such review.', 'not_found', 404);
-    return fromReviewRow(rows[0]);
+    const { findings: _blob, ...review } = fromReviewRow(rows[0]);
+    return review;
   });
 
   // NOT `app.put<{ Params: … }>(…)` — see `matters.ts`'s note.

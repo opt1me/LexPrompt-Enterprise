@@ -102,7 +102,9 @@ describe('the scanners find something (a guard that matches nothing passes vacuo
       'src/features/review/runReview.ts', 'src/lib/api/client.ts',
       'apps/api/src/routes/reviews.ts', 'apps/api/src/routes/runs.ts',
       'apps/api/src/findings/write.ts', 'apps/api/src/findings/reconcile.ts',
-      'apps/api/src/findings/backfill.ts', 'apps/api/src/dispositions/service.ts',
+      'apps/api/src/findings/backfill.ts', 'apps/api/src/findings/read.ts',
+      'apps/api/src/dispositions/service.ts', 'apps/api/src/routes/findings.ts',
+      'src/lib/api/findings.ts',
       'apps/api/src/run/worker.ts', 'apps/api/src/run/queue.ts', 'apps/api/src/run/reaper.ts',
       'apps/api/src/main.ts',
       'apps/api/test/dispositions.pg.test.ts', 'apps/api/test/shadowWrite.pg.test.ts',
@@ -268,24 +270,71 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(there('src/lib/api/runs.ts'), 'Task 17 arrived early').toBe(false);
   });
 
-  it('nothing reads a finding out of a row — that flip is Task 14', () => {
+  it('READS a finding out of a row, and the blob reaches no reader — Task 14 has landed', () => {
     /*
-     * The blob is still authoritative. `GET /v1/reviews/:id` returns
-     * `review.findings` and no route touches the `finding` table for a read.
-     * The three writers below are exactly the three that Part 3A puts there:
-     * the shadow write, the backfill and the engine.
+     * TASK 14 FLIPPED THIS, and the assertion flipped with it rather than
+     * being deleted: what it now guards is that the flip is COMPLETE, which
+     * is the half a half-done flip would leave true.
+     *
+     * `findings/read.ts` is the one assembler; the two review-reading
+     * routes go through it; and `GET /v1/reviews/:id` no longer hands a
+     * caller `review.findings` at all. The blob is still WRITTEN (Task 22
+     * freezes it, and "never delete what you cannot read" keeps the column)
+     * — it is reading it that has stopped.
      */
+    expect(there('apps/api/src/findings/read.ts')).toBe(true);
+    const read = codeOf(at('apps/api/src/findings/read.ts'));
+    expect(read).toMatch(/\bfrom\s+finding\b/i);
+    expect(read).toMatch(/left join finding_disposition/i);
+    expect(read).toMatch(/from note/i);
+
+    // No route composes its own findings read: they all come through the
+    // one assembler, so a second query cannot drift from it.
     const READS = /\bfrom\s+finding\b/i;
     expect(READS.test('select * from finding where review_id = $1')).toBe(true);
     expect(READS.test('select * from finding_disposition where review_id = $1')).toBe(false);
     expect(ROUTE_SOURCES.filter(f => READS.test(codeOf(f))).map(rel)).toEqual([]);
     expect(ROUTE_SOURCES.length).toBeGreaterThan(10);       // the sanity check
 
-    // Task 14's own module has not landed early.
-    expect(there('apps/api/src/findings/read.ts'), 'Task 14 arrived early').toBe(false);
-    // …and the review the API returns still carries the blob.
+    // …and no route hands the blob back to a reader. The single-review GET
+    // drops the key; the listing replaces it with the assembled rows.
+    //
+    // NOT `expect(route).not.toMatch(/findings:\s*(row|b)\.findings/)`, which
+    // is what this assertion said in its previous form. That pattern was
+    // meant to find the RESPONSE carrying the blob, and what it actually
+    // matched was `parseReview`'s `findings: b.findings` — the line that
+    // reads the blob out of a PUT BODY, which is still there and should be.
+    // It would have gone on passing after the flip for a reason that had
+    // nothing to do with the flip: one more guard that was not guarding
+    // what it claimed.
     const route = codeOf(at('apps/api/src/routes/reviews.ts'));
-    expect(route).toMatch(/findings:\s*(row|b)\.findings/);
+    expect(route).toContain('readFindingsForReviews');
+    expect(route).toMatch(/const \{ findings: _blob, \.\.\.review \} = fromReviewRow\(rows\[0\]\)/);
+    expect(route).toMatch(/return review;/);
+  });
+
+  it('and a whole-review save can no longer DELETE a finding row (Task 14 s ruling)', () => {
+    /*
+     * The other half of the flip, and the one that would be silent: while
+     * the blob was authoritative, `writeFindingRows` deleted the rows for
+     * keys a re-saved body no longer carried, and 005 granted the DELETE
+     * for it — both marked "revisit when Task 14 flips the reader". A body
+     * that omits a key is now a body that is BEHIND, and the delete would
+     * let a stale save destroy an authoritative finding and cascade to a
+     * lawyer's verification. `findingsRead.pg.test.ts` proves the
+     * behaviour; this proves the statement is not there to be re-enabled by
+     * a later edit that "restores" it.
+     */
+    const write = codeOf(at('apps/api/src/findings/write.ts'));
+    const DELETES_FINDING = /delete\s+from\s+finding\b/i;
+    // The scan bites on the statement it is looking for.
+    expect(DELETES_FINDING.test('await t.query(`delete from finding f where f.review_id = $1`)'))
+      .toBe(true);
+    expect(DELETES_FINDING.test('delete from note where review_id = $1')).toBe(false);
+    expect(DELETES_FINDING.test(write), 'the Task 14 delete is back').toBe(false);
+    // The file still writes findings, so the check above is not passing
+    // because the file emptied.
+    expect(write).toMatch(/insert into finding\b/i);
   });
 
   it('review.findings is untouched by every migration in this part — P18 is Task 22', () => {

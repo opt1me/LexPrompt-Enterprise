@@ -320,10 +320,57 @@ const UPSERT = `
  * Every finding in `review.findings`, as rows — inside the caller's
  * transaction, which is the same one that wrote the blob.
  *
- * Deletes nothing it cannot see: it upserts every `(findings_key, clause_id)`
- * the body carries and deletes the rows for keys the body no longer has. A
- * clause removed from a re-saved review must not leave an orphan finding whose
- * disposition still counts toward a standard position's health.
+ * ## THE DELETE IS GONE, AND ITS REMOVAL IS TASK 14'S RULING
+ *
+ * This function used to delete the rows for every key the body no longer
+ * carried, and `005_findings.sql` granted the app role DELETE on `finding`
+ * to allow it. Both were justified in the same sentence — *"a key absent
+ * from the blob is a judgement that no longer exists in the record of truth
+ * either, and the shadow's job is to agree with it"* — and both were
+ * explicitly marked **"revisit when Task 14 flips the reader."** This is
+ * Task 14.
+ *
+ * The justification does not survive the flip, for three reasons and any
+ * one of them is enough:
+ *
+ *  1. **The blob is no longer the record of truth.** From this task on the
+ *     rows are, and a body that omits a key is a body that is behind — a
+ *     browser holding a snapshot taken before a run seeded its cells, an
+ *     upload of a locally-stored review, a save built from a partially
+ *     loaded page. Deleting on its say-so lets a stale writer destroy the
+ *     authoritative record. That is the exact window Part 3A's own gate
+ *     named: *"a run started via the new route produces rows that the next
+ *     browser save would delete."*
+ *
+ *  2. **It destroys a human judgement, not merely an answer.**
+ *     `finding_disposition` still cascades from `finding` (deliberately —
+ *     see `009_evidence_and_indexes.sql`), so one absent key takes a
+ *     lawyer's verification with it. The HISTORY survives that cascade now,
+ *     which makes the loss detectable afterwards but does not make it
+ *     right: the disposition a position's health is counted from would be
+ *     gone.
+ *
+ *  3. **It is the shape this codebase already ruled against one table up.**
+ *     `routes/reviews.ts` grandfathers the document ids a stored review
+ *     already holds rather than re-validating them against today's
+ *     membership, because *"a review is the record of what was examined;
+ *     the matter's membership having changed since does not make that
+ *     record false."* A clause dropped from a playbook does not make the
+ *     finding that answered it false either.
+ *
+ * What the original sentence was actually worried about — an orphan finding
+ * counting toward a standard position's health — is answered where health
+ * is computed: `positionHealth` counts only `verified` findings, and only
+ * ones tested against the position's CURRENT wording, in a review whose
+ * playbook version carried that exact text. A finding for a clause that
+ * version no longer has cannot satisfy that filter. The health rule was
+ * never relying on this delete.
+ *
+ * So this function now only ever UPSERTS. It writes every
+ * `(findings_key, clause_id)` the body carries and touches nothing else.
+ * The DELETE grant on `finding` stays for the cascade from `review`
+ * (deleting a review deletes its findings, which is a whole-record deletion
+ * somebody asked for) and is not exercised from here.
  */
 export async function writeFindingRows(
   t: Tx,
@@ -333,16 +380,7 @@ export async function writeFindingRows(
 ): Promise<void> {
   const cells = readFindingsBlob(review.findings, review.target as ReviewTarget);
 
-  // Removed keys first, so a clause that moved between two keys in one save
-  // does not delete the row it was just written to.
   await refuseUnknownAuthors(t, cells);
-  await t.query(
-    `delete from finding f
-      where f.review_id = $1 and f.workspace_id = $2
-        and not exists (
-          select 1 from unnest($3::text[], $4::text[]) as a(k, c)
-          where a.k = f.findings_key and a.c = f.clause_id)`,
-    [review.id, workspaceId, cells.map(c => c.findingsKey), cells.map(c => c.clauseId)]);
 
   for (const cell of cells) {
     const key: FindingKey = {
@@ -421,8 +459,21 @@ async function writeDisposition(
     typeof stored.version === 'number' ? stored.version : Number(stored.version));
 }
 
-/** Notes, by id. Added and withdrawn, never edited — the `note` table holds
- *  no UPDATE grant for anybody, so a changed note is a different note. */
+/**
+ * Notes, by id. Added and withdrawn, never edited — the `note` table holds
+ * no UPDATE grant for anybody, so a changed note is a different note.
+ *
+ * THE DELETE HERE IS NOT THE ONE TASK 14 REMOVED ABOVE, and the difference
+ * is worth stating because the two statements look alike. A finding row is
+ * now the record of truth and a body that omits one is a body that is
+ * behind; a NOTE is still carried in the blob by the only writer there is
+ * (`handleAddNote`, until Task 19) and this is what keeps the two in step,
+ * including a withdrawal. It goes with the blob write it shadows, in Task
+ * 22 — and no path between here and there gives a note a second writer
+ * whose work this could undo: Task 15's route exists but nothing calls it
+ * until Task 19, and by then the notes the browser saves are the ones it
+ * read back from these very rows.
+ */
 async function writeNotes(
   t: Tx, key: FindingKey, workspaceId: string, cell: Cell,
 ): Promise<void> {

@@ -91,6 +91,23 @@ describe('the requests each export makes', () => {
     expect((await getReview('rev-1'))!.id).toBe('rev-1');
   });
 
+  it('reads its FINDINGS from /v1/reviews/:id/findings, not from the review record', async () => {
+    // TASK 14. The review the server answers no longer carries the blob;
+    // the findings come from `finding`, `finding_disposition` and `note`.
+    const fromRows = { 'doc-1': { c1: {
+      clauseId: 'c1', status: 'done' as const, citations: [],
+      summary: 'The break notice period is six months.',
+      verification: { state: 'verified' as const, byUserId: 'u1', at: 9 },
+      notes: [],
+    } } };
+    transport.responses.set('/v1/reviews/rev-1', { ...makeReview(), findings: undefined });
+    transport.responses.set('/v1/reviews/rev-1/findings', {
+      findings: fromRows, dispositionVersions: { 'doc-1': { c1: 3 } }, version: 1,
+    });
+    const review = await getReview('rev-1');
+    expect(review!.findings['doc-1'].c1.verification.state).toBe('verified');
+  });
+
   it('PUTs the whole record to /v1/reviews/:id', async () => {
     serverEchoes(1);
     await saveReview(makeReview());
@@ -217,6 +234,38 @@ describe('playbookSnapshot isolation', () => {
     await promise;
     const sent = (transport.sent[0].body as Review).playbookSnapshot as PlaybookVersion;
     expect(sent.clauses).toHaveLength(1);
+  });
+});
+
+describe('a findings read that FAILED is never a review that found nothing', () => {
+  /*
+   * THE FOUNDING DEFECT, WEARING TASK 14'S CLOTHES.
+   *
+   * `getReview` now makes two requests, and the failure available on the
+   * second is the one this whole codebase has a rule about: a review whose
+   * findings could not be read, rendered as a review of a contract that says
+   * nothing about any of its clauses. Every screen that loads from the store
+   * distinguishes "empty" from "broken"; this is the newest load path and it
+   * has to do the same.
+   *
+   * The rejection is what `describeLoadError`/`LoadErrorPanel` turn into a
+   * sentence with a Retry. What must never happen is a resolved `Review`
+   * with `findings: {}`.
+   */
+  it('REJECTS rather than resolving with no findings when the findings route fails', async () => {
+    transport.responses.set('/v1/reviews/rev-1', { ...makeReview(), findings: undefined });
+    transport.failures.set('/v1/reviews/rev-1/findings',
+      new ModelError('The findings could not be read.', 'upstream_failed', 502));
+    await expect(getReview('rev-1')).rejects.toThrow(/findings could not be read/);
+  });
+
+  it('…and still resolves for a review that genuinely has none', async () => {
+    // The other half, so the rejection above cannot be satisfied by a
+    // `getReview` that simply refuses everything.
+    transport.responses.set('/v1/reviews/rev-1', { ...makeReview(), findings: undefined });
+    transport.responses.set('/v1/reviews/rev-1/findings',
+      { findings: {}, dispositionVersions: {}, version: 1 });
+    expect((await getReview('rev-1'))!.findings).toEqual({});
   });
 });
 

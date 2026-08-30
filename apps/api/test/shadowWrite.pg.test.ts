@@ -151,11 +151,6 @@ describe('the rows stay equal to the blob, through every kind of write', () => {
         // rerunSave — the clause was re-run, so the verification is cleared
         // and the net position with it.
         { findings: { d1: { c1: finding({ summary: 'A second answer.' }) }, d2: { c1: finding() } } },
-        // clauseRemovedSave — the whole d2 key goes.
-        { findings: { d1: { c1: finding({ summary: 'A second answer.' }) } } },
-        // …and an empty findings map, which is what a review whose clauses
-        // were all removed looks like.
-        { findings: {} },
       ];
 
       let version: number | undefined;
@@ -165,6 +160,26 @@ describe('the rows stay equal to the blob, through every kind of write', () => {
         const found = await reconcileFindings(t, 'sr1');
         expect(found, `write ${i}:\n${describeDiscrepancies(found)}`).toEqual([]);
       }
+
+      // THE ONE KIND OF WRITE AFTER WHICH THE TWO NO LONGER AGREE — and it
+      // is Task 14's ruling rather than a defect (`findings/write.ts` has
+      // the long form): a body that omits a key is a body that is BEHIND,
+      // so the ROW stays and it is the blob that has lost something. This
+      // used to be two more entries in the list above ("clauseRemovedSave"
+      // and an empty findings map) and they reconciled clean only because
+      // the shadow writer deleted the rows to match.
+      //
+      // Asserted here rather than deleted, because "the rows stay equal to
+      // the blob after every kind of write" stops being the whole truth at
+      // exactly this point, and a reader of this suite has to be told where.
+      const dropped = await h.put({
+        ...REVIEW({ findings: { d1: { c1: finding({ summary: 'A second answer.' }) } } }),
+        version,
+      });
+      expect(dropped.version).toBeGreaterThan(version!);
+      const after = await reconcileFindings(t, 'sr1');
+      expect(after.map(d => `${d.key}/${d.field}`).sort(),
+        describeDiscrepancies(after)).toEqual(['d2/c1/disposition', 'd2/c1/finding']);
       await h.app.close();
     });
   });
@@ -359,27 +374,32 @@ describe('re-running a clause resets its verification and its net position, in t
   });
 });
 
-describe('a key the body no longer carries leaves no orphan, and its history survives', () => {
+describe('a key the body no longer carries is KEPT, judgement, history and all', () => {
   /*
-   * CHANGED BY MIGRATION 009, deliberately, and this assertion moved with
-   * the behaviour rather than being made to agree with it.
+   * CHANGED TWICE, and both changes are rulings rather than repairs — so the
+   * history of this assertion is worth reading before editing it again.
    *
-   * It used to assert `eventCount(t, 'd2', 'c1') === 0` — the history
-   * cascading away with the finding. 006 calls that table "INSERT-only to
-   * every application role, which is what makes it evidence rather than a
-   * claim", and a transitive DELETE through a cascade is a delete: one
-   * `delete from finding` and who verified that clause, when, and what they
-   * changed it from was gone. 005's justification for the app role's DELETE
-   * ("a key absent from the blob is a judgement that no longer exists in the
-   * record of truth either") covers the CURRENT disposition, which the blob
-   * mirrors, and not the history, which the blob never carried.
+   * It first asserted `eventCount(t, 'd2', 'c1') === 0`: the finding, its
+   * disposition AND its history all cascading away when a save stopped
+   * carrying the key. Migration 009 took the history out of that cascade,
+   * because 006 calls that table "INSERT-only to every application role,
+   * which is what makes it evidence rather than a claim" and a transitive
+   * DELETE is a delete.
    *
-   * So the history's parent is now the REVIEW. The finding and its current
-   * disposition still go; the evidence outlives them, and goes only when the
-   * whole review does — which the next test asserts, so this one cannot be
-   * read as "the history is never cleaned up".
+   * TASK 14 TAKES THE REST OF IT OUT, and the reason is that the sentence
+   * 005 justified the delete with — "a key absent from the blob is a
+   * judgement that no longer exists in the record of truth either" — stops
+   * being true the moment the reader flips. From this task on the ROWS are
+   * the record of truth, so a body that omits a key is not a body saying the
+   * key is gone; it is a body that is BEHIND. Part 3A's own gate named the
+   * window: "a run started via the new route produces rows that the next
+   * browser save would delete." `findings/write.ts` carries the full form.
+   *
+   * The next test is the other half, unchanged: deleting the whole REVIEW
+   * still takes everything, because that is a whole-record deletion somebody
+   * asked for.
    */
-  it('deletes the finding and its disposition when a clause is removed, and KEEPS its history', async () => {
+  it('keeps the finding, its disposition and its history when a save omits the key', async () => {
     await withPg(async t => {
       await aUser(t, PARTNER, 'P Partner');
       await aMatterAndDocuments(t);
@@ -396,16 +416,15 @@ describe('a key the body no longer carries leaves no orphan, and its history sur
         state: 'verified', byUserId: PARTNER, at: 1_700_000_030_000 } }) } } }),
       version: first.version });
 
-      const keys = await t.query<{ findings_key: string }>('select findings_key from finding');
-      expect(keys.map(k => k.findings_key)).toEqual(['d1']);
-      // The finding is gone and so is its CURRENT disposition — that one is
-      // the blob's mirror, and the blob no longer carries the key.
-      expect(await t.query(
-        "select 1 from finding_disposition where findings_key = 'd2'")).toEqual([]);
-      // The EVIDENCE is not. Somebody flagged d2/c1 at a particular instant
-      // and that remains answerable.
+      const keys = await t.query<{ findings_key: string }>(
+        'select findings_key from finding order by findings_key');
+      expect(keys.map(k => k.findings_key)).toEqual(['d1', 'd2']);
+      // The judgement survives — this is the assertion the ruling is about.
+      expect((await t.query<{ state: string }>(
+        "select state from finding_disposition where findings_key = 'd2'"))[0].state)
+        .toBe('flagged');
       expect(await eventCount(t, 'd2', 'c1')).toBe(1);
-      // …and the surviving key kept its own judgement and its own history.
+      // …and the key the body DID carry is untouched by any of this.
       expect(await eventCount(t, 'd1', 'c1')).toBe(1);
       expect((await t.query<{ state: string }>(
         "select state from finding_disposition where findings_key = 'd1'"))[0].state)

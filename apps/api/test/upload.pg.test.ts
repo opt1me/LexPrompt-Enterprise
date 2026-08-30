@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { withPg, dbOn } from './helpers/pgHarness.ts';
 import { buildTestApi } from './helpers/apiHarness.ts';
 import type { Tx } from '../src/db/pool.ts';
-import type { PlaybookVersion, Review } from '../src/db/rows.ts';
+import type { PlaybookVersion } from '../src/db/rows.ts';
 
 /**
  * What the API has to answer for when the UPLOADER (§13.1) is the caller.
@@ -179,7 +179,13 @@ describe("a human's verification survives the upload", () => {
       });
       expect(res.statusCode, res.body).toBe(200);
 
-      const read = (await h.raw('GET', '/v1/reviews/r1')).json() as Review;
+      // TASK 14: read back from the ROWS, which is where a verification and
+      // a note now live. `GET /v1/reviews/:id` no longer carries the blob at
+      // all — and reading them back from the tables is the stronger claim
+      // this test was always making: the upload's judgements survived into
+      // `finding_disposition` and `note`, not merely into a jsonb column.
+      const read = (await h.raw('GET', '/v1/reviews/r1/findings')).json() as
+        { findings: unknown };
       const stored = read.findings as unknown as typeof findings;
       expect(stored.d1.c1.verification.state).toBe('verified');
       expect(stored.d1.c1.verification.byUserId).toBe(actor);

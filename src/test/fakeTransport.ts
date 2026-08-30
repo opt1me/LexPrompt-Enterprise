@@ -90,6 +90,41 @@ export function makeFakeTransport(): FakeTransport {
 const notFound = (path: string): ModelError =>
   new ModelError(`Nothing at ${path}.`, 'not_found', 404);
 
+const FINDINGS_PATH = /^(\/v1\/reviews\/[^/]+)\/findings$/;
+
+/**
+ * `GET /v1/reviews/:id/findings`, answered from the review this transport
+ * already holds (Task 14).
+ *
+ * A test that stores a `Review` at `/v1/reviews/rev-1` is stating what the
+ * server has, and after the reader flip the server answers TWO paths from
+ * that one record: the review without its findings, and the findings
+ * assembled from rows. This derives the second from the first so that every
+ * suite which was stating one fact goes on stating one fact.
+ *
+ * It is an ANSWER, not behaviour: no assembly, no disposition versions
+ * beyond the create-shaped `1` a fresh row carries, no scope, no refusal.
+ * The real assembly is proved against a real Postgres in
+ * `apps/api/test/findingsRead.pg.test.ts`.
+ *
+ * A review this transport does not hold answers 404 through the ordinary
+ * path, exactly as the route does — which is the distinction a test of
+ * "empty is not broken" needs, and a test wanting a FAILURE registers one
+ * in `failures` for the `/findings` path itself.
+ */
+function derivedFindings(t: FakeTransport, path: string): unknown {
+  const match = FINDINGS_PATH.exec(path);
+  if (!match) return undefined;
+  const review = t.responses.get(match[1]) as { findings?: unknown } | undefined;
+  if (!review) return undefined;
+  const findings = (review.findings ?? {}) as Record<string, Record<string, unknown>>;
+  const dispositionVersions: Record<string, Record<string, number>> = {};
+  for (const [key, byClause] of Object.entries(findings)) {
+    dispositionVersions[key] = Object.fromEntries(Object.keys(byClause).map(c => [c, 1]));
+  }
+  return { findings, dispositionVersions, version: 1 };
+}
+
 /**
  * The module factory to hand `vi.mock('.../lib/api/client', …)`.
  *
@@ -108,6 +143,8 @@ export function transportModule(t: FakeTransport): Record<string, unknown> {
       if (t.responses.has(path)) return t.responses.get(path);
       const fallback = t.fallback?.(path);
       if (fallback !== undefined) return fallback;
+      const findings = derivedFindings(t, path);
+      if (findings !== undefined) return findings;
       throw notFound(path);
     },
     apiGetOrNull: async (path: string) => {

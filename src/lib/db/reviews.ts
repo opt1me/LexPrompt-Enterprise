@@ -1,5 +1,6 @@
 import { ModelError } from '@lexprompt/core';
 import { apiDelete, apiGet, apiGetOrNull, apiSend } from '../api/client';
+import { forgetFindingVersions, getFindings } from '../api/findings';
 import { debug } from '../debug';
 import { migrateReviewRecord } from './reviewMigration';
 import { listVersions } from './playbookVersions';
@@ -58,6 +59,11 @@ function remember(review: Review): Review {
  *  state a fresh tab is in. */
 export function forgetReviewVersion(id: string): void {
   lastSeenVersion.delete(id);
+  // The disposition versions this browser holds for the same review belong
+  // to the same "what this tab has seen" bookkeeping and go with it — a
+  // stale one left behind would be stated on a write against a row it was
+  // never read from.
+  forgetFindingVersions(id);
 }
 
 /**
@@ -115,10 +121,27 @@ export async function listReviews(matterId: string): Promise<Review[]> {
   return Promise.all(raw.map(repair));
 }
 
-/** `null` for "there is no such review", and ONLY for that. */
+/**
+ * `null` for "there is no such review", and ONLY for that.
+ *
+ * TASK 14: THE FINDINGS COME FROM ROWS. `GET /v1/reviews/:id` no longer
+ * carries them — absent, not `{}` — and `GET /v1/reviews/:id/findings`
+ * assembles them from `finding`, `finding_disposition` and `note`. The
+ * signature does not change and neither does the `Review` this returns, so
+ * not one consumer of `review.findings` had to learn anything.
+ *
+ * The second read is AWAITED and its failure PROPAGATES. Defaulting to `{}`
+ * on a failed findings read would render a review of a contract as one that
+ * found nothing — this project's founding defect, in the one place a new
+ * load path could reintroduce it. `repair`/`buildVersionIndex` still run
+ * over the assembled record, because a review read today can still be one
+ * written before sub-project B or D.
+ */
 export async function getReview(id: string): Promise<Review | null> {
   const found = await apiGetOrNull<Review>(`/v1/reviews/${encodeURIComponent(id)}`);
-  return found ? repair(found) : null;
+  if (!found) return null;
+  const { findings } = await getFindings(id);
+  return repair({ ...found, findings });
 }
 
 /**

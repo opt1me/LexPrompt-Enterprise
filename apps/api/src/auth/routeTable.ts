@@ -154,6 +154,12 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'PUT /v1/reviews/:id': 'reviewer',
   'DELETE /v1/reviews/:id': 'reviewer',
 
+  // §6.2/§6.3, Task 14: a review's findings, its dispositions and its notes,
+  // assembled from their own rows. Reading them is the same act as reading
+  // the review, so it sits at the review's own bar and is scoped to the
+  // caller's workspace inside the handler.
+  'GET /v1/reviews/:id/findings': 'reviewer',
+
   // §7: a reviewer RUNS reviews. All four at `reviewer`, including cancel —
   // stopping a run you started is part of running one, and a bar that let a
   // reviewer start work nobody but a partner could stop would leave the

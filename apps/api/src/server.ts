@@ -21,6 +21,7 @@ import { registerPlaybooks } from './routes/playbooks.ts';
 import { registerChangesets } from './routes/changesets.ts';
 import { registerWorkspaceSettings } from './routes/workspaceSettings.ts';
 import { registerReviews } from './routes/reviews.ts';
+import { registerFindings } from './routes/findings.ts';
 import { registerRuns } from './routes/runs.ts';
 import { ConflictError } from './errors.ts';
 
@@ -312,6 +313,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerPlaybooks(app, deps.db);
   registerChangesets(app, deps.db);
   registerReviews(app, deps.db);
+  registerFindings(app, deps.db);
   registerRuns(app, deps.db, { eventPageMax: deps.eventPageMax });
   registerWorkspaceSettings(app, deps.db, deps.gateway);
 

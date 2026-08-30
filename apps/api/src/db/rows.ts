@@ -213,9 +213,19 @@ export interface Review {
   documentIds: string[];
   /** `ReviewTarget` on the wire — opaque jsonb at this layer. */
   target: unknown;
-  /** `Record<string, Record<string, Finding>>` on the wire — opaque jsonb
-   *  at this layer. */
-  findings: unknown;
+  /**
+   * `Record<string, Record<string, Finding>>` on the wire — opaque jsonb at
+   * this layer.
+   *
+   * OPTIONAL since Task 14, and its absence is a claim rather than an
+   * omission: "this response does not carry the findings — read them from
+   * `GET /v1/reviews/:id/findings`, which assembles them from `finding`,
+   * `finding_disposition` and `note`." `findings: {}` would say the review
+   * found nothing, which is a different fact and the one a reader would act
+   * on. A PUT body still REQUIRES it (`parseReview`) until Task 22 freezes
+   * the column.
+   */
+  findings?: unknown;
   modelId: string;
   startedAt: number;
   completedAt?: number;

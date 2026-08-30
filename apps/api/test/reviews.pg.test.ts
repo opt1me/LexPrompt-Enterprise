@@ -183,8 +183,13 @@ describe('a review round-trips through Postgres unchanged', () => {
         target: { kind: 'documents', documentIds: ['d1', 'd2', 'd3'] },
         findings,
       }));
-      expect(await h.get('/v1/reviews/r1')).toEqual(saved);
-      const back = (await h.get('/v1/reviews/r1') as Review).findings as
+      // TASK 14: `GET /v1/reviews/:id` no longer carries the findings —
+      // absent, never `{}` — and the record is otherwise byte-for-byte what
+      // the save answered. The findings themselves are asserted against the
+      // route that now serves them, which is the whole point of the flip.
+      const { findings: _sent, ...record } = saved as Review;
+      expect(await h.get('/v1/reviews/r1')).toEqual(record);
+      const back = (await h.get('/v1/reviews/r1/findings')).findings as
         Record<string, Record<string, Record<string, unknown>>>;
       expect(Object.keys(back)).toEqual(['d1', 'd2', 'd3']);
       expect(Object.keys(back.d2)).toHaveLength(20);
@@ -364,7 +369,7 @@ describe('a save that would lose somebody else s work is refused', () => {
       });
       expect(res.statusCode, 'a stale run save was APPLIED over a human verification').toBe(409);
 
-      const now = await h.get('/v1/reviews/r1') as Review;
+      const now = await h.get('/v1/reviews/r1/findings');
       const v = (now.findings as Record<string, Record<string, Record<string, unknown>>>)
         .d1.c1.verification;
       expect(v).toEqual({ state: 'verified', byUserId: HUMAN, at: 1_700_000_009_000 });
@@ -541,8 +546,17 @@ describe('a review may only name documents in its own matter', () => {
           documentIds: ['d1', 'd2'],
           target: { kind: 'documents', documentIds: ['d1', 'd2'] },
           findings: {
+            // A DIFFERENT judgement from the first save's, deliberately.
+            // The re-read below now comes from `finding_disposition`, and
+            // that row records who set the CURRENT state and when they set
+            // it — so a save repeating an identical verification writes no
+            // new instant (`writeDisposition` compares state, reason and
+            // actor, on purpose: a run's autosave repeats the same
+            // verification every two seconds). Re-asserting a moved
+            // timestamp on an unchanged judgement would have been asserting
+            // the blob's behaviour, not the store's.
             d1: { c1: finding({ verification: {
-              state: 'verified', byUserId: HUMAN, at: 1_700_000_099_000,
+              state: 'flagged', byUserId: HUMAN, at: 1_700_000_099_000,
             } }) },
           },
         }),
@@ -550,9 +564,9 @@ describe('a review may only name documents in its own matter', () => {
       });
       expect(saved.documentIds).toEqual(['d1', 'd2']);
 
-      const back = await h.get('/v1/reviews/r1') as Review;
-      const findings = back.findings as Record<string, Record<string, {
-        verification: { at: number } }>>;
+      const findings = (await h.get('/v1/reviews/r1/findings')).findings as
+        Record<string, Record<string, { verification: { state: string; at: number } }>>;
+      expect(findings.d1.c1.verification.state).toBe('flagged');
       expect(findings.d1.c1.verification.at).toBe(1_700_000_099_000);
       await h.app.close();
     });
