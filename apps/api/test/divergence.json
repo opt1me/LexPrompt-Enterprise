@@ -196,7 +196,9 @@
     "API_WS_MAX_CONNECTIONS",
     "API_WS_MAX_SUBSCRIPTIONS",
     "API_WS_MAX_FRAME_BYTES",
-    "API_HUB_TICK_MS"
+    "API_HUB_TICK_MS",
+    "API_PRESENCE_HEARTBEAT_MS",
+    "API_PRESENCE_TTL_MS"
   ],
   "defaultedNote": [
     "Read by a configuration module, set by NEITHER environment: each falls",
@@ -216,7 +218,8 @@
     "Stage 3 Task 8-12 added thirteen: the run queue's caps (workers, lease, cell timeout, heartbeat, attempts, poll, per-workspace concurrency, parse workers), the outbox's retention and page size, the page-image LRU and the per-call image budget, and the engine pool's size. Every one is a property of the software's own behaviour and every one is DECLARED rather than inherited from a library default -- which is the rule three shipped defects on the scanned-document path bought. API_RUN_IMAGE_BYTES_MAX is the one whose default is DERIVED (three quarters of API_MAX_BODY_BYTES) rather than a constant, so an operator who lowers the body limit does not have to know about a second key to keep the two consistent.",
     "",
     "Stage 4 Task 16 added four: the live socket's ping interval, its per-replica connection ceiling, its per-socket subscription ceiling and its maximum client frame size. Every one is a property of the software's own behaviour, defaulted in apps/api/src/config.ts (WS_CAP_DEFAULTS) and set by NEITHER environment -- so they belong here rather than in sameEverywhere, which would require both docker-compose.yml and containerApps.bicep to name them. API_WS_PING_MS is the one with a relationship OUTSIDE this file: it must stay below infra/nginx/web.conf's proxy_read_timeout on the socket location and below Container Apps' ingress idle timeout, or every idle socket dies and the app looks like a network with a fault. That relationship is asserted in wsProxy.compose.test.ts rather than left to a reader comparing two files.",
-    "Stage 4 Task 18 added API_HUB_TICK_MS: how often each replica reads the outbox forward for the subscriptions it holds, whether or not a pg_notify arrived. It is the FLOOR live change degrades to when the LISTEN connection has dropped -- a failure whose only symptom is the app feeling one tick slow, which nobody reports -- so the number is declared rather than picked, and defaulted in the module that reads it like every other cap here."
+    "Stage 4 Task 18 added API_HUB_TICK_MS: how often each replica reads the outbox forward for the subscriptions it holds, whether or not a pg_notify arrived. It is the FLOOR live change degrades to when the LISTEN connection has dropped -- a failure whose only symptom is the app feeling one tick slow, which nobody reports -- so the number is declared rather than picked, and defaulted in the module that reads it like every other cap here.",
+    "Stage 4 Task 22 added two: the presence heartbeat interval and the TTL that expires a roster entry. Both are properties of the software's own behaviour, defaulted in apps/api/src/config.ts (WS_CAP_DEFAULTS) and set by NEITHER environment. The heartbeat is the interval the SERVER asks the browser for -- it travels on the hello frame -- rather than a constant compiled into the bundle, so raising it in a deployment cannot leave a browser beating on the old one and expiring between beats. loadConfig refuses a TTL below one and a half heartbeats (assertPresenceOutlivesBeat) for the same reason: the failure it prevents is every colleague flickering on and off a roster, which nobody reports as a fault and which costs the whole feature."
   ],
   "localOnlyServices": [
     "keycloak",

@@ -43,6 +43,57 @@ export const WS_BEARER_PREFIX = 'bearer.';
 export const WS_PATH = '/v1/ws';
 
 /**
+ * WHERE SOMEBODY IS, COARSELY (§8).
+ *
+ * A closed set, narrowed on the way in, for the reason every closed set in
+ * this codebase is closed: a screen name a client invented would reach a
+ * roster and be rendered, and the roster is a surface about PEOPLE. Coarse
+ * on purpose - "which review, which clause" is as fine as this goes, and a
+ * path or a URL would be a record of where a colleague has been rather than
+ * a signal that they are here now.
+ */
+export const PRESENCE_SCREENS = ['review', 'matter', 'playbook'] as const;
+export type PresenceScreen = (typeof PRESENCE_SCREENS)[number];
+
+export function isPresenceScreen(value: unknown): value is PresenceScreen {
+  return typeof value === 'string' && (PRESENCE_SCREENS as readonly string[]).includes(value);
+}
+
+/**
+ * ONE PERSON ON A ROSTER - advisory, ephemeral, and carrying no time.
+ *
+ * ## It carries no timestamp, deliberately
+ *
+ * The server holds the instant of a member's last beat (`PresenceBeat` in
+ * `apps/api/src/realtime/presence.ts`) because the TTL sweep needs it. It
+ * does NOT travel here. A "last seen 3m ago" is a claim about the past
+ * dressed as a claim about now, and it is the first thing anybody would
+ * build out of a timestamp on this shape - while the roster expires at
+ * fifteen seconds, so a three-minute-old entry cannot exist and rendering
+ * one would be a lie the wire made possible.
+ *
+ * ## It carries no name and no initials
+ *
+ * `userId` only. The browser resolves it through `src/lib/api/users.ts`,
+ * which is the one id-to-name resolver (P32) - the same rule an event
+ * payload follows. An id this workspace's directory does not hold renders as
+ * an unnamed colleague, never as a raw id.
+ *
+ * ## A member is NOT a disposition
+ *
+ * Nothing on this shape says anything about a finding. A face on a clause
+ * means somebody is looking at it and never that they have decided
+ * anything; the day this type grows a field about a judgement is the day
+ * presence starts making a claim it cannot support.
+ */
+export interface PresenceMember {
+  userId: string;
+  screen: PresenceScreen;
+  /** The clause they have SELECTED, when they have selected one. */
+  clauseId?: string;
+}
+
+/**
  * What a client sends.
  *
  * `lastEventId` is the client's cursor for THAT subscription, and it is per
@@ -54,7 +105,24 @@ export const WS_PATH = '/v1/ws';
 export type ClientFrame =
   | { t: 'subscribe'; sub: SubscriptionRef; lastEventId: number }
   | { t: 'unsubscribe'; sub: SubscriptionRef }
-  | { t: 'pong' };
+  | { t: 'pong' }
+  /**
+   * §8'S HEARTBEAT - *"I am here, on this screen, looking at this clause."*
+   *
+   * It carries NO identity. The `userId` on the roster the server publishes
+   * comes from the token this socket was upgraded with and from nowhere
+   * else: a frame naming a user would let a client put a colleague's face on
+   * a clause, which is the one thing an advisory signal must not be able to
+   * do. It carries no display name either, for the reason P32 gives - a name
+   * is a mutable field on `app_user` and `src/lib/api/users.ts` is the only
+   * place an id becomes one.
+   *
+   * `clauseId` is the clause the reader SELECTED, never the one nearest the
+   * top of the viewport. A scroll-derived presence would broadcast a stream
+   * of clause changes and would tell a colleague something the reader never
+   * chose to say.
+   */
+  | { t: 'presence'; sub: SubscriptionRef; screen: PresenceScreen; clauseId?: string };
 
 /**
  * What the server sends.
@@ -67,11 +135,37 @@ export type ClientFrame =
  * websocket.
  */
 export type ServerFrame =
-  | { t: 'hello'; instanceId: string; userId: string }
+  /**
+   * `presenceHeartbeatMs` is the interval THE SERVER ASKS FOR, and the
+   * client beats at it rather than at a constant of its own.
+   *
+   * The TTL that expires a roster entry is `API_PRESENCE_TTL_MS`, and it is
+   * only meaningful relative to the interval beats actually arrive at. Two
+   * numbers - one in a deployment's environment and one compiled into a
+   * browser bundle - is how a raised TTL silently becomes a roster that
+   * expires between beats: a colleague flickering in and out, which reads as
+   * somebody repeatedly opening and closing the review.
+   */
+  | { t: 'hello'; instanceId: string; userId: string; presenceHeartbeatMs: number }
   | { t: 'event'; sub: SubscriptionRef; event: AppEvent }
   | { t: 'caught_up'; sub: SubscriptionRef; cursor: number }
   | { t: 'resync_required'; sub: SubscriptionRef }
   | { t: 'refused'; sub?: SubscriptionRef; reason: string }
+  /**
+   * WHO ELSE IS HERE - the whole roster, on change only (§8, S6).
+   *
+   * The whole roster rather than a join/leave delta, because a client that
+   * missed one delta would claim a colleague is present for the rest of the
+   * session, and *"a stale presence indicator that claims someone is there
+   * is worse than no indicator"*. A snapshot cannot drift: the client
+   * renders what the last frame said and never its own accumulated view.
+   *
+   * `members` is EMPTY, never absent, when the last person leaves. That
+   * frame is the one that clears a face off a clause, and it is the reason
+   * the roster is broadcast on change rather than only when somebody
+   * arrives.
+   */
+  | { t: 'presence'; sub: SubscriptionRef; members: PresenceMember[] }
   | { t: 'ping' };
 
 /**
@@ -97,10 +191,21 @@ export function isClientFrame(value: unknown): value is ClientFrame {
   if (typeof value !== 'object' || value === null) return false;
   const t = (value as { t?: unknown }).t;
   if (t === 'pong') return true;
-  if (t !== 'subscribe' && t !== 'unsubscribe') return false;
+  if (t !== 'subscribe' && t !== 'unsubscribe' && t !== 'presence') return false;
   const sub = (value as { sub?: unknown }).sub;
   if (!isSubscriptionRef(sub)) return false;
   if (t === 'unsubscribe') return true;
+  if (t === 'presence') {
+    const frame = value as { screen?: unknown; clauseId?: unknown };
+    if (!isPresenceScreen(frame.screen)) return false;
+    // ABSENT or a non-empty string, never `null` and never a number. A
+    // `clauseId` this server could not read is REFUSED rather than dropped
+    // to `undefined`: a beat that silently loses its clause puts a colleague
+    // on the review and on no clause, which reads as somebody looking at
+    // nothing.
+    return frame.clauseId === undefined
+      || (typeof frame.clauseId === 'string' && frame.clauseId.length > 0);
+  }
   return typeof (value as { lastEventId?: unknown }).lastEventId === 'number';
 }
 

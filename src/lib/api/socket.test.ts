@@ -204,7 +204,7 @@ describe('the connection state, and the backoff', () => {
     const off = onConnectionState(s => seen.push(s));
     subscribe({ review: 'r1' }, handlers());
     const ws = await opened();
-    ws.deliver({ t: 'hello', instanceId: 'api-1', userId: 'u1' });
+    ws.deliver({ t: 'hello', instanceId: 'api-1', userId: 'u1', presenceHeartbeatMs: 10_000 });
     expect(connectionState()).toBe('live');
 
     // A drop is NOT stale. A socket that closes and reconnects inside 300 ms

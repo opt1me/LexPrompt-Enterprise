@@ -73,6 +73,8 @@ const BASE: ApiConfig = {
   wsMaxConnections: 500,
   wsMaxSubscriptions: 20,
   wsMaxFrameBytes: 16 * 1024,
+  presenceHeartbeatMs: 10_000,
+  presenceTtlMs: 15_000,
 };
 
 const MTLS = {

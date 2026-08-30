@@ -1,7 +1,9 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { API_BASE, asUser, twoAccounts, type TestAccount } from './helpers/twoAccounts.ts';
 import { dispositionPath, removeSeeded, seedOneDoneFinding, type Seeded } from './helpers/seedReview.ts';
-import { connect, type Frame, type TestSocket } from './helpers/wsClient.ts';
+import {
+  socketsOnDistinctReplicas, type Frame, type TestSocket,
+} from './helpers/wsClient.ts';
 
 /**
  * SPIKE 3'S QUESTION, EXECUTED LOCALLY AT TWO REPLICAS (Task 14, P41).
@@ -40,34 +42,16 @@ const sockets: TestSocket[] = [];
 /**
  * Two sockets on DIFFERENT replicas, or a failure that says so.
  *
- * The loop is bounded and the bound is the assertion: nginx round-robins
- * over the addresses its resolver returns, so a handful of attempts is
- * plenty, and twenty that all land on one replica means the multi-replica
- * condition this file exists to test does not exist — which must be a
- * failure, not a pass.
+ * The loop, the bound and the failure message moved to
+ * `helpers/wsClient.ts` when `presence.compose.test.ts` needed the same
+ * condition (Task 22) — extracted at the second copy, per `CLAUDE.md`,
+ * rather than at the third. What stays here is the binding of it to this
+ * suite's own socket bookkeeping.
  */
 async function twoSocketsOnDifferentReplicas(
   a: TestAccount, b: TestAccount,
 ): Promise<[TestSocket, TestSocket]> {
-  const first = await connect(WS_URL, a.token);
-  sockets.push(first);
-  const firstHello = await first.waitFor('hello');
-  const seen = new Set<string>([String(firstHello.instanceId)]);
-
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const next = await connect(WS_URL, b.token);
-    sockets.push(next);
-    const hello = await next.waitFor('hello');
-    if (hello.instanceId !== firstHello.instanceId) return [first, next];
-    seen.add(String(hello.instanceId));
-    next.close();
-  }
-  throw new Error(
-    'twenty connections all landed on one replica '
-    + `(instance ids seen: ${[...seen].join(', ')}). The cross-replica condition this file `
-    + 'tests does not exist, so a pass here would mean nothing. Check that `api` really is '
-    + 'running at two replicas (`docker compose ps`) and that nginx is resolving it per '
-    + 'request (infra/nginx/web.conf).');
+  return socketsOnDistinctReplicas(WS_URL, a.token, b.token, sockets);
 }
 
 // SKIPPED BY TASK 14, UN-SKIPPED BY TASK 18. It was skipped with the reason

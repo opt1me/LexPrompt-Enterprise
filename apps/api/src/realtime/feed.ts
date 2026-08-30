@@ -3,6 +3,7 @@ import { subscriptionKey } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import { EVENT_CHANNEL, readEvents } from '../run/events.ts';
 import type { Hub } from './hub.ts';
+import { decodePresence, PRESENCE_CHANNEL, type PresenceRegistry } from './presence.ts';
 
 /**
  * FAN-OUT ACROSS REPLICAS: THE OUTBOX IS THE DELIVERY, THE NOTIFICATION IS
@@ -48,6 +49,24 @@ export interface EventFeed {
 export interface EventFeedDeps {
   db: Db;
   hub: Hub;
+  /**
+   * THE ROSTER THIS REPLICA MERGES OTHER REPLICAS' BEATS INTO (Task 22).
+   *
+   * Presence is the ONE thing that rides the notification payload, and it
+   * rides it here rather than through the outbox because it is never
+   * persisted: there is no table to read a beat forward from, and there must
+   * not be one (S6). It shares this connection rather than opening a second
+   * `pg.Client` per replica — the `LISTEN` connection is already one per
+   * replica and already named in the caps table, and a second would be a
+   * second thing to reconnect, on a signal whose whole failure budget is one
+   * TTL.
+   *
+   * A SEPARATE CHANNEL from `EVENT_CHANNEL`, deliberately. That channel's
+   * handler reads nothing from its payload, by design (P39: the doorbell is
+   * never the delivery), and giving it a payload to parse is exactly how the
+   * doorbell quietly becomes one.
+   */
+  presence: PresenceRegistry;
   /**
    * A DEDICATED connection string for the `LISTEN`.
    *
@@ -175,12 +194,50 @@ export function startEventFeed(deps: EventFeedDeps): EventFeed {
       listener = null;
       if (!stopped) setTimeout(() => { void reconnect(); }, 1_000).unref?.();
     });
-    // The payload is EMPTY and this handler reads nothing from it. The
-    // notification says "look now", and what to look at is the outbox.
-    client.on('notification', () => { void tick(); });
+    client.on('notification', msg => {
+      if (msg.channel === PRESENCE_CHANNEL) {
+        applyPresence(msg.payload);
+        return;
+      }
+      // On `EVENT_CHANNEL` the payload is EMPTY and this branch reads
+      // nothing from it. The notification says "look now", and what to look
+      // at is the outbox.
+      void tick();
+    });
     await client.connect();
     await client.query(`listen ${EVENT_CHANNEL}`);
+    await client.query(`listen ${PRESENCE_CHANNEL}`);
     listener = client;
+  }
+
+  /**
+   * A beat from another replica, applied to this one's roster.
+   *
+   * The `at` is REPLACED with this replica's own clock rather than trusted
+   * from the sender. Two container clocks that disagree by a minute would
+   * otherwise expire a whole roster instantly (a sender running slow) or
+   * never (a sender running fast), and a TTL only means anything measured
+   * against the clock that sweeps it.
+   *
+   * A payload this replica cannot read is DROPPED and reported, not guessed
+   * at. The cost is one colleague missing from one roster for at most one
+   * TTL, which is the correct failure for an advisory signal — and the
+   * report is what stops a version skew between two replicas looking like a
+   * quiet review.
+   */
+  function applyPresence(payload: string | undefined): void {
+    const n = payload === undefined ? undefined : decodePresence(payload);
+    if (!n) {
+      log('api: a presence notification could not be read; that person is absent from this '
+        + "replica's roster until their next beat");
+      return;
+    }
+    const scope = { workspaceId: n.workspaceId, sub: n.sub };
+    if (n.k === 'leave') {
+      deps.presence.leave(n.beat.connectionId, scope);
+      return;
+    }
+    deps.presence.beat(scope, { ...n.beat, at: Date.now() });
   }
 
   async function reconnect(): Promise<void> {

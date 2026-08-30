@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ROOT, walk, rel, codeOf } from './sourceScan.ts';
 
@@ -219,10 +219,33 @@ describe('Part 4A: the part boundary, enforced rather than remembered', () => {
     expect(socket.indexOf('handleUpgrade')).toBeGreaterThan(-1);
   });
 
-  it('has no presence surface yet — Task 22, not before', () => {
+  it('has presence, and it reaches no migration - Task 22 (this guard INVERTED)', () => {
+    /*
+     * This assertion used to be the ABSENCE of presence, holding the part
+     * boundary until Task 22. Task 22 landed, so it now holds the property
+     * that outlives the boundary: presence exists in the running process and
+     * has no schema anywhere.
+     *
+     * A `presence` TABLE is the failure S6 names - *"a stale 'Priya is here'
+     * row surviving a crash is a lie the app would tell indefinitely"* - and
+     * the way one would actually arrive is a migration, so this reads the
+     * migrations directory. `presence.pg.test.ts` reads the live database's
+     * own catalogue as well; both are needed, because a table created
+     * outside a migration is as real as one created by one, and a migration
+     * is what a future task would write.
+     */
     const PRESENCE = /\bpresence\b/i;
-    expect(grepRepo(PRESENCE, [...WEB_SOURCES, ...API_SOURCES])).toEqual([]);
-    expect(PRESENCE.test('const presence = usePresence();')).toBe(true);
+    expect(grepRepo(PRESENCE, API_SOURCES)).toContain('apps/api/src/realtime/presence.ts');
+    const migrations = readdirSync(at('apps/api/migrations'));
+    expect(migrations.filter(f => PRESENCE.test(f))).toEqual([]);
+    expect(migrations.length, 'the migrations directory was not read').toBeGreaterThan(10);
+    const sql = migrations
+      .map(f => readFileSync(at(`apps/api/migrations/${f}`), 'utf8').replace(/--[^\n]*/g, ''))
+      .join('\n');
+    expect(PRESENCE.test(sql), 'a migration names presence').toBe(false);
+    // The sanity check for that `toBe(false)`: the same scan over the same
+    // text finds a table that IS there.
+    expect(/finding_disposition/.test(sql)).toBe(true);
   });
 
   it('has no assignment yet — Task 24, not before', () => {

@@ -314,6 +314,28 @@ export interface ApiConfig {
   wsMaxConnections: number;
   wsMaxSubscriptions: number;
   wsMaxFrameBytes: number;
+  /**
+   * §8's presence heartbeat and the TTL that expires it (Stage 4 Task 22).
+   *
+   * `presenceHeartbeatMs` is the interval THE SERVER ASKS THE BROWSER FOR,
+   * sent on the `hello` frame and beaten at by `src/lib/api/socket.ts`. It
+   * is not a browser constant: a TTL raised in a deployment's environment
+   * while a bundle kept beating at a compiled-in interval would expire a
+   * roster between beats, and a colleague flickering in and out reads as
+   * somebody repeatedly opening and closing the review.
+   *
+   * `presenceTtlMs` is how long a beat is believed. It is the number that
+   * makes *"a stale presence indicator that claims someone is there is
+   * worse than no indicator"* a property of the code rather than a hope: a
+   * reviewer must not defer to a colleague who left ten minutes ago, and
+   * fifteen seconds is short enough that deferring to a roster entry is
+   * deferring to something that was true within the last quarter minute.
+   *
+   * The TTL MUST OUTLAST THE HEARTBEAT, and by a margin — see
+   * `assertPresenceOutlivesBeat`.
+   */
+  presenceHeartbeatMs: number;
+  presenceTtlMs: number;
 }
 
 /**
@@ -341,6 +363,12 @@ export const WS_CAP_DEFAULTS = {
   maxConnections: 500,
   maxSubscriptions: 20,
   maxFrameBytes: 16 * 1024,
+  // §8, verbatim: a 10-second heartbeat and a 15-second TTL. Here rather
+  // than as two literals inside `loadConfig` for the reason the four above
+  // are: three harnesses stand a real server up, and a suite exercising a
+  // TTL no deployment uses is the quieter half of an undeclared cap.
+  presenceHeartbeatMs: 10_000,
+  presenceTtlMs: 15_000,
 } as const;
 
 function int(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
@@ -591,6 +619,36 @@ export function assertBackoffOutlivedByHeartbeat(cfg: ApiConfig): void {
   }
 }
 
+/**
+ * A PRESENCE TTL THAT DOES NOT OUTLAST THE HEARTBEAT EXPIRES EVERYBODY.
+ *
+ * The failure is not an outage and would never be reported as one: every
+ * colleague appears, vanishes, and reappears on a cycle, so the roster reads
+ * as people opening and closing the review rather than as a misconfiguration
+ * — and a reader who learns to distrust it has lost the whole feature while
+ * the app looks like it is working.
+ *
+ * A MARGIN of one whole heartbeat rather than "strictly greater", because a
+ * beat is not instantaneous: it crosses a network, a proxy and, across
+ * replicas, a `pg_notify`. A TTL of 11s against a 10s beat would expire a
+ * roster on any second of latency, which is a race rather than a margin —
+ * the same reasoning `assertBackoffOutlivedByHeartbeat` gives one screen up,
+ * applied to the one signal that is allowed to be wrong and therefore has to
+ * say so honestly.
+ */
+export function assertPresenceOutlivesBeat(cfg: ApiConfig): void {
+  if (cfg.presenceTtlMs < cfg.presenceHeartbeatMs * 1.5) {
+    throw new ConfigError(
+      `API_PRESENCE_TTL_MS is ${cfg.presenceTtlMs}ms and API_PRESENCE_HEARTBEAT_MS is `
+      + `${cfg.presenceHeartbeatMs}ms. A roster entry has to survive at least one missed `
+      + 'beat, or every colleague expires between heartbeats and the presence roster reads '
+      + 'as people opening and closing the review — a failure nobody reports, which costs '
+      + 'the whole feature while the app looks like it is working. Set the TTL to at least '
+      + `${Math.ceil(cfg.presenceHeartbeatMs * 1.5)}ms, or lower the heartbeat interval.`,
+    );
+  }
+}
+
 /** The image budget must fit inside the body limit that carries it. */
 export function assertImagesFitTheBody(cfg: ApiConfig): void {
   if (cfg.runImageBytesMax >= cfg.maxBodyBytes) {
@@ -651,6 +709,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     wsMaxConnections: int(env, 'API_WS_MAX_CONNECTIONS', WS_CAP_DEFAULTS.maxConnections),
     wsMaxSubscriptions: int(env, 'API_WS_MAX_SUBSCRIPTIONS', WS_CAP_DEFAULTS.maxSubscriptions),
     wsMaxFrameBytes: int(env, 'API_WS_MAX_FRAME_BYTES', WS_CAP_DEFAULTS.maxFrameBytes),
+    presenceHeartbeatMs: int(
+      env, 'API_PRESENCE_HEARTBEAT_MS', WS_CAP_DEFAULTS.presenceHeartbeatMs),
+    presenceTtlMs: int(env, 'API_PRESENCE_TTL_MS', WS_CAP_DEFAULTS.presenceTtlMs),
   };
   // Every cross-key rule, at load, so the banner below describes a
   // configuration that can actually serve.
@@ -658,6 +719,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
   assertLeaseOutlastsCell(cfg);
   assertImagesFitTheBody(cfg);
   assertBackoffOutlivedByHeartbeat(cfg);
+  assertPresenceOutlivesBeat(cfg);
   return cfg;
 }
 
@@ -743,6 +805,12 @@ export function describeConfig(cfg: ApiConfig): string {
       + `at most ${cfg.wsMaxConnections} connection(s) `
       + `per replica, ${cfg.wsMaxSubscriptions} subscription(s) per socket, `
       + `frames up to ${cfg.wsMaxFrameBytes} bytes`,
+    // Presence on its own line, and both numbers on it. "Why does a
+    // colleague keep flickering on and off the roster" is answered by the
+    // ratio of these two and by nothing else, and an operator must not have
+    // to read the source to find either.
+    `Presence: heartbeat ${cfg.presenceHeartbeatMs}ms, believed for ${cfg.presenceTtlMs}ms, `
+      + 'never persisted',
     `Database: ${redactDsn(cfg.databaseUrl)}`,
     // The WORKER's connection, named separately and redacted the same way.
     // Which role the engine holds is the fact that makes "the worker cannot

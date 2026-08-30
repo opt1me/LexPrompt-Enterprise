@@ -28,6 +28,7 @@ import { registerActivity } from './routes/activity.ts';
 import { registerRuns } from './routes/runs.ts';
 import { createHub, type Hub } from './realtime/hub.ts';
 import { attachSocket, type SocketCaps } from './realtime/socket.ts';
+import { createPresenceRegistry, type PresenceRegistry } from './realtime/presence.ts';
 import { ConflictError } from './errors.ts';
 
 declare module 'fastify' {
@@ -49,6 +50,13 @@ declare module 'fastify' {
      *  and the outbox feeding the other, which delivers nothing and looks
      *  exactly like a quiet review. */
     lexpromptHub: Hub;
+    /** Who this process believes is here (§8, Task 22). Decorated for the
+     *  same reason the hub is: `main.ts` hands the SAME registry to the
+     *  event feed, which merges other replicas' beats into it. Two
+     *  registries would be a socket publishing one roster and a colleague's
+     *  beats landing in the other — a review that reads as empty while two
+     *  people are in it. */
+    lexpromptPresence: PresenceRegistry;
   }
 }
 
@@ -388,11 +396,25 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
 
   const hub = createHub();
   app.decorate('lexpromptHub', hub);
+  /*
+   * PRESENCE PUBLISHES THROUGH THE HUB, and holds no transport of its own.
+   *
+   * The three-file separation §8 asks for stays three files: the hub knows
+   * connections, the socket knows frames, the feed knows the outbox. The
+   * registry knows a roster and hands a finished frame to the hub, which is
+   * why it can be driven by a test with no socket in the process at all.
+   */
+  const presence = createPresenceRegistry({
+    ttlMs: deps.socket.presenceTtlMs,
+    publish: (scope, frame) => { hub.publish(scope.workspaceId, scope.sub, frame); },
+  });
+  app.decorate('lexpromptPresence', presence);
   const stopSocket = attachSocket(app.server, {
     verify: deps.verify,
     resolveActor: deps.resolveActor,
     db: deps.db,
     hub,
+    presence,
     instanceId: deps.instanceId,
     caps: deps.socket,
   });

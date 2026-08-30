@@ -5,6 +5,7 @@ import { appDb, migratorDb } from './helpers/pgHarness.ts';
 import { appendEvent } from '../src/run/events.ts';
 import { startEventFeed, type EventFeed } from '../src/realtime/feed.ts';
 import type { ActiveSubscription, Connection, Hub } from '../src/realtime/hub.ts';
+import { createPresenceRegistry } from '../src/realtime/presence.ts';
 
 /**
  * THE FAN-OUT, WITH NO SOCKET IN THE PROCESS AT ALL.
@@ -47,6 +48,20 @@ function recordingHub(): RecordingHub {
     size() { return active.length; },
   };
 }
+
+/**
+ * A real registry, publishing into the recording hub.
+ *
+ * Not a stub: the feed's presence branch is one of the two things it does
+ * with a notification, and a stub here would make every assertion below
+ * about the outbox pass while the branch beside it did nothing. Presence's
+ * own behaviour is `presence.pg.test.ts`'s; what this one needs is a
+ * registry that is really the shipped one.
+ */
+const presenceFor = (hub: RecordingHub) => createPresenceRegistry({
+  ttlMs: 15_000,
+  publish: (scope, frame) => { hub.publish(scope.workspaceId, scope.sub, frame); },
+});
 
 const reviews: string[] = [];
 const feeds: EventFeed[] = [];
@@ -117,7 +132,7 @@ describe('the outbox is the delivery', () => {
     const hub = recordingHub();
     hub.watch({ review: reviewId }, await highestId());
     const feed = startEventFeed({
-      db: appDb(), hub, listenerUrl: LISTENER_URL, tickMs: 100, pageMax: 100, listen: false,
+      db: appDb(), hub, presence: presenceFor(hub), listenerUrl: LISTENER_URL, tickMs: 100, pageMax: 100, listen: false,
     });
     feeds.push(feed);
     await feed.start();
@@ -135,7 +150,7 @@ describe('the outbox is the delivery', () => {
     // A tick far longer than the assertion's patience, so a pass here can
     // only be the notification doing the work.
     const feed = startEventFeed({
-      db: appDb(), hub, listenerUrl: LISTENER_URL, tickMs: 30_000, pageMax: 100,
+      db: appDb(), hub, presence: presenceFor(hub), listenerUrl: LISTENER_URL, tickMs: 30_000, pageMax: 100,
     });
     feeds.push(feed);
     await feed.start();
@@ -160,7 +175,7 @@ describe('the outbox is the delivery', () => {
     const hub = recordingHub();
     hub.watch({ review: reviewId }, await highestId());
     const feed = startEventFeed({
-      db: appDb(), hub, listenerUrl: LISTENER_URL, tickMs: 50, pageMax: 100,
+      db: appDb(), hub, presence: presenceFor(hub), listenerUrl: LISTENER_URL, tickMs: 50, pageMax: 100,
     });
     feeds.push(feed);
     await feed.start();
@@ -188,7 +203,7 @@ describe('the outbox is the delivery', () => {
     const hub = recordingHub();
     hub.watch({ review: reviewId }, await highestId());
     const feed = startEventFeed({
-      db: appDb(), hub, listenerUrl: LISTENER_URL, tickMs: 50, pageMax: 100, listen: false,
+      db: appDb(), hub, presence: presenceFor(hub), listenerUrl: LISTENER_URL, tickMs: 50, pageMax: 100, listen: false,
     });
     feeds.push(feed);
     await feed.start();
@@ -208,7 +223,7 @@ describe('the outbox is the delivery', () => {
     hub.watch({ review: reviewId }, await highestId());
     const lines: string[] = [];
     const feed = startEventFeed({
-      db: appDb(), hub,
+      db: appDb(), hub, presence: presenceFor(hub),
       // THE MIGRATOR'S DSN, in this test only, and for one reason:
       // `pg_terminate_backend` may only be called on a backend owned by the
       // SAME role unless the caller is a superuser or holds
@@ -226,9 +241,17 @@ describe('the outbox is the delivery', () => {
     // Kill the feed's own backend from another session. `pg_terminate_backend`
     // on the connection running `LISTEN lexprompt_event` is the closest a
     // test can get to the network dropping under it.
+    //
+    // `like 'listen lexprompt_%'` AND NOT the exact `listen lexprompt_event`.
+    // `pg_stat_activity.query` holds the LAST statement a backend ran, and
+    // since Task 22 the listener issues two: `listen lexprompt_event` and
+    // then `listen lexprompt_presence`. Pinned to the first string, this
+    // matched nothing the moment presence landed -- and the assertion below
+    // is what turned that into a named failure rather than a test that had
+    // quietly stopped killing anything.
     const killed = await migratorDb().query<{ pg_terminate_backend: boolean }>(
       `select pg_terminate_backend(pid) from pg_stat_activity
-        where query like 'listen lexprompt_event' and pid <> pg_backend_pid()`);
+        where query like 'listen lexprompt%' and pid <> pg_backend_pid()`);
     // ASSERTED, because a kill that matched nothing would make everything
     // below pass for the wrong reason: the listener never dropped, so of
     // course delivery continued.

@@ -167,6 +167,8 @@ async function main(): Promise<void> {
       maxSubscriptions: config.wsMaxSubscriptions,
       maxFrameBytes: config.wsMaxFrameBytes,
       eventPageMax: config.eventPageMax,
+      presenceHeartbeatMs: config.presenceHeartbeatMs,
+      presenceTtlMs: config.presenceTtlMs,
     },
     // The SAME store `ensureContainer` ran against above. One instance for
     // the upload path and the delete cascade both: two stores built from
@@ -242,6 +244,11 @@ async function main(): Promise<void> {
   const feed = startEventFeed({
     db,
     hub: app.lexpromptHub,
+    // The SAME registry the socket beats into (Task 22). It listens on
+    // `PRESENCE_CHANNEL` beside the outbox's doorbell, on the connection it
+    // already holds, so a colleague connected to another replica appears on
+    // this one's roster.
+    presence: app.lexpromptPresence,
     listenerUrl: config.databaseUrl,
     tickMs: config.hubTickMs,
     pageMax: config.eventPageMax,

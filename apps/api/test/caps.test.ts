@@ -4,7 +4,7 @@ import path from 'node:path';
 import { ROOT, walk, rel, codeOf } from './sourceScan.ts';
 import {
   ConfigError, assertBackoffOutlivedByHeartbeat, assertImagesFitTheBody, assertLeaseOutlastsCell,
-  assertWorkerPoolFits,
+  assertPresenceOutlivesBeat, assertWorkerPoolFits,
   describeConfig, loadConfig,
 } from '../src/config.ts';
 
@@ -54,6 +54,13 @@ const DECLARED = [
   // failure and therefore exactly the kind that needs a declared number.
   'API_WS_PING_MS', 'API_WS_MAX_CONNECTIONS', 'API_WS_MAX_SUBSCRIPTIONS',
   'API_WS_MAX_FRAME_BYTES', 'API_HUB_TICK_MS',
+  // Presence (Task 22). The TTL is the number that keeps this feature
+  // honest -- a roster entry outliving it claims a colleague is present who
+  // is not -- and the heartbeat is the interval the server ASKS the browser
+  // for, on the `hello` frame, so the two cannot be set independently in two
+  // places. `assertPresenceOutlivesBeat` refuses a pair that would expire
+  // everybody between beats.
+  'API_PRESENCE_HEARTBEAT_MS', 'API_PRESENCE_TTL_MS',
 ];
 
 /** `API_RUN_LEASE_MS` -> `runLeaseMs`, the naming `config.ts` uses without
@@ -162,7 +169,7 @@ describe('every declared cap has a reader, and every reader has a declaration', 
       'Run queue:', 'worker(s)', 'lease ', 'heartbeat ', 'attempt(s)',
       'cell(s) per workspace', 'Events: kept', 'Page rendering:', 'Engine:',
       'Live socket: ping', 'fan-out tick', 'connection(s) per replica',
-      'retry backoff ',
+      'retry backoff ', 'Presence: heartbeat', 'believed for',
     ]) {
       expect(text, fragment).toContain(fragment);
     }
@@ -243,6 +250,23 @@ describe('the caps that constrain each other are checked at load, not at runtime
     expect(() => loadConfig({ ...BASE })).not.toThrow();
   });
 
+  it('refuses a presence TTL that would expire everybody between heartbeats', () => {
+    // The failure is not an outage and nobody would report it as one: every
+    // colleague appears, vanishes and reappears on a cycle, which reads as
+    // people opening and closing the review. A reader who learns to distrust
+    // the roster has lost the whole feature while the app looks fine.
+    expect(() => loadConfig({
+      ...BASE, API_PRESENCE_HEARTBEAT_MS: '10000', API_PRESENCE_TTL_MS: '11000',
+    })).toThrow(/API_PRESENCE_TTL_MS/);
+    // …and the repair the message names works.
+    expect(loadConfig({
+      ...BASE, API_PRESENCE_HEARTBEAT_MS: '10000', API_PRESENCE_TTL_MS: '15000',
+    }).presenceTtlMs).toBe(15_000);
+    // The defaults pass, so the refusal is about an operator's values rather
+    // than about a check nothing can satisfy.
+    expect(() => loadConfig({ ...BASE })).not.toThrow();
+  });
+
   it('each assertion is reachable on its own, so a caller can be checked in isolation', () => {
     const cfg = loadConfig({ ...BASE });
     expect(() => assertWorkerPoolFits({ ...cfg, runWorkers: 99 })).toThrow(ConfigError);
@@ -251,6 +275,8 @@ describe('the caps that constrain each other are checked at load, not at runtime
     expect(() => assertImagesFitTheBody({ ...cfg, runImageBytesMax: cfg.maxBodyBytes }))
       .toThrow(ConfigError);
     expect(() => assertBackoffOutlivedByHeartbeat({ ...cfg, runRetryBackoffMs: 10 * 60_000 }))
+      .toThrow(ConfigError);
+    expect(() => assertPresenceOutlivesBeat({ ...cfg, presenceTtlMs: cfg.presenceHeartbeatMs }))
       .toThrow(ConfigError);
   });
 });

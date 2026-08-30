@@ -182,7 +182,7 @@ describe('a watch that has stopped being live says so', () => {
     const onError = vi.fn();
     const stop = watchRun('run-1', vi.fn(), onError);
     const ws = await openedSocket();
-    ws.deliver({ t: 'hello', instanceId: 'api-1', userId: 'u1' });
+    ws.deliver({ t: 'hello', instanceId: 'api-1', userId: 'u1', presenceHeartbeatMs: 10_000 });
 
     ws.drop();
     await vi.advanceTimersByTimeAsync(300);

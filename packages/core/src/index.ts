@@ -60,8 +60,14 @@ export {
   WS_SUBPROTOCOL, WS_BEARER_PREFIX, WS_PATH,
   WS_CLOSE_UNAUTHENTICATED, WS_CLOSE_UNRESPONSIVE, WS_CLOSE_TOO_MANY,
   isClientFrame, isSubscriptionRef,
+  // §8's heartbeat (Stage 4 Task 22). `PresenceMember` is declared beside
+  // `ServerFrame` rather than in `apps/api/src/realtime/presence.ts`, where
+  // the plan put it, for the mechanical reason that the frame union carries
+  // it and the browser reads that union: a type the wire references cannot
+  // live in a workspace the browser does not import.
+  PRESENCE_SCREENS, isPresenceScreen,
 } from './api/socket.ts';
-export type { ClientFrame, ServerFrame } from './api/socket.ts';
+export type { ClientFrame, ServerFrame, PresenceMember, PresenceScreen } from './api/socket.ts';
 export type {
   FindingsPage, DispositionView, DispositionCause, DispositionEventView,
   DispositionWithHistory,

@@ -140,3 +140,46 @@ export async function connect(
   };
   return socket;
 }
+
+/**
+ * TWO SOCKETS ON DIFFERENT REPLICAS, OR A FAILURE THAT SAYS SO.
+ *
+ * Extracted from `replicaFanout.compose.test.ts` when `presence.compose.
+ * test.ts` needed the same condition — at the SECOND copy, per `CLAUDE.md`,
+ * because the copy that stays green when the property breaks is always the
+ * weaker one, and here the property is the whole premise of both files.
+ *
+ * The loop is bounded and the bound is the assertion: nginx round-robins
+ * over the addresses its resolver returns, so a handful of attempts is
+ * plenty, and twenty that all land on one replica means the multi-replica
+ * condition does not exist — which must be a failure, not a pass.
+ *
+ * Every socket it opens (including the ones it discards) is pushed onto
+ * `keep`, so the calling suite's `afterAll` closes them: a suite that leaks
+ * an open socket leaves the server holding a connection against its cap.
+ */
+export async function socketsOnDistinctReplicas(
+  url: string, firstToken: string, secondToken: string, keep: TestSocket[],
+): Promise<[TestSocket, TestSocket]> {
+  const first = await connect(url, firstToken);
+  keep.push(first);
+  const firstHello = await first.waitFor('hello');
+  const seen = new Set<string>([String(firstHello.instanceId)]);
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const next = await connect(url, secondToken);
+    keep.push(next);
+    // eslint-disable-next-line no-await-in-loop
+    const hello = await next.waitFor('hello');
+    if (hello.instanceId !== firstHello.instanceId) return [first, next];
+    seen.add(String(hello.instanceId));
+    next.close();
+  }
+  throw new Error(
+    'twenty connections all landed on one replica '
+    + `(instance ids seen: ${[...seen].join(', ')}). The cross-replica condition this file `
+    + 'tests does not exist, so a pass here would mean nothing. Check that `api` really is '
+    + 'running at two replicas (`docker compose ps`) and that nginx is resolving it per '
+    + 'request (infra/nginx/web.conf).');
+}

@@ -4,7 +4,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import {
   ModelError, isClientFrame, uid,
   WS_BEARER_PREFIX, WS_CLOSE_UNRESPONSIVE, WS_PATH, WS_SUBPROTOCOL,
-  type AppEvent, type ClientFrame, type ServerFrame, type SubscriptionRef,
+  type AppEvent, type ClientFrame, type PresenceScreen, type ServerFrame, type SubscriptionRef,
 } from '@lexprompt/core';
 import type { Principal } from '../oidc.ts';
 import type { Actor } from '../auth/actor.ts';
@@ -13,6 +13,10 @@ import { readEvents } from '../run/events.ts';
 import { ROLE_RANK } from '../auth/roles.ts';
 import { ROUTE_POLICY, routeKey } from '../auth/routeTable.ts';
 import type { Connection, Hub } from './hub.ts';
+import {
+  encodePresence, PRESENCE_CHANNEL,
+  type PresenceNotification, type PresenceRegistry, type PresenceScope,
+} from './presence.ts';
 
 /**
  * §8'S TRANSPORT — AUTHENTICATED BEFORE IT IS UPGRADED.
@@ -53,6 +57,14 @@ export interface SocketDeps {
   resolveActor(principal: Principal): Promise<Actor>;
   db: Db;
   hub: Hub;
+  /**
+   * WHO IS HERE, in this process's memory and nowhere else (Task 22, S6).
+   *
+   * Shared with `feed.ts`, which merges the beats other replicas publish on
+   * `PRESENCE_CHANNEL` into the same registry — one roster per replica,
+   * whether a colleague happens to be connected to this one or another.
+   */
+  presence: PresenceRegistry;
   /** This process's identity, echoed on every `hello`. `main.ts` passes the
    *  same `api-${hostname()}` the worker pool uses, so "which replica am I
    *  on" is answerable from a frame — which is what
@@ -69,6 +81,11 @@ export interface SocketCaps {
   /** `API_EVENT_PAGE_MAX` — the replay's page size, the same cap the HTTP
    *  cursor uses. */
   eventPageMax: number;
+  /** `API_PRESENCE_HEARTBEAT_MS` — the interval this server ASKS the browser
+   *  to beat at, sent on `hello`. See `ServerFrame`. */
+  presenceHeartbeatMs: number;
+  /** `API_PRESENCE_TTL_MS` — how often the sweep runs is derived from it. */
+  presenceTtlMs: number;
 }
 
 /** The role a socket needs, read from the SAME table every route reads. */
@@ -169,8 +186,27 @@ export function attachSocket(server: Server, deps: SocketDeps): () => Promise<vo
   // shutdown is not held open by a heartbeat nobody is listening to.
   timer.unref?.();
 
+  /*
+   * THE TTL SWEEP — the thing that makes presence honest (Task 22, S6).
+   *
+   * It runs on its own clock and not off an arriving frame, and that is the
+   * whole point: a replica nobody is beating at must still expire the people
+   * it last heard from. Expiry driven by traffic would keep a roster alive
+   * exactly when there is nobody left to correct it — *"a stale presence
+   * indicator that claims someone is there is worse than no indicator"*, and
+   * the quietest way to ship one is to expire on write.
+   *
+   * A THIRD of the TTL, so an entry is at most a third of a TTL stale beyond
+   * it. Sweeping at the TTL itself would let an expired entry stand for
+   * almost twice its life.
+   */
+  const sweepMs = Math.max(1_000, Math.floor(deps.caps.presenceTtlMs / 3));
+  const sweeper = setInterval(() => { deps.presence.sweep(Date.now()); }, sweepMs);
+  sweeper.unref?.();
+
   return async () => {
     clearInterval(timer);
+    clearInterval(sweeper);
     server.off('upgrade', onUpgrade);
     for (const ws of wss.clients) ws.terminate();
     await new Promise<void>(resolve => { wss.close(() => resolve()); });
@@ -262,7 +298,14 @@ function onConnection(ws: WebSocket, actor: Actor, deps: SocketDeps): void {
 
   // The instance id is what makes "these two sockets are on different
   // replicas" a fact a test can assert rather than a hope.
-  send(ws, { t: 'hello', instanceId: deps.instanceId, userId: actor.id });
+  send(ws, {
+    t: 'hello',
+    instanceId: deps.instanceId,
+    userId: actor.id,
+    // The interval this deployment asks for, rather than a constant compiled
+    // into the browser bundle. See `ServerFrame`.
+    presenceHeartbeatMs: deps.caps.presenceHeartbeatMs,
+  });
 
   ws.on('message', data => {
     let parsed: unknown;
@@ -287,6 +330,23 @@ function onConnection(ws: WebSocket, actor: Actor, deps: SocketDeps): void {
 
   ws.on('close', () => {
     deps.hub.close(conn);
+    /*
+     * GONE NOW, not in fifteen seconds' time.
+     *
+     * The TTL is the backstop for a replica that died or a network that
+     * disappeared — the cases where nobody is left to say so. A tab that
+     * closes cleanly says so, here and (below) on every other replica, so a
+     * colleague's face leaves the clause when they leave it.
+     */
+    for (const sub of state.subs.values()) {
+      announcePresence(deps, {
+        k: 'leave',
+        workspaceId: conn.workspaceId,
+        sub,
+        beat: { connectionId: conn.id, userId: conn.userId, screen: 'review', at: Date.now() },
+      });
+    }
+    deps.presence.leave(conn.id);
     STATE.delete(ws);
   });
   ws.on('error', err => {
@@ -304,9 +364,89 @@ async function handleFrame(
   if (frame.t === 'unsubscribe') {
     deps.hub.leave(state.conn, frame.sub);
     state.subs.delete(keyOf(frame.sub));
+    // Leaving a subscription is leaving its roster. Without this a reader
+    // who navigated away would stay on the clause index of a review they
+    // are no longer looking at, for as long as their socket lived.
+    announcePresence(deps, {
+      k: 'leave',
+      workspaceId: state.conn.workspaceId,
+      sub: frame.sub,
+      beat: {
+        connectionId: state.conn.id, userId: state.conn.userId, screen: 'review', at: Date.now(),
+      },
+    });
+    deps.presence.leave(state.conn.id, { workspaceId: state.conn.workspaceId, sub: frame.sub });
+    return;
+  }
+  if (frame.t === 'presence') {
+    handleBeat(ws, state, frame.sub, frame.screen, frame.clauseId, deps);
     return;
   }
   await subscribe(ws, state, frame.sub, frame.lastEventId, deps);
+}
+
+/**
+ * *"I am here."* — recorded against the AUTHENTICATED actor, never against
+ * anything the frame said.
+ *
+ * The beat carries a screen and a clause and no identity at all: `userId`
+ * comes from the token this socket was upgraded with. A frame able to name a
+ * user would let one client put a colleague's face on a clause, which is
+ * the single thing an advisory signal must not be able to do — a face is not
+ * a judgement, but a face somebody else planted is a claim about where a
+ * person was.
+ *
+ * REFUSED on a subscription this socket has not joined, rather than
+ * recorded. `subscribe` is where a subscription is checked for existence and
+ * for workspace, and presence on an unchecked ref would let a signed-in
+ * caller appear on any review id they can guess — and a refusal is what the
+ * client needs to hear, because a beat that is silently dropped looks
+ * exactly like a review nobody else is in.
+ */
+function handleBeat(
+  ws: WebSocket, state: SocketState, sub: SubscriptionRef,
+  screen: PresenceScreen, clauseId: string | undefined, deps: SocketDeps,
+): void {
+  if (!state.subs.has(keyOf(sub))) {
+    send(ws, {
+      t: 'refused', sub,
+      reason: 'LexPrompt records presence only on a subscription this socket has joined.',
+    });
+    return;
+  }
+  const scope: PresenceScope = { workspaceId: state.conn.workspaceId, sub };
+  const beat = {
+    connectionId: state.conn.id,
+    userId: state.conn.userId,
+    screen,
+    ...(clauseId === undefined ? {} : { clauseId }),
+    // THIS REPLICA'S CLOCK, and the receiving replica's clock on the far
+    // side of the notification below — never the sender's. Two container
+    // clocks that disagree by a minute would otherwise expire one replica's
+    // whole roster instantly or never, and a TTL is only meaningful measured
+    // against the clock that sweeps it.
+    at: Date.now(),
+  };
+  deps.presence.beat(scope, beat);
+  announcePresence(deps, { k: 'beat', workspaceId: state.conn.workspaceId, sub, beat });
+}
+
+/**
+ * The beat, to every other replica (P39's one exception).
+ *
+ * FIRE AND FORGET, and reported rather than awaited: presence is advisory,
+ * so a notification that fails costs a colleague their place on one other
+ * replica's roster for at most one TTL and gets it back on the next beat.
+ * Awaiting it would put a database round trip in front of a frame handler
+ * ten times a minute per reader, for a signal that is allowed to be wrong.
+ */
+function announcePresence(deps: SocketDeps, n: PresenceNotification): void {
+  void deps.db.query('select pg_notify($1, $2)', [PRESENCE_CHANNEL, encodePresence(n)])
+    .catch((err: Error) => {
+      process.stderr.write(
+        `api: could not announce presence (${err.message}); `
+        + 'this replica\'s roster is still correct\n');
+    });
 }
 
 const keyOf = (sub: SubscriptionRef): string => JSON.stringify(sub);
