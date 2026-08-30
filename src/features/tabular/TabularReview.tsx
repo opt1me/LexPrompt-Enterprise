@@ -2,8 +2,11 @@ import React, { useState } from 'react';
 import { AlignLeft, Download, FileText, Info, Loader, LayoutList, RotateCcw, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { DocumentFile, Finding, Review, ReviewRun, RiskLevel } from '../../types';
 import { findingKey, findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
-import type { VerificationChange } from '@lexprompt/core';
-import { verificationCounts, isVerifiable, positionOutcomeCounts, NO_RISK_DATA_LABEL } from '../../lib/findingOutcome';
+import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
+import {
+  verificationCounts, isVerifiable, positionOutcomeCounts, NO_RISK_DATA_LABEL,
+  type DispositionAudience,
+} from '../../lib/findingOutcome';
 import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';
 import { Button } from '../../components/Button';
@@ -29,6 +32,16 @@ export interface TabularReviewProps {
   authorInitials?: string;
   /** The local profile's id, for deciding which notes read as "yours". */
   localUserId?: string;
+  /**
+   * Resolves the disposition the open cell's card should name (§6.3, Stage
+   * 4) — `src/lib/api/findings.ts`'s `dispositionFor`, with the review
+   * closed over. A lookup rather than a map, for the reason `ResultsView`'s
+   * copy of this prop gives.
+   */
+  dispositionOf?: (findingsKey: string, clauseId: string) => DispositionWithHistory | undefined;
+  /** How the open cell's card turns a user id into a name and an instant
+   *  into a time. */
+  audience?: DispositionAudience;
   /** The grid's way out of triage: hands the clicked cell's `docId`/
    *  `clauseId` off to the ledger (Task 10). Optional, like `onVerify` and
    *  `onAddNote` — omitted, `CellDetail` renders with no such affordance
@@ -62,7 +75,8 @@ const RISK_CELL: Record<RiskLevel, string> = {
  */
 export function TabularReview({
   run, documents, onRetryCell, onOpenCards, interrupted = false,
-  onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId, onOpenInReview,
+  onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId,
+  dispositionOf, audience, onOpenInReview,
 }: TabularReviewProps) {
   const [wrapText, setWrapText] = useState(false);
   const [selected, setSelected] = useState<SelectedCell | null>(null);
@@ -214,6 +228,12 @@ export function TabularReview({
             verifyBusy={verifyBusyKey === findingKey(selected.docId, selected.clauseId)}
             authorInitials={authorInitials}
             localUserId={localUserId}
+            // Through `findingsKeyFor`, the ONE place a findings key is
+            // derived — never `selected.docId`, which names which document
+            // the viewer pane shows and not which cell owns the answer.
+            disposition={dispositionOf?.(
+              findingsKeyFor(run.target, selected.docId), selected.clauseId)}
+            audience={audience}
             onOpenInReview={onOpenInReview ? () => onOpenInReview(selected.docId, selected.clauseId) : undefined}
           />
         )}

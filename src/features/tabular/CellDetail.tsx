@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { X, FileText, BookOpen } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding } from '../../types';
-import type { VerificationChange } from '@lexprompt/core';
+import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
+import type { DispositionAudience } from '../../lib/findingOutcome';
 import { Button } from '../../components/Button';
 import { FindingCard } from '../review/FindingCard';
 import { DocumentViewer } from '../review/DocumentViewer';
@@ -47,6 +48,13 @@ export interface CellDetailProps {
   authorInitials?: string;
   /** The local profile's id, for deciding which notes read as "yours". */
   localUserId?: string;
+  /** WHO SET THE STATE THIS CARD IS SHOWING, AND WHEN (§6.3, Stage 4). The
+   *  cell is already resolved here, so this is the value rather than a
+   *  lookup. Optional, and `undefined` means "not read", never "not
+   *  checked". */
+  disposition?: DispositionWithHistory;
+  /** How the card turns a user id into a name and an instant into a time. */
+  audience?: DispositionAudience;
   /** The grid's way out of triage: hands this clicked cell off to the
    *  ledger (Task 10). Optional, same reasoning as `onVerify`/`onAddNote` —
    *  omitted, no such affordance renders rather than a button that goes
@@ -62,7 +70,10 @@ export interface CellDetailProps {
  * button feeds that single quote to the viewer as its highlight, scrolling
  * to it, exactly as `ResultsView` wires `FindingCard` to `DocumentViewer`.
  */
-export function CellDetail({ doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote, authorInitials, localUserId, onOpenInReview }: CellDetailProps) {
+export function CellDetail({
+  doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote,
+  authorInitials, localUserId, disposition, audience, onOpenInReview,
+}: CellDetailProps) {
   const [highlights, setHighlights] = useState<string[]>([]);
   /** Set when a clicked citation belongs to a document other than `doc`. */
   const [citedDocId, setCitedDocId] = useState<string | null>(null);
@@ -127,6 +138,8 @@ export function CellDetail({ doc, documents, clause, finding, onClose, onRetry, 
           documentNames={documentNames}
           authorInitials={authorInitials}
           localUserId={localUserId}
+          disposition={disposition}
+          audience={audience}
         />
       </div>
 

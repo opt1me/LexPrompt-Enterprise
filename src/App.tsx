@@ -54,7 +54,11 @@ import { describeLoadError, describeRunEnding } from './lib/loadError';
 import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
 } from './lib/api/runs';
-import { addNote, getFindings, setDisposition, setNetPosition } from './lib/api/findings';
+import {
+  addNote, dispositionFor, getFindings, setDisposition, setNetPosition,
+} from './lib/api/findings';
+import { loadDirectory, userName } from './lib/api/users';
+import { formatInstant } from './lib/instant';
 import { debug } from './lib/debug';
 import { getVersion, listVersions } from './lib/db/playbookVersions';
 import { scanPlaybookAcrossMatters } from './lib/playbookScan';
@@ -796,6 +800,48 @@ function AppShell({ signIn }: { signIn: () => void }) {
     getProfile().then(setProfile).catch(() => { /* display-only; initials falls back to 'ME' */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /**
+   * THE WORKSPACE'S PEOPLE, for every attribution line on screen (§6.3).
+   *
+   * Loaded once, beside the profile above, and for the same reason: a card
+   * has to say WHO set the state it is showing, and the `byUserId` on a
+   * disposition is a foreign key rather than a name. `userName` reads a
+   * module cache, so the load needs a state change to bring the names onto
+   * a screen already rendered — that is all `directoryLoads` is.
+   *
+   * A FAILURE IS SWALLOWED HERE ON PURPOSE, and it is not the "empty is not
+   * broken" rule being broken. `loadDirectory` rejects and stays unloaded
+   * rather than caching an empty directory, so `userName` goes on answering
+   * `undefined` and every actor renders as *"someone this workspace does not
+   * name"* — a true sentence, not an invented name and not a blank. The
+   * alternative, blocking the review screen on a directory fetch, would make
+   * a name the precondition for reading a contract.
+   */
+  const [directoryLoads, setDirectoryLoads] = useState(0);
+  useEffect(() => {
+    loadDirectory()
+      .then(() => setDirectoryLoads(n => n + 1))
+      .catch(() => { /* names stay unresolved, and the label says so */ });
+  }, []);
+
+  /**
+   * How a card turns a user id into a name and an instant into a time.
+   *
+   * Rebuilt when the directory arrives so a card rendered before it lands
+   * re-renders with the names in it. It can only RESOLVE an id — it cannot
+   * supply one, which is what keeps "the card names an actor because a
+   * disposition says so" true no matter what this object holds.
+   */
+  const audience = useMemo(() => ({ nameOf: userName, timeOf: formatInstant }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [directoryLoads]);
+
+  /** The disposition the server last reported for one cell of the open
+   *  review — `undefined` until this browser has read it, which the card
+   *  renders as "not read" rather than as "not checked". */
+  const dispositionOf = (findingsKey: string, clauseId: string) =>
+    (run ? dispositionFor(run.id, findingsKey, clauseId) : undefined);
 
   // --- Sub-project E: authoring a new playbook ---------------------------
   //
@@ -4461,6 +4507,8 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     verifyBusyKey={verifyBusyKey}
                     authorInitials={profile?.initials ?? 'ME'}
                     localUserId={profile?.id ?? ''}
+                    dispositionOf={dispositionOf}
+                    audience={audience}
                     onConfirmNetPosition={handleConfirmNetPosition}
                     onAmendNetPosition={handleAmendNetPosition}
                     documentDates={documentDates}
@@ -4480,6 +4528,8 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     verifyBusyKey={verifyBusyKey}
                     authorInitials={profile?.initials ?? 'ME'}
                     localUserId={profile?.id ?? ''}
+                    dispositionOf={dispositionOf}
+                    audience={audience}
                   />
                 )}
               </div>

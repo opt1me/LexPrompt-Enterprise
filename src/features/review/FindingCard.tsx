@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { PlaybookClause, Finding, RiskLevel } from '../../types';
-import type { VerificationChange } from '@lexprompt/core';
+import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
 import { RiskChip } from '../../components/RiskChip';
 import { StateChip } from '../../components/StateChip';
 import { PositionChip } from '../../components/PositionChip';
@@ -12,7 +12,8 @@ import { NotesPanel } from './NotesPanel';
 import { NetPositionPanel } from './NetPositionPanel';
 import { PositionComparison } from './PositionComparison';
 import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
-import { isVerifiable } from '../../lib/findingOutcome';
+import { dispositionLabel, isVerifiable, type DispositionAudience } from '../../lib/findingOutcome';
+import { formatInstant } from '../../lib/instant';
 
 export interface FindingCardProps {
   clause: PlaybookClause;
@@ -80,7 +81,43 @@ export interface FindingCardProps {
    *  step naming an id absent here renders as unavailable rather than
    *  crashing. */
   documentInfo?: Record<string, TrailDocumentInfo>;
+  /**
+   * WHO SET THE STATE THIS CARD IS SHOWING, AND WHEN (§6.3, Stage 4).
+   *
+   * The `finding_disposition` row the server last reported for this cell,
+   * with the event that produced it —
+   * `src/lib/api/findings.ts`'s `dispositionFor`.
+   *
+   * OPTIONAL, and `undefined` is NOT "nobody has checked this": it means
+   * this browser has not read a disposition for the clause, which
+   * `dispositionLabel` renders as exactly that rather than as "Not checked".
+   * A finding nobody has touched arrives as a real disposition with
+   * `changedCount: 0`.
+   *
+   * The card renders an actor because THIS says so, never because a name
+   * happened to be resolvable — `audience` below can only turn an id into a
+   * name, and cannot conjure the id.
+   */
+  disposition?: DispositionWithHistory;
+  /** How to turn a user id into a name and an instant into a time. Optional:
+   *  a card rendered with none falls back to `NO_DIRECTORY`, which names
+   *  nobody — a true sentence rather than an invented name. */
+  audience?: DispositionAudience;
 }
+
+/**
+ * The audience a card falls back to when its caller hands it none.
+ *
+ * It names NOBODY. That is honest rather than helpful, and it is the right
+ * direction: `dispositionLabel` turns an unresolvable id into *"someone this
+ * workspace does not name"*, which is true of every actor when nothing has
+ * been given a directory, and is never a name somebody did not have. Every
+ * screen that has a directory passes its own.
+ */
+const NO_DIRECTORY: DispositionAudience = {
+  nameOf: () => undefined,
+  timeOf: formatInstant,
+};
 
 // Written fresh, not ported: the corresponding classes in the deleted
 // components/ResultsView.tsx (lines ~184, 206, 250) were mangled by a
@@ -116,6 +153,7 @@ export function FindingCard({
   clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames,
   onVerify, verifyBusy, onAddNote, noteBusy, authorInitials, localUserId,
   onConfirmNetPosition, onAmendNetPosition, netPositionBusy, documentInfo,
+  disposition, audience = NO_DIRECTORY,
 }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
   const [trailOpen, setTrailOpen] = useState(false);
@@ -338,6 +376,26 @@ export function FindingCard({
            elimination; naming it here, rather than leaving it implicit in
            the switch above, is what keeps the two sites from being able to
            drift apart the way they did before (Critical 2). */}
+        {/* WHO SET THE STATE THE CHIP ABOVE IS SHOWING, AND WHEN (§6.3).
+           Rendered whether or not this card can CHANGE a disposition:
+           attribution is information a reader is entitled to, not a control
+           — a preview with no `onVerify` still has to be honest about who
+           checked the clause.
+
+           ONE ink for the whole line rather than a colour per state, and
+           deliberately: the `StateChip` two rows up already carries the
+           state's colour, and a second coloured rendering of the same fact
+           is a second place for the two to disagree. It also means no class
+           name here is ever built from a variable — Tailwind's compiler
+           finds classes by scanning for complete literal strings, so a
+           template-built name is silently no styling at all, with no error
+           and no failing test. */}
+        {isVerifiable(finding) && (
+          <p data-disposition-label className="font-ui text-ui-sm text-ink-4">
+            {dispositionLabel(disposition, audience)}
+          </p>
+        )}
+
         {isVerifiable(finding) && onVerify && (
           <VerificationControls
             verification={finding.verification}

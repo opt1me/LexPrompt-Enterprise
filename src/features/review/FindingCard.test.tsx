@@ -5,6 +5,10 @@ import { createRoot, type Root } from 'react-dom/client';
 import type { PlaybookClause, Finding, StandardPosition } from '../../types';
 import { FindingCard } from './FindingCard';
 import { unconfirmedPosition } from '@lexprompt/core';
+import { dispositionLabel } from '../../lib/findingOutcome';
+import {
+  DISPOSITION_SHAPES, BY_A_STRANGER, TEST_AUDIENCE,
+} from '../../test/dispositionShapes';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -341,5 +345,183 @@ describe('FindingCard — standard position comparison (Task 7)', () => {
     expect(text).toMatch(/deviates/i);
     expect(text).toMatch(/verified/i);   // state chip survives
     expect(text).toMatch(/medium/i);     // risk chip survives
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ *  STAGE 4 §18 item 5: every disposition on screen carries its actor   *
+ *  and its time, and a changed one says so.                            *
+ * ------------------------------------------------------------------ */
+
+describe('FindingCard — the disposition names who set it and when', () => {
+  it.each(Object.keys(DISPOSITION_SHAPES))('renders the "%s" shape with its own words', (what) => {
+    const shape = DISPOSITION_SHAPES[what];
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        disposition={shape}
+        audience={TEST_AUDIENCE}
+      />,
+    );
+    // The card renders the ONE wording, rather than composing its own —
+    // which is what keeps the card, the history panel and the two exporters
+    // from drifting apart the way the DOCX and the CSV once did.
+    expect(container.textContent).toContain(dispositionLabel(shape, TEST_AUDIENCE));
+  });
+
+  it('never renders a bare state with no actor for a disposition somebody set', () => {
+    /*
+     * THE MUTATION THIS EXISTS FOR: delete the label line from
+     * `FindingCard` and keep the `StateChip`. The chip still says
+     * "Verified", the card still looks finished, and this assertion is the
+     * only thing that goes red.
+     */
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding({ verification: { state: 'verified', byUserId: 'u2', at: 1 } })}
+        disposition={DISPOSITION_SHAPES['verified after a rejection']}
+        audience={TEST_AUDIENCE}
+      />,
+    );
+    const text = container.textContent!;
+    expect(text).toContain('Verified by R. Okafor');
+    // Every "Verified" on this card is followed by an actor. The chip's own
+    // word is "Verified" with nothing after it, so this also pins that the
+    // chip is not the only thing saying so.
+    const line = container.querySelector('[data-disposition-label]');
+    expect(line).toBeTruthy();
+    expect(line!.textContent).toMatch(/Verified by /);
+  });
+
+  it('names nobody for a never-touched finding, rather than whoever ran the review', () => {
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        disposition={DISPOSITION_SHAPES['never touched']}
+        audience={TEST_AUDIENCE}
+      />,
+    );
+    const line = container.querySelector('[data-disposition-label]')!;
+    expect(line.textContent).toBe('Not checked');
+    expect(line.textContent).not.toContain(' by ');
+  });
+
+  it('says a disposition it has not READ is unread, never "Not checked"', () => {
+    // A card with no `disposition` prop at all — a preview, or a cell this
+    // browser has not read. "Not checked" here would be a claim about a
+    // lawyer's work made because a fetch had not happened.
+    const container = mount(<FindingCard {...baseProps} finding={doneFinding()} />);
+    const line = container.querySelector('[data-disposition-label]')!;
+    expect(line.textContent).toMatch(/not read/i);
+    expect(line.textContent).not.toBe('Not checked');
+  });
+
+  it('does not derive an actor from a Finding s verification — only from a disposition', () => {
+    /*
+     * RULE 1, RENDERED. A `Finding.verification` can carry a `byUserId`,
+     * and a card that read it would put a name on screen because a name was
+     * resolvable rather than because a disposition said so. The two are
+     * given DIFFERENT people here, and the card must say what the
+     * disposition says.
+     */
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding({ verification: { state: 'verified', byUserId: 'u1', at: 1 } })}
+        disposition={DISPOSITION_SHAPES['verified after a rejection']}
+        audience={TEST_AUDIENCE}
+      />,
+    );
+    const line = container.querySelector('[data-disposition-label]')!;
+    expect(line.textContent).toContain('R. Okafor');
+    expect(line.textContent).not.toContain('A. Trainee');
+  });
+
+  it('renders no actor line at all on a finding no judgement can attach to', () => {
+    // `isVerifiable`, the same rule `VerificationControls` is gated on. A
+    // pending or errored clause has no settled output for a judgement to be
+    // about, so an attribution line there would be about nothing.
+    for (const status of ['pending', 'running', 'error', 'cancelled'] as const) {
+      const container = mount(
+        <FindingCard
+          {...baseProps}
+          finding={{ clauseId: 'c1', status, citations: [], verification: { state: 'unchecked' }, notes: [] }}
+          disposition={DISPOSITION_SHAPES['verified once']}
+          audience={TEST_AUDIENCE}
+        />,
+      );
+      expect(container.querySelector('[data-disposition-label]'), status).toBeNull();
+      cleanup?.();
+    }
+  });
+
+  it('shows the line even when the card cannot CHANGE a disposition', () => {
+    // Attribution is information, not a control. A preview with no
+    // `onVerify` still has to be honest about who checked the clause.
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        disposition={DISPOSITION_SHAPES['verified once']}
+        audience={TEST_AUDIENCE}
+      />,
+    );
+    expect(container.querySelector('[data-disposition-label]')!.textContent)
+      .toContain('A. Trainee');
+    // …and no verification controls, so this really is the no-write case.
+    expect(Array.from(container.querySelectorAll('button')).some(
+      b => /^verify$/i.test(b.textContent || ''))).toBe(false);
+  });
+
+  it('names nobody it cannot name, and never prints a raw id', () => {
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        disposition={BY_A_STRANGER}
+        audience={TEST_AUDIENCE}
+      />,
+    );
+    const text = container.textContent!;
+    expect(text).toContain('someone this workspace does not name');
+    expect(text).not.toContain(BY_A_STRANGER.disposition.byUserId!);
+  });
+
+  it('falls back to naming nobody when no audience is given, rather than throwing', () => {
+    const container = mount(
+      <FindingCard {...baseProps} finding={doneFinding()} disposition={DISPOSITION_SHAPES['verified once']} />,
+    );
+    const line = container.querySelector('[data-disposition-label]')!;
+    expect(line.textContent).toContain('Verified by someone this workspace does not name');
+    expect(line.textContent).not.toBe('');
+  });
+
+  it('distinguishes a re-run reset from a person clearing a verification', () => {
+    // §6.3: the card must not flatten them.
+    const rerun = mount(
+      <FindingCard {...baseProps} finding={doneFinding()}
+        disposition={DISPOSITION_SHAPES['cleared by a re-run']} audience={TEST_AUDIENCE} />,
+    );
+    const rerunText = rerun.querySelector('[data-disposition-label]')!.textContent;
+    cleanup?.();
+    const byHand = mount(
+      <FindingCard {...baseProps} finding={doneFinding()}
+        disposition={DISPOSITION_SHAPES['cleared by hand']} audience={TEST_AUDIENCE} />,
+    );
+    const byHandText = byHand.querySelector('[data-disposition-label]')!.textContent;
+    expect(rerunText).not.toBe(byHandText);
+    expect(rerunText).toContain('re-run');
+  });
+
+  it('says a contested clause has been changed more than twice', () => {
+    const container = mount(
+      <FindingCard {...baseProps} finding={doneFinding()}
+        disposition={DISPOSITION_SHAPES['changed three times']} audience={TEST_AUDIENCE} />,
+    );
+    expect(container.querySelector('[data-disposition-label]')!.textContent)
+      .toContain('changed 3 times');
   });
 });
