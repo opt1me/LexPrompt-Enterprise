@@ -46,6 +46,14 @@ const DECLARED = [
   'API_PAGE_RENDER_TIMEOUT_MS', 'API_PAGE_IMAGE_MAX_PAGES', 'API_PAGE_IMAGE_LRU_BYTES',
   'API_RUN_IMAGE_BYTES_MAX', 'API_WORKER_POOL_MAX',
   'API_EVENT_RETENTION_DAYS', 'API_EVENT_PAGE_MAX',
+  // Stage 4's live transport. `API_WS_PING_MS` is the one with a
+  // relationship outside this file -- it must stay below nginx's
+  // proxy_read_timeout on the socket location and below Container Apps'
+  // ingress idle timeout -- and `API_HUB_TICK_MS` is the floor live change
+  // degrades to when the LISTEN connection has dropped, which is a silent
+  // failure and therefore exactly the kind that needs a declared number.
+  'API_WS_PING_MS', 'API_WS_MAX_CONNECTIONS', 'API_WS_MAX_SUBSCRIPTIONS',
+  'API_WS_MAX_FRAME_BYTES', 'API_HUB_TICK_MS',
 ];
 
 /** `API_RUN_LEASE_MS` -> `runLeaseMs`, the naming `config.ts` uses without
@@ -153,6 +161,7 @@ describe('every declared cap has a reader, and every reader has a declaration', 
     for (const fragment of [
       'Run queue:', 'worker(s)', 'lease ', 'heartbeat ', 'attempt(s)',
       'cell(s) per workspace', 'Events: kept', 'Page rendering:', 'Engine:',
+      'Live socket: ping', 'fan-out tick', 'connection(s) per replica',
       'retry backoff ',
     ]) {
       expect(text, fragment).toContain(fragment);

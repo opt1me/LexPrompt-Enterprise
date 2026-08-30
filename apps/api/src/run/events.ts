@@ -99,8 +99,35 @@ export async function appendEvent(t: Tx, e: EventToAppend): Promise<number> {
     [e.workspaceId, e.matterId ?? null, e.reviewId, e.runId ?? null, e.type,
       JSON.stringify(e.payload)],
   );
+  /*
+   * THE DOORBELL, IN THE SAME TRANSACTION AS THE INSERT (Task 18, P39).
+   *
+   * Here rather than beside the call or in the route: `appendEvent` is
+   * already the one writer and already takes a `Tx`, and a `pg_notify`
+   * issued in the same transaction fires ON COMMIT and not before. A
+   * notification sent OUTSIDE the transaction can wake a replica that then
+   * reads the outbox before the insert has committed, finds nothing, and
+   * never comes back — a lost event that no test written against a single
+   * process would ever produce.
+   *
+   * THE PAYLOAD IS EMPTY, deliberately. The notification says "look now";
+   * what to look at is this table. Nothing that matters rides in it, so a
+   * lost notification costs latency and never content — which is the whole
+   * difference between this and a message bus, and what makes the mechanism
+   * correct with no delivery guarantee at all.
+   */
+  await t.query('select pg_notify($1, $2)', [EVENT_CHANNEL, '']);
   return Number(rows[0].id);
 }
+
+/**
+ * The channel `pg_notify` rings and `realtime/feed.ts` listens on.
+ *
+ * Named here, beside the one writer, because a channel name spelt two ways
+ * is a doorbell nobody hears — and the symptom is not an outage but live
+ * change feeling one tick slow, which nobody reports as a fault.
+ */
+export const EVENT_CHANNEL = 'lexprompt_event';
 
 function parsedJson(value: unknown): unknown {
   return typeof value === 'string' ? JSON.parse(value) : value;

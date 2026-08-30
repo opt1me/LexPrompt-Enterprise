@@ -298,6 +298,18 @@ export interface ApiConfig {
    * is small because a client only ever sends `subscribe`, `unsubscribe` and
    * `pong`.
    */
+  /**
+   * How often each replica reads the outbox forward for the subscriptions
+   * it holds, whether or not a notification arrived (§8, P39).
+   *
+   * THIS IS THE FLOOR LIVE CHANGE DEGRADES TO, and that is why it is
+   * declared rather than picked. The `pg_notify` issued inside
+   * `appendEvent`'s transaction normally makes delivery immediate; this is
+   * what still delivers everything when the listener connection has
+   * dropped, and the failure it covers is silent -- the app keeps working,
+   * one tick slower, which nobody reports as a fault.
+   */
+  hubTickMs: number;
   wsPingMs: number;
   wsMaxConnections: number;
   wsMaxSubscriptions: number;
@@ -634,6 +646,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     parseStuckReportMs: int(env, 'API_PARSE_STUCK_REPORT_MS', 300_000),
     eventRetentionDays: int(env, 'API_EVENT_RETENTION_DAYS', 7),
     eventPageMax: int(env, 'API_EVENT_PAGE_MAX', 500),
+    hubTickMs: int(env, 'API_HUB_TICK_MS', 1_000),
     wsPingMs: int(env, 'API_WS_PING_MS', WS_CAP_DEFAULTS.pingMs),
     wsMaxConnections: int(env, 'API_WS_MAX_CONNECTIONS', WS_CAP_DEFAULTS.maxConnections),
     wsMaxSubscriptions: int(env, 'API_WS_MAX_SUBSCRIPTIONS', WS_CAP_DEFAULTS.maxSubscriptions),
@@ -726,7 +739,8 @@ export function describeConfig(cfg: ApiConfig): string {
     // are: "why did everyone's live view go quiet" is answered by the ping
     // interval and the connection ceiling, and an operator must not have to
     // read the source to find either.
-    `Live socket: ping ${cfg.wsPingMs}ms, at most ${cfg.wsMaxConnections} connection(s) `
+    `Live socket: ping ${cfg.wsPingMs}ms, fan-out tick ${cfg.hubTickMs}ms, `
+      + `at most ${cfg.wsMaxConnections} connection(s) `
       + `per replica, ${cfg.wsMaxSubscriptions} subscription(s) per socket, `
       + `frames up to ${cfg.wsMaxFrameBytes} bytes`,
     `Database: ${redactDsn(cfg.databaseUrl)}`,

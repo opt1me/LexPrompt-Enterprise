@@ -39,7 +39,18 @@ export interface Hub {
    *  opens and never subscribes -- which is exactly the shape a client
    *  holding sockets open would take. */
   open(conn: Connection): void;
-  join(conn: Connection, sub: SubscriptionRef): void;
+  /**
+   * Joins `conn` to `sub`, from the event id it has ALREADY SEEN.
+   *
+   * `since` is what stops the feed republishing a review's whole seven-day
+   * buffer at a reader who just replayed it: the socket has caught the
+   * connection up to that id itself, so the feed starts there. It is
+   * recorded only for the FIRST joiner of a bucket -- a second connection
+   * arriving with an older cursor gets its own backlog from its own replay,
+   * and rewinding the shared feed for it would resend everything to the
+   * connection that was already current.
+   */
+  join(conn: Connection, sub: SubscriptionRef, since: number): void;
   leave(conn: Connection, sub: SubscriptionRef): void;
   /** Sends `frame` to every connection joined to `sub` IN THAT WORKSPACE. */
   publish(workspaceId: string, sub: SubscriptionRef, frame: ServerFrame): void;
@@ -57,6 +68,9 @@ export interface Hub {
 export interface ActiveSubscription {
   workspaceId: string;
   sub: SubscriptionRef;
+  /** Where the feed should read this bucket from if it has no cursor of its
+   *  own yet. See `join`. */
+  since: number;
 }
 
 /**
@@ -79,6 +93,8 @@ export function createHub(): Hub {
   /** connection id -> the buckets it is in, so `close` is O(its own
    *  subscriptions) rather than a sweep of every bucket in the process. */
   const held = new Map<string, { conn: Connection; keys: Map<string, ActiveSubscription> }>();
+  /** bucket key -> the event id its FIRST joiner had already seen. */
+  const starts = new Map<string, number>();
 
   return {
     open(conn) {
@@ -87,7 +103,7 @@ export function createHub(): Hub {
       }
     },
 
-    join(conn, sub) {
+    join(conn, sub, since) {
       const key = bucketKey(conn.workspaceId, sub);
       let bucket = buckets.get(key);
       if (!bucket) {
@@ -95,12 +111,13 @@ export function createHub(): Hub {
         buckets.set(key, bucket);
       }
       bucket.add(conn);
+      if (!starts.has(key)) starts.set(key, since);
       let mine = held.get(conn.id);
       if (!mine) {
         mine = { conn, keys: new Map<string, ActiveSubscription>() };
         held.set(conn.id, mine);
       }
-      mine.keys.set(key, { workspaceId: conn.workspaceId, sub });
+      mine.keys.set(key, { workspaceId: conn.workspaceId, sub, since });
     },
 
     leave(conn, sub) {
@@ -111,7 +128,7 @@ export function createHub(): Hub {
       // what the feed reads forward from, and a bucket nobody is in would
       // keep a cursor advancing over a review no one is watching, for the
       // life of the process.
-      if (bucket && bucket.size === 0) buckets.delete(key);
+      if (bucket && bucket.size === 0) { buckets.delete(key); starts.delete(key); }
       held.get(conn.id)?.keys.delete(key);
     },
 
@@ -138,7 +155,7 @@ export function createHub(): Hub {
       for (const key of mine.keys.keys()) {
         const bucket = buckets.get(key);
         bucket?.delete(conn);
-        if (bucket && bucket.size === 0) buckets.delete(key);
+        if (bucket && bucket.size === 0) { buckets.delete(key); starts.delete(key); }
       }
       held.delete(conn.id);
     },
@@ -154,7 +171,7 @@ export function createHub(): Hub {
           // and one has gone.
           if (!buckets.has(key)) continue;
           seen.add(key);
-          out.push(active);
+          out.push({ ...active, since: starts.get(key) ?? active.since });
         }
       }
       return out;

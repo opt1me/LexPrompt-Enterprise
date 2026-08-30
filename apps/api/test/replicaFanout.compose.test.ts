@@ -70,14 +70,13 @@ async function twoSocketsOnDifferentReplicas(
     + 'request (infra/nginx/web.conf).');
 }
 
-// SKIPPED BY TASK 14, UN-SKIPPED BY TASK 18. The reason is in the source
-// rather than in somebody's memory: there is no `/v1/ws` route at all as of
-// Task 14 (it arrives in Task 16), and even once there is, the hub is
-// in-process — so this test fails, and that failure is Spike 3's answer.
-// `it.fails` would have passed for the wrong reason (a connection refused
-// rather than an undelivered event), which is why this is a skip with a
-// sentence and not an inverted assertion.
-describe.skip('fan-out across replicas', () => {
+// SKIPPED BY TASK 14, UN-SKIPPED BY TASK 18. It was skipped with the reason
+// in the source rather than in somebody's memory: there was no `/v1/ws`
+// route at all as of Task 14, and even once there was, an in-process hub
+// delivers a write to the replica that served it and to nobody else. That
+// failure WAS Spike 3's answer and it is what the outbox-by-cursor fan-out
+// was built from.
+describe('fan-out across replicas', () => {
   afterAll(async () => {
     for (const s of sockets.splice(0)) s.close();
     for (const { who, seeded } of litter.splice(0)) await removeSeeded(who, seeded);

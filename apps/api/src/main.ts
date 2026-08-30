@@ -14,6 +14,7 @@ import { makePageImageCache } from './parse/hydrate.ts';
 import { startParseWorkers } from './parse/parseWorker.ts';
 import { startWorkerPool } from './run/worker.ts';
 import { startReaper } from './run/reaper.ts';
+import { startEventFeed } from './realtime/feed.ts';
 
 /** Every startup failure reaches the operator as the same banner, whatever
  *  threw it. `ConfigError` was the only thing caught before, so a missing
@@ -224,6 +225,28 @@ async function main(): Promise<void> {
   });
   // On the APP connection: it deletes from `event`, which the worker role
   // deliberately cannot do.
+  // §8 FAN-OUT (Task 18, P39). One per replica, on its OWN connection: a
+  // `LISTEN` issued on a pooled client is lost when that client is returned
+  // to the pool, which is a fact about `pg` rather than a preference.
+  //
+  // On the APP connection string rather than the worker one: it reads
+  // `event`, which both roles can, but it also has to be a connection this
+  // process may keep open indefinitely, and the worker pool is sized for
+  // the run slots.
+  //
+  // NOTHING ELSE PUBLISHES TO THE HUB. The disposition route writes the
+  // outbox and stops there; this is what turns that row into a frame, on
+  // every replica including the one that served the write. One path,
+  // exercised constantly, rather than a local shortcut that behaves
+  // differently on the busiest hop.
+  const feed = startEventFeed({
+    db,
+    hub: app.lexpromptHub,
+    listenerUrl: config.databaseUrl,
+    tickMs: config.hubTickMs,
+    pageMax: config.eventPageMax,
+  });
+  await feed.start();
   const reaper = startReaper({
     db,
     heartbeatMs: config.runHeartbeatMs,
@@ -238,7 +261,8 @@ async function main(): Promise<void> {
   const shutdown = (signal: string) => {
     process.stderr.write(`api: ${signal} received; stopping the engine.
 `);
-    void Promise.allSettled([parseWorkers.stop(), runWorkers.stop(), reaper.stop()])
+    void Promise.allSettled(
+      [parseWorkers.stop(), runWorkers.stop(), reaper.stop(), feed.stop()])
       .then(() => app.close())
       .then(() => process.exit(0));
   };

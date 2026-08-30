@@ -363,11 +363,17 @@ async function subscribe(
 
   // 1. JOIN, so nothing that arrives from here on is lost.
   const buffered: AppEvent[] = [];
+  // Hoisted so the `finally` below can hand the REAL connection the id this
+  // socket has actually been caught up to — which is what the feed reads
+  // this bucket forward from if it has no cursor of its own. Left at
+  // `lastEventId` if the replay threw, which is the conservative direction:
+  // the feed re-reads from there and the client drops what it already holds.
+  let cursorSeen = lastEventId;
   const collector: Connection = {
     ...state.conn,
     send: frame => { if (frame.t === 'event') buffered.push(frame.event); },
   };
-  deps.hub.join(collector, sub);
+  deps.hub.join(collector, sub, lastEventId);
 
   try {
     // 2. REPLAY from the cursor.
@@ -387,18 +393,20 @@ async function subscribe(
       send(ws, { t: 'event', sub, event });
       cursor = Math.max(cursor, event.id);
     }
+    cursorSeen = cursor;
     // 3. FLUSH what arrived during the replay, de-duplicated by id.
     for (const event of buffered) {
       if (event.id <= cursor) continue;
       send(ws, { t: 'event', sub, event });
       cursor = Math.max(cursor, event.id);
     }
+    cursorSeen = cursor;
     send(ws, { t: 'caught_up', sub, cursor });
   } finally {
     // 4. Swap the collector for the real connection, whatever happened. A
     // replay that threw must not leave a buffer in the hub forever.
     deps.hub.leave(collector, sub);
-    deps.hub.join(state.conn, sub);
+    deps.hub.join(state.conn, sub, cursorSeen);
     state.subs.set(keyOf(sub), sub);
   }
 }

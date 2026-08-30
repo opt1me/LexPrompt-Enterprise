@@ -464,26 +464,34 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
           ]
         }
       ]
-      // PINNED BY STAGE 4 TASK 14 (Spike 3, P41) — chosen, not inherited
-      // from a template default.
+      // PINNED BY STAGE 4 (Spike 3, P41) — chosen, not inherited from a
+      // template default, and RAISED BY TASK 18 against a named test.
       //
-      // Fan-out is IN-PROCESS as of this commit: a client's WebSocket is
-      // held by one replica's hub, and a write served by another replica
-      // reaches nothing. Measured locally at two replicas, where nginx
-      // resolves `api` per request and `dns.resolve4('api')` answers two
-      // addresses, so successive requests genuinely land on different
-      // containers.
-      //
-      // So `api` may run at ONE replica and no more. Raising this without
-      // `apps/api/test/replicaFanout.compose.test.ts` passing means a
-      // reviewer connected to one replica silently stops seeing a
-      // colleague's changes — in the deployed environment only, which is
+      // Task 14 pinned this to 1: fan-out was in-process, so a client's
+      // WebSocket was held by one replica's hub and a write served by
+      // another reached nothing — in the deployed environment only, which is
       // where nobody is watching, and which is exactly how AZURE_CLIENT_ID
       // and oidcRequiredClaims shipped broken.
       //
-      // Task 18 builds the outbox-by-cursor fan-out with `pg_notify` as its
-      // doorbell and raises this, citing that test by name.
-      scale: { minReplicas: 1, maxReplicas: 1 }
+      // `apps/api/test/replicaFanout.compose.test.ts` now PASSES: two
+      // sockets are opened until their `hello` frames report different
+      // instance ids (a fact, not a hope), a disposition is written over
+      // HTTP, and the change reaches the socket on the other replica in
+      // **35 ms** measured. The mechanism is the outbox read by cursor with
+      // `pg_notify` as a doorbell (`realtime/feed.ts`); a lost notification
+      // costs latency and never content, and the floor it degrades to is
+      // `API_HUB_TICK_MS`.
+      //
+      // THREE IS THE NUMBER, and lowering it is safe while raising it is
+      // bounded by one thing: `API_DATABASE_POOL_MAX` (10) +
+      // `API_WORKER_POOL_MAX` (4) + one dedicated LISTEN connection = 15 per
+      // replica, against `max_connections` (100, declared in
+      // infra/modules/postgres.bicep). At three replicas that is 45.
+      //
+      // Raising this without that test passing puts a reviewer back where
+      // Task 14 found them: connected to one replica, silently not being
+      // told what a colleague decided.
+      scale: { minReplicas: 1, maxReplicas: 3 }
     }
   }
   dependsOn: [ apiAcrPull ]

@@ -68,6 +68,7 @@ const BASE: ApiConfig = {
   parseStuckReportMs: 300_000,
   eventRetentionDays: 7,
   eventPageMax: 500,
+  hubTickMs: 1_000,
   wsPingMs: 25_000,
   wsMaxConnections: 500,
   wsMaxSubscriptions: 20,
