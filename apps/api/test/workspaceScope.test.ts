@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { ROOT, walk, rel, codeOf } from './sourceScan.ts';
+import { ROOT, walk, rel, codeOf, statementsIn } from './sourceScan.ts';
 
 /**
  * Every SQL statement in a route module names `workspace_id`.
@@ -58,15 +58,16 @@ const namesScopedTable = (statement: string): string | undefined =>
  * full of prose about SQL — including the paragraph above — and a scanner
  * that cannot tell a statement from a sentence describing one ends up being
  * relaxed until it stops biting.
+ *
+ * MOVED TO `sourceScan.ts` BY STAGE 3 TASK 13, and fixed in the move. The
+ * copy that lived here was not escape-aware, so one apostrophe in one error
+ * message (`routes/ingest.ts`'s `'document\'s contents with another\'s.'`)
+ * desynchronised every literal after it in that file and made three
+ * `select … from document …` statements invisible to this guard, plus three
+ * more in `routes/documents.ts`. See the note on `statementsIn` itself; the
+ * count below is what proves the fix, and it is asserted rather than
+ * described.
  */
-function statementsIn(code: string): string[] {
-  const literals = code.match(/`[^`]*`|'[^']*'|"[^"]*"/g) ?? [];
-  return literals
-    .map(l => l.slice(1, -1))
-    .flatMap(l => l.split(';'))
-    .map(s => s.trim())
-    .filter(Boolean);
-}
 
 const ROUTES_DIR = path.join(ROOT, 'apps/api/src/routes');
 
@@ -96,6 +97,54 @@ describe('the scanner finds something (a guard that matches nothing passes vacuo
     // The module's own prose quotes `where matter.version = $8`; if comments
     // survived, that sentence would be scanned as a statement.
     expect(sample).not.toContain('most likely to be read wrongly');
+  });
+
+  it('sees EVERY scoped clause in the source, not only the ones before the first apostrophe', () => {
+    /*
+     * ADDED BY STAGE 3 TASK 13, and it failed when it was written.
+     *
+     * The old extractor was not escape-aware, so `routes/ingest.ts`'s
+     * `'document\'s contents with another\'s.'` terminated its own literal
+     * early and desynchronised every literal after it in that file. The
+     * result: THREE `select id from document where id = $1 and workspace_id
+     * = $2` statements in `ingest.ts` and three more in `documents.ts` were
+     * never scanned by the guard above — six statements against
+     * tenant-scoped tables, invisible to the check whose only purpose is to
+     * notice a missing `workspace_id`. All six carried the predicate, so
+     * nothing in the app was wrong; the guard simply was not looking, and it
+     * reported green because its `>= 4` bound was met by the files that
+     * still parsed.
+     *
+     * This test is the one that could have caught it: it compares what the
+     * extractor sees against the same clauses found in the RAW
+     * comment-stripped source, which needs no quote pairing at all. A
+     * scanner that loses a statement is now a failure rather than a smaller
+     * number nobody was counting.
+     */
+    const clause = () => new RegExp(
+      `\\b(?:from|into|update|join)\\s+(?:only\\s+)?"?(?:${SCOPED_TABLES.join('|')})"?\\b`, 'gi');
+    const occurrences = (text: string): string[] => {
+      const out: string[] = [];
+      for (const m of text.matchAll(clause())) {
+        // The clause plus what follows it, so two reads of the same table in
+        // one file are distinguishable.
+        out.push(text.slice(m.index, m.index + m[0].length + 24).replace(/\s+/g, ' '));
+      }
+      return out;
+    };
+    const invisible: string[] = [];
+    for (const file of walk(ROUTES_DIR)) {
+      const code = codeOf(file);
+      const seen = new Set(occurrences(statementsIn(code).join('\n')));
+      for (const found of occurrences(code)) {
+        if (!seen.has(found)) invisible.push(`${rel(file)}: ${found}`);
+      }
+    }
+    expect(invisible).toEqual([]);
+    // …and the comparison is not vacuous: the source really does contain
+    // clauses against scoped tables.
+    const all = walk(ROUTES_DIR).flatMap(f => occurrences(codeOf(f)));
+    expect(all.length).toBeGreaterThan(40);
   });
 });
 

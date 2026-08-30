@@ -2254,3 +2254,101 @@ group-claim shape, group overage, admin consent and conditional access have no l
 analogue, and `roles.pg.test.ts` proves only that the same lookup handles both **shapes**
 offline. No `az`, `azd` or `bicep` CLI was available and there is no Azure subscription, so
 **no template in `infra/` has been compiled, validated or deployed.**
+
+---
+
+# Server Stage 3, Part 3A — the gate (2026-08-30)
+
+Part 3A's claim is that it is **shippable with no user-visible change**: the engine
+exists, rows are shadow-written and reconciled, the workers run — and the browser is
+still authoritative and still orchestrates. Task 13 checked both halves.
+`apps/api/test/stage3aDoD.test.ts` and `apps/api/test/stage3aDoD.pg.test.ts` are the
+suite; the narrative record lives in the stage's SDD directory, which is gitignored, so
+what survives a clean checkout is here.
+
+**Two §18 item 4 clauses are deliberately NOT met by Part 3A**, and the gate suite
+guards them from arriving early rather than letting them drift in: the server-side
+re-run reset in one transaction (Task 16), and the deletion of `carryHumanState`
+(Task 21). A green Part 3A gate is not a green Stage 3 gate, and the table saying so is
+in the suite itself.
+
+## R-S3A1 — `markup_notice` staying browser-derived is not a Part 3A gate failure
+
+P12 is closed for `text`, `parse_state` and `parse_error` and **open** for the
+tracked-changes disclosure: detecting tracked changes needs `src/lib/docxMarkup.ts`,
+which needs `jszip`, which is not a `packages/core` dependency. Ruled not a failure,
+because Part 3A's claim is that nothing a user can see changed and this is precisely a
+place where nothing did — the browser still derives the notice and still sends it,
+exactly as in Stage 2. What would make it a failure is the server being **able to blank
+it**, and the worker's `update` grant on `document` names `text, parse_state,
+parse_error` and does not name that column. The gate enforces both halves: no grant
+naming it, and no SQL write of it outside the two upload routes that take it from a
+browser's body. Both mutation-tested.
+
+**It becomes a gate item in Part 3B**, when Task 18 moves orchestration server-side and
+it stops being safe to assume every upload came from a browser that read the file
+itself. The fix is a task (move `docxMarkup.ts` into `packages/core`), not a footnote.
+
+*Cost if wrong: a `.docx` whose tracked changes are never disclosed — the counterparty's
+redline read back as the contract, which is the second entry on `CLAUDE.md`'s list and
+the worst-consequence one, because the output is fluent and plausible.*
+
+## R-S3A2 — the engine's workspace scoping is checked in the DoD suite, not by extending `workspaceScope.test.ts`
+
+`workspaceScope.test.ts` walks `apps/api/src/routes` only, and the `src/run/*` modules
+issue many statements against `run`, `run_cell`, `event` and `finding`. Extending that
+file was rejected for the reason its own author gave: the reaper legitimately sweeps
+**across** workspaces, so it would need an exemption, and a file-level exemption hides
+everything in the file — the `PdfCanvas` lesson this repository has already paid for.
+
+So the check lives in `stage3aDoD.test.ts`, and it is narrower and honest about being
+narrower: the one module sweeping across workspaces is **the reaper, named as a file**,
+and every other engine module's statements against a scoped table must name
+`workspace_id` somewhere in the module. That is weaker than the `routes/` check — which
+insists the predicate appear in the filtering clause — and deliberately so: the engine
+reads by ids it claimed itself rather than by an id from a URL, and pretending otherwise
+produces a guard nobody can keep green.
+
+*Cost if wrong: a future engine module reads across tenants and the guard reports the
+module as scoped because the words appear elsewhere in the file. The mitigation is that
+the check fails loudly for a module with no workspace predicate at all, which is the
+shape a new module actually arrives in.*
+
+## R-S3A3 — a sixth guard found not to be guarding, and it was one of the tenant-isolation guards
+
+`workspaceScope.test.ts` pulled string literals with
+`` /`[^`]*`|'[^']*'|"[^"]*"/g ``, which does not honour a backslash. One apostrophe in
+one error message — `routes/ingest.ts`'s `'document\'s contents with another\'s.'` —
+terminated its own literal early and desynchronised every literal after it in that file.
+
+Measured: **six clauses against tenant-scoped tables were invisible to the scanner** —
+all three in `routes/ingest.ts`, three in `routes/documents.ts`. All six carry
+`workspace_id`, so nothing in the app was wrong; the guard whose only job is to notice a
+missing `workspace_id` simply was not looking at them, and it reported green because its
+`>= 4` sanity bound was met by the eleven route modules that still parsed.
+
+`statementsIn` is now escape-aware and lives in `sourceScan.ts` (two suites need it —
+`CLAUDE.md`'s "extract it then", applied at two rather than at seven). The new test
+compares what the extractor sees against the same clauses found in the **raw**
+comment-stripped source, which needs no quote pairing, so a scanner that loses a
+statement is a failure rather than a smaller number nobody counts. It is still a regex
+and not a parser; the note on the function says what it would still miss and that the
+AST is the real fix when it is next found wrong.
+
+*Cost if wrong: a missing `and workspace_id = $2` reaches production unnoticed — §19's
+"a fact about a contract they were never entitled to see", with nothing on screen looking
+wrong.*
+
+## What Part 3A's gate could not check
+
+**No browser was driven** (the Chrome extension is disconnected, Playwright times out),
+and **no request was made over HTTP as a signed-in user** — the shipped realm has
+`directAccessGrantsEnabled: false` and enabling it temporarily, the route the previous
+batch used, was refused to that session. So the shadow write was exercised through its
+shipped handler against a real Postgres and through `writeFindingRows` against the
+running database, but the HTTP hop was not re-walked in this gate. It was walked in the
+previous batch and `routes/reviews.ts` is unchanged since.
+
+*Cost if wrong: a defect between the wire and the handler — a body shape, a header, an
+error mapping — would not have been seen. Recorded rather than implied away, on Stage
+2's precedent.*

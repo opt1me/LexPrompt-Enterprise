@@ -72,3 +72,47 @@ export function codeOf(file: string): string {
 
 /** Every uppercase environment-variable name this repository's apps use. */
 export const ENV_NAME = /\b(?:API|GATEWAY|VITE|KC|OPENAI|ANTHROPIC|OPENROUTER)_[A-Z0-9_]+\b/g;
+
+/**
+ * Every string literal in `code`, split on `;` so a literal carrying two
+ * statements is checked as two.
+ *
+ * Extracted here (Stage 3 Task 13) because `workspaceScope.test.ts` and
+ * `stage3aDoD.test.ts` both need it, and this project's own rule is "when
+ * you find yourself writing a second copy, extract it then".
+ *
+ * **ESCAPE-AWARE, and that is the whole reason this is a function rather
+ * than an inline regex.** The version this replaces was
+ * `` /`[^`]*`|'[^']*'|"[^"]*"/g ``, which does not honour a backslash: the
+ * FIRST `\'` in a file terminates its literal early, and every literal after
+ * it in that file pairs up against the wrong quote. `routes/ingest.ts`
+ * contains `'document\'s contents with another\'s.'` — one apostrophe in one
+ * error message — and the consequence was that its three
+ * `select id from document where id = $1 and workspace_id = $2` statements
+ * were **invisible to the workspace-scope guard entirely**, along with three
+ * more in `routes/documents.ts`. Six statements against tenant-scoped
+ * tables, unscanned, by the guard whose only job is to notice a missing
+ * `workspace_id`. All six happened to carry the predicate, so nothing was
+ * wrong in the app — but the check that would have said so was not looking,
+ * and it reported green because its sanity bound was met by the files that
+ * still parsed.
+ *
+ * That is the fifth guard in this stage found not to be guarding, and the
+ * pattern in all of them is the same: a failure mode that is silence.
+ *
+ * It is still a regex over source text and not a parser: a `;` inside a SQL
+ * string constant would still split one statement into two, and a nested
+ * template expression containing a backtick would still confuse it. Neither
+ * occurs today. The real fix is the TypeScript AST — the move `codeOf` above
+ * already made for comments — and it is worth making the next time this is
+ * found wrong rather than pre-emptively.
+ */
+export function statementsIn(code: string): string[] {
+  const literals = code.match(
+    /`(?:\\[\s\S]|[^`\\])*`|'(?:\\[\s\S]|[^'\\])*'|"(?:\\[\s\S]|[^"\\])*"/g) ?? [];
+  return literals
+    .map(l => l.slice(1, -1))
+    .flatMap(l => l.split(';'))
+    .map(s => s.trim())
+    .filter(Boolean);
+}
