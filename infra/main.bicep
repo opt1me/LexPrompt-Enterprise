@@ -270,6 +270,7 @@ module containerApps 'modules/containerApps.bicep' = {
     postgresDatabaseName: postgres.outputs.databaseName
     databaseAppPassword: vault.getSecret(databaseAppPasswordSecretName)
     databaseMigratorPassword: vault.getSecret(databaseMigratorPasswordSecretName)
+    databaseWorkerPassword: vault.getSecret(databaseWorkerPasswordSecretName)
     blobAccountUrl: storage.outputs.blobAccountUrl
     blobContainer: storage.outputs.containerName
     apiImageName: apiImageName

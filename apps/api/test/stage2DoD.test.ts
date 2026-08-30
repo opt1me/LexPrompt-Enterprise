@@ -148,6 +148,16 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
     finding_disposition_event: 'apps/api/test/dispositions.pg.test.ts',
     finding_migration_census: 'apps/api/test/findingsBackfill.pg.test.ts',
     finding_migration_report: 'apps/api/test/findingsBackfill.pg.test.ts',
+    // Stage 3 Task 8's queue. `run` and `run_cell` are covered by the suite
+    // that creates a run and by the one that proves a run that died cannot
+    // look finished — two files, because "a queue creates the right cells"
+    // and "a queue's failure paths are honest" are different claims and the
+    // second is the one this stage is named after. `event` has its own,
+    // since the cursor is a protocol Stage 4 inherits rather than a table
+    // any screen reads.
+    run: 'apps/api/test/runQueue.pg.test.ts',
+    run_cell: 'apps/api/test/runLifecycle.pg.test.ts',
+    event: 'apps/api/test/events.pg.test.ts',
   };
 
   it('every table in the migrations has a named suite, and every named suite exists', () => {
@@ -260,6 +270,19 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
       // They hold no store and write nothing.
       'packages/core/src/review/extractClause.ts',
       'packages/core/src/review/extractCollectionClause.ts',
+      // Stage 3 Task 9's hydration and its cache. The cache is BOUNDED,
+      // in-process and byte-counted; nothing in this file reaches a store or
+      // a pool, which is the claim, and `hydrate.pg.test.ts` proves no image
+      // reaches Postgres or the blob store from a whole run.
+      'apps/api/src/parse/hydrate.ts',
+      // Task 10's worker. It HOLDS a cache and passes it to the hydration;
+      // it writes model output to `finding` and never a page image — the
+      // column list it writes is `FINDING_COLUMNS`, which has no such
+      // column and cannot grow one without 005 growing one first.
+      'apps/api/src/run/worker.ts',
+      // The composition root: it builds the cache with the declared bound
+      // and hands it to the pool. One `makePageImageCache` call, no store.
+      'apps/api/src/main.ts',
     ];
     const PAGE_IMAGE = /pageimages|page_images|pageimage/i;
     // The scan bites on what it looks for, including the name that the
@@ -273,9 +296,34 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
       .filter(name => !PAGE_IMAGE_CARRIERS.includes(name));
     expect(offenders).toEqual([]);
 
-    // Every carrier still exists, still names it, and still writes it
-    // nowhere. A stale exemption is worse than none.
-    const PERSISTS = /blobStore|BlobStore|blobKeyFor|insert into|INSERT INTO|withPool|getPool|localStorage|indexedDB/;
+    /*
+     * Every carrier still exists, still names it, and still WRITES it
+     * nowhere. A stale exemption is worse than none.
+     *
+     * TIGHTENED BY STAGE 3 TASK 10, and tightened rather than relaxed. The
+     * previous pattern matched the TYPE NAME `BlobStore`, which is not a
+     * write and never was: the run worker takes a `BlobStore` to READ a
+     * document's original bytes, which is the one thing it must do before it
+     * can render a scan's pages at all, and `main.ts` takes one to build it.
+     * Matching a type name would have forced either an exemption for those
+     * two files — and a file-level exemption hides everything in the file,
+     * which is the `PdfCanvas` lesson this repository already paid for — or
+     * a contortion in the source to satisfy a regex.
+     *
+     * So the pattern now names WRITES: `.put(` (any binding, so renaming the
+     * store does not evade it), `blobKeyFor` (constructing an address in the
+     * store is how you would write to one), an INSERT, and the browser's two
+     * persistence APIs. The assertions below prove it bites on each and does
+     * not bite on the type name — because a guard that was widened and never
+     * shown to still catch anything is decoration.
+     */
+    const PERSISTS = /\.put\(|blobKeyFor|insert into|INSERT INTO|withPool|getPool|localStorage|indexedDB/;
+    expect(PERSISTS.test('await blobs.put(key, bytes, mime)')).toBe(true);
+    expect(PERSISTS.test('await store.put(k, b, m)')).toBe(true);
+    expect(PERSISTS.test('blobKeyFor(ws, id)')).toBe(true);
+    expect(PERSISTS.test('await t.query(`insert into finding (…)`)')).toBe(true);
+    // …and not on a type it merely names.
+    expect(PERSISTS.test("import type { BlobStore } from '../blob/store.ts';")).toBe(false);
     for (const carrier of PAGE_IMAGE_CARRIERS) {
       const full = path.join(ROOT, carrier);
       expect(existsSync(full), carrier).toBe(true);

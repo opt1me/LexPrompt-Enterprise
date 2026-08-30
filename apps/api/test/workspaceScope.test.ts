@@ -35,6 +35,12 @@ import { ROOT, walk, rel, codeOf } from './sourceScan.ts';
 const SCOPED_TABLES = [
   'matter', 'document', 'collection', 'playbook', 'playbook_version', 'review', 'changeset',
   'precedent_set', 'position_basis',
+  // 008's three (Stage 3 Task 8). `run` and `run_cell` carry a workspace and
+  // are reached by id from a URL, which is exactly the shape this guard is
+  // about: `GET /v1/runs/<someone else's run>` finds the row, renders the
+  // page and tells a reader how another firm's review is going. `event` is
+  // the same one layer down — its payloads name findings by key.
+  'run', 'run_cell', 'event',
 ];
 
 /** `from x` / `into x` / `update x` / `join x`, where x is a scoped table.

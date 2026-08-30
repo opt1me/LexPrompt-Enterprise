@@ -79,6 +79,14 @@ describe('import boundary (S14)', () => {
     // side by side.
     'extractClause', 'buildClausePrompt', 'clauseSchema', 'CLAUSE_SCHEMA',
     'extractCollectionClause', 'collectionClauseSchema', 'COLLECTION_CLAUSE_SCHEMA',
+
+    // The run outbox's vocabulary (Stage 3 Task 12, P22). The reason these
+    // belong here is the same reason the SSE names do: five event types are
+    // the shape a browser and a worker have to agree on exactly, and a
+    // second `RUN_EVENT_TYPES` in `src/lib/` — one type longer, or one
+    // renamed — is a client that silently drops the event telling it a run
+    // failed.
+    'RUN_EVENT_TYPES', 'isRunEventType', 'RUN_STATES', 'RUN_CELL_STATES',
   ];
 
   const scanned = (): string[] => [

@@ -97,9 +97,10 @@ param postgresFqdn string
 @description('The database name on that server.')
 param postgresDatabaseName string
 
-@description('The two database roles P10 requires. They are created by ONE psql run by the Flexible Server admin (infra/postgres/init.sql is the local form of the same thing) — not by this template. 000_preconditions.sql refuses the migration, naming that step, if they are absent, which is why the refusal exists rather than letting a GRANT fail with "role does not exist".')
+@description('The THREE database roles P10 and §9 require. They are created by ONE psql run by the Flexible Server admin (infra/postgres/init.sql is the local form of the same thing) — not by this template. 000_preconditions.sql and 005_findings.sql refuse the migration, naming that step, if any is absent, which is why those refusals exist rather than letting a GRANT fail with "role does not exist". lexprompt_worker also needs its statement_timeout set in the same psql run; 005 refuses when it was skipped.')
 param databaseAppRole string = 'lexprompt_app'
 param databaseMigratorRole string = 'lexprompt_migrator'
+param databaseWorkerRole string = 'lexprompt_worker'
 
 @secure()
 @description('lexprompt_app\'s password, read out of Key Vault by main.bicep with getSecret(). Never a default, never an output, and never an app SETTING — it reaches the container only inside the DSN below, which is a Container Apps SECRET.')
@@ -140,6 +141,7 @@ param blobContainer string
 // refused by something that is not the database.
 var databaseUrl = 'postgres://${databaseAppRole}:${uriComponent(databaseAppPassword)}@${postgresFqdn}:5432/${postgresDatabaseName}?sslmode=verify-full'
 var databaseMigrationUrl = 'postgres://${databaseMigratorRole}:${uriComponent(databaseMigratorPassword)}@${postgresFqdn}:5432/${postgresDatabaseName}?sslmode=verify-full'
+var databaseWorkerUrl = 'postgres://${databaseWorkerRole}:${uriComponent(databaseWorkerPassword)}@${postgresFqdn}:5432/${postgresDatabaseName}?sslmode=verify-full'
 
 // azd's placeholder-image bootstrap: `azd provision` must be able to create
 // all three Container Apps before any image has been built, so each image
@@ -394,6 +396,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
         // string and expects no match.
         { name: 'database-url', value: databaseUrl }
         { name: 'database-migration-url', value: databaseMigrationUrl }
+        { name: 'database-worker-url', value: databaseWorkerUrl }
       ]
     }
     template: {
@@ -417,6 +420,7 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             // identity keys, not a divergence.
             { name: 'API_DATABASE_URL', secretRef: 'database-url' }
             { name: 'API_DATABASE_MIGRATION_URL', secretRef: 'database-migration-url' }
+            { name: 'API_WORKER_DATABASE_URL', secretRef: 'database-worker-url' }
             // NO API_DATABASE_POOL_MAX: apps/api/src/config.ts defaults it
             // to 10 and NEITHER environment sets it, which is what keeps it
             // a shared default rather than an undeclared divergence. The

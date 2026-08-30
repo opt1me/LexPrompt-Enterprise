@@ -185,6 +185,16 @@ services:
       API_MTLS_KEY_FILE: /certs/api.key
       API_DATABASE_URL: postgres://lexprompt_app:lexprompt_app_dev@postgres:5432/lexprompt
       API_DATABASE_MIGRATION_URL: postgres://lexprompt_migrator:lexprompt_migrator_dev@postgres:5432/lexprompt
+      # THE THIRD ROLE (§9, §14), and the reason it is a third connection
+      # rather than a reuse of the app's: `lexprompt_worker` holds NO grant on
+      # finding_disposition or finding_disposition_event (006 revokes both
+      # explicitly), which is what makes "nothing derives a human judgement" a
+      # fact about the database rather than a fact about the code. The review
+      # engine runs on this connection. Pointing it at API_DATABASE_URL would
+      # give the engine back the ability to overwrite a lawyer's verification
+      # with every test in this repository still green, which is why
+      # apps/api/src/config.ts refuses to default it.
+      API_WORKER_DATABASE_URL: postgres://lexprompt_worker:lexprompt_worker_dev@postgres:5432/lexprompt
       # Document BYTES (§6.5). ONE source, and no fallback between the two:
       # `resolveBlobCredential` refuses a configured source with no material
       # rather than reaching for the other, because a fallback means the

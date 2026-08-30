@@ -80,6 +80,7 @@ async function listen(gateway: GatewayClient): Promise<number> {
     gateway,
     workspaceId: 'ws-configured',
     maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
+    eventPageMax: 500,
     db: UNUSED_DB,
     resolveActor: async () => ACTOR,
     // This suite never touches a document; the store is here because

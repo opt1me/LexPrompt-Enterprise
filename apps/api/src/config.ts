@@ -60,6 +60,25 @@ export interface ApiConfig {
   databaseMigrationUrl: string;
   databasePoolMax: number;
   /**
+   * The RUN WORKER's connection, and REQUIRED — there is deliberately no
+   * fallback to `databaseUrl` (§9, §14).
+   *
+   * The whole of "the worker cannot touch a human's judgement" is a fact
+   * about the database rather than about the code: `lexprompt_worker` holds
+   * no grant on `finding_disposition` or `finding_disposition_event`, and
+   * `006_dispositions.sql` revokes both explicitly so a future blanket grant
+   * cannot undo it. A fallback here would hand every worker slot the APP
+   * role's connection, which holds `select, insert, update` on both of them
+   * — and the guarantee would evaporate with nothing on any screen, in any
+   * log, or in any test to say so. The worker would keep working. That is
+   * the failure this key's absence of a default exists to make loud.
+   */
+  databaseWorkerUrl: string;
+  /** Sized against `runWorkers` at startup — see the refusal in
+   *  `assertWorkerPoolFits`. Its own pool, not a share of the app's: two
+   *  roles means two connections, which is the price of the grant above. */
+  workerPoolMax: number;
+  /**
    * The issuer's group claim, mapped to LexPrompt's three roles (§6.5).
    *
    * THERE IS NO DEFAULT AND NONE IS SHIPPED. A default would be this
@@ -109,13 +128,123 @@ export interface ApiConfig {
    *
    * `pageImageMaxPages` is a SOFT cap: the renderer reports
    * `renderedPages < totalPages` and its caller says so. §15's third key,
-   * `API_PAGE_IMAGE_LRU_BYTES`, is deliberately NOT here — there is no cache
-   * for it to size yet, and a configuration key that changes nothing is a
-   * knob an operator turns and then trusts. It arrives in Task 9, with the
-   * cache it bounds.
+   * `API_PAGE_IMAGE_LRU_BYTES`, was deliberately absent while there was no
+   * cache for it to size — a configuration key that changes nothing is a
+   * knob an operator turns and then trusts. Task 9 built the cache, so the
+   * key arrives with it, below.
    */
   pageRenderTimeoutMs: number;
   pageImageMaxPages: number;
+  /**
+   * §15's third key, and the cache it bounds now exists (Task 9).
+   *
+   * Page images are the largest objects this process holds: a base64 JPEG
+   * per page, roughly a third larger than the bytes it was rendered from.
+   * The browser bounds its own cache by DOCUMENT COUNT
+   * (`PAGE_IMAGE_CACHE_MAX_DOCUMENTS = 10`), which is fine for one person's
+   * tab and wrong for a server: ten documents is a few megabytes of
+   * three-page contracts and gigabytes of hundred-page scans. Bounded by
+   * BYTES here for that reason, and the difference is deliberate rather
+   * than a drift.
+   */
+  pageImageLruBytes: number;
+  /**
+   * The wire ceiling on one clause's page images, and it exists because
+   * Spike 1 found the real limit is not the renderer.
+   *
+   * A 100-page scan is roughly 31 MB of base64 — already over
+   * `API_MAX_BODY_BYTES` before the gateway's own prompt cap is consulted.
+   * A request that large is refused by the middle hop with a 413, which is
+   * a loud failure and therefore acceptable; what is NOT acceptable is the
+   * repair somebody reaches for next, which is to send the pages that fit.
+   * A partly-sent scan reads to a model as a document that is silent on
+   * everything the missing pages said — this project's founding defect,
+   * wearing a successful HTTP status.
+   *
+   * So the cell is REFUSED by name, before the call, naming the document,
+   * its page count and this key. Defaulted well under `maxBodyBytes` because
+   * the images are not the only thing in the body.
+   *
+   * NOT BATCHED, and that is a decision rather than an omission: splitting
+   * one clause's images across several calls means merging several model
+   * answers into one finding, which is a synthesis no document contains and
+   * a second extraction pipeline beside `extractClause`. The honest lever an
+   * operator has is fewer pages (`API_PAGE_IMAGE_MAX_PAGES`) or a larger
+   * body (`API_MAX_BODY_BYTES`), and both are named in the refusal.
+   */
+  runImageBytesMax: number;
+  /**
+   * The queue's caps (§9, P26). Every one of them DECLARED, because three
+   * undeclared-cap defects have already been found in this repository —
+   * Fastify's `bodyLimit`, nginx's `client_max_body_size`, busboy's
+   * `fieldSize` — and every one was a library default nobody had written
+   * down. A queue adds five more, and none of them is a library's to choose.
+   *
+   * `runWorkers` — how many cells this process runs at once. Each slot holds
+   * a worker-pool connection for the length of its write transaction.
+   *
+   * `runLeaseMs` — how long a claimed cell is this worker's. A lease that
+   * expires while the cell is legitimately still working hands the same
+   * clause to a second worker, so it MUST exceed `runCellTimeoutMs`;
+   * `assertLeaseOutlastsCell` refuses at startup when it does not.
+   *
+   * `runCellTimeoutMs` — the hard budget for one cell's model call. The
+   * browser has no equivalent (a person watching a spinner is the timeout),
+   * which is exactly why the server needs one.
+   *
+   * `runHeartbeatMs` — how often a live run says it is alive, and the unit
+   * the reaper counts in (three missed intervals is dead).
+   *
+   * `runAttemptsMax` — §9's bound of 3. A cell that exhausts them becomes an
+   * `error` finding carrying its last error text, which is something a
+   * person can retry by hand; it is never a cell that quietly never
+   * finishes.
+   *
+   * `runRetryBackoffMs` — how long a cell that failed RETRYABLY waits before
+   * another worker may claim it. Found by running a 200-cell review against
+   * the real stack: the gateway's own rate limiter answered 429 for 140 of
+   * them, `extractClause` turned each into an error finding, and the run
+   * reported 140 failures for a condition that would have cleared in under a
+   * minute. A 429 or a 5xx is the one failure a retry genuinely fixes — the
+   * browser's own client has always retried them (`isRetryableStatus`) — and
+   * an immediate retry would simply burn all three attempts inside a second
+   * against a limiter that counts per minute. The wait is what makes the
+   * attempt bound mean something.
+   *
+   * `runPollMs` — how long an idle worker waits before asking again. There
+   * is no LISTEN/NOTIFY here deliberately: a notification lost while a
+   * worker was between transactions is a run that stops with cells queued,
+   * and polling cannot lose one.
+   *
+   * `workspaceRunConcurrency` — the ceiling across ALL of a workspace's
+   * runs, so one forty-cell review cannot starve a three-cell retry (§9's
+   * own sentence, and Task 8's test).
+   *
+   * `parseWorkers` — the same, for the parse queue, which is separate
+   * because a document being read and a clause being reviewed compete for
+   * nothing except this process.
+   */
+  runWorkers: number;
+  runLeaseMs: number;
+  runCellTimeoutMs: number;
+  runHeartbeatMs: number;
+  runAttemptsMax: number;
+  runRetryBackoffMs: number;
+  runPollMs: number;
+  workspaceRunConcurrency: number;
+  parseWorkers: number;
+  /**
+   * The outbox's retention and its page size (§6.5, P22).
+   *
+   * `eventRetentionDays` is 7 because the outbox is "a reconnection buffer,
+   * not an archive". A cursor older than the oldest surviving event gets
+   * `{ resyncRequired: true }` and NOT a silently short list: a client that
+   * asked for everything after 400 and received everything after 900 has a
+   * hole it cannot see, which is the quiet-wrong-answer shape one layer down
+   * from a finding.
+   */
+  eventRetentionDays: number;
+  eventPageMax: number;
 }
 
 /**
@@ -270,22 +399,157 @@ function blobFrom(env: NodeJS.ProcessEnv): ApiConfig['blob'] {
   };
 }
 
+/**
+ * How many pool connections the request path needs while every worker slot
+ * is busy.
+ *
+ * The worker has its OWN pool (`databaseWorkerUrl`, a different ROLE), so it
+ * does not compete with request handlers for `databasePoolMax` — the shape
+ * the plan's own sketch assumed. What it does compete for is Postgres's
+ * `max_connections`, which is why both pools are named in the banner and in
+ * the refusal below.
+ */
+export const POOL_HEADROOM = 1;
+
+/**
+ * The pool-size check, at startup, loudly — the new cap tier and the one
+ * with no precedent in this repository.
+ *
+ * Each worker slot holds a connection from the WORKER pool for the length of
+ * its write transaction; the reaper and the pruner hold one from the APP
+ * pool. If the worker pool is smaller than the number of slots, a slot
+ * blocks on `pool.connect()` for as long as another slot's transaction runs
+ * — the run still progresses, but at a rate nothing in the configuration
+ * explains, and every symptom points at the database.
+ *
+ * The same posture as every other startup refusal in this system: a
+ * misconfiguration must not become a service that runs and mostly works.
+ */
+export function assertWorkerPoolFits(cfg: ApiConfig): void {
+  if (cfg.workerPoolMax < cfg.runWorkers + cfg.parseWorkers + POOL_HEADROOM) {
+    throw new ConfigError(
+      `API_WORKER_POOL_MAX is ${cfg.workerPoolMax}, which is not enough for `
+      + `API_RUN_WORKERS=${cfg.runWorkers} plus API_PARSE_WORKERS=${cfg.parseWorkers} plus `
+      + `${POOL_HEADROOM} of headroom. Every worker slot holds a connection for the length of `
+      + 'its transaction, so a pool smaller than the slot count makes slots wait on each other '
+      + 'for a reason no configuration value states. Raise the pool or lower the worker count. '
+      + `The app pool (API_DATABASE_POOL_MAX=${cfg.databasePoolMax}) is separate and is not `
+      + "part of this arithmetic — the worker connects as a different ROLE — but the two "
+      + "together must fit inside Postgres's own max_connections.",
+    );
+  }
+}
+
+/**
+ * A lease must outlast the cell it covers.
+ *
+ * `API_RUN_LEASE_MS` shorter than `API_RUN_CELL_TIMEOUT_MS` means a cell
+ * whose model call is still legitimately running has its lease expire, is
+ * re-leased by a second worker, and is answered twice — two writers on one
+ * finding, which is the thing this stage exists to end. Worse, the first
+ * worker's write then lands on a cell it no longer holds. The write path
+ * abandons quietly in that case (it re-reads the lease before writing), so
+ * the symptom is not an error: it is a run that takes twice as long and
+ * spends twice the model budget, with nothing anywhere saying why.
+ */
+export function assertLeaseOutlastsCell(cfg: ApiConfig): void {
+  if (cfg.runLeaseMs <= cfg.runCellTimeoutMs) {
+    throw new ConfigError(
+      `API_RUN_LEASE_MS is ${cfg.runLeaseMs}ms and API_RUN_CELL_TIMEOUT_MS is `
+      + `${cfg.runCellTimeoutMs}ms. A lease must outlast the cell it covers, or a cell whose `
+      + 'model call is still running is re-leased by a second worker and answered twice — two '
+      + 'writers on one finding, at twice the cost, with nothing to show for it. Raise the '
+      + 'lease above the cell timeout.',
+    );
+  }
+}
+
+/** The image budget must fit inside the body limit that carries it. */
+export function assertImagesFitTheBody(cfg: ApiConfig): void {
+  if (cfg.runImageBytesMax >= cfg.maxBodyBytes) {
+    throw new ConfigError(
+      `API_RUN_IMAGE_BYTES_MAX is ${cfg.runImageBytesMax} and API_MAX_BODY_BYTES is `
+      + `${cfg.maxBodyBytes}. The page images ride INSIDE the request body, alongside the `
+      + 'prompt, so an image budget at or above the body limit means the refusal an operator '
+      + 'reads is a raw 413 from the hop rather than a sentence naming the scan. Lower the '
+      + 'image budget or raise the body limit.',
+    );
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
-  return {
+  // DERIVED from the body limit rather than a constant beside it.
+  //
+  // A fixed 12 MB default plus a hard `assertImagesFitTheBody` made an
+  // operator who LOWERED `API_MAX_BODY_BYTES` — a perfectly reasonable thing
+  // to do — unable to start, over a key they had never set. Three quarters
+  // of the declared body is the images' share; the rest is the prompt, the
+  // schema and the envelope around them. An operator who names the key
+  // explicitly is still held to the check below, because two values they
+  // both chose and that contradict each other is a configuration fault.
+  const maxBodyBytes = int(env, 'API_MAX_BODY_BYTES', DEFAULT_MAX_BODY_BYTES);
+  const cfg: ApiConfig = {
     port: int(env, 'API_PORT', 8080),
     auth: parseAuth(env),
     gatewayUrl: required(env, 'API_GATEWAY_URL'),
     workspaceId: required(env, 'API_WORKSPACE_ID'),
     mtls: parseMtls(env),
-    maxBodyBytes: int(env, 'API_MAX_BODY_BYTES', DEFAULT_MAX_BODY_BYTES),
+    maxBodyBytes,
     databaseUrl: required(env, 'API_DATABASE_URL'),
     databaseMigrationUrl: required(env, 'API_DATABASE_MIGRATION_URL'),
     databasePoolMax: int(env, 'API_DATABASE_POOL_MAX', 10),
+    databaseWorkerUrl: requiredWorkerUrl(env),
+    workerPoolMax: int(env, 'API_WORKER_POOL_MAX', 4),
     roleMappings: roleMappingsFrom(env),
     blob: blobFrom(env),
     pageRenderTimeoutMs: int(env, 'API_PAGE_RENDER_TIMEOUT_MS', 120_000),
     pageImageMaxPages: int(env, 'API_PAGE_IMAGE_MAX_PAGES', 100),
+    pageImageLruBytes: int(env, 'API_PAGE_IMAGE_LRU_BYTES', 256 * 1024 * 1024),
+    runImageBytesMax: int(env, 'API_RUN_IMAGE_BYTES_MAX', Math.floor(maxBodyBytes * 3 / 4)),
+    runWorkers: int(env, 'API_RUN_WORKERS', 2),
+    runLeaseMs: int(env, 'API_RUN_LEASE_MS', 600_000),
+    runCellTimeoutMs: int(env, 'API_RUN_CELL_TIMEOUT_MS', 300_000),
+    runHeartbeatMs: int(env, 'API_RUN_HEARTBEAT_MS', 15_000),
+    runAttemptsMax: int(env, 'API_RUN_ATTEMPTS_MAX', 3),
+    runRetryBackoffMs: int(env, 'API_RUN_RETRY_BACKOFF_MS', 30_000),
+    runPollMs: int(env, 'API_RUN_POLL_MS', 1_000),
+    workspaceRunConcurrency: int(env, 'API_WORKSPACE_RUN_CONCURRENCY', 8),
+    parseWorkers: int(env, 'API_PARSE_WORKERS', 1),
+    eventRetentionDays: int(env, 'API_EVENT_RETENTION_DAYS', 7),
+    eventPageMax: int(env, 'API_EVENT_PAGE_MAX', 500),
   };
+  // Every cross-key rule, at load, so the banner below describes a
+  // configuration that can actually serve.
+  assertWorkerPoolFits(cfg);
+  assertLeaseOutlastsCell(cfg);
+  assertImagesFitTheBody(cfg);
+  return cfg;
+}
+
+/**
+ * `API_WORKER_DATABASE_URL`, refused with the reason rather than with the
+ * key's name alone.
+ *
+ * `required` would say "it is not set". That is true and it invites the
+ * repair this key exists to prevent, which is to point it at
+ * `API_DATABASE_URL` and move on — a worker on the app role can write a
+ * disposition, and every test in this repository would still pass.
+ */
+function requiredWorkerUrl(env: NodeJS.ProcessEnv): string {
+  const value = env.API_WORKER_DATABASE_URL;
+  if (!value) {
+    throw new ConfigError(
+      'API_WORKER_DATABASE_URL is not set. The review engine runs as a THIRD database role '
+      + '(lexprompt_worker) which holds no grant on finding_disposition or '
+      + 'finding_disposition_event — that separation is what makes "nothing derives a human '
+      + "judgement\" a fact about the database rather than a fact about the code. Do NOT point "
+      + 'it at API_DATABASE_URL: the app role can write both of those tables, so the engine '
+      + 'would silently regain the ability to overwrite a lawyer\'s verification and every '
+      + 'test would still pass. The role is created by the deployment '
+      + '(infra/postgres/init.sql locally); its DSN belongs here.',
+    );
+  }
+  return value;
 }
 
 /** A DSN in a log line must never carry its password. `postgres://u:p@h/db`
@@ -318,8 +582,24 @@ export function describeConfig(cfg: ApiConfig): string {
     `Workspace: ${cfg.workspaceId}`,
     `Gateway: ${cfg.gatewayUrl}${cfg.mtls ? ' (mTLS)' : ''}`,
     `Max request body: ${cfg.maxBodyBytes} bytes`,
-    `Page rendering: up to ${cfg.pageImageMaxPages} page(s) in ${cfg.pageRenderTimeoutMs}ms`,
+    `Page rendering: up to ${cfg.pageImageMaxPages} page(s) in ${cfg.pageRenderTimeoutMs}ms`
+      + `, cached to ${cfg.pageImageLruBytes} bytes, at most ${cfg.runImageBytesMax} bytes per call`,
+    // Every queue cap on one line of the boot log, for the same reason the
+    // role mappings are: the answer to "why is this run crawling" or "why
+    // did that cell get answered twice" must be in the first screen of logs
+    // rather than in a default nobody wrote down.
+    `Run queue: ${cfg.runWorkers} worker(s), ${cfg.parseWorkers} parse worker(s), `
+      + `lease ${cfg.runLeaseMs}ms over a ${cfg.runCellTimeoutMs}ms cell, `
+      + `heartbeat ${cfg.runHeartbeatMs}ms, poll ${cfg.runPollMs}ms, `
+      + `retry backoff ${cfg.runRetryBackoffMs}ms, `
+      + `${cfg.runAttemptsMax} attempt(s), ${cfg.workspaceRunConcurrency} cell(s) per workspace`,
+    `Events: kept ${cfg.eventRetentionDays} day(s), at most ${cfg.eventPageMax} per page`,
     `Database: ${redactDsn(cfg.databaseUrl)}`,
+    // The WORKER's connection, named separately and redacted the same way.
+    // Which role the engine holds is the fact that makes "the worker cannot
+    // touch a human's judgement" true, so it belongs where an operator can
+    // see it rather than inside a pool nobody prints.
+    `Engine: ${redactDsn(cfg.databaseWorkerUrl)} (pool ${cfg.workerPoolMax})`,
     // The SOURCE and the container, never the material. A connection string
     // carries an account key, and a boot banner is the last place it should
     // appear — but WHICH identity this process was configured to hold the

@@ -148,7 +148,8 @@
     "VITE_OIDC_ISSUER",
     "VITE_OIDC_CLIENT_ID",
     "VITE_OIDC_SCOPE",
-    "API_UPSTREAM"
+    "API_UPSTREAM",
+    "API_WORKER_DATABASE_URL"
   ],
   "sameEverywhereNote": [
     "GATEWAY_ALLOWED_JURISDICTIONS is in this list, not in a divergence row,",
@@ -172,7 +173,21 @@
     "GATEWAY_TOKENS_PER_HOUR_PER_WORKSPACE",
     "GATEWAY_RECORDED_DIR",
     "API_PAGE_RENDER_TIMEOUT_MS",
-    "API_PAGE_IMAGE_MAX_PAGES"
+    "API_PAGE_IMAGE_MAX_PAGES",
+    "API_PAGE_IMAGE_LRU_BYTES",
+    "API_RUN_IMAGE_BYTES_MAX",
+    "API_WORKER_POOL_MAX",
+    "API_RUN_WORKERS",
+    "API_RUN_LEASE_MS",
+    "API_RUN_CELL_TIMEOUT_MS",
+    "API_RUN_HEARTBEAT_MS",
+    "API_RUN_ATTEMPTS_MAX",
+    "API_RUN_POLL_MS",
+    "API_WORKSPACE_RUN_CONCURRENCY",
+    "API_PARSE_WORKERS",
+    "API_EVENT_RETENTION_DAYS",
+    "API_EVENT_PAGE_MAX",
+    "API_RUN_RETRY_BACKOFF_MS"
   ],
   "defaultedNote": [
     "Read by a configuration module, set by NEITHER environment: each falls",
@@ -187,7 +202,9 @@
     "these is a property of the software's own behaviour — a size cap, a",
     "timeout, a rate — that the software is entitled to have an opinion",
     "about. Which jurisdictions a firm permits is a property of that firm's",
-    "contracts, which the software has no standing to guess at all."
+    "contracts, which the software has no standing to guess at all.",
+    "",
+    "Stage 3 Task 8-12 added thirteen: the run queue's caps (workers, lease, cell timeout, heartbeat, attempts, poll, per-workspace concurrency, parse workers), the outbox's retention and page size, the page-image LRU and the per-call image budget, and the engine pool's size. Every one is a property of the software's own behaviour and every one is DECLARED rather than inherited from a library default -- which is the rule three shipped defects on the scanned-document path bought. API_RUN_IMAGE_BYTES_MAX is the one whose default is DERIVED (three quarters of API_MAX_BODY_BYTES) rather than a constant, so an operator who lowers the body limit does not have to know about a second key to keep the two consistent."
   ],
   "localOnlyServices": [
     "keycloak",

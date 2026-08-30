@@ -21,6 +21,7 @@ import { registerPlaybooks } from './routes/playbooks.ts';
 import { registerChangesets } from './routes/changesets.ts';
 import { registerWorkspaceSettings } from './routes/workspaceSettings.ts';
 import { registerReviews } from './routes/reviews.ts';
+import { registerRuns } from './routes/runs.ts';
 import { ConflictError } from './errors.ts';
 
 declare module 'fastify' {
@@ -90,6 +91,11 @@ export interface ServerDeps {
    *  first sight. Injected, so a route test needs no database and so Task
    *  4's role lookup has exactly one place to live. */
   resolveActor(principal: Principal): Promise<Actor>;
+  /** `API_EVENT_PAGE_MAX` — the run outbox's page size, DECLARED rather
+   *  than inherited. A run of forty cells writes eighty-odd events, and a
+   *  route that would hand a client all of them on request is an undeclared
+   *  cap by another name. */
+  eventPageMax: number;
   /** Where the firm's document BYTES live (Task 10). Injected rather than
    *  constructed here, so a route test needs no Azurite and so there is
    *  exactly one store for the upload path and the delete cascade to share
@@ -306,6 +312,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerPlaybooks(app, deps.db);
   registerChangesets(app, deps.db);
   registerReviews(app, deps.db);
+  registerRuns(app, deps.db, { eventPageMax: deps.eventPageMax });
   registerWorkspaceSettings(app, deps.db, deps.gateway);
 
   return app;

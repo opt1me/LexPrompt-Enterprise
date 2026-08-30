@@ -512,6 +512,8 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/precedent-sets/:id',
       'GET /v1/precedent-sets/:id/documents',
       'GET /v1/reviews/:id',
+      'GET /v1/runs/:id',
+      'GET /v1/runs/:id/events',
       'GET /v1/versions/:id',
       'GET /v1/workspace/settings',
       'PATCH /v1/documents/:id/role',
@@ -524,6 +526,8 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'POST /v1/playbooks/import',
       'POST /v1/precedent-sets',
       'POST /v1/precedent-sets/:id/documents',
+      'POST /v1/reviews/:id/runs',
+      'POST /v1/runs/:id/cancel',
       'PUT /v1/changesets/:id',
       'PUT /v1/collections/:id',
       'PUT /v1/matters/:id',
@@ -556,11 +560,11 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     }
     // The count is pinned so this cannot pass over an empty sweep. Grown by
     // every route task: 9 through Task 9, 17 with Task 11's six document
-    // routes and two admin ones, 49 with Task 19's eight precedent routes and
-    // 50 with Task 20's basis read. A
-    // DROP in this number without a route being removed is a route that
-    // stopped being registered.
-    expect(checked).toHaveLength(50);
+    // routes and two admin ones, 49 with Task 19's eight precedent routes,
+    // 50 with Task 20's basis read and 54 with Stage 3 Task 8's four run
+    // routes. A DROP in this number without a route being removed is a route
+    // that stopped being registered.
+    expect(checked).toHaveLength(54);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

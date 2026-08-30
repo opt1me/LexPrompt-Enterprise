@@ -154,6 +154,18 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'PUT /v1/reviews/:id': 'reviewer',
   'DELETE /v1/reviews/:id': 'reviewer',
 
+  // §7: a reviewer RUNS reviews. All four at `reviewer`, including cancel —
+  // stopping a run you started is part of running one, and a bar that let a
+  // reviewer start work nobody but a partner could stop would leave the
+  // firm's model budget running with no one able to reach it.
+  //
+  // Reading a run and its events is the same act as reading the review, and
+  // both are scoped to the caller's workspace inside the handler.
+  'POST /v1/reviews/:id/runs': 'reviewer',
+  'GET /v1/runs/:id': 'reviewer',
+  'POST /v1/runs/:id/cancel': 'reviewer',
+  'GET /v1/runs/:id/events': 'reviewer',
+
   // Reconciliation (§6.5). ADMIN, not reviewer: the listing names bytes
   // that no record claims — which is a fact about storage rather than about
   // any matter — and the second route destroys them. A reviewer who could

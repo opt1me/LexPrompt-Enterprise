@@ -51,6 +51,7 @@ const ENV = {
   API_GATEWAY_URL: 'https://gateway:8081',
   API_WORKSPACE_ID: '00000000-0000-0000-0000-000000000001',
   API_DATABASE_URL: 'postgres://lexprompt_app:pw@postgres:5432/lexprompt',
+  API_WORKER_DATABASE_URL: 'postgres://lexprompt_worker:pw@postgres:5432/lexprompt',
   API_DATABASE_MIGRATION_URL: 'postgres://lexprompt_migrator:pw@postgres:5432/lexprompt',
   API_ROLE_MAPPINGS: `${KC}|reviewers|reviewer,${KC}|partners|partner,${KC}|admins|admin`,
 };

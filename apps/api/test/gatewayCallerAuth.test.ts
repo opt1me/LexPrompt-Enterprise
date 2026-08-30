@@ -45,6 +45,27 @@ const BASE: ApiConfig = {
   },
   pageRenderTimeoutMs: 120_000,
   pageImageMaxPages: 100,
+  pageImageLruBytes: 256 * 1024 * 1024,
+  runImageBytesMax: 12 * 1000 * 1000,
+  // The engine's own connection, on the THIRD role. Spelled out in this
+  // fixture rather than reused from `databaseUrl` for the reason
+  // `loadConfig` refuses to default it: the app role can write a
+  // disposition and the worker role cannot, and a fixture that blurred the
+  // two would make the difference invisible to the one suite that reads a
+  // whole `ApiConfig`.
+  databaseWorkerUrl: 'postgres://lexprompt_worker:worker-dev@postgres:5432/lexprompt',
+  workerPoolMax: 4,
+  runWorkers: 2,
+  runLeaseMs: 600_000,
+  runCellTimeoutMs: 300_000,
+  runHeartbeatMs: 15_000,
+  runAttemptsMax: 3,
+  runPollMs: 1_000,
+  runRetryBackoffMs: 30_000,
+  workspaceRunConcurrency: 8,
+  parseWorkers: 1,
+  eventRetentionDays: 7,
+  eventPageMax: 500,
 };
 
 const MTLS = {

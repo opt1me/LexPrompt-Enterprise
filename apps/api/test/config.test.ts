@@ -14,6 +14,12 @@ const BASE = {
   API_GATEWAY_URL: 'https://gateway.internal',
   API_WORKSPACE_ID: 'ws-1',
   API_DATABASE_URL: 'postgres://lexprompt_app:app-dev@postgres:5432/lexprompt',
+  // The ENGINE's own connection, on the third role (Stage 3 Task 10). It has
+  // no default and no fallback to API_DATABASE_URL on purpose: the app role
+  // can write a disposition and lexprompt_worker cannot, so a fallback would
+  // give the review engine back the ability to overwrite a lawyer's
+  // verification with every test in this repository still green.
+  API_WORKER_DATABASE_URL: 'postgres://lexprompt_worker:worker-dev@postgres:5432/lexprompt',
   API_DATABASE_MIGRATION_URL: 'postgres://lexprompt_migrator:migrator-dev@postgres:5432/lexprompt',
   // Required, with no default — see `roleMappingsFrom`. It is in BASE rather
   // than in each case because "the API refuses to start unset" is asserted in
@@ -99,7 +105,9 @@ describe('loadConfig (apps/api)', () => {
   // existing required keys above — a database DSN that silently defaulted
   // to nothing would connect to nowhere with no explanation.
   it('refuses a missing database URL or migration URL, by name', () => {
-    for (const key of ['API_DATABASE_URL', 'API_DATABASE_MIGRATION_URL'] as const) {
+    for (const key of [
+      'API_DATABASE_URL', 'API_DATABASE_MIGRATION_URL', 'API_WORKER_DATABASE_URL',
+    ] as const) {
       const env = { ...BASE }; delete env[key];
       expect(() => loadConfig(env), key).toThrow(ConfigError);
       expect(() => loadConfig(env), key).toThrow(new RegExp(key));

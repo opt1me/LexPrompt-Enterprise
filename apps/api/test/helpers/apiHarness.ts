@@ -93,6 +93,9 @@ export interface TestApiOptions {
    * its own and reads `keys()`.
    */
   blobs?: MemoryBlobStore;
+  /** Overrides `API_EVENT_PAGE_MAX`, so a test can prove the cursor's
+   *  `hasMore` without writing five hundred events. */
+  eventPageMax?: number;
 }
 
 export interface CallLog {
@@ -205,6 +208,9 @@ export function buildTestApi(
     verify, gateway, db: opts.db ?? db, resolveActor, blobs,
     workspaceId: WORKSPACE_ID,
     maxBodyBytes: opts.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES,
+    // The shipped default, so a route suite reads the same page size the
+    // running service uses rather than a number the harness invented.
+    eventPageMax: opts.eventPageMax ?? 500,
   });
 
   return { app, calls, blobs };

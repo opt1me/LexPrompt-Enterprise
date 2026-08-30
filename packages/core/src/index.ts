@@ -28,6 +28,15 @@ export {
 export type { Frame, StreamEnd } from './model/sse.ts';
 export { ROLES, isRole } from './api/records.ts';
 export type { Role, MeResponse, WorkspaceSettings } from './api/records.ts';
+// §8/§9's run outbox, P22: one payload vocabulary, two transports. Declared
+// here because the browser reads these and `apps/api` writes them, and
+// Stage 4's socket sends exactly the same five.
+export { RUN_EVENT_TYPES, isRunEventType, RUN_STATES, RUN_CELL_STATES } from './api/records.ts';
+export type {
+  RunEventType, RunStartedPayload, FindingEventPayload, RunFinishedPayload,
+  RunEventPayload, RunEvent, RunEventPage,
+  RunState, RunCellState, RunCellCounts, RunView,
+} from './api/records.ts';
 // The domain logic that decides what a published playbook version SAYS,
 // needed by the browser that reviews a changeset and by the API that
 // publishes it. Moved out of `src/lib/db/changesets.ts` rather than copied:
