@@ -235,10 +235,20 @@ describe('claimsIn recognises a claim, and recognises what is not one', () => {
 });
 
 describe('§18 item 3: nothing in this app denies that a precedent is kept', () => {
+  // 20s, not Vitest's default 5s. This walks and comment-strips every source
+  // file under `src/`, and at ~6s it had already outgrown the default — so it
+  // began failing on load rather than on a defect, which is the worst thing a
+  // §18 guard can do: a red run that means nothing teaches whoever sees it to
+  // re-run rather than look. (Stage 1 shipped the same shape: an egress test
+  // whose 8s probe sat under a 5s timeout, unpassable in both directions.)
+  //
+  // The budget is generous on purpose. It is not a performance assertion —
+  // if this scan ever genuinely takes 20s, the right answer is to make it
+  // cheaper, not to raise this again.
   it('finds no such claim anywhere under src/', () => {
     const offenders = scanned().flatMap(f => claimsIn(rel(f), codeOf(f)));
     expect(offenders.map(o => `${o.file}:${o.line} ${o.text}`)).toEqual([]);
-  });
+  }, 20_000);
 
   it('finds no such claim in the README', () => {
     const readme = readFileSync(path.join(ROOT, 'README.md'), 'utf8');
