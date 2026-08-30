@@ -21,6 +21,13 @@
 
     "openAiResourceId": { "value": "${OPENAI_RESOURCE_ID=}" },
 
-    "modelsJsonContent": { "value": "${MODELS_JSON_CONTENT}" }
+    "modelsJsonContent": { "value": "${MODELS_JSON_CONTENT}" },
+
+    "postgresAdministratorLogin": { "value": "${POSTGRES_ADMIN_LOGIN=lexprompt_admin}" },
+
+    "postgresBackupRetentionDays": { "value": 14 },
+    "postgresMaxConnections": { "value": 100 },
+    "postgresEntraAuthentication": { "value": false },
+    "blobSoftDeleteRetentionDays": { "value": 7 }
   }
 }

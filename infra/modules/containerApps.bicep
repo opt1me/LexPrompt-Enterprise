@@ -16,6 +16,10 @@ param logAnalyticsSharedKey string
 
 param apiIdentityResourceId string
 param apiPrincipalId string
+// The CLIENT id, which is a different value from the principal id above and
+// is needed for a reason that would otherwise only appear on a deployment —
+// see the AZURE_CLIENT_ID entry in `api`'s env block.
+param apiClientId string
 param gatewayIdentityResourceId string
 param gatewayPrincipalId string
 param webIdentityResourceId string
@@ -82,6 +86,61 @@ param gatewayEntraAudience string
 @secure()
 param modelsJsonContent string
 
+// --- Stage 2: the VNet, and the two stores `api` reads -------------------
+
+@description('The Container Apps environment\'s infrastructure subnet (infra/modules/network.bicep). Integrating the environment with a VNet is what lets `api` resolve the two private endpoints; it does NOT restrict outbound traffic, and nothing here claims it does — see README.md and Spike 2.')
+param infrastructureSubnetId string
+
+@description('The Postgres server\'s FQDN. Half of the two DSNs composed below; the other half is a password out of Key Vault.')
+param postgresFqdn string
+
+@description('The database name on that server.')
+param postgresDatabaseName string
+
+@description('The two database roles P10 requires. They are created by ONE psql run by the Flexible Server admin (infra/postgres/init.sql is the local form of the same thing) — not by this template. 000_preconditions.sql refuses the migration, naming that step, if they are absent, which is why the refusal exists rather than letting a GRANT fail with "role does not exist".')
+param databaseAppRole string = 'lexprompt_app'
+param databaseMigratorRole string = 'lexprompt_migrator'
+
+@secure()
+@description('lexprompt_app\'s password, read out of Key Vault by main.bicep with getSecret(). Never a default, never an output, and never an app SETTING — it reaches the container only inside the DSN below, which is a Container Apps SECRET.')
+param databaseAppPassword string
+
+@secure()
+@description('lexprompt_migrator\'s password. Same handling.')
+param databaseMigratorPassword string
+
+@description('The blob endpoint of the Storage account (infra/modules/storage.bicep). This is the ONLY thing `api` is given about the store: there is no connection string, because the account has key-based authentication switched off entirely and there is nothing to give.')
+param blobAccountUrl string
+
+@description('The container documents live in — the same value that created it, so API_BLOB_CONTAINER and the real container cannot drift.')
+param blobContainer string
+
+// The two DSNs, composed here rather than in main.bicep for one mechanical
+// reason: `getSecret()` is only valid when assigned directly to a @secure()
+// module parameter, so it cannot be interpolated into a string at the call
+// site. Here the passwords are ordinary secure parameters and interpolation
+// is allowed.
+//
+// `sslmode=verify-full` is CHECKED against the loader, not assumed.
+// `apps/api/src/db/pool.ts` passes the DSN straight to `pg`'s Pool, which
+// parses it with `pg-connection-string` (2.14.0, pinned in this repo's
+// lockfile). In that version's default mode `verify-full` enables TLS with
+// Node's ordinary certificate verification and emits nothing; `require` and
+// `prefer` reach the SAME code path but print a deprecation warning, and
+// `no-verify` silently turns verification off. So `verify-full` is the only
+// value here that is both strict and quiet. Azure's Flexible Server presents
+// a DigiCert Global Root G2 chain, which Node's own trust store carries, so
+// no `sslrootcert` is needed. The compose stack sets no sslmode at all and
+// gets no TLS, which is correct for a container on a network with no route
+// out — that is §5.1 row 11, not a divergence in code.
+//
+// `uriComponent()` on each password because a DSN is a URI: an operator who
+// chooses a password containing `@`, `/` or `#` would otherwise get a DSN
+// that parses into a different host, and the failure would be a connection
+// refused by something that is not the database.
+var databaseUrl = 'postgres://${databaseAppRole}:${uriComponent(databaseAppPassword)}@${postgresFqdn}:5432/${postgresDatabaseName}?sslmode=verify-full'
+var databaseMigrationUrl = 'postgres://${databaseMigratorRole}:${uriComponent(databaseMigratorPassword)}@${postgresFqdn}:5432/${postgresDatabaseName}?sslmode=verify-full'
+
 // azd's placeholder-image bootstrap: `azd provision` must be able to create
 // all three Container Apps before any image has been built, so each image
 // parameter defaults to a public placeholder and `azd deploy` (which `azd up`
@@ -108,6 +167,22 @@ resource environment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: '${namePrefix}-env'
   location: location
   properties: {
+    // Stage 2. Two consequences worth naming rather than leaving to be met:
+    //
+    //  - `internal: false` keeps `web`'s public ingress exactly as it was.
+    //    Setting it true would make the whole environment internal-only and
+    //    the app unreachable from a browser, which is not what any of this
+    //    is for: what had to become private is the two STORES, and they are
+    //    private because their own `publicNetworkAccess` is Disabled.
+    //  - Adding VNet integration to an environment that already exists is
+    //    not an in-place update. ARM replaces the environment, and every
+    //    app in it with it. For a first deployment that is free; for an
+    //    already-running Stage 1 deployment it is a rebuild, and it is
+    //    better read here than discovered in a `what-if`.
+    vnetConfiguration: {
+      infrastructureSubnetId: infrastructureSubnetId
+      internal: false
+    }
     appLogsConfiguration: {
       destination: 'log-analytics'
       logAnalyticsConfiguration: {
@@ -304,6 +379,22 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
       // system to get wrong, and no public API surface to defend.
       ingress: { external: false, targetPort: 8080, transport: 'http', allowInsecure: false }
       registries: [ { server: registry.properties.loginServer, identity: apiIdentityResourceId } ]
+      secrets: [
+        // The two DSNs, as Container Apps SECRETS rather than plain
+        // environment values, so neither appears in the portal's
+        // app-settings blade or in `azd env get-values` — the same treatment
+        // models.json gets on the gateway, for the same reason.
+        //
+        // There is no third secret for the document store, and its absence
+        // is the point: the Storage account has key-based authentication
+        // switched off entirely, so `api` reaches it with the managed
+        // identity below and there is no credential to store. That is S2's
+        // stronger property expressed as an absence — README.md's Azure
+        // checklist greps `infra` and `azure.yaml` for a credential-shaped
+        // string and expects no match.
+        { name: 'database-url', value: databaseUrl }
+        { name: 'database-migration-url', value: databaseMigrationUrl }
+      ]
     }
     template: {
       containers: [
@@ -321,6 +412,44 @@ resource apiApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'API_ROLE_MAPPINGS', value: oidcRoleMappings }
             { name: 'API_WORKSPACE_ID', value: '00000000-0000-0000-0000-000000000001' }
             { name: 'API_GATEWAY_URL', value: 'https://${gatewayApp.properties.configuration.ingress.fqdn}' }
+            // §5.1 row 11. The SAME KEY NAMES the compose stack sets, with
+            // different values — a sameEverywhere pair, exactly like the
+            // identity keys, not a divergence.
+            { name: 'API_DATABASE_URL', secretRef: 'database-url' }
+            { name: 'API_DATABASE_MIGRATION_URL', secretRef: 'database-migration-url' }
+            // NO API_DATABASE_POOL_MAX: apps/api/src/config.ts defaults it
+            // to 10 and NEITHER environment sets it, which is what keeps it
+            // a shared default rather than an undeclared divergence. The
+            // number is not free-floating — postgres.bicep's max_connections
+            // is declared against it (10 x 3 replicas + headroom <= 100).
+            //
+            // §5.1 row 5. The credential SOURCE and the container are set in
+            // both environments under the same names; only the value of the
+            // source differs, and there is NO FALLBACK between the two —
+            // `resolveBlobCredential` refuses a configured source with no
+            // material rather than reaching for the other, because a
+            // fallback means the system used a different identity than the
+            // operator configured and said nothing (P14).
+            { name: 'API_BLOB_CREDENTIAL_SOURCE', value: 'managed-identity' }
+            { name: 'API_BLOB_ACCOUNT_URL', value: blobAccountUrl }
+            { name: 'API_BLOB_CONTAINER', value: blobContainer }
+            // NOT read by apps/api/src/config.ts, and it still has to be
+            // here. `apps/api/src/blob/store.ts` constructs
+            // `new DefaultAzureCredential()` with no options; the
+            // managed-identity leg of that chain resolves a USER-ASSIGNED
+            // identity's client id from `process.env.AZURE_CLIENT_ID` and
+            // from nowhere else (@azure/identity 4.13.1,
+            // `createDefaultManagedIdentityCredential` — checked in this
+            // repository's own node_modules, not assumed). This app has a
+            // user-assigned identity and NO system-assigned one, so without
+            // this value the chain asks for a system-assigned token that
+            // does not exist, and every document byte read and write fails
+            // at runtime with an authentication error — in a deployment
+            // whose unit tests are all green. It is the same class of defect
+            // as Stage 1's `oidcRequiredClaims`-as-JSON: visible only
+            // against a real tenant, and found by reading the loader rather
+            // than by trusting the name.
+            { name: 'AZURE_CLIENT_ID', value: apiClientId }
             // NO API_MTLS_*: apps/api/src/config.ts's own comment says this
             // set is "Absent in a firm deployment, where the gateway trusts
             // this process's managed identity instead" — setting any one of

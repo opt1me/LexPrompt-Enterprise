@@ -13,6 +13,46 @@
 // setting §5's "no key is a parameter, an output, or an app setting" rules
 // out. Neither `apiIdentity` nor `webIdentity` can read a provider secret
 // or call a provider — this file is where that boundary is drawn.
+// ---------------------------------------------------------------------
+// STAGE 2 CHANGED ONE SENTENCE ABOVE, AND THE CHANGE IS NAMED HERE RATHER
+// THAN LEFT TO BE INFERRED FROM A DIFF.
+//
+// "`apiIdentity` carries no Azure RBAC role at all" is no longer true. It
+// now carries exactly one, and the two data-plane grants Stage 2 needs are
+// listed here in full so this file remains the place a reviewer reads to
+// find out what each identity can do:
+//
+//  1. **Storage Blob Data Contributor**, granted to `apiIdentity` and
+//     SCOPED TO THE ONE CONTAINER — not to the account, not to the
+//     resource group, not to the subscription, and not Owner. §6.5 says
+//     the document bytes are "reachable only through the API's managed
+//     identity", and this is that sentence.
+//
+//     The assignment itself lives in `infra/modules/storage.bicep`, not in
+//     this file, and it cannot live here: the container is a resource
+//     `storage.bicep` declares, so the symbol needed to scope the
+//     assignment only exists there — and `storage.bicep` already takes
+//     `apiPrincipalId` from this module's output, so moving the assignment
+//     here would make the two modules depend on each other in a cycle.
+//     Named in both places is the honest answer to a requirement that says
+//     "name them explicitly in identity.bicep".
+//
+//  2. **The Postgres database role**, if the operator chooses Entra
+//     authentication for the server (`postgresEntraAuthentication`). This
+//     one is NOT expressible in Bicep at all, and pretending otherwise
+//     would be worse than saying so: granting a managed identity a
+//     non-admin Postgres role is `SELECT pgaadauth_create_principal(...)`
+//     followed by ordinary `GRANT`s, run over psql by the server's Entra
+//     administrator — the same manual step, on the same connection, as
+//     creating `lexprompt_migrator` and `lexprompt_app`. The only thing
+//     Bicep could do instead is make `apiIdentity` a SERVER ADMINISTRATOR,
+//     which is a much larger grant than the design asks for and is
+//     deliberately not done. README.md's Azure section carries the psql.
+//
+// `gatewayIdentity` is unchanged and still holds the only PROVIDER
+// credentials. `webIdentity` is unchanged and still holds nothing but
+// AcrPull.
+// ---------------------------------------------------------------------
 metadata description = 'User-assigned managed identities for api and gateway.'
 
 param location string

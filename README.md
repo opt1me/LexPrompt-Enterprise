@@ -352,6 +352,47 @@ A green run here is evidence about the authentication *path* and about the *shap
 3. After the first `azd provision`, add every provider key `models.json` needs via `az keyvault secret set --vault-name <name> --name <secretName> --value <key>` — never as a parameter, an azd env value, or a committed file. `keyVault.bicep` deliberately defines no secrets.
 4. Author `models.json` yourself (same file shape as the compose stack's, `models.example.json` for the Azure-native shape) and pass its content as the `MODELS_JSON_CONTENT` azd environment value — it is mounted as a Container Apps secret volume (`GATEWAY_MODELS_FILE=/config/models.json`), never an environment variable, so it is absent from the portal's app-settings blade and from `azd env get-values`.
 
+**Two steps Bicep cannot do, and one ordering consequence of holding every credential in Key Vault.** These are not omissions to be tidied up later — each one is a thing a template is not allowed to do on a firm's behalf, and each fails loudly rather than quietly if it is skipped.
+
+**(a) The first `azd provision` will fail, and that is the design.** The template reads three passwords out of the Key Vault it creates, with `getSecret()` — never a parameter with a default, never an azd environment value, never an output. On a fresh subscription the vault is created empty, so the run stops when it reaches Postgres and names the vault and the missing secret. Create the three, then run it again:
+
+```bash
+azd provision                                   # creates the RG, identities, VNet and the vault; FAILS on Postgres
+VAULT=$(azd env get-value KEY_VAULT_URI | sed -E 's#https://([^.]+)\..*#\1#')
+
+az keyvault secret set --vault-name "$VAULT" --name postgres-admin-password     --value "$(openssl rand -base64 24 | tr -d '/+=')"
+az keyvault secret set --vault-name "$VAULT" --name database-app-password       --value "$(openssl rand -base64 24 | tr -d '/+=')"
+az keyvault secret set --vault-name "$VAULT" --name database-migrator-password  --value "$(openssl rand -base64 24 | tr -d '/+=')"
+
+azd provision                                   # now provisions Postgres, Storage and the three Container Apps
+```
+
+The alternative — a `@secure()` parameter fed from the azd environment — would put three live database credentials in `.azure/<env>/.env` on somebody's laptop, which is the thing this whole arrangement exists not to do. (The DSNs the API reads are composed *inside* the Bicep from those passwords and the server's FQDN, so no connection string is ever a parameter, an output, or an app setting either.)
+
+**(b) Creating `lexprompt_migrator` and `lexprompt_app`.** `infra/postgres/init.sql` is the local form of this. In Azure it is one `psql` run by the Flexible Server admin, after provisioning and **before the first `azd deploy`** — the server has public network access disabled, so run it from inside the VNet (a jump box, Cloud Shell with VNet integration, or `az containerapp exec` into the `api` app once it exists). Use the same two passwords you put in the vault:
+
+```sql
+-- as the admin, connected to the `lexprompt` database
+create role lexprompt_migrator login password '<database-migrator-password>';
+create role lexprompt_app      login password '<database-app-password>';
+grant connect on database lexprompt to lexprompt_migrator, lexprompt_app;
+-- the rest of the grants are what infra/postgres/init.sql does locally; read
+-- it and mirror it, because the two must not drift.
+```
+
+Skipping this is not silent: `000_preconditions.sql` refuses the migration with a message naming this step, which is why that file exists rather than letting a `GRANT` fail with "role does not exist".
+
+**(c) Confirming the private endpoints resolve.** §5.1's own list says Azure networking is not exercised locally, so this is the one check that has no local equivalent. From inside the Container Apps environment:
+
+```bash
+az containerapp exec --name <namePrefix>-api --command sh
+# then, inside the container:
+getent hosts <namePrefix>-pg.postgres.database.azure.com
+getent hosts <namePrefix>st.blob.core.windows.net
+```
+
+**A correct answer is a private address** — something in the VNet's `10.20.2.0/24` private-endpoint subnet. A public address (or a CNAME resolving to one) means the private DNS zone is not linked to the VNet: the endpoints will look green in the portal and every connection will time out, which reads as a firewall problem and is not one.
+
 ```bash
 azd auth login
 azd up      # prompts for GATEWAY_ALLOWED_JURISDICTIONS — there is no default in the template;
@@ -371,9 +412,23 @@ Then, against the deployed environment (**not verified here — this is what Ste
 
 **`api` cannot yet authenticate to the gateway with a managed identity, and it now refuses to start rather than pretending otherwise.** `makeGatewayClient` accepts an optional `getGatewayToken()` callback and attaches it as a Bearer token, but nothing supplies one: acquiring a managed-identity token for the gateway's audience needs `@azure/identity` in `apps/api`, an audience value this service is not yet given, and a real tenant to test against. Rather than deploy an `api` that starts cleanly, reports itself healthy and has every single request refused by `GATEWAY_CALLER_AUTH=entra`, `apps/api` **refuses to start** when it has neither a client certificate nor a token source — naming both modes and the missing wiring in the message. So this template will provision successfully and the `api` container will fail its startup, loudly, until that wiring lands. That is deliberate: a crash-looping container with an explanatory log line is a far cheaper failure than a healthy-looking service whose model calls silently never succeed. Verification step 2 above cannot pass until then.
 
-**What this template does NOT enforce, and says so rather than implying otherwise (Task 25 point 2):** `api`'s Container App has no VNet integration, route table, or NAT configuration in this Bicep, so it has ordinary outbound internet access by default — the Azure counterpart of compose's network isolation (`api` not on the `egress` network) is **not yet a fact about this deployment**, only a fact about the local stack. Enforcing it needs a VNet-integrated Container Apps environment with an egress lockdown (a firewall or a route table forcing all outbound traffic through one), which is Spike 2's work, not this task's. `npm run test:compose`'s assertion is what actually holds today; nothing equivalent runs against Azure yet.
+**What this template does NOT enforce, and says so rather than implying otherwise:** the Container Apps environment is now VNet-integrated — Stage 2 needed that so the two private endpoints resolve — but **VNet integration is an inbound fact, not an outbound one**. There is no route table, no NAT gateway and no firewall in this Bicep, so `api`'s Container App still has ordinary outbound internet access. The Azure counterpart of compose's network isolation (`api` not on the `egress` network) is therefore **not yet a fact about this deployment**, only a fact about the local stack — unchanged by the VNet, and it would be an easy sentence to delete by accident on reading that a VNet arrived. Enforcing it needs an egress lockdown forcing all outbound traffic through a firewall or a route table, and that is Spike 2's work. `npm run test:compose`'s assertion is what actually holds today; nothing equivalent runs against Azure yet.
 
-**No Postgres, no Blob Storage, no private endpoints for either** (Task 25 point 6) — Stage 2's concern. Provisioning them now would be infrastructure this stage never touches and a bill nobody expected.
+**The deployer's checklist.** Nobody can automate these, so they are a list to tick. Four of them, and the last one is a command rather than a judgement:
+
+- [ ] **Public network access is disabled on both stores.** `infra/modules/postgres.bicep` sets `network.publicNetworkAccess: 'Disabled'`; `infra/modules/storage.bicep` sets `publicNetworkAccess: 'Disabled'` and `networkAcls.defaultAction: 'Deny'` with **no** `AzureServices` bypass. Confirm both in the portal after provisioning — a policy in the tenant can override a template.
+- [ ] **The private endpoints resolve from inside the Container Apps environment**, by the two `getent hosts` commands in step (c) above, and the answers are private addresses.
+- [ ] **The Postgres admin password exists only in Key Vault.** It is not a parameter with a default, not an output, not an app setting, and not in `.azure/<env>/.env`. `azd env get-values | grep -i -E 'key|secret|password'` returns nothing.
+- [ ] **No storage connection string exists anywhere in the template, the parameters file, or the azd environment** — searched, not assumed:
+
+```bash
+grep -rniE 'AccountKey=|DefaultEndpointsProtocol=|API_BLOB_CONNECTION_STRING' infra azure.yaml
+# expect: no output
+```
+
+That absence is the Azure half of the stronger security property, expressed the same way Stage 1 expressed it for provider keys. It is also more than a convention here: the storage account is created with **shared-key authentication switched off**, so an account key authenticates nothing even if one were to leak. The API reaches the container with its own managed identity, granted `Storage Blob Data Contributor` **on the container** — not on the account, not on the subscription, and not Owner.
+
+**Postgres and Blob Storage are provisioned, and neither has been deployed.** `infra/modules/postgres.bicep` and `infra/modules/storage.bicep` are new in Stage 2, along with `infra/modules/network.bicep` for the VNet they sit behind. **No `az`, `azd` or `bicep` CLI was available in the environment they were written in, and there is no Azure subscription** — so nothing here has been compiled, validated, or deployed, and no resource has ever been created from it. What was checked instead is what could be checked: every environment variable the template sets was cross-referenced **by name** against `apps/api/src/config.ts`'s reads, and `sslmode=verify-full` in the composed DSN was checked against the pinned `pg-connection-string` (2.14.0) that actually parses it — `require` and `prefer` reach the same code path but print a deprecation warning, and `no-verify` silently turns certificate verification off. The one defect that cross-reference found is recorded in `.superpowers/sdd/2026-08-29-lexprompt-server-stage-2-storage-and-auth/task-24-27-report.md`: `apps/api/src/blob/store.ts` constructs `new DefaultAzureCredential()` with no options, whose managed-identity leg resolves a **user-assigned** identity's client id from `AZURE_CLIENT_ID` and from nowhere else, so the Bicep sets it — without it every document byte read and write would have failed in Azure with every unit test green.
 
 ## Testing
 

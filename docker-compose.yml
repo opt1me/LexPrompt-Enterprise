@@ -266,6 +266,22 @@ services:
     # `api` reaches it by service name over this network, exactly as it
     # reaches keycloak and the gateway.
     networks: [internal]
+    # max_connections DECLARED, not inherited. Three undeclared caps have
+    # already bitten this project — Fastify's 1 MiB bodyLimit, nginx's 1 MiB
+    # client_max_body_size and busboy's fieldSize — and every one was a
+    # library default nobody had written down. This one happens to equal the
+    # postgres image's own default, so setting it changes no behaviour; what
+    # it changes is that the number now exists in a file, beside the same
+    # number in infra/modules/postgres.bicep, where the arithmetic that has
+    # to hold is written out:
+    #
+    #     API_DATABASE_POOL_MAX (10, defaulted in BOTH environments and set
+    #     by neither) x api replicas + headroom <= max_connections
+    #
+    # Exceeding it does not degrade gracefully: Postgres refuses the next
+    # connection outright with "sorry, too many clients already", which
+    # arrives as a 500 from a route that worked yesterday.
+    command: ["postgres", "-c", "max_connections=100"]
     environment:
       POSTGRES_USER: lexprompt_root
       POSTGRES_PASSWORD: lexprompt_root_dev
