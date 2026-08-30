@@ -1,6 +1,6 @@
 # LexPrompt
 
-LexPrompt is a tool for reviewing contracts against a checklist of clauses you define. It is a static web app, an HTTP API and an inference gateway you deploy into your own cloud. Your matters and documents still live in your browser (that changes in a later release); model calls go through the gateway.
+LexPrompt is a tool for reviewing contracts against a checklist of clauses you define. It is a static web app, an HTTP API, an inference gateway, a Postgres database and a blob store, deployed into your firm's own cloud. Your matters, documents, reviews and playbooks are stored there; model calls go through the gateway. You sign in with an identity provider your firm already runs, and there is no way to run it without doing so.
 
 ## What it does
 
@@ -59,7 +59,7 @@ A playbook doesn't come into existence pre-approved. It starts as a **draft** �
 - **Three routes, offered side by side.** "Create Template" in the library opens a chooser rather than going straight to a form: **Draft with AI** (describe the contract type, optionally point it at an existing playbook or a completed matter as style material, and a model proposes a first pass); **Build by hand** (add clauses one at a time, with a "Draft this for me" button on each field); and **Learn from redlines** (read a set of your own negotiated documents and propose standard positions from what you actually did to them — see [Learning from redlines](#learning-from-redlines) below).
 - **Nothing is saved until every clause has been decided.** An AI-drafted playbook opens on a review screen headed "Unsaved draft" that stays true for as long as you're on it: reload the page, or navigate away without answering the warning, and the draft is gone — that's the intended behaviour, not data loss. Every clause has to be **kept**, **edited then kept**, or **cut** before `Save as v1` does anything; the button is disabled and names how many clauses are still waiting, rather than sitting greyed out with no explanation. A cut clause is left out of the saved playbook entirely, not merely hidden.
 - **Every saved standard position says where it came from.** A clause the model proposed a position for reads as drafted by AI and not yet reviewed until you keep it; keep it unchanged and it reads as reviewed; rewrite it before keeping it and it still says the AI drafted it, because a person changing the wording doesn't erase where the idea came from — it only adds that someone changed it.
-- **Selecting a matter as style material sends its verified findings to the model you've chosen.** Only `verified` findings — never anything still unverified, flagged, or rejected, since those are the model's own unconfirmed output — and only for a matter you've explicitly ticked in the picker. This is the one place in the app where another matter's content leaves your browser rather than just the document currently under review, and the picker says so plainly next to the checkboxes, not in a Settings note.
+- **Selecting a matter as style material sends its verified findings to the configured model.** Only `verified` findings — never anything still unverified, flagged, or rejected, since those are the model's own unconfirmed output — and only for a matter you've explicitly ticked in the picker. This is the one place in the app where a matter *other than the one under review* is sent to a model at all, and the picker says so plainly next to the checkboxes, not in a Settings note.
 - **Per-field AI suggestions in the by-hand editor are never adopted just by saving the form.** "Draft this for me" on an extraction instruction, risk criteria, or standard position shows the suggestion dashed, badged, and clearly unaccepted, with Use this / Try again / I'll write it myself. Saving the clause while a suggestion sits on screen unaccepted leaves the field exactly as it was before you asked.
 - **"Suggest what I'm missing" proposes clause titles only**, checked against what the playbook already covers, added or dismissed one at a time — there's no "add all," because every clause entering a playbook is meant to be a decision, not a bulk import.
 
@@ -94,21 +94,41 @@ LexPrompt's screens use a paper-and-ink palette meant to read like a document ra
 - **Colour lives in two layers, and only the top one is usable from a component.** Raw values are plain CSS custom properties outside Tailwind's theme layer, so they never become classes anyone can type; only a small vocabulary of semantic roles — `accent`, `risk-high`, `ink-4`, `state-verified`, and the like — is exposed as a Tailwind utility. A component asks for what a colour *means* ("this is a risk", "this is a human confirmation"), never for a raw value. Teal is reserved for something a person did; a separate green is used for the model's own low-risk rating, so the two are never visually confused for one another even though they sit close in hue.
 - **Two automated guards make the system a rule, not a guideline.** A palette scanner runs over every source file and fails the build on a raw hex or `rgb()` literal, a Tailwind arbitrary colour value, a reference to the raw token layer, or a generic Tailwind palette class — with no exemption list, so no file is invisible to it. A contrast test checks every declared colour pairing (foreground role on background role) against the WCAG threshold its use case calls for — body text, chip text, or decorative metadata — so a future palette edit that quietly pushes a colour below legible contrast fails the suite instead of shipping.
 - **Fonts are vendored, not fetched.** `public/fonts/` holds six latin-subset `.woff2` files (a serif for document prose, a sans for interface chrome, a mono for labels and chips) under a combined budget of 350 KiB, checked by a test that also confirms nothing in the app links to a third-party font host. This is a privacy decision as much as a performance one: the app's own disclosure says nothing leaves the browser except calls to your firm's own API, and a Google Fonts `<link>` would make that false on every page view — before a user has done anything at all. Updating a font version is consequently a manual step — there is no font package as a dependency.
-- **The chrome is honest about being single-user.** The header avatar shows the initials from your own local profile, not an invented colleague's; there is no assignee chip, no "assigned to me" counter, and no firm-wide search box, because none of those can mean anything in an app with no accounts and no server. The matter activity feed is derived from your own verifications, notes, and confirmations at the moment you view it — it is not a stored event log, so it can never show an entry claiming a second person did something.
+- **The chrome is honest about what the app can actually do.** The header avatar shows your own initials, taken from the account you signed in with; there is no assignee chip, no "assigned to me" counter, and no firm-wide search box. Accounts are real now, so the reason those are absent has changed and is worth stating exactly: it is no longer that there is nobody to assign to — it is that **assignment, presence and notification are not built**, and an affordance that implies otherwise would be a promise the app cannot keep. The matter activity feed is derived from your own verifications, notes, and confirmations at the moment you view it — it is not a stored event log, so it can never show an entry claiming a second person did something. Each of those comes back when its mechanism is real, and not before.
 - **A matter's status board and its `Standard positions` tab both refuse to overstate.** The status board shows an empty form — not a row of zeroes — for a matter with no completed review yet, because "0 of 0 verified" reads as a fact about safety it hasn't earned. `Standard positions` lists every clause carrying a house position across your playbooks and marks each `HELD`, `CONCEDED`, or `UNTESTED` from verified findings only, built entirely from data the app already derives elsewhere — no new model calls, no new stored state.
 - **The app is usable from 768px upward.** Phone-width layouts are a separate, later piece of work — this pass covers tablet and desktop widths of the existing screens, not a phone-specific redesign.
 
-## No database yet
+## The services, and the two stores
 
-There are three services, and none of them is a database.
+There are three services and two stores, all inside your firm's own cloud tenant.
 
-- **`web`** — the static bundle of HTML, CSS and JavaScript this repository builds. It is the same single-page app as before; what changed is where it sends a model request.
-- **`api`** — validates the signed-in user's token on every request and forwards the validated call onward. It holds no credential of its own, and it is deliberately unable to reach the internet.
-- **`gateway`** — the only process permitted to call a model provider. It holds the provider credentials, enforces an allowlist of provider+model pairs, and writes one call record per request.
+- **`web`** — the static bundle of HTML, CSS and JavaScript this repository builds, served by nginx, which also proxies `/api` to the API on the same origin.
+- **`api`** — validates the signed-in user's token on every request, reads and writes the two stores below, and forwards model calls onward. It holds no provider credential, and it is deliberately unable to reach the internet.
+- **`gateway`** — the only process permitted to call a model provider. It holds the provider credentials, enforces an allowlist of provider+model pairs, and writes one call record per request. It holds **no database credential and no blob credential**, and has no client for either, so compromising it yields the calls in flight and never the archive.
+- **Postgres** — every record: matters, documents' metadata and extracted text, collections, reviews and their findings, playbooks and their published versions, changesets, precedent sets, standard-position evidence, and the user rows sign-in creates. Locally a container on a network with no route out; in a firm a Flexible Server with public network access disabled and a private endpoint.
+- **A blob store** — original file bytes, and nothing else. Locally Azurite (Microsoft's own emulator, not anything "S3-compatible"); in a firm an Azure Storage account with public network access disabled, a private endpoint, and shared-key authentication switched off entirely, so the API reaches it with a managed identity and there is no key to hold.
 
-**Your matters, documents, reviews and playbooks are stored by your firm's own service now, not by your browser.** They are rows in its Postgres database and files in its object storage, inside your firm's own cloud tenant. Anything you created before this release is still in this browser's IndexedDB and is *not* deleted by moving it — see [Moving your existing data](#moving-your-existing-data) and [Privacy](#privacy).
+**Your matters, documents, reviews and playbooks are stored by your firm's own service, not by your browser.** Anything you created before this release is still in this browser's IndexedDB and is *not* deleted by moving it — see [Moving your existing data](#moving-your-existing-data) and [Privacy](#privacy).
 
-There are still no user accounts *in LexPrompt* — it has no user table. It does require you to sign in, against an identity provider your firm already runs, and there is no way to run it without doing so.
+There **are** user accounts now, and they are not LexPrompt's: you sign in against an identity provider your firm already runs, and LexPrompt records the account the issuer names plus the role your firm's own group membership maps to. It has no password of yours, no way to create an account, and no way to run without signing in. What it does not yet have is anything two people can do to each other's work — see [Known limitations](#known-limitations).
+
+### What is stored, and where
+
+Matter documents and precedent documents are both stored, and they are deliberately kept apart. This is the whole table:
+
+| | Matter document | Precedent document |
+|---|---|---|
+| What it is | A contract under review, in a matter | One of your own past negotiated documents, brought in to learn house positions from |
+| Original file bytes | Blob store | Blob store |
+| Record and extracted text | Postgres, `kind = 'matter'` | Postgres, `kind = 'precedent'`, in a precedent set |
+| Belongs to | A matter | A precedent set — never a matter |
+| Can be reviewed | Yes | **No.** The API refuses it as a review target, not merely hides it in a picker |
+| Can join a collection | Yes | **No.** Refused the same way |
+| Can be cited in a report | Yes | No |
+| What a delete removes | The document's row and its bytes. Deleting the matter deletes every document in it, and their bytes | The precedent set, its documents' rows and their bytes. Any standard position learned from it keeps its wording and loses its evidence, and the evidence panel says so rather than showing an empty panel |
+| Page images for a scan | Never stored anywhere — regenerated on demand from the bytes | Never stored anywhere |
+
+**How long precedent documents are kept is your firm's decision and LexPrompt does not decide it.** There is no retention schedule in this software, no default expiry, and nothing that deletes a precedent set on its own; a precedent set stays until somebody removes it. That is a deliberate refusal rather than an omission — the alternative is a tool quietly deciding how long another client's papers sit in your database.
 
 ## Choosing a model provider
 
@@ -152,7 +172,7 @@ Matters, reviews, and templates are addressable by URL: `/matters/:id` opens a m
 This matters if you're evaluating LexPrompt for real contract work, so it's stated plainly:
 
 - **Matters, documents, and reviews are stored by your firm's own LexPrompt service** — the records and their text in its database, the original file bytes in its object storage, both inside your firm's own cloud tenant. Colleagues with access to a matter can see it.
-- **Nothing is uploaded anywhere except to your firm's own LexPrompt gateway, which forwards it to the model provider your administrator configured.** Which provider that is, and where it processes your text, is shown on every model in Settings. LexPrompt adds no retention of its own on top of whatever terms your firm holds with that provider; see [Choosing a model provider](#choosing-a-model-provider) for where those terms are recorded.
+- **Documents are uploaded to your firm's own LexPrompt API, and to nothing else.** They are stored by it and read back from it. When you run a review, that API sends the text (or, for a scan, page images) through your firm's own gateway to the model provider your administrator configured — the gateway is the only process that talks to a provider, and it is the only place your text goes outside your firm's tenant. Which provider that is, and where it processes your text, is shown on every model in Settings. LexPrompt adds no retention of its own on top of whatever terms your firm holds with that provider; see [Choosing a model provider](#choosing-a-model-provider) for where those terms are recorded.
 - **Deleting a matter deletes its documents and their stored bytes**, not just the matter's entry in a list. This cascade is real and covered by tests, not just a UI-level hide.
 - **Retention and backups are your firm's**, not this app's. LexPrompt adds no retention of its own and takes no backups of its own; your administrator decides how long everything is kept.
 - **Page images generated for scanned PDFs are never stored.** When a scanned page needs an image (because it has no usable text layer), it's rendered on demand from the document's stored original bytes and kept only in memory for that session.
@@ -181,14 +201,23 @@ Templates written by the very first version of LexPrompt, which lived in `localS
 
 ## How it's built
 
-A React 19 + TypeScript single-page app, built with Vite, styled with Tailwind 4. No backend, no server-side anything — the whole app is `dist/` and a static host.
+A TypeScript monorepo: a React 19 single-page app built with Vite and styled with Tailwind 4, a Fastify API, an inference gateway, and a `packages/core` both sides import so one idea never gets two implementations.
 
 ```
-src/
+packages/core/    the vocabulary the browser and the API both speak —
+                  wire types, roles, and the shared logic neither side
+                  may re-derive
+apps/api/         Fastify. Validates a token on every request, owns the
+                  Postgres schema and its migrations, and is the only
+                  process holding a database or blob credential
+apps/gateway/     the only process permitted to call a model provider
+src/              the web app
   lib/            pure logic and persistence — no React
-    db/           IndexedDB via `idb`; one repository per store
-                  (matters, documents, blobs, reviews, playbooks,
-                   collections, playbookVersions, changesets, profile)
+    db/           one repository per record type, each an HTTP client
+                  against apps/api (matters, documents, blobs, reviews,
+                  playbooks, collections, playbookVersions, changesets,
+                  profile). `blobs` is a route over the blob store rather
+                  than a table; the other eight are tables
     model/        the ONLY route to a model: the gateway client, and the
                   closed set of purposes every call must name
     citations.ts  matches a verbatim quote to page coordinates
@@ -213,6 +242,8 @@ Some deliberate shapes worth knowing before changing things:
 - **One route to a model.** Every request from the browser goes through `src/lib/model/gatewayModelClient.ts`, to your firm's own `api`, and onward to the gateway. The retry policy now lives in the gateway, where the provider's status code actually arrives: it retries only on 429 and 5xx and fails fast on 4xx. A failure a Retry button cannot fix is classified as one (`authFailure.ts`) so the screen offers the right thing rather than a button that will fail again.
 - **The card view, the comparison grid and the clause index are three renderers over one findings map.** None of them derives its own counts. The moment two of them compute "how many are verified" separately, they can disagree, and a reader has no way to know which to believe.
 - **Derived state is derived, not stored.** Position health, matter statistics and the activity feed are computed at read time from what already exists. A stored summary is a second source of truth that can drift from the thing it summarises.
+- **A route with no authorisation policy fails the build.** Every API route is a key in one table that says which roles may call it; there is no default and no fallback, so adding a route without deciding who may call it does not compile. What the UI hides is a convenience — what the API refuses is the rule, and the two are tested as a pair so a screen cannot quietly become the only thing standing between a trainee and a publish.
+- **Every query is scoped to the workspace, and every matter-context query is scoped to `kind = 'matter'`.** Both are enforced by a scanner over the SQL rather than by review, because a query that forgets either fails by showing **too much** — a precedent from another client's file appearing where a lawyer expects the deal in hand — and nothing on screen would look wrong.
 
 ### The rule the codebase is organised around
 
@@ -235,9 +266,9 @@ npm run dev
 
 This starts a Vite dev server (default `http://127.0.0.1:3005`) for the web app alone. It needs an `api` to call and an identity provider to sign in against, so on its own it renders the sign-in gate and goes no further. To run the whole thing, use the compose stack below.
 
-## Running the server stack locally (Stage 1)
+## Running the server stack locally
 
-The section above is the original browser-only app. LexPrompt is being rebuilt around a real server: a `gateway` that is the only process allowed to call a model provider, an `api` that authenticates every request against a real identity provider and proxies validated calls to the gateway, and a `web` static build in front of both. **There is no way to run LexPrompt without signing in.** No `SKIP_AUTH`, no anonymous mode, no trusted header, no development issuer that skips validation — a bypass would test a different code path from the one that ships, which would make a green local run evidence about something nobody deploys. A local Keycloak realm ships alongside the services instead, so the whole sign-in path runs on a laptop exactly as it runs in a tenant. The cost of that decision is one more container and about twenty seconds of cold start; the cost of the alternative is a flag that reaches production enabled.
+`docker compose up` brings up the whole system: a `gateway` that is the only process allowed to call a model provider, an `api` that authenticates every request against a real identity provider and owns both stores, a `web` static build in front of both, a `postgres` and an `azurite` neither of which has a route out or a published port, and a Keycloak realm to sign in against. **There is no way to run LexPrompt without signing in.** No `SKIP_AUTH`, no anonymous mode, no trusted header, no development issuer that skips validation — a bypass would test a different code path from the one that ships, which would make a green local run evidence about something nobody deploys. A local Keycloak realm ships alongside the services instead, so the whole sign-in path runs on a laptop exactly as it runs in a tenant. The cost of that decision is one more container and about twenty seconds of cold start; the cost of the alternative is a flag that reaches production enabled.
 
 **Run the certificate script first.** The gateway and `api` talk to each other over mTLS; `api` presents a client certificate the gateway's identity check requires. Nothing else in this section works until this has been run:
 
@@ -276,7 +307,7 @@ admin    / admin      admins
 nogroups / nogroups   (no group - expect to be refused, on purpose)
 ```
 
-Stage 1 enforces no roles, so all four sign in and see the same app — `partner`, `admin` and `nogroups` exist for Stage 2 onward, not because anything in this stage treats them differently yet. Four accounts ship now rather than later because every collaborative behaviour this design adds is unobservable with one user, and the realm file is version-controlled: one edit now is cheaper than four later. Open `http://localhost:3005` and sign in as `trainee` / `trainee` to run a review end to end.
+**Those roles are now enforced, by the API and not by the UI.** A `trainee` reviews and verifies but cannot publish a playbook version or change the workspace's model; a `partner` can publish; an `admin` can also change workspace settings and sweep orphaned document files. `nogroups` is in no mapped group and is **refused** — told plainly which account it signed in as and that its administrator maps groups to roles, with no user record created for it. Every one of those refusals is the API's; the screens hide what a role cannot do as a convenience, and the two are tested as a pair, because a gate whose only enforcement is a greyed-out button is a suggestion rather than a gate. Open `http://localhost:3005` and sign in as `trainee` / `trainee` to run a review end to end.
 
 ```bash
 npm run test:compose   # proves the network claim below against the running stack
@@ -320,7 +351,11 @@ Stated plainly, because a reader of this file has no other way to tell.
 
 **Driven in a real browser against a running compose stack:** the sign-in gate renders; **Sign in** redirects to Keycloak with `response_type=code` and `code_challenge_method=S256` (PKCE, no MSAL); Keycloak serves its login page; an error-shaped redirect back renders "LexPrompt couldn't sign you in" with the reason and a Retry; `npm run test:compose` passes all four of its network assertions.
 
-**Not done. No credentials were entered.** So the token exchange, `api` validating a real token, and an end-to-end review are all untested — nothing here has ever produced a finding from a signed-in session. The stream fixtures are synthetic, hand-authored from published wire formats rather than captured; `apps/gateway/src/smoke.ts` **has never been run against a live provider**; and nothing has been deployed to Azure.
+**Verified against the running stack without a browser:** the whole of `npm run test:pg` — 220 tests over a real Postgres, including every table's whole-record round trip, the grants, and the matter cascade deleting real blobs out of Azurite; real Keycloak tokens accepted and a user in no mapped group refused with no account row created; and `GET /api/v1/matters` with no token answering `401 sign_in_required` rather than an empty list, which is the founding rule holding at the HTTP boundary.
+
+**Not done, and this is the largest gap in this file. No credentials were entered.** **Nothing in the server rebuild past the sign-in redirect has ever been watched in a browser**, so the token exchange, an end-to-end review, the four seeded accounts seeing different things, the screen that moves this browser's data to the server, the sentence a lawyer reads when bringing in a precedent document, and the standard-position evidence panel are **all covered by unit, integration, real-Postgres and real-token HTTP tests, and by nothing that has looked at a screen.** Browser automation was unavailable throughout: the Chrome extension disconnected mid-way and Playwright's driver times out. That is stated rather than worked around, because two of this project's worst defects — a review screen showing zero documents, and a failed review becoming permanently unopenable — were invisible to thousands of passing tests and appeared only when somebody drove the real app. **These need a person.**
+
+The stream fixtures are synthetic, hand-authored from published wire formats rather than captured; `apps/gateway/src/smoke.ts` **has never been run against a live provider**; and nothing has been deployed to Azure.
 
 ## What running locally does not prove
 
@@ -334,7 +369,7 @@ A green local run says nothing about:
 - **Entra's group-claim shape, consent, and group overage.** Overage — the claim being replaced by a Graph pointer once a user is in enough groups — is the case most likely to be met in a real tenant and impossible to meet locally.
 - **Admin consent, conditional access, MFA and tenant token lifetimes.** None of these has a local analogue.
 - **Azure networking, and the real egress denial.** The compose stack proves it with Docker networks; Azure would prove it with a VNet-integrated environment and a route table, which this template does not yet create. That is Spike 2.
-- **Postgres Flexible Server's behaviour**, and **Azurite's gaps** as a stand-in for Blob Storage. Neither is provisioned in this stage; both matter from the next one.
+- **Postgres Flexible Server's behaviour**, and **Azurite's gaps** as a stand-in for Blob Storage. Both are provisioned now (`infra/modules/postgres.bicep`, `infra/modules/storage.bicep`) and neither template has been deployed, so what a green local run proves about them is what a container proves: the SQL is right and the SDK calls are right. It says nothing about a private endpoint resolving, about `max_connections` under real concurrency, about a managed identity actually being granted a token for the storage account, or about Azurite's own divergences from the real service under load.
 - **Real provider latency, rate limits and stream behaviour.** Every fixture in this repository is hand-authored.
 - **Container Apps scale-to-zero, and multi-replica WebSockets.** A second replica changes the rate limiter's assumptions now, and the realtime channel's later.
 
@@ -439,7 +474,17 @@ npm run test:watch  # watch mode
 
 The suite is unit and integration tests (Vitest) covering the repositories and the API routes behind them (matters, documents, blobs, reviews, playbooks, and the cascade-delete path, the route suites run against a real Postgres), the local-data uploader (still run against `fake-indexeddb`, which stays for exactly as long as that screen does), the gateway client and the gateway's own provider adapters, PDF/DOCX parsing, citation matching, the review engine, and CSV/DOCX export. It does not include end-to-end browser tests or make real network calls: every provider is faked at the transport, and the stream fixtures the adapter conformance suite runs against are hand-authored from each provider's published wire format rather than captured from a live response. Each fixture says so in its own header, and nothing here has been run against a live provider.
 
-At the time of writing that is **1,742 tests across 130 files**, and two of them are guards rather than tests of behaviour: a palette scanner that fails the build if a raw colour is used anywhere instead of a semantic design token, and a contrast test that checks every colour pair in the design system against its assigned legibility floor — so a warning or a disclosure cannot quietly become too faint to read.
+There are three more suites beyond `npm test`, and they are separate because each needs something running:
+
+```bash
+npm test              # 2,693 tests across 198 files — no network, no containers
+npm run test:pg       # 220 tests across 16 files, against a REAL Postgres
+npm run test:compose  # 14 tests across 4 files, against the running compose stack
+```
+
+`test:pg` is where every grant, every cascade and every whole-record round trip is proved against the real database rather than against a fake — a permission is a property of a `GRANT`, not of a code path, and a fake client cannot refuse anything. It needs the stack up and a bridge to the container's Postgres (`bash scripts/pg-forward.sh` prints the two variables to export); the database is deliberately not published on a host port, because a database reachable from the host is a database reachable from anything else on it.
+
+Several of these are guards rather than tests of behaviour, and they are the ones most likely to look deletable: a palette scanner that fails the build on a raw colour anywhere instead of a semantic design token; a contrast test that checks every colour pair against its legibility floor, so a warning or a disclosure cannot quietly become too faint to read; a configuration-surface test that fails if the local and deployed environments differ by any key the divergence table does not name **and equally if the table names a key nothing sets**; a scanner that fails if any SQL touching a matter forgets its workspace or its `kind`; and a search over `src/`, the README and the test suite for any sentence that denies a precedent document is kept.
 
 One convention worth adopting if you contribute: **anything load-bearing gets mutation-tested.** Break the implementation deliberately, confirm the test fails, then restore it. A green suite is not evidence on its own — a test that fails when you break the thing is. This project has shipped tests that passed against unfixed code and proved nothing, which is why the rule is written down.
 
@@ -458,7 +503,7 @@ For the web app on its own:
 npm run build
 ```
 
-This runs `tsc` for a type check and then produces a static `dist/` folder with Vite. The result is a set of plain HTML/CSS/JS files — deploy it to any static host: Netlify, Vercel, GitHub Pages, S3 + CloudFront, nginx, or similar. This builds the `web` service only; `api` and `gateway` are separate images (see [Running the server stack locally](#running-the-server-stack-locally-stage-1) and [Deploying to Azure](#deploying-to-azure-azd)). The web bundle's own configuration — the API base URL and the three OIDC values — is inlined at **build** time by Vite, so a bundle built with the wrong ones cannot be corrected with an environment variable afterwards; it has to be rebuilt.
+This runs `tsc` for a type check and then produces a static `dist/` folder with Vite. The result is a set of plain HTML/CSS/JS files — deploy it to any static host: Netlify, Vercel, GitHub Pages, S3 + CloudFront, nginx, or similar. This builds the `web` service only; `api` and `gateway` are separate images (see [Running the server stack locally](#running-the-server-stack-locally) and [Deploying to Azure](#deploying-to-azure-azd)). The web bundle's own configuration — the API base URL and the three OIDC values — is inlined at **build** time by Vite, so a bundle built with the wrong ones cannot be corrected with an environment variable afterwards; it has to be rebuilt.
 
 To preview the production build locally before deploying:
 
@@ -491,7 +536,10 @@ The app targets browsers from roughly **2024 onward**: Chrome 122+, Firefox 131+
 - **A DOCX with tracked changes is read with every change accepted, and says so.** The library LexPrompt uses to extract text from a `.docx` returns the *accepted-changes* view of the document: deletions are removed and insertions are treated as final, with margin comments dropped entirely. LexPrompt cannot yet read the markup itself, so instead it checks every `.docx` for tracked changes and comments at upload, and says what it did — on the document in its matter, and again beside the findings in the review, where whoever is acting on them will see it. If the file's package can't be opened to check, it says *that* rather than nothing. One gap to know about: **documents added before this check existed were never checked** — their records carry no notice because nothing was ever looked at, not because they are clean. Re-adding such a document checks it.
 - **The Assistant declines rather than guessing on unreadable documents.** If a document has no usable text and the selected model can't read images either, the chat panel tells you it can't answer rather than fabricating a plausible-sounding response. This is deliberate: a confident wrong answer about a contract is worse than an honest "I can't read this."
 - **The template editor doesn't autosave, but it does ask before discarding.** Trying to leave with unpublished changes pending offers to save them as a draft or discard them; there's no third way to lose them silently. Nothing is written to your library until you either save a draft or publish, though — closing the browser tab without answering that prompt still loses whatever you typed.
-- **Verification is single-reviewer.** A verification or note is attributed to the local profile on this browser. There is no second reviewer, no sharing a matter, and nothing here notifies anybody of anything — verifying, flagging, or rejecting a finding is a record for yourself and later readers of the export, not a handoff to a colleague.
+- **Verification is attributed to a real account, and is still single-reviewer in behaviour.** A verification or note now carries the account you signed in with rather than a profile invented in this browser, so an export names a person your firm can identify. What has *not* arrived is anything collaborative: two people editing one review do not see each other, a stale change is not yet refused with what replaced it, a verification cannot yet be overridden with a history of who changed it from what, assignment reaches nobody, and nothing notifies anybody of anything. Those are the next stages' work, and every affordance that would imply them is deliberately absent rather than stubbed.
+- **Role changes and workspace-setting changes are attributed on the row, not logged as events.** Who last changed a user's role, and when, is recorded on the record itself; there is no append-only audit log yet, so a change that was made and then reversed leaves no trace of having happened. The activity feed a reader sees is derived from their own work at the moment they look, which is why it can never claim somebody else did something.
+- **A user's role comes from their group membership at the identity provider, and there is no screen to change the mapping.** The group-to-role table is seeded from deployment configuration and the API's database role has read access to it and nothing else, so changing which of your groups may publish a playbook is a deployment change today. That is a deliberate absence: the missing grant is what keeps adding the screen a decision rather than an oversight.
+- **The one-time uploader ships for one release.** The screen that moves this browser's data to the server, and the read-only local database behind it, exist so nothing is stranded. The release that removes them is the release that deletes the local copy, and it happens after the server copy has been confirmed good — not before.
 - **A collection review isn't shown in the comparison grid.** The grid is built for comparing genuinely separate documents row by row; a collection produces one net position per clause, however many documents fed it, so there is nothing to compare — the grid refuses to open for a collection's review and points you back to the card view instead.
 - **A document's effective date can't be entered yet.** A document record carries an optional effective date, and everything that would use one is built: the collection prompt labels each document with its date, and each step of a variation trail shows one. Nothing in the app can set it, though, so no date is ever known — a trail step shows its document by name alone, and the model is told the reading order of a collection but not when each amendment took effect. Nothing displays a blank or an empty "dated" where a date would go; the date is simply omitted. Reading order is unaffected either way: it is the order you set when you built the collection, and is deliberately never derived from a date. Entering a date is later work.
 - **A collection whose base document is missing can't be run.** Every amendment acts on the base, so without it there's no starting position for any of them to vary; the collection's card says so and offers to choose a new base or ungroup, and starting a review is blocked until you do one or the other.

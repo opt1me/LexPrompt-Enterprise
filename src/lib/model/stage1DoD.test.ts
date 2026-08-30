@@ -454,6 +454,47 @@ describe('Stage 1 definition of done (§18.2)', () => {
     expect(text).not.toContain('there is no server for LexPrompt to leak it to');
   });
 
+  /**
+   * §18 item 8 and §19's named risk, as a guard rather than as vigilance.
+   *
+   * *"The strongest guarantee in this design is now the one most easily
+   * overstated… the pressure to re-merge them is permanent, because one
+   * sentence is shorter and sounds better. Watch for it in the README
+   * rewrite, which is where a summary gets written by someone reading this
+   * document quickly."* The test above checks the two sentences are both
+   * present and separated; this one checks the merged version has not
+   * appeared anywhere a reader would take as live.
+   *
+   * SCOPE, and why the design document is deliberately not in it: §18 item 8
+   * says the claim must not be findable "as live" in the app, the README, the
+   * admin screens or the spec — and the spec quotes the retired sentence four
+   * times, on purpose, in order to say it is retired. "Live" is not a
+   * distinction a regex can draw over prose that discusses its own history,
+   * so scanning the spec would either fail permanently or need an exemption
+   * per quotation, and both end with a guard nobody trusts. The README and
+   * the app's own strings carry no such history, so over them the pattern
+   * means exactly what §18 means.
+   */
+  it('the README and the app never state the unconditional "no provider keys anywhere" claim', () => {
+    const unconditional = /no provider (api )?keys anywhere|there are no provider (api )?keys/i;
+    // The pattern bites on the sentence it is here to catch.
+    expect(unconditional.test('There are no provider API keys anywhere in the system')).toBe(true);
+    expect(unconditional.test('no provider keys exist at all')).toBe(false);
+
+    expect(readme()).not.toMatch(unconditional);
+    const offenders = CLIENT_FILES
+      .filter(f => unconditional.test(codeOf(f)))
+      .map(rel);
+    expect(offenders).toEqual([]);
+
+    // The companion positive: the two sentences that replaced it are both
+    // still there. Without this, deleting BOTH of them passes the negative
+    // above and leaves a README that says nothing about credentials at all —
+    // which is a different failure with an identical green suite.
+    expect(readme()).toMatch(/no credential ever leaves the gateway/i);
+    expect(readme()).toMatch(/managed identity/i);
+  });
+
   it('README no longer tells the reader to get an OpenRouter key', () => {
     const text = readme();
     expect(text).not.toContain('openrouter.ai/keys');

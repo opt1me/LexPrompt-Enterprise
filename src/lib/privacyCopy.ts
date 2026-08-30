@@ -123,9 +123,29 @@ export const PRECEDENT_STORAGE_PRIVACY =
   + 'matter documents: a precedent is never offered as something to review, added to a '
   + 'collection, or cited in a report. Your firm decides how long they are kept.';
 
+/**
+ * Rewritten in Stage 2, for two reasons that §2's table did not list.
+ *
+ *  1. *"the model you have chosen"* stopped being true when the model choice
+ *     became workspace configuration an administrator sets (§6.6). A user
+ *     picks nothing; they read which model is configured.
+ *  2. *"leaves your browser"* stopped being the right frame entirely. It was
+ *     exactly right when every matter lived in one browser's IndexedDB: the
+ *     other matters were HERE, and this picker was the one door out. They are
+ *     now rows in the firm's own database, so another matter's content is
+ *     already outside this browser before anyone opens this screen, and a
+ *     sentence implying otherwise understates where a firm's content sits.
+ *
+ * What is still true, and is the whole reason this disclosure exists, is the
+ * narrower claim: this is the one place where a matter OTHER than the one
+ * under review is sent to a MODEL. That is the fact a person ticking a
+ * checkbox needs, and it survives the move to a server unchanged.
+ */
 export const SOURCE_PRIVACY =
-  'Selecting a matter sends its verified findings to the model you have chosen — the only '
+  'Selecting a matter sends its verified findings to the model your administrator has '
+  + 'configured. It is the only place in this app where another '
   // CURLY here, deliberately and in contrast to the block above:
   // SourcePicker.tsx:94 renders `matter&rsquo;s`, so U+2019 is what the
   // DOM actually contains and what SourcePicker.test.tsx matches against.
-  + "place in this app another matter’s content leaves your browser.";
+  + 'matter’s content is sent to the model — everything else sends only the document '
+  + 'under review.';

@@ -27,9 +27,16 @@ function isSelected(selected: FewShotSource[], kind: FewShotSource['kind'], id: 
  * "Learn from" style-source picker for the AI-draft form (spec §3.2, §5).
  *
  * R-E2 / spec §10: selecting a MATTER sends that matter's verified findings
- * to the chosen model as prompt material — the only place in this app
- * another matter's content leaves the browser (everything else sends only
- * the document under review). That has to be disclosed plainly, next to the
+ * to the configured model as prompt material — the only place in this app
+ * another matter's content is sent to a model (everything else sends only
+ * the document under review).
+ *
+ * That used to read "leaves the browser", which was exact when every matter
+ * lived in one browser's IndexedDB and is not any more: the matters are rows
+ * in the firm's own database now, so their content is outside this browser
+ * before anyone opens this screen. The narrower claim — another matter
+ * reaching a MODEL — is the one that survived the move, and it is the one
+ * `SOURCE_PRIVACY` states. That has to be disclosed plainly, next to the
  * checkboxes, at the point of selection — not in a Settings note, and not
  * behind a dismiss button. Selecting a PLAYBOOK carries no client text (only
  * clause titles and standard positions), so it carries no such disclosure.
