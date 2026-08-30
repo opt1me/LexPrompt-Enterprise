@@ -5,6 +5,7 @@ import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core
 import type { DispositionAudience } from '../../lib/findingOutcome';
 import { Button } from '../../components/Button';
 import { FindingCard } from '../review/FindingCard';
+import type { VerificationConflict } from '../review/ConflictNotice';
 import { DocumentViewer } from '../review/DocumentViewer';
 
 export interface CellDetailProps {
@@ -55,6 +56,10 @@ export interface CellDetailProps {
   disposition?: DispositionWithHistory;
   /** How the card turns a user id into a name and an instant into a time. */
   audience?: DispositionAudience;
+  /** A refused change and the row that refused it, for this cell. */
+  conflict?: VerificationConflict;
+  onReapplyConflict?: () => void;
+  onDismissConflict?: () => void;
   /** The grid's way out of triage: hands this clicked cell off to the
    *  ledger (Task 10). Optional, same reasoning as `onVerify`/`onAddNote` —
    *  omitted, no such affordance renders rather than a button that goes
@@ -72,7 +77,8 @@ export interface CellDetailProps {
  */
 export function CellDetail({
   doc, documents, clause, finding, onClose, onRetry, onVerify, verifyBusy, onAddNote,
-  authorInitials, localUserId, disposition, audience, onOpenInReview,
+  authorInitials, localUserId, disposition, audience, conflict, onReapplyConflict,
+  onDismissConflict, onOpenInReview,
 }: CellDetailProps) {
   const [highlights, setHighlights] = useState<string[]>([]);
   /** Set when a clicked citation belongs to a document other than `doc`. */
@@ -140,6 +146,9 @@ export function CellDetail({
           localUserId={localUserId}
           disposition={disposition}
           audience={audience}
+          conflict={conflict}
+          onReapplyConflict={onReapplyConflict}
+          onDismissConflict={onDismissConflict}
         />
       </div>
 

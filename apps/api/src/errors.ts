@@ -27,9 +27,19 @@ import { ModelError } from '@lexprompt/core';
  * shares with the gateway.
  */
 export class ConflictError extends ModelError {
-  /** The row as it stands NOW, when this workspace is entitled to see it. */
-  readonly current?: unknown;
-
+  // `current` — the row as it stands NOW, when this workspace is entitled to
+  // see it — is DECLARED ON `ModelError` ITSELF as of Stage 4, and no longer
+  // redeclared here.
+  //
+  // It was declared in both, which compiled and behaved correctly, and the
+  // reason it moved is the sentence at the top of this file: the field
+  // exists so *"a caller that wants to show the reader what actually
+  // happened needs no second round trip"*, and the browser could not read
+  // it. `modelErrorFrom` — the one reader of a refusal envelope, shared by
+  // the browser and by `apps/api`'s own model client — now keeps it, which
+  // it can only do against a field the shared class declares. Two
+  // declarations of one wire field, in two packages, is this project's most
+  // repeated defect in the form where nobody can read them side by side.
   constructor(current?: unknown, message?: string) {
     super(
       message ?? (current === undefined

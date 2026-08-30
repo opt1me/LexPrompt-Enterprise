@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import type {
-  DispositionWriteResult, FindingsPage,
+import {
+  ModelError, modelErrorFrom,
+  type DispositionView, type DispositionWriteResult, type FindingsPage,
 } from '@lexprompt/core';
 import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
 
@@ -20,6 +21,7 @@ vi.mock('./client', () => transportModule(transport));
 
 const {
   getFindings, dispositionFor, setDisposition, forgetFindingVersions, dispositionVersionFor,
+  conflictingDisposition, rememberConflict,
 } = await import('./findings');
 
 const OKAFOR = 'u-okafor';
@@ -158,5 +160,78 @@ describe('the disposition the read reported', () => {
     transport.responses.set('/v1/reviews/rev-1/findings', older);
     await getFindings('rev-1');
     expect(dispositionFor('rev-1', 'd1', 'c1')).toBeUndefined();
+  });
+});
+
+/**
+ * THE ROW THAT WON, off a refused write.
+ *
+ * §6.3's sentence is only possible because the 409 carries `current`. Until
+ * Stage 4 the browser threw it away in `modelErrorFrom`, so this half of the
+ * mechanism has its own cases: the envelope keeps it, this module narrows it
+ * SAFELY, and remembering it is what lets a person offer the change again
+ * against the version that won.
+ */
+const WON: DispositionView = {
+  reviewId: 'rev-1', findingsKey: 'd1', clauseId: 'c1', state: 'rejected',
+  reason: 'Cap is uncapped', byUserId: OKAFOR, at: 3_000, changedCount: 3, version: 4,
+};
+
+const refusal = (current: unknown): ModelError => modelErrorFrom(409, {
+  error: { code: 'conflict', message: 'This was changed since you opened it.' },
+  ...(current === undefined ? {} : { current }),
+});
+
+describe('the row a refusal carries', () => {
+  it('survives the envelope, which used to drop it', () => {
+    // The mutation: delete the `current` assignment in `modelErrorFrom` and
+    // every case below goes red — which is the state this browser shipped
+    // in through Stage 3, where the only sentence available was "this
+    // finding changed".
+    expect(conflictingDisposition(refusal(WON))).toMatchObject({
+      state: 'rejected', byUserId: OKAFOR, version: 4,
+    });
+  });
+
+  it('is ABSENT, not undefined, on a refusal that carried no row', () => {
+    const e = refusal(undefined);
+    expect('current' in e).toBe(false);
+    expect(conflictingDisposition(e)).toBeUndefined();
+  });
+
+  it('refuses to read a 409 that is not about a disposition at all', () => {
+    // `server.ts` answers 409 for a foreign-key violation with no `current`,
+    // and `ConflictError` deliberately omits `current` for a row this
+    // workspace may not see. A cast would render "someone this record does
+    // not name changed this to undefined"; the caller falls back to the
+    // plain sentence instead.
+    expect(conflictingDisposition(refusal({ id: 'doc-9', name: 'Lease.pdf' }))).toBeUndefined();
+    expect(conflictingDisposition(refusal({ ...WON, state: 'approved' }))).toBeUndefined();
+    expect(conflictingDisposition(refusal({ ...WON, version: '4' }))).toBeUndefined();
+    expect(conflictingDisposition(refusal(null))).toBeUndefined();
+  });
+
+  it('is not read off a refusal that is not a conflict', () => {
+    const notMine = modelErrorFrom(404, { error: { code: 'not_found', message: 'gone' } });
+    expect(conflictingDisposition(notMine)).toBeUndefined();
+    expect(conflictingDisposition(new Error('network'))).toBeUndefined();
+    expect(conflictingDisposition(undefined)).toBeUndefined();
+  });
+
+  it('records the winning row so the change can be offered again against it', async () => {
+    await getFindings('rev-1');
+    expect(dispositionVersionFor('rev-1', 'd1', 'c1')).toBe(3);
+    rememberConflict(WON);
+    // Mechanism 3 of four: without this the re-apply would be refused too,
+    // forever, and the only exit would be the reload the notice exists to
+    // avoid.
+    expect(dispositionVersionFor('rev-1', 'd1', 'c1')).toBe(4);
+    const d = dispositionFor('rev-1', 'd1', 'c1')!;
+    expect(d.disposition.byUserId).toBe(OKAFOR);
+    expect(d.disposition.changedCount).toBe(3);
+    // The cached event described the movement INTO the state this row has
+    // just left. Keeping it would put "was Verified" on a line about
+    // somebody else's rejection.
+    expect('last' in d).toBe(false);
   });
 });

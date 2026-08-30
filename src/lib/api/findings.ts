@@ -1,6 +1,8 @@
-import type {
-  DispositionHistory, DispositionWithHistory, DispositionWriteResult, FindingsPage,
-  NetPositionWriteResult, Note, VerificationChange,
+import {
+  ModelError,
+  type DispositionHistory, type DispositionView, type DispositionWithHistory,
+  type DispositionWriteResult, type FindingsPage, type NetPositionWriteResult, type Note,
+  type VerificationChange, type VerificationState,
 } from '@lexprompt/core';
 import { apiGet, apiSend } from './client';
 
@@ -217,6 +219,70 @@ export async function setDisposition(
     { disposition: result.disposition, last: result.event });
   lastSeenDisposition.set(reviewId, byCell);
   return result;
+}
+
+/**
+ * THE ROW THAT WON, off a refused disposition write — or `undefined` when
+ * this refusal is not one this module can speak about.
+ *
+ * The 409 carries it (`registerErrorEnvelope` puts `current` on the envelope
+ * beside `error`, and `asView` in `routes/findings.ts` maps it into the same
+ * wire shape the success path answers with), `modelErrorFrom` now keeps it,
+ * and this is the ONE place it is narrowed from `unknown`. `@lexprompt/core`
+ * deliberately does not learn the shape of every table that can conflict;
+ * the caller that knows which write it made is the one entitled to say what
+ * came back.
+ *
+ * CHECKED, not cast. Two 409s in this application carry no disposition at
+ * all — a foreign-key violation (`server.ts`'s `23503` branch, which sends
+ * no `current`), and a conflict over an id this workspace may not see
+ * (`ConflictError` with `current` absent, by design). A cast would turn
+ * either into a notice reading "someone this record does not name changed
+ * this to undefined", which is worse than the plain sentence it replaced.
+ * Anything that does not check out returns `undefined` and the caller falls
+ * back to `verificationRefusal`'s wording.
+ */
+const STATES: readonly VerificationState[] = ['unchecked', 'verified', 'flagged', 'rejected'];
+
+export function conflictingDisposition(e: unknown): DispositionView | undefined {
+  if (!(e instanceof ModelError) || e.code !== 'conflict') return undefined;
+  const c = e.current as Partial<DispositionView> | null | undefined;
+  if (!c || typeof c !== 'object') return undefined;
+  if (typeof c.reviewId !== 'string' || typeof c.findingsKey !== 'string'
+    || typeof c.clauseId !== 'string') return undefined;
+  if (!STATES.includes(c.state as VerificationState)) return undefined;
+  if (typeof c.version !== 'number' || typeof c.changedCount !== 'number') return undefined;
+  return c as DispositionView;
+}
+
+/**
+ * Records what the REFUSAL said, so the change can be offered again against
+ * the row that won.
+ *
+ * This is mechanism 3 of four (§6.3): the version guard refuses, the refusal
+ * is named, and then *a person* re-applies against the new version — which
+ * they cannot do while this browser still remembers the version it was
+ * refused for. Without this the re-apply would be refused too, forever, and
+ * the only exit would be the reload the notice exists to avoid.
+ *
+ * It is NOT a way around the check. What is written here is exactly what the
+ * server said in the act of refusing, and nothing re-submits on its own
+ * (P25) — the next write is a click, and the person making it has been shown
+ * whose judgement they are about to replace.
+ *
+ * The cached `last` event is DROPPED rather than kept: it described the
+ * movement into the state this row has just left, so keeping it would put
+ * "was Verified" on a line about somebody else's rejection — a stale clause
+ * on a fresh fact, which is the drift the whole disposition read exists to
+ * close.
+ */
+export function rememberConflict(current: DispositionView): void {
+  const { reviewId, findingsKey, clauseId } = current;
+  rememberDispositionVersion(reviewId, findingsKey, clauseId, current.version);
+  const byCell = lastSeenDisposition.get(reviewId)
+    ?? new Map<string, DispositionWithHistory>();
+  byCell.set(cellKey(findingsKey, clauseId), { disposition: current });
+  lastSeenDisposition.set(reviewId, byCell);
 }
 
 /** A person's remark about the clause. The actor and the instant are the

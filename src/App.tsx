@@ -23,7 +23,9 @@ import {
   couldNotBeReadMessageFor,
   notYetReadMessageFor,
 } from '@lexprompt/core';
-import type { WorkspaceSettings, VerificationChange, RetryResult, RunView } from '@lexprompt/core';
+import type {
+  DispositionWithHistory, RetryResult, RunView, VerificationChange, WorkspaceSettings,
+} from '@lexprompt/core';
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
 import { apiKeyWasPurgedThisSession, loadSettings } from './lib/storage';
 import { API_KEY_PURGED_NOTICE } from './lib/privacyCopy';
@@ -55,7 +57,8 @@ import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
 } from './lib/api/runs';
 import {
-  addNote, dispositionFor, getFindings, setDisposition, setNetPosition,
+  addNote, conflictingDisposition, dispositionFor, getFindings, rememberConflict, setDisposition,
+  setNetPosition,
 } from './lib/api/findings';
 import { loadDirectory, userName } from './lib/api/users';
 import { formatInstant } from './lib/instant';
@@ -2699,6 +2702,12 @@ function AppShell({ signIn }: { signIn: () => void }) {
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
       const { disposition } = await setDisposition(current.id, key, clauseId, change);
+      // The write landed, so whatever refusal was on screen is about a state
+      // that no longer stands. Cleared here rather than left for the next
+      // render, because a notice saying "your change was not applied" beside
+      // a card showing that it was is a second lie of exactly the kind the
+      // notice exists to end.
+      setVerifyConflict(null);
       applyToFinding(docId, clauseId, finding => ({
         ...finding,
         // The row the store CONFIRMED, rebuilt through the same reading
@@ -2714,15 +2723,75 @@ function AppShell({ signIn }: { signIn: () => void }) {
           },
       }));
     } catch (e) {
-      notify(verificationRefusal(e), 'error');
+      // A REFUSAL THAT NAMES WHOSE WON (§6.3, Stage 4).
+      //
+      // The 409 carries the row as it stands now, so this needs no second
+      // round trip: `conflictingDisposition` narrows it, `rememberConflict`
+      // records it — which is what lets the change be offered again against
+      // the version that won — and `ConflictNotice` renders §6.3's own
+      // sentence beside the card.
+      //
+      // NOTHING RE-SUBMITS HERE. The re-apply is `handleReapplyConflict`,
+      // reachable only from a person's click (P25). An automatic one would
+      // be last-write-wins with a history row claiming a person decided it.
+      //
+      // Await-then-apply holds on this path too: the card's own state is not
+      // moved. What is updated is the browser's record of what the SERVER
+      // says is there, because continuing to show the stale disposition
+      // beside a notice about the new one would be a second lie beside the
+      // first.
+      const won = conflictingDisposition(e);
+      if (won) {
+        rememberConflict(won);
+        setVerifyConflict({
+          findingsKey: won.findingsKey, clauseId: won.clauseId, docId,
+          current: { disposition: won }, attempted: change,
+        });
+        setDirectoryLoads(n => n + 1);
+      } else {
+        notify(verificationRefusal(e), 'error');
+      }
     } finally {
       setVerifyBusyKey(null);
     }
   };
 
-  /** The sentence a refused verification shows. A conflict is a fact the
-   *  reader has to act on rather than an error they caused, and it says what
-   *  to do; everything else carries its own cause. */
+  /**
+   * A refused change, and the row that refused it.
+   *
+   * ONE at a time, like `verifyBusyKey` and for the same reason: a person
+   * makes one judgement at a time, and a queue of unresolved refusals is a
+   * screen nobody can act on.
+   */
+  const [verifyConflict, setVerifyConflict] = useState<{
+    findingsKey: string; clauseId: string; docId: string;
+    current: DispositionWithHistory; attempted: VerificationChange;
+  } | null>(null);
+
+  /**
+   * THE CHANGE, OFFERED AGAIN, AGAINST THE VERSION THAT WON — by a click.
+   *
+   * This writes a SECOND HISTORY ROW, which is the point: §6.3's resolution
+   * is that both intentions end up on the record, not that one of them is
+   * merged into the other. There is nothing to merge — a disposition is one
+   * of four words — and "keep mine" is exactly this.
+   *
+   * It is `handleVerify` again, unchanged, because the re-apply must be
+   * indistinguishable from the original judgement in every way except that
+   * the person making it has now been shown whose judgement they are
+   * replacing. A separate write path here would be a second way to move a
+   * disposition, and this codebase has six findings about what that costs.
+   */
+  const handleReapplyConflict = () => {
+    const conflict = verifyConflict;
+    if (!conflict) return;
+    void handleVerify(conflict.docId, conflict.clauseId, conflict.attempted);
+  };
+
+  /** The sentence a refused verification shows when the refusal named no
+   *  row this browser can speak about — a foreign-key conflict, or a
+   *  conflict over an id this workspace may not see. A conflict WITH a row
+   *  goes to `ConflictNotice` instead, which names the person. */
   const verificationRefusal = (e: unknown): string => {
     if (e instanceof ModelError && e.code === 'conflict') {
       return 'This finding changed while you were looking at it. Reload the review and try again.';
@@ -4509,6 +4578,9 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     localUserId={profile?.id ?? ''}
                     dispositionOf={dispositionOf}
                     audience={audience}
+                    verifyConflict={verifyConflict}
+                    onReapplyConflict={handleReapplyConflict}
+                    onDismissConflict={() => setVerifyConflict(null)}
                     onConfirmNetPosition={handleConfirmNetPosition}
                     onAmendNetPosition={handleAmendNetPosition}
                     documentDates={documentDates}
@@ -4530,6 +4602,9 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     localUserId={profile?.id ?? ''}
                     dispositionOf={dispositionOf}
                     audience={audience}
+                    verifyConflict={verifyConflict}
+                    onReapplyConflict={handleReapplyConflict}
+                    onDismissConflict={() => setVerifyConflict(null)}
                   />
                 )}
               </div>

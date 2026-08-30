@@ -13,6 +13,7 @@ import { NetPositionPanel } from './NetPositionPanel';
 import { PositionComparison } from './PositionComparison';
 import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
 import { DispositionHistory } from './DispositionHistory';
+import { ConflictNotice, type VerificationConflict } from './ConflictNotice';
 import { dispositionLabel, isVerifiable, type DispositionAudience } from '../../lib/findingOutcome';
 import { formatInstant } from '../../lib/instant';
 
@@ -104,6 +105,24 @@ export interface FindingCardProps {
    *  a card rendered with none falls back to `NO_DIRECTORY`, which names
    *  nobody — a true sentence rather than an invented name. */
   audience?: DispositionAudience;
+  /**
+   * A CHANGE THIS PERSON MADE THAT THE STORE REFUSED, because somebody else
+   * moved the disposition first (§6.3, Stage 4).
+   *
+   * Rendered beside the card rather than as a toast, because it carries a
+   * control — the change, offered again against the row that won — and a
+   * notice that disappears on a timer is not somewhere to put a decision.
+   * The card's own state does not move: `handleVerify` applies nothing on
+   * the failure path.
+   *
+   * The caller passes it only to the card it is ABOUT; a card with no
+   * conflict renders nothing here.
+   */
+  conflict?: VerificationConflict;
+  /** Offers the refused change again. A person's click, never anything
+   *  else (P25). */
+  onReapplyConflict?: () => void;
+  onDismissConflict?: () => void;
 }
 
 /**
@@ -154,7 +173,7 @@ export function FindingCard({
   clause, finding, onCiteClick, onRetry, onSuggestFix, suggestFixLoading, interrupted = false, documentNames,
   onVerify, verifyBusy, onAddNote, noteBusy, authorInitials, localUserId,
   onConfirmNetPosition, onAmendNetPosition, netPositionBusy, documentInfo,
-  disposition, audience = NO_DIRECTORY,
+  disposition, audience = NO_DIRECTORY, conflict, onReapplyConflict, onDismissConflict,
 }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
   const [trailOpen, setTrailOpen] = useState(false);
@@ -417,6 +436,21 @@ export function FindingCard({
               </>
             )}
           </p>
+        )}
+
+        {/* Directly above the controls that produced it, deliberately: the
+           refusal is about the button the reader just pressed, and a notice
+           anywhere else on the card would have to name the clause to be
+           understood. */}
+        {isVerifiable(finding) && conflict && onReapplyConflict && onDismissConflict && (
+          <ConflictNotice
+            current={conflict.current}
+            attempted={conflict.attempted}
+            audience={audience}
+            onReapply={onReapplyConflict}
+            onDismiss={onDismissConflict}
+            busy={verifyBusy}
+          />
         )}
 
         {isVerifiable(finding) && onVerify && (

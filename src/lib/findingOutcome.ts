@@ -2,7 +2,7 @@ import type { Finding, Review } from '../types';
 import {
   positionText, stepEffectText,
   type DispositionCause, type DispositionEventView, type DispositionWithHistory,
-  type VerificationState,
+  type VerificationChange, type VerificationState,
 } from '@lexprompt/core';
 
 /**
@@ -747,4 +747,68 @@ export function dispositionHistoryLine(
   const reason = event.reason?.trim();
   // Straight quotes, for the ASCII reason `describeChange` gives above.
   return reason ? `${line}. "${reason}"` : line;
+}
+
+/**
+ * THE SENTENCE A PERSON SEES WHEN SOMEBODY ELSE MOVED A JUDGEMENT OUT FROM
+ * UNDER THEM (§6.3, Stage 4).
+ *
+ * *"R. Okafor changed this to Rejected at 14:22, after you loaded it. Your
+ * change was not applied."* — the spec writes that sentence out, and this is
+ * the only place it exists.
+ *
+ * Three things it must do, and each of them is a defect if it is missing:
+ *
+ *  - **NAME THE PERSON.** The shipped Stage 3 refusal said *"This finding
+ *    changed while you were looking at it. Reload the review and try
+ *    again."* — true, and it tells a reviewer nothing they can act on.
+ *    "R. Okafor changed it" tells them who to ask. `actorPhrase` is the same
+ *    one the card's line uses, so an unresolvable actor reads the same way
+ *    in both places rather than disappearing here.
+ *  - **SAY WHAT IT IS NOW, in the card's own vocabulary** — `STATE_WORD`,
+ *    which is `StateChip`'s word — so the notice and the card beside it
+ *    cannot disagree about what happened. That is the drift this module
+ *    exists to stop, and a refusal that disagreed with the card two
+ *    centimetres above it would be the worst possible place for it.
+ *  - **SAY THAT NOTHING WAS SAVED**, in those words. A reviewer who reads
+ *    only the first half must not be left thinking their change landed
+ *    second.
+ *
+ * It never says "reload". The change is offered again against the row that
+ * won, by a person's click (`conflictReapplyLabel`), which writes a second
+ * history row so both intentions are on the record — §6.3's own resolution.
+ *
+ * ASCII only, like every other string here: it is not exported today, but
+ * `verificationLabel`'s history is that a string written for one surface is
+ * read by an exporter eighteen months later.
+ */
+export function dispositionConflictLine(
+  current: DispositionWithHistory,
+  audience: DispositionAudience,
+): string {
+  const { disposition } = current;
+  const who = actorPhrase(disposition.byUserId, audience);
+  const at = disposition.at ?? current.last?.at;
+  const when = at === undefined ? '' : ` at ${audience.timeOf(at)}`;
+  return `${who} changed this to ${STATE_WORD[disposition.state]}${when}, after you loaded it. `
+    + 'Your change was not applied.';
+}
+
+/**
+ * What the control that offers the change again is called.
+ *
+ * Here rather than in `ConflictNotice.tsx` because it names a STATE, and a
+ * component that spelled "Verified" itself would be the second wording site
+ * `dispositionLabel` exists to prevent — the same reason `STATE_WORD` is not
+ * exported.
+ *
+ * It says "anyway", and that is deliberate: the person has just been told
+ * somebody else decided otherwise, and the button has to read as a
+ * considered second judgement rather than as a retry of a failed request.
+ * Nothing clicks it for them (P25).
+ */
+export function conflictReapplyLabel(attempted: VerificationChange): string {
+  return attempted.state === 'unchecked'
+    ? 'Clear it anyway'
+    : `Set it to ${STATE_WORD[attempted.state]} anyway`;
 }

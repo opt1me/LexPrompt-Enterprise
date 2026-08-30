@@ -301,6 +301,43 @@ export class ModelError extends Error {
   status: number;
   retryable: boolean;
   callId?: string;
+  /**
+   * THE ROW THAT WON, on a `conflict` — and nothing else ever sets it.
+   *
+   * `apps/api`'s `ConflictError` has carried a `current` since Stage 3 and
+   * `registerErrorEnvelope` puts it on the wire as a top-level key, for a
+   * stated reason: *"a caller that wants to show the reader what actually
+   * happened needs no second round trip"*. The browser then threw it away —
+   * `modelErrorFrom` read `body.error` and nothing else — so the only thing
+   * a refused reviewer could be told was that "this finding changed", which
+   * is §6.3's own example of the sentence that tells nobody anything they
+   * can act on.
+   *
+   * Declared HERE rather than in a browser-only subclass because the two
+   * ends of one wire must not describe one field two ways: the server class
+   * says `readonly current?: unknown` and this says the same, and
+   * `modelErrorFrom` is the single reader in the middle.
+   *
+   * `unknown`, deliberately. `@lexprompt/core` must not learn the shape of
+   * every table that can conflict; the caller that knows which write it made
+   * is the caller that may narrow it, which is what
+   * `conflictingDisposition` (`src/lib/api/findings.ts`) does and the only
+   * thing that does.
+   *
+   * ABSENT, never `current: undefined`. `structuredClone` preserves an
+   * undefined-valued key, so a caller checking `'current' in err` would read
+   * an absent row as a present one.
+   *
+   * `declare`, and that word is load-bearing. A plain `current?: unknown;`
+   * field declaration EMITS `current = undefined` into the constructor
+   * (`useDefineForClassFields`), so every `ModelError` ever thrown — a 404, a
+   * network failure, a stream truncation — would carry an own `current` key
+   * holding nothing, and `'current' in err` would answer true for all of
+   * them. Caught by the test that asserts the absence rather than
+   * `toEqual`-ing around it, which is the case `CLAUDE.md` says to write
+   * whenever absence is the thing meant.
+   */
+  declare current?: unknown;
 
   constructor(message: string, code: ModelErrorCode, status: number, callId?: string) {
     super(message);

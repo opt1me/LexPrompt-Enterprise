@@ -14,6 +14,7 @@ import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { isVerifiable, type DispositionAudience } from '../../lib/findingOutcome';
 import { FindingCard } from './FindingCard';
+import type { VerificationConflict } from './ConflictNotice';
 import { ServiceConfigError } from '../../components/ServiceConfigError';
 import { ClauseIndex } from './ClauseIndex';
 import { ViewSwitch } from './ViewSwitch';
@@ -122,6 +123,11 @@ export interface ResultsViewProps {
   /** How a card turns a user id into a name and an instant into a time.
    *  Optional, and a card given none names nobody. */
   audience?: DispositionAudience;
+  /** A refused change and the row that refused it, for the ONE cell it is
+   *  about (§6.3). Passed to that card and to no other. */
+  verifyConflict?: VerificationConflict | null;
+  onReapplyConflict?: () => void;
+  onDismissConflict?: () => void;
   /** Persists the human's acceptance of a collection clause's synthesised
    *  net position (Task 8). Same optionality reasoning as `onVerify`. */
   onConfirmNetPosition?: (docId: string, clauseId: string) => Promise<void>;
@@ -193,7 +199,7 @@ type Tab = 'findings' | 'chat';
 export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId,
-  dispositionOf, audience,
+  dispositionOf, audience, verifyConflict, onReapplyConflict, onDismissConflict,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
   playbookVersion, onShowVersionHistory, matterId,
 }: ResultsViewProps) {
@@ -706,6 +712,13 @@ export function ResultsView({
                       // pane shows.
                       disposition={findingsKey ? dispositionOf?.(findingsKey, clause.id) : undefined}
                       audience={audience}
+                      conflict={
+                        verifyConflict && findingsKey === verifyConflict.findingsKey
+                          && clause.id === verifyConflict.clauseId
+                          ? verifyConflict : undefined
+                      }
+                      onReapplyConflict={onReapplyConflict}
+                      onDismissConflict={onDismissConflict}
                       onConfirmNetPosition={onConfirmNetPosition ? () => onConfirmNetPosition(activeDocId, clause.id) : undefined}
                       onAmendNetPosition={onAmendNetPosition ? (text) => onAmendNetPosition(activeDocId, clause.id, text) : undefined}
                       netPositionBusy={verifyBusyKey === findingKey(activeDocId, clause.id)}

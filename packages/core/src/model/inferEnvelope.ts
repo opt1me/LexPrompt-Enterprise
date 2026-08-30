@@ -76,7 +76,24 @@ export function modelErrorFrom(status: number, body: unknown): ModelError {
   const code = isModelErrorCode(error?.code) ? error.code : undefined;
   const message = typeof error?.message === 'string' && error.message ? error.message : `HTTP ${status}`;
   const callId = typeof error?.callId === 'string' ? error.callId : undefined;
-  return new ModelError(message, code ?? codeFromStatus(status), status, callId);
+  const failure = new ModelError(message, code ?? codeFromStatus(status), status, callId);
+  // THE ROW THAT WON TRAVELS WITH THE REFUSAL.
+  //
+  // `ConflictError` has put `current` on the 409 envelope since Stage 3, as
+  // a TOP-LEVEL key beside `error` (`registerErrorEnvelope`) — and until
+  // Stage 4 nothing on this side read it, so every caller of a refused write
+  // could say only that something had changed. Read here rather than in the
+  // browser's `toModelError`, because `apps/api` reaches the same envelope
+  // through undici and this is the one place the JUDGEMENT about a body
+  // lives; a second reader is the drift this module's own docstring exists
+  // to prevent.
+  //
+  // Assigned only when the key is PRESENT, so `current` stays absent rather
+  // than becoming an undefined-valued key that `structuredClone` would
+  // preserve and an `in` check would read as a row that is there.
+  const current = (body as { current?: unknown } | null)?.current;
+  if (current !== undefined) failure.current = current;
+  return failure;
 }
 
 /**
