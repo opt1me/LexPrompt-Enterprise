@@ -1905,3 +1905,352 @@ decided.
   not improvised: such a provider adds an optional `classifyError?` to the interface. It
   never becomes an `if` on a provider id in the core, which `stage1DoD` forbids and which
   would be the duplication S25 exists to prevent, inverted.*
+
+---
+
+# Server Stage 2 — storage and authentication (2026-08-29 → 2026-08-30)
+
+Twenty-seven tasks, in two parts with a gate between 18 and 19. Postgres and Blob Storage
+behind the nine repositories' existing interfaces; sign-in as the real gate, with roles the
+API refuses on; precedent documents stored server-side; and a one-release uploader that
+moves a browser's data and names what it could not.
+
+The plan's decision labels are **P6–P16**, continuing Stage 1's P1–P5. As with Stage 1,
+nothing here restates the spec's S-rulings; only what planning and execution decided
+without owner review, each with what it would cost if it turned out wrong.
+
+**Several of these corrected an earlier mistake, and two of the mistakes were the
+supervisor's own.** They are recorded that way rather than as achievements, because a
+ledger that only lists what went right is a ledger nobody consults when something goes
+wrong.
+
+## The pre-flight rulings, taken before Task 1
+
+These are the four spec/shipped-code disagreements ruled on before any code was written.
+The ledger for this stage was created at **Setup**, deliberately: Stage 1's was
+reconstructed at Task 7 and its Tasks 1–6 rulings were lost.
+
+- **P12 — document parsing stays in the browser this stage, and `parse_state` is stored
+  from the day the column exists.** §11 says parsing moves server-side; §13 puts the
+  engine that needs it in Stage 3. Both are right about different things, and a reader of
+  §11 alone would expect a parse worker here. Moving it now would change
+  `addDocument(rec, bytes)`'s contract — the caller change R3's seam exists to prevent —
+  for a queue that does not yet exist. Stage 3 changes **who writes those columns**, not
+  what they are; `'pending'` is already in the check constraint and unused, and the
+  "Reading…" state §11 asks for renders from it.
+  *Cost if wrong: a scanned PDF is parsed on a laptop rather than on a server, which is
+  where it has been parsed since this project started. The failure this defers is a
+  latency one, not a correctness one. Against that: the moment a second writer of
+  `parse_state` exists, "who last wrote this column" stops being obvious, and Stage 3 has
+  to answer it explicitly rather than inherit it.*
+
+- **P13 — `position_basis` keys on `(playbook_id, clause_id)`, because `StandardPosition`
+  has no id.** §6.5 writes `position_basis(standard_position_id, …)` and **that cannot be
+  satisfied literally**: a standard position is a field on a clause inside an immutable
+  `PlaybookVersion`, and it has no identity of its own. Keying on the version id was the
+  obvious alternative and is worse than wrong — it would make a firm's evidence vanish on
+  every publish, which is the exact opposite of §11.1's argument for storing precedents at
+  all. Ruled: key on the clause's identity across versions, and additionally record
+  `adopted_in_version_id` and the position text **as adopted**, so a panel can say *the
+  wording has moved* rather than implying four leases support today's sentence.
+  *Cost if wrong: a clause id reused for a different clause in a later version would
+  attach one clause's evidence to another. Against that, keying on anything version-scoped
+  makes the evidence disappear on a publish, silently, which is the failure a lawyer would
+  meet and a test would not.*
+
+- **Nine repository modules, eight tables.** §6.1 lists nine IndexedDB stores as tables
+  including `blobs -> (none)`, and §13's Stage 2 sentence says "the nine repositories".
+  `blobs.ts` becomes a route over Blob Storage rather than a table. Recorded so a later
+  reader counting tables does not conclude one is missing.
+
+- **Four places R3's seam does not hold** — named in advance as findings rather than as
+  silent widenings: `publishVersionIn`'s `idb`-typed parameter; `Matter` and its siblings
+  gaining an optional `version`; `Settings` losing its model fields; and the nine
+  `await getProfile()` write paths in `App.tsx` that can now reject.
+  **Four was the number to check the execution against, and the answer is five.** Tasks
+  9–10 found a fifth the pre-flight had not predicted: **`ownerId` becomes
+  server-authoritative.** A client may no longer name a matter's owner; the API takes it
+  from the token. That is a contract change at a public signature, it is correct, and it
+  was not foreseen. Task 16 also found the fourth was undercounted — nine `getProfile()`
+  call sites claimed, eleven actual, and **five of them carried a real unhandled-rejection
+  bug**, the same class as the flake that made the suite intermittently exit 1 with every
+  test passing.
+  *Cost of having been wrong about the count: none directly — each break was found by the
+  compiler or by a test. The cost is to the confidence the number was offered with, which
+  is why it is corrected here rather than quietly updated.*
+
+## P6–P16, as executed
+
+- **P6. Record ids stay `text` and client-minted by `uid()`; only `workspace.id` and
+  `app_user.id` are `uuid` and server-minted.** Executed as written. *Cost if wrong: a
+  client can choose a colliding id. It is scoped by `workspace_id` and refused by a
+  primary key, which is a loud failure. Against that: making every id server-minted would
+  have broken the uploader, which has to carry a browser's existing ids across unchanged
+  or nothing that references them survives.*
+- **P7. One idempotent `PUT /v1/<thing>/{id}` per repository `save*`; no create/update
+  split.** Executed as written. *Cost if wrong: a `PUT` that creates is unusual REST. It is
+  also what makes the uploader safe to run twice, which is P15's whole property.*
+- **P8. `src/lib/db/` keeps its path and its file names; the bodies become HTTP.**
+  Executed. The seam held for all nine repositories' **public signatures** and broke in the
+  five places above. *Cost if wrong: every caller in `App.tsx` changes at once. It did not
+  happen, and the five exceptions are each a declared finding.*
+- **P9. Every mutable record carries `version bigint not null default 1`; a stale write is
+  refused `409` with the current row.** Executed. The **409 already returns the current
+  row**, so Stage 4's *"Priya changed this to Rejected at 14:22, after you loaded it"*
+  needs no second round trip. *Cost if wrong: the stale-change refusal and the realtime
+  version guard must remain one number doing two jobs; two numbers is the failure §8 names.*
+- **P10. Two Postgres roles — `lexprompt_migrator` owns the schema, `lexprompt_app` runs
+  every request — and the grants are part of the migration, not a runbook.**
+  *Amended, 2026-08-30 (Task 24).* The **grants** are in the migration, as ruled. The
+  **roles themselves** cannot be: `infra/postgres/init.sql` creates them locally, and in
+  Azure they are one `psql` run by the Flexible Server admin, because a role needs a
+  password the template must never see. That is a runbook step, it is named in the README,
+  and `000_preconditions.sql` refuses the migration with a message naming it rather than
+  letting a `GRANT` fail with "role does not exist". Recorded as an amendment rather than
+  edited away: the ruling's *intent* — that a grant is not something a human remembers to
+  apply — survives intact.
+- **P11. Findings stay a `jsonb` column on `review`; they become rows in Stage 3.**
+  Executed. The column holds the exact `Record<findingsKey, Record<clauseId, Finding>>`
+  shape `types.ts` declares, so Stage 3's migration is a `jsonb_each` shred and not a
+  translation. *Cost if wrong: no per-finding query until Stage 3, which nothing needs yet.*
+- **P12 / P13.** Above.
+- **P14. Blob credentials are resolved from an explicitly configured *source*, never
+  inferred from which value happens to be set, and the sources never fall back to one
+  another.** Executed, and it is the strongest small ruling in this stage. A fallback means
+  the system used a different identity than the operator configured and said nothing.
+  *Cost if wrong: a misconfigured deployment refuses to start instead of limping. That is
+  the trade this project makes everywhere.*
+- **P15. The uploader is a route, not a modal, and it is idempotent.** Executed. It ships
+  for one release; the release that removes it is the release that deletes the local
+  IndexedDB database, **after the owner confirms the server copy is good**, and that is
+  also when `fake-indexeddb` and the `node:buffer` Blob workaround finally go.
+  *Cost if wrong: a modal cannot be linked to, reloaded, or returned to half way, and this
+  screen is the one place a firm's entire working history passes through.*
+- **P16. Every attribution field in uploaded data is rewritten to the uploading user's
+  `app_user.id`, and the report says how many were rewritten and where.** Executed.
+  *Cost if wrong: a verification attributed to a local profile id that names nobody, which
+  is worse than one attributed to the person who actually did the upload — but only just,
+  which is why the report says the rewrite happened rather than performing it silently.*
+
+## Rulings taken during execution
+
+- **C1 (Part 2A review) — a review became permanently read-only the moment any document it
+  covered was removed from its matter, and the fix had to not open the hole the check
+  existed to close.** `routes/reviews.ts` ran "every document the target names must be in
+  this matter" **unconditionally**, on the upsert path as well as on create. Deleting a
+  document is one click that touches no review; from that moment every save of every review
+  that covered it answered 400 — verify, flag, reject, add a note, confirm a net position,
+  amend one, retry a cell, the debounced auto-save — **forever**, with no UI anywhere able
+  to edit a stored review's `documentIds`. The review still *opened* (§9, deliberately) and
+  was then silently unwritable, which is this project's founding failure shape at a new
+  layer: a screen that looks fine and quietly refuses to record what a person just decided.
+  **Resolved by scoping the check to the ids a write INTRODUCES**: the stored row's
+  `document_ids` union the incoming `documentIds` are read inside the same transaction and
+  grandfathered, and anything not already on the row is checked exactly as before. A review
+  is the record of what was examined, and the matter's membership having changed since does
+  not make that record false. Dropping the check outright was rejected — it exists so a
+  review cannot be **created** citing another client's contract. The union is read through
+  one function (`documentIdsIn`) used for both sides, and `PUT /v1/collections/:id` got the
+  same treatment when its sibling defect was closed, so the two cannot drift apart.
+  *Cost if wrong: a review walked into another matter could have foreign ids re-read as
+  native there. It cannot: `matter_id` is deliberately **not** in the `DO UPDATE` list, and
+  an id can only be on the stored row by having passed this same check on the write that
+  first put it there. Both halves have their own test.*
+
+- **The precedent promise reversal — S19 is amended, and the sentence had to change in the
+  same commit as the storage.** The app told a lawyer, on the screen where they choose
+  which of their client's marked-up documents to bring in, *"Read once to learn from. Never
+  stored."* That was **true when it was written**. Owner decision D2 made it false. §11.1
+  states the ordering as an acceptance condition — *there is no release in which the
+  storage exists and the sentence does* — and Task 19 shipped both in one commit
+  (`6eeb067`), with the replacement in `privacyCopy.ts` and rendered once, on the same
+  header the old sentence occupied.
+  **The reversal is the point, not the storage.** A promise a firm relied on was withdrawn,
+  and the record of it being withdrawn is more useful than a clean statement of the new
+  rule. `CLAUDE.md`'s precedent paragraph was **inverted** in that same commit for the same
+  reason.
+  The search for the old promise is a **suite**, not a grep run once
+  (`src/test/precedentPromise.test.ts`), and it covers the **test suite** as well as `src/`
+  and the README — because a test still asserting the old promise is a test somebody
+  restores by treating red as a regression. It found a **seventh** place the task brief's
+  own grep could not have: `App.tsx`'s `REDLINES_DIRTY_MESSAGE`, the modal a person reads
+  at the moment of leaving, said leaving *"loses the documents you brought in"* — the same
+  false claim in words the pattern did not contain.
+  *Cost if wrong: the app shows a lawyer "Never stored" while storing their client's
+  papers. S24 calls that the founding defect of this project in its purest form, and it
+  would have been shipped deliberately.*
+
+- **`document.doc_type` versus `document.kind` — two different facts that share one word in
+  the TypeScript, named apart in the schema.** `types.ts`'s `DocumentRecord.kind` is the
+  *file* type (`pdf`/`docx`/`txt`); §11.1's matter-versus-precedent distinction is also
+  called `kind`. In SQL the file type is `doc_type` and the §11.1 fact is `kind`; on the
+  wire the §11.1 fact is `storedAs`. Task 19's brief asserted `doc.kind === 'precedent'`,
+  which cannot be satisfied against the shipped types and would have re-conflated them.
+  *Cost if wrong: a query filtering `kind = 'pdf'` and one filtering `kind = 'matter'` both
+  compile, and one of them is catastrophic — it shows another client's papers where a
+  lawyer expects the deal in hand, and nothing on screen looks wrong. §19 names this as the
+  thing to watch in this whole stage.*
+
+- **Two tests that could not fail, found by mutation and not by review (Tasks 11–15).**
+  A `for update` assertion did not fail when the lock was removed, because
+  `unique (playbook_id, version_number)` refuses the duplicate with or without it — so a
+  uniqueness-only assertion passes over a route with no serialisation at all. And
+  `authz.route.test.ts` stayed green when the partner gate was downgraded, because its
+  matrix ran against a **fixture** policy rather than the shipped table.
+  *Recorded because both were written in good faith and both read as coverage. The Stage 2
+  DoD sweep now asserts that `authz.route.test.ts` imports `ROUTE_POLICY` from
+  `../src/auth/routeTable.ts`, and that assertion is itself mutation-tested.*
+
+- **The advisory lock in the migration runner was proved by running it, not asserted.**
+  Without it, 6 of 11 concurrent runs applied the same file twice; with it, 0 of 11. And a
+  genuinely broken migration was dropped into the real image to confirm the refusal:
+  `lexprompt-api-1` exited(1) naming the file and the syntax error.
+  *Recorded because "the lock is there" and "the lock works" are different claims, and only
+  the second is evidence.*
+
+- **`stage1DoD`'s credential guard was narrowed, deliberately and to one file (Task 10).**
+  `DefaultAzureCredential` came off the forbidden-pattern list for `apps/api`, because S1/S2
+  is about **model provider** credentials and a managed identity for the firm's own
+  document store is a different fact — §6.5 says in as many words that the bytes are
+  "reachable only through the API's managed identity", so the pattern as written made §6.5
+  unimplementable. Scoped rather than removed: the exemption is asserted to be exactly
+  `apps/api/src/blob/store.ts`, and that one file is held to the **full** provider-credential
+  pattern list and to holding no other credential machinery.
+  *Cost if wrong: a file-level exemption hides everything in that file, not just the part
+  you meant to protect — the `PdfCanvas` lesson. The second half is what keeps this from
+  being a hole.*
+
+- **Task 24 — `AZURE_CLIENT_ID`, a key no configuration module reads and without which
+  nothing works in Azure.** `apps/api/src/blob/store.ts` constructs
+  `new DefaultAzureCredential()` with no options. The managed-identity leg of that chain
+  resolves a **user-assigned** identity's client id from `process.env.AZURE_CLIENT_ID` and
+  from nowhere else (@azure/identity 4.13.1, `createDefaultManagedIdentityCredential` —
+  read in this repository's own `node_modules`, not assumed). The api Container App has a
+  user-assigned identity and **no system-assigned one**, so without that variable the chain
+  asks for a token that does not exist and every document byte read and write fails at
+  runtime, in a deployment whose entire test suite is green. It is tabled in
+  `divergence.json` by hand and given a test of its own, because every classification check
+  in `configSurface` is blind to a key no config module reads.
+  *Same class as Stage 1's `oidcRequiredClaims`-given-as-JSON: visible only against a real
+  tenant, and found by reading the loader rather than by trusting the name. Cost if wrong:
+  the firm's documents are unreachable on the first deployment, and the error names an
+  identity rather than a missing variable.*
+
+- **Task 24 — holding every credential in Key Vault costs a two-phase first deployment,
+  and that is the trade being made.** The Postgres admin password and the two application
+  role passwords are read with `getSecret()` from the vault this template creates, so the
+  **first** `azd provision` against a fresh subscription fails: the vault is created empty.
+  The failure is loud and names the vault and the secret, and the README walks the sequence.
+  The alternative — a `@secure()` parameter fed from the azd environment — would put three
+  live database credentials in `.azure/<env>/.env` on somebody's laptop.
+  *Cost if wrong: a deployer meets a failure on their first run and has to read a README.
+  Against that: a credential on a laptop is a credential in a backup, in a screen share, and
+  in whatever syncs that folder.*
+
+- **Task 24 — a VNet arrived and the egress sentence did not change.** Integrating the
+  Container Apps environment with a VNet is what makes the two private endpoints resolve.
+  It does **nothing** to `api`'s outbound traffic: Container Apps still gives every replica
+  default outbound internet access unless a route table, a NAT gateway or a firewall is put
+  in front of it, and none of those is created here. Spike 2 is still open and the README
+  still says so.
+  *Cost if wrong: exactly the sentence §19 warns about — a security claim that becomes true
+  in a reader's head because a related thing arrived. "The environment is now VNet
+  integrated, therefore api cannot egress" is false, and it is the kind of false that gets
+  written into a Risk answer.*
+
+- **Task 24 — three undeclared caps had already bitten this project, so this one is
+  declared.** Fastify's 1 MiB `bodyLimit`, nginx's 1 MiB `client_max_body_size` and
+  busboy's `fieldSize` were each a library default nobody had written down, and all three
+  were on the scanned-document path. A Flexible Server's `max_connections` is the same
+  shape — derived from the SKU, invisible unless named, and exceeded it refuses new
+  connections outright rather than degrading. It is now declared explicitly in **both**
+  environments, with the arithmetic written beside it
+  (`API_DATABASE_POOL_MAX` x replicas + headroom <= `max_connections`), and Postgres
+  auto-grow is off against an explicit storage size for the same reason.
+  *Cost if wrong: two numbers to keep in step instead of one inherited default. Against
+  that: an inherited default is a number nobody can see until it is exceeded.*
+
+- **Task 26 — two of §2's rows said Stage 1 had already rewritten a sentence, and it had
+  not.** "No backend, no server-side anything" was still in the README's "How it's built"
+  verbatim, and privacy bullet 2 had been rewritten around the **gateway** when documents
+  go to the **API**. This is `CLAUDE.md`'s frozen-copy rule biting in the direction it
+  warns about: a spec quoting a file is transcribing what shipped when it was written.
+  *The shipped wording wins on a mismatch, in both directions — including when the spec
+  claims something was already fixed.*
+
+- **Task 26 — two false sentences §2's table does not list, found by reading rather than by
+  following it.** `SOURCE_PRIVACY` said *"the model you have chosen"* (the model choice
+  became workspace configuration an administrator sets in Task 18) and *"the only place
+  another matter's content leaves your browser"* — a frame that was exact when every matter
+  lived in one browser's IndexedDB and is now wrong in the **understating** direction,
+  since the matters are already server-side. The claim that survived the move is narrower
+  and is what it now says: the one place a matter *other than the one under review* reaches
+  a model.
+  *Cost if wrong: a disclosure that understates where a firm's content sits is the same
+  category of defect as one that overstates a guarantee, and it is harder to notice because
+  it reads as reassuring.*
+
+- **Task 27 — a DoD sweep must not restate what a real-database suite already proves.**
+  Most of §18 item 3 is carried by a suite that runs the real thing — a real Postgres, real
+  Azurite, a real Fastify with the shipped policy table. Re-asserting those here would give
+  each property a second home that never touches a database, and the weaker home is the one
+  that stays green when the property breaks. So the sweep asserts the **structural** facts
+  those suites cannot check about themselves: that each suite is wired to a runner, that
+  every table in the migrations has a named home for its round trip, and that the
+  authorisation matrix reads the shipped table. Twenty-six mutations were run and every one
+  killed a **named** test.
+  *Cost if wrong: a sweep that looks comprehensive and proves less than the suites it
+  summarises — which is the shape §19 warns will be proposed for deletion, and would
+  deserve it.*
+
+- **Task 27 — one of this sweep's own assertions could not fail, and was found by
+  mutating it.** The blob round-trip check read `blobStore.compose.test.ts` as raw text and
+  asserted it contained `0x00` and `0xFF`; the file's own **comment** explains why those two
+  bytes were chosen, so replacing the payload with ordinary text left the assertion green.
+  Fixed by reading comment-stripped source. Recorded because this stage has already shipped
+  several assertions that could not bite, and the only reason this one did not join them is
+  that the mutation was actually run.
+
+## Spec-versus-plan disagreements, recorded rather than smoothed
+
+Three, each already resolved above but named here so a reader of the spec alone is not
+surprised:
+
+1. **§11 says parsing moves server-side; §13 puts the engine that needs it in Stage 3.**
+   Resolved by P12. The spec is not wrong — the two sections are about different things —
+   but a reader of §11 alone would expect a parse worker in this stage.
+2. **§6.5 writes `position_basis(standard_position_id, …)`; `types.ts`'s
+   `StandardPosition` has no id.** Resolved by P13. **This is a genuine spec/code
+   disagreement and the spec cannot be satisfied literally.**
+3. **§6.1 lists nine IndexedDB stores as tables including `blobs -> (none)`, and §13's
+   Stage 2 sentence says "the nine repositories".** There are nine repository *modules* and
+   eight tables.
+
+## What this stage could not verify, and what that means
+
+**Nothing in the server rebuild past the sign-in redirect has been watched in a browser,
+by anyone, at any point in this stage.** Browser automation was unavailable throughout: the
+Chrome extension disconnected part way (it is how Stage 1's OIDC scope defect was found)
+and Playwright's driver times out at connect. The four-account walkthroughs, the uploader
+screen, the precedent intake sentence and the standard-position evidence panel are covered
+by unit, integration, real-Postgres and real-token HTTP tests — and by nothing that has
+looked at a screen. **Task 22 step 5 in particular — running the uploader against a browser
+holding real data and comparing the report record by record against what arrived — was not
+done.**
+
+This is recorded as a ruling because it is a decision, not an accident: the stage was
+completed and reported with the gap named rather than held open indefinitely or papered
+over. `CLAUDE.md` says two of this project's worst defects — "Run a review" showing zero
+documents, and a review that failed once becoming permanently unopenable — were invisible
+to thousands of passing tests and surfaced only by driving the real app. C1 above is a
+third of exactly that kind, and it was found by review rather than by a browser.
+
+*Cost if wrong: a defect of that class ships. The remedy is not more tests; it is a person
+signing in as each of the four seeded accounts and using the app. Entering credentials is
+out of scope for automation regardless, so this gap cannot be closed by trying harder.*
+
+**Also not done, and named for the same reason:** Entra itself has never been exercised —
+group-claim shape, group overage, admin consent and conditional access have no local
+analogue, and `roles.pg.test.ts` proves only that the same lookup handles both **shapes**
+offline. No `az`, `azd` or `bicep` CLI was available and there is no Azure subscription, so
+**no template in `infra/` has been compiled, validated or deployed.**
