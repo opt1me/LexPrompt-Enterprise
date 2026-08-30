@@ -426,15 +426,25 @@ describe('MatterHome — a collections load failure does not mis-describe docume
 
 describe('MatterHome — activity list (Task 16)', () => {
   it('attributes an action by the local profile as yours, wiring localUserId through', () => {
+    /*
+     * A NOTE, not a verification, since Stage 4. A verification is read from
+     * `finding_disposition_event` through `GET /v1/matters/:id/activity` --
+     * the record, which carries every change rather than only the current
+     * state -- and deriving it from `finding.verification` here as well
+     * would put the same act in the feed twice. A note has no server-side
+     * source, so it is still the browser's to derive, and it is what proves
+     * `localUserId` reaches the feed.
+     */
     const review = makeReview({
       findings: {
         d1: {
-          c1: { clauseId: 'c1', status: 'done', citations: [], notes: [], verification: { state: 'verified', byUserId: 'u1', at: 500 } },
+          c1: { clauseId: 'c1', status: 'done', citations: [], verification: { state: 'unchecked' },
+            notes: [{ id: 'n1', findingId: 'd1::c1', text: 'Ask the client.', byUserId: 'u1', at: 500 }] },
         },
       },
     });
     const container = mount(<MatterHome {...baseProps} reviews={[review]} />);
-    expect(container.textContent).toContain('You verified');
+    expect(container.textContent).toContain('You noted on');
   });
 
   it('a reviews load failure replaces the activity column with the error panel, never an empty feed', () => {

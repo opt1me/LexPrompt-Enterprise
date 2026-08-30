@@ -90,6 +90,13 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // Documents and their bytes. Adding, reading and removing a document is
   // reviewer work by §7; nothing here publishes anything.
   'GET /v1/matters/:id/documents': 'reviewer',
+
+  // What happened in this matter, and who did it (section 10.1, S22).
+  // `reviewer`: it is a UNION over three records a reviewer can already read
+  // one at a time -- a disposition's history, a run, and the audited acts of
+  // a matter they work in. A higher bar would mean a reviewer could see each
+  // change and not the list of them, which is a distinction with no reader.
+  'GET /v1/matters/:id/activity': 'reviewer',
   'POST /v1/documents': 'reviewer',
   'GET /v1/documents/:id': 'reviewer',
   'GET /v1/documents/:id/bytes': 'reviewer',

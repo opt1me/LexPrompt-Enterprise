@@ -619,7 +619,7 @@ export function MatterHome({
       {reviewsError ? (
         <LoadErrorPanel compact message={reviewsError} onRetry={onRetryReviews} />
       ) : (
-        <MatterActivity reviews={reviews} localUserId={localUserId} />
+        <MatterActivity reviews={reviews} localUserId={localUserId} matterId={matter.id} />
       )}
       </div>
 

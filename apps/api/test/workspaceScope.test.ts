@@ -69,6 +69,12 @@ const SCOPED_TABLES = [
   // `finding_disposition` with no workspace predicate fails by showing
   // another firm's judgements, and nothing on screen would look wrong.
   'finding_disposition_event', 'finding_disposition', 'finding', 'note',
+  // 012's audit log (Stage 4 Task 11). It is the one table here that is
+  // written by every route and read by one, and the failure it would have
+  // with no predicate is the worst-reading of the lot: an activity feed
+  // listing another firm's people opening another firm's matters, with
+  // nothing on screen looking wrong.
+  'audit_event',
 ];
 
 /** `from x` / `into x` / `update x` / `join x`, where x is a scoped table.
@@ -491,6 +497,41 @@ describe('every SQL statement in a route module names workspace_id', () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('scopes EVERY ARM of a UNION, not just one of them', () => {
+    /*
+     * THE GAP THE CASE ABOVE HAS, FOUND BY MUTATION. It reads a statement
+     * whole, so a `union all` over three tables passes as long as ANY arm
+     * names `workspace_id` — and the activity feed is exactly that shape.
+     * Dropping the predicate from its first arm left the guard green while
+     * the route read every firm's disposition history.
+     *
+     * A UNION is where this matters most: each arm is an independent read of
+     * an independent table, and the arms that are right say nothing about
+     * the arm that is not.
+     */
+    const offenders: string[] = [];
+    let unions = 0;
+    for (const file of walk(SCANNED)) {
+      if (UNSCOPED_BY_DESIGN.includes(rel(file))) continue;
+      for (const statement of statementsIn(codeOf(file))) {
+        if (!/\bunion\b/i.test(statement)) continue;
+        unions += 1;
+        const arms = statement.split(/\bunion\s+all\b|\bunion\b/i);
+        arms.forEach((arm, i) => {
+          if (namesScopedTable(arm) === undefined) return;
+          if (!/workspace_id/.test(arm)) {
+            offenders.push(`${rel(file)} arm ${i}: ${arm.trim().slice(0, 80)}`);
+          }
+        });
+      }
+    }
+    expect(offenders).toEqual([]);
+    // THE SANITY CHECK. A guard that found no UNION at all would satisfy the
+    // `toEqual([])` above while checking nothing, which is the failure mode
+    // this stage has now caught ten times.
+    expect(unions, 'the guard found no UNION to check').toBeGreaterThan(0);
   });
 
   it('every unscoped-by-design module still exists, and still issues SQL', () => {

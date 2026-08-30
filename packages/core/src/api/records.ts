@@ -520,6 +520,46 @@ export interface ReviewHistoryEvent extends DispositionEventView {
  * an insert-only table — so a page boundary cannot shift under a reader the
  * way an offset into a mutable list can.
  */
+/**
+ * WHERE ONE LINE OF A MATTER'S ACTIVITY FEED CAME FROM.
+ *
+ * Named on the wire rather than inferred from the shape, because the whole
+ * point of S22 is that these three are DIFFERENT RECORDS kept for different
+ * reasons — and a reader that guessed the source from the fields would be
+ * one field away from reading a disposition change as an audited act.
+ */
+export type ActivitySource = 'disposition' | 'audit' | 'run';
+
+/**
+ * One line of a matter's activity, as the SERVER read it.
+ *
+ * Not an `ActivityEntry` — that is the browser's rendered shape, and it
+ * carries `byYou`, which is a fact about who is looking rather than about
+ * what happened. This carries only what the row said.
+ */
+export interface ActivityRow {
+  at: number;
+  source: ActivitySource;
+  /** A disposition's `to_state`, an audit's `action`, or a run's `state`.
+   *  A plain string: the three vocabularies are closed in their own tables
+   *  and a union of all three here would be a fourth place they are
+   *  written down. */
+  kind: string;
+  byUserId: string;
+  reviewId?: string;
+  reviewName?: string;
+  clauseId?: string;
+  clauseTitle?: string;
+  /** A disposition's `cause` — `rerun_reset` is not a person un-verifying
+   *  something, and the feed must not flatten them (§6.3). */
+  cause?: string;
+}
+
+/** The answer to `GET /v1/matters/:id/activity` — newest first. */
+export interface MatterActivityPage {
+  rows: ActivityRow[];
+}
+
 export interface ReviewHistory {
   events: ReviewHistoryEvent[];
   nextCursor?: number;

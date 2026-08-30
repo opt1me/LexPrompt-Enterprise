@@ -51,6 +51,7 @@ export type {
   FindingsPage, DispositionView, DispositionCause, DispositionEventView,
   DispositionWithHistory,
   DispositionWriteResult, DispositionHistory, ReviewHistory, ReviewHistoryEvent,
+  ActivitySource, ActivityRow, MatterActivityPage,
   RetryCleared, RetryResult,
   NetPositionAction, NetPositionWriteResult,
 } from './api/records.ts';

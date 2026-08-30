@@ -24,6 +24,7 @@ import { registerWorkspaceSettings } from './routes/workspaceSettings.ts';
 import { registerReviews } from './routes/reviews.ts';
 import { registerFindings } from './routes/findings.ts';
 import { registerHistory } from './routes/history.ts';
+import { registerActivity } from './routes/activity.ts';
 import { registerRuns } from './routes/runs.ts';
 import { ConflictError } from './errors.ts';
 
@@ -318,6 +319,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerReviews(app, deps.db);
   registerFindings(app, deps.db);
   registerHistory(app, deps.db);
+  registerActivity(app, deps.db);
   registerRuns(app, deps.db, { eventPageMax: deps.eventPageMax });
   registerWorkspaceSettings(app, deps.db, deps.gateway);
 
