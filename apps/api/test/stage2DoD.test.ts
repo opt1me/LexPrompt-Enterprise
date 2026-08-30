@@ -137,6 +137,17 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
     precedent_set: 'apps/api/test/precedent.pg.test.ts',
     position_basis: 'apps/api/test/positionBasis.pg.test.ts',
     workspace_setting: 'apps/api/test/workspaceSettings.pg.test.ts',
+    // Stage 3. `finding` and `note` are records a client reads and writes;
+    // the two disposition tables are the record of a human judgement and its
+    // history; the two `finding_migration_*` tables are the backfill's census
+    // and its report, which outlive the migration and are covered by the
+    // suite that proves the migration refuses rather than guesses.
+    finding: 'apps/api/test/findings.pg.test.ts',
+    note: 'apps/api/test/findings.pg.test.ts',
+    finding_disposition: 'apps/api/test/dispositions.pg.test.ts',
+    finding_disposition_event: 'apps/api/test/dispositions.pg.test.ts',
+    finding_migration_census: 'apps/api/test/findingsBackfill.pg.test.ts',
+    finding_migration_report: 'apps/api/test/findingsBackfill.pg.test.ts',
   };
 
   it('every table in the migrations has a named suite, and every named suite exists', () => {
