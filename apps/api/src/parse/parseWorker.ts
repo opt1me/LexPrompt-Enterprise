@@ -46,6 +46,25 @@ export interface ParseWorkerDeps {
   db: Db;
   blobs: BlobStore;
   pollMs: number;
+  /** `API_PARSE_TIMEOUT_MS`. See `parseWithin` — the bound this queue
+   *  shipped without. */
+  parseTimeoutMs: number;
+  /** `API_PARSE_STUCK_REPORT_MS`. How long a document may sit `pending`
+   *  before this worker says so on stderr. */
+  parseStuckReportMs: number;
+  /**
+   * The reader, injected — defaulting to `parseDocument`, which is what
+   * production passes by omission.
+   *
+   * A seam, and a narrow one, for the same reason `db` and `blobs` are
+   * injected: the behaviour this module's timeout exists for is a parse that
+   * DOES NOT RETURN, and there is no fixture for that. A `Promise.race`
+   * cannot preempt synchronous CPU work either — nothing in Node can — so a
+   * test that leaned on a tiny `parseTimeoutMs` against a real PDF would
+   * prove only that the fixture is fast, and would go on passing with the
+   * bound deleted.
+   */
+  parse?: typeof parseDocument;
 }
 
 interface PendingRow {
@@ -99,7 +118,26 @@ export async function parseOneDocument(deps: ParseWorkerDeps): Promise<boolean> 
       return true;
     }
 
-    const parsed = await parseDocument(bytes, doc.mime, doc.name);
+    let parsed;
+    try {
+      const read = deps.parse ?? parseDocument;
+      parsed = await parseWithin(read(bytes, doc.mime, doc.name), deps.parseTimeoutMs);
+    } catch (error) {
+      if (!(error instanceof ParseTimeoutError)) throw error;
+      // FAILED, not left `pending`. This is the whole point of the bound:
+      // `parseWorkers` defaults to 1 and the claim is strict FIFO with no
+      // skipping, so a document that never finishes blocks every other
+      // document in the deployment — in every workspace — and the only
+      // message anybody can reach is `routes/runs.ts`'s "try again in a
+      // moment", which becomes a lie repeated forever. Taking it out of
+      // `pending` with a message naming the key is the loud answer; leaving
+      // it is the quiet one.
+      await fail(t, doc, `${doc.name} took longer than ${deps.parseTimeoutMs}ms to read and was `
+        + 'stopped (API_PARSE_TIMEOUT_MS). It has NOT been read, and a review of it would '
+        + 'report every clause as absent. Add the file again, or ask an administrator to '
+        + 'raise that limit for a document this large.');
+      return true;
+    }
     if (parsed.parseError) {
       await fail(t, doc, `${doc.name} could not be read (${parsed.parseError}).`);
       return true;
@@ -127,6 +165,50 @@ export async function parseOneDocument(deps: ParseWorkerDeps): Promise<boolean> 
   });
 }
 
+/**
+ * The parse did not finish inside its budget.
+ *
+ * Its own class rather than a bare `Error`, so `parseOneDocument` can tell a
+ * timeout (which it records as a `failed` document with a message naming the
+ * key) from a genuine crash (which it lets propagate, so the transaction
+ * rolls back and the row stays `pending` for the next poll — the recovery
+ * this module's "no lease column" design deliberately relies on).
+ */
+export class ParseTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`The parse did not finish inside ${timeoutMs}ms.`);
+    this.name = 'ParseTimeoutError';
+  }
+}
+
+/**
+ * `work`, bounded.
+ *
+ * A race rather than a check afterwards, because the failure this exists for
+ * is work that never settles: a check afterwards never runs. The parse keeps
+ * burning CPU until it finishes or the process ends — nothing in Node can
+ * stop a synchronous library mid-loop — but the CLAIM is released and the
+ * document leaves `pending`, which is what unblocks every other document
+ * behind it in a single-slot FIFO queue.
+ */
+async function parseWithin<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new ParseTimeoutError(timeoutMs)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    // The losing promise must not become an unhandled rejection when the
+    // parse eventually fails on its own, long after this returned.
+    work.catch(() => { /* already answered, one way or the other */ });
+  }
+}
+
 async function fail(
   t: { query: (text: string, values?: unknown[]) => Promise<unknown[]> },
   doc: PendingRow,
@@ -139,6 +221,36 @@ async function fail(
 }
 
 export interface WorkerHandle { stop(): Promise<void> }
+
+/**
+ * Documents that have been waiting to be read for longer than anybody would
+ * call "a moment", reported on stderr.
+ *
+ * NOT a failure and NOT a bound: a busy queue is not a broken one, and a
+ * document waiting behind nine others is normal — the same reasoning the
+ * reaper gives for never reaping a `queued` run. It exists because the
+ * alternative is a queue whose only symptom is a person being told to *"try
+ * again in a moment"* forever, with nothing anywhere naming the document at
+ * the head of it.
+ *
+ * Exported so a test can assert on the count rather than on a log line.
+ */
+export async function reportStuckDocuments(deps: ParseWorkerDeps): Promise<number> {
+  const rows = await deps.db.query<{ id: string; name: string; waited: string | number }>(
+    `select id, name, extract(epoch from (now() - added_at)) * 1000 as waited
+       from document
+      where parse_state = 'pending' and added_at < now() - ($1 || ' milliseconds')::interval
+      order by added_at asc
+      limit 20`,
+    [String(deps.parseStuckReportMs)]);
+  if (rows.length === 0) return 0;
+  process.stderr.write(
+    `api: ${rows.length} document(s) have been waiting to be read for longer than `
+    + `${deps.parseStuckReportMs}ms (API_PARSE_STUCK_REPORT_MS). Nothing can review them, and every `
+    + 'attempt is answered "try again in a moment". Oldest first: '
+    + `${rows.map(r => `${r.name} (${Math.round(Number(r.waited))}ms)`).join(', ')}\n`);
+  return rows.length;
+}
 
 /**
  * The polling loop. `stop()` waits for the in-flight parse, so a shutdown
@@ -165,10 +277,22 @@ export function startParseWorkers(deps: ParseWorkerDeps, count: number): WorkerH
     }
   };
 
+  // The report ticks beside the loops rather than inside them: a loop that
+  // is blocked on a slow parse is exactly when the report matters, and a
+  // check inside the loop would be the thing not running.
+  const report = setInterval(() => {
+    if (!running) return;
+    void reportStuckDocuments(deps).catch((error: Error) => {
+      process.stderr.write(`api: could not check for stuck documents: ${error.message}\n`);
+    });
+  }, Math.max(deps.pollMs, Math.floor(deps.parseStuckReportMs / 2)));
+  report.unref?.();
+
   const loops = Array.from({ length: count }, () => loop());
   return {
     async stop() {
       running = false;
+      clearInterval(report);
       await Promise.allSettled(loops);
     },
   };

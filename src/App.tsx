@@ -18,6 +18,8 @@ import {
   ModelError,
   isSignInError,
   isServiceConfigError,
+  isNotYetRead,
+  notYetReadMessageFor,
 } from '@lexprompt/core';
 import type { WorkspaceSettings, VerificationChange } from '@lexprompt/core';
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
@@ -256,6 +258,24 @@ function reviewFromRun(run: ReviewRun, matterId: string, modelId: string, userId
 async function hydrateRecordForReview(record: DocumentRecord): Promise<DocumentFile> {
   const blob = await getDocumentBlob(record.id);
   return documentFileForReview(record, blob);
+}
+
+/**
+ * The browser's half of `refuseUnparsedDocuments` (`routes/runs.ts`).
+ *
+ * Since Stage 3 an upload stores the bytes and returns; a parse worker reads
+ * them a moment later. A review started in that window is a review of `text:
+ * ''`, which reports every clause absent — this project's founding defect,
+ * caused by our own write path rather than by a scan. The API refuses such a
+ * run by name; the browser still ORCHESTRATES runs for the whole of Part 3A,
+ * so that refusal is never consulted, and this is it on the side that starts
+ * the work.
+ *
+ * The sentence comes from `@lexprompt/core` and is not written here: two
+ * copies of one refusal is how one of them stops being true.
+ */
+function notYetReadNames(records: DocumentRecord[]): string[] {
+  return records.filter(isNotYetRead).map(r => r.name);
 }
 
 /**
@@ -2956,6 +2976,11 @@ function AppShell({ signIn }: { signIn: () => void }) {
         const presentRecords = [collection.baseDocumentId, ...collection.variesDocumentIds]
           .map(id => recordById.get(id))
           .filter((r): r is DocumentRecord => !!r);
+        const reading = notYetReadNames(presentRecords);
+        if (reading.length > 0) {
+          notify(notYetReadMessageFor(reading), 'error');
+          return;
+        }
         const hydrated = await Promise.all(presentRecords.map(hydrateRecordForReview));
         const members = orderedMembers(collection, hydrated);
         if (!members[0]?.document) {
@@ -2978,6 +3003,11 @@ function AppShell({ signIn }: { signIn: () => void }) {
     }
 
     try {
+      const reading = notYetReadNames(matterDocuments);
+      if (reading.length > 0) {
+        notify(notYetReadMessageFor(reading), 'error');
+        return;
+      }
       const docs = await Promise.all(matterDocuments.map(hydrateRecordForReview));
       setActiveTemplate(template);
       setActiveMatterId(matterId);

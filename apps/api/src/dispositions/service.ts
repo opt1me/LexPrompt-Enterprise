@@ -1,4 +1,6 @@
-import { ModelError, requiresReason, type VerificationState } from '@lexprompt/core';
+import {
+  ModelError, effectiveReason, requiresReason, type VerificationState,
+} from '@lexprompt/core';
 import type { Tx } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
 import type { FindingKey } from '../findings/rows.ts';
@@ -135,7 +137,12 @@ export async function setDisposition(
       + 'The one write this system performs on its own behalf must only ever REMOVE a claim '
       + 'that a human checked something.');
   }
-  const nextReason = requiresReason(change.state) && reason ? reason : null;
+  // The shared rule, not a second copy of it. `findings/write.ts` reads the
+  // same function when it decides what a blob's verification actually
+  // carries, so the value compared and the value stored cannot disagree —
+  // which is exactly how a flagged finding with a reason came to write a
+  // history row on every autosave.
+  const nextReason = effectiveReason(change.state, reason);
 
   const before = await dispositionFor(t, key);
   if (!before) {

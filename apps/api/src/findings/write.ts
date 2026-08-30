@@ -1,12 +1,12 @@
 import {
-  ModelError, OUTCOMES, findingsKeyFor, requiresReason, type Finding, type ReviewTarget,
-  type VerificationState,
+  ModelError, OUTCOMES, effectiveReason, findingsKeyFor, requiresReason,
+  type Finding, type ReviewTarget, type VerificationState,
 } from '@lexprompt/core';
 import type { Tx } from '../db/pool.ts';
 import {
   FINDING_COLUMNS, findingValues, toFindingRow, type FindingContent, type FindingKey,
 } from './rows.ts';
-import { dispositionFor, ensureDisposition, setDisposition } from '../dispositions/service.ts';
+import { ensureDisposition, setDisposition } from '../dispositions/service.ts';
 
 /**
  * The shadow writer (P17), and it is temporary by design — deleted in Task 22
@@ -223,7 +223,15 @@ function readCell(findingsKey: string, clauseId: string, value: unknown): Cell {
     content,
     verification: {
       state,
-      ...(reason ? { reason } : {}),
+      // `effectiveReason`, NOT the raw one. A reason on anything but
+      // `rejected` is dropped when it is stored (`setDisposition`), so a cell
+      // that kept it here compared an undropped blob value against a dropped
+      // stored one — never equal, on every autosave, forever. The result was
+      // a fresh `finding_disposition_event` row roughly every two seconds of
+      // a live run for one flagged clause, in the table 006 calls evidence,
+      // and a `reconcileFindings` discrepancy that no number of saves could
+      // clear.
+      ...(effectiveReason(state, reason) ? { reason: effectiveReason(state, reason)! } : {}),
       ...(typeof v.byUserId === 'string' && v.byUserId ? { byUserId: v.byUserId } : {}),
       ...(typeof v.at === 'number' ? { at: v.at } : {}),
     },
@@ -265,6 +273,19 @@ async function refuseUnknownAuthors(t: Tx, cells: Cell[]): Promise<void> {
   }
 }
 
+/**
+ * The CONTENT columns of a finding — everything but the four that identify
+ * it — as a row constructor, on each side of the upsert.
+ *
+ * Derived from `FINDING_COLUMNS` rather than written out, because a column
+ * added to that list and forgotten here would silently stop counting as a
+ * change, and the symptom would be a finding whose version never moves.
+ */
+const CONTENT_TUPLE = {
+  finding: `(${FINDING_COLUMNS.slice(4).map(c => `finding.${c}`).join(', ')})`,
+  excluded: `(${FINDING_COLUMNS.slice(4).map(c => `excluded.${c}`).join(', ')})`,
+};
+
 const UPSERT = `
   insert into finding (${FINDING_COLUMNS.join(', ')})
   values (${FINDING_COLUMNS.map((c, i) =>
@@ -277,8 +298,23 @@ const UPSERT = `
     edited = excluded.edited, position_outcome = excluded.position_outcome,
     position_rationale = excluded.position_rationale, citations = excluded.citations,
     net_position = excluded.net_position,
-    version = finding.version + 1, updated_at = now()
-  where finding.workspace_id = excluded.workspace_id`;
+    -- ONLY WHEN SOMETHING ACTUALLY CHANGED. The version column is the field an event
+    -- carries so a client can drop a stale one, and a browser autosaves the
+    -- whole review roughly every two seconds while a run is live — so an
+    -- unconditional bump meant a forty-cell review's versions were dominated
+    -- by saves that wrote the identical row back. A version that moves when
+    -- nothing moved is a version that says nothing.
+    --
+    -- "is distinct from" over the whole content tuple, not <>: NULL is an
+    -- ordinary value in half these columns, and null <> null is NULL,
+    -- which would read as "no change" for a summary that had just been
+    -- cleared.
+    version = case when ${CONTENT_TUPLE.finding} is distinct from ${CONTENT_TUPLE.excluded}
+                   then finding.version + 1 else finding.version end,
+    updated_at = case when ${CONTENT_TUPLE.finding} is distinct from ${CONTENT_TUPLE.excluded}
+                      then now() else finding.updated_at end
+  where finding.workspace_id = excluded.workspace_id
+  returning review_id`;
 
 /**
  * Every finding in `review.findings`, as rows — inside the caller's
@@ -312,8 +348,19 @@ export async function writeFindingRows(
     const key: FindingKey = {
       reviewId: review.id, findingsKey: cell.findingsKey, clauseId: cell.clauseId,
     };
-    await t.query(UPSERT, findingValues(toFindingRow(
+    // THE UPSERT'S OWN SILENT FAILURE, made loud. `on conflict … do update
+    // … where finding.workspace_id = excluded.workspace_id` performs
+    // NEITHER the insert nor the update when that predicate is false, and
+    // Postgres reports success: a save that wrote nothing and said it
+    // worked, which is the exact shape this whole file exists to prevent.
+    // Unreachable in practice — review ids are unique — and refused rather
+    // than trusted to stay that way.
+    const wrote = await t.query(UPSERT, findingValues(toFindingRow(
       cell.content, review.id, cell.findingsKey, workspaceId)));
+    if (wrote.length === 0) {
+      refuse(`the finding at ${cell.findingsKey}/${cell.clauseId} belongs to a different `
+        + 'workspace than this review, so it was not written. Nothing has been saved');
+    }
     await writeDisposition(t, key, workspaceId, cell, actor);
     await writeNotes(t, key, workspaceId, cell);
   }

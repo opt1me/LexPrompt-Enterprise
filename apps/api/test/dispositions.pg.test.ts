@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { appDb, migratorDb, workerDb, withPg } from './helpers/pgHarness.ts';
+import { appDb, workerDb, withPg } from './helpers/pgHarness.ts';
 import type { Db, Tx } from '../src/db/pool.ts';
 import {
   dispositionFor, ensureDisposition, setDisposition, type DispositionRow,
@@ -127,14 +127,46 @@ describe('the database refuses what a card must never be able to say', () => {
     });
   });
 
-  it('refuses a disposition or an event for a finding that does not exist', async () => {
+  it('refuses a disposition for a finding that does not exist', async () => {
+    await withPg(async t => {
+      await aReviewWithFindings(t, ['c1']);
+      await expect(attempt(t, tt => insertDisposition(tt, { clause: 'c-nothing' })))
+        .rejects.toThrow(/finding_disposition_review_id_findings_key_clause_id_fkey/);
+    });
+  });
+
+  it('anchors the HISTORY to the review instead, which is what lets evidence outlive a finding', async () => {
+    /*
+     * CHANGED BY MIGRATION 009, deliberately. This used to assert that an
+     * event for an unknown CLAUSE was refused by a foreign key to `finding`
+     * — and that same foreign key, `on delete cascade`, gave the app role a
+     * transitive DELETE on the table 006 calls evidence "because it is
+     * INSERT-only to every application role". One `delete from finding` and
+     * who verified that clause, when, and what they changed it from was gone.
+     *
+     * So the parent is the REVIEW now. What that costs is exactly the
+     * assertion above: a row-level guarantee that an event names a finding
+     * that exists. What replaces it is the code-level one, which is stronger
+     * about the thing that matters — `setDisposition` is the only writer,
+     * and it reads `finding_disposition` (which still has its foreign key to
+     * `finding`) and refuses BY NAME before it writes an event. That refusal
+     * is the test three describes below, "refuses to record a judgement about
+     * a finding that has no disposition row yet".
+     */
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
       const by = await aUser(t);
-      await expect(attempt(t, tt => insertDisposition(tt, { clause: 'c-nothing' })))
-        .rejects.toThrow(/finding_disposition_review_id_findings_key_clause_id_fkey/);
+      // An unknown REVIEW is still refused by the database.
+      await expect(attempt(t, tt => tt.query(
+        `insert into finding_disposition_event
+           (review_id, findings_key, clause_id, workspace_id, from_state, to_state, cause,
+            by_user_id, at)
+         values ('no-such-review', 'd1', 'c1', $1, 'unchecked', 'verified', 'human', $2, now())`,
+        [WS, by]))).rejects.toThrow(/finding_disposition_event_review_fkey/);
+      // …and the parent is the review, not the finding, which is what makes
+      // the history survive a per-key delete.
       await expect(attempt(t, tt => insertEvent(tt, { clause: 'c-nothing', by })))
-        .rejects.toThrow(/finding_disposition_event_review_id_findings_key_clause_id/);
+        .resolves.toBeDefined();
     });
   });
 
@@ -340,6 +372,25 @@ describe('a disposition belongs to the finding it is about', () => {
       await setDisposition(t, key('c1'), { state: 'verified' }, 'human', actor, new Date(), 1);
       await t.query("delete from finding where review_id = 'dr1' and clause_id = 'c1'");
       expect(await t.query('select 1 from finding_disposition')).toEqual([]);
+      // THE HISTORY DOES NOT (migration 009). This assertion used to read
+      // `.toEqual([])` for the event table too, and that was the defect: 006
+      // calls this table evidence BECAUSE no application role may delete
+      // from it, and a cascade through `delete on finding` — which the app
+      // role holds — is a delete. The current disposition is the blob's
+      // mirror and goes with the finding; the record of who changed what,
+      // when, has no copy anywhere else and is not the shadow writer's to
+      // remove.
+      expect(await t.query('select 1 from finding_disposition_event')).toHaveLength(1);
+    });
+  });
+
+  it('and goes when the REVIEW goes, so the evidence is retained rather than immortal', async () => {
+    await withPg(async t => {
+      await aReviewWithFindings(t, ['c1']);
+      const actor = { id: await aUser(t) };
+      await ensureDisposition(t, key('c1'), WS);
+      await setDisposition(t, key('c1'), { state: 'verified' }, 'human', actor, new Date(), 1);
+      await t.query("delete from review where id = 'dr1'");
       expect(await t.query('select 1 from finding_disposition_event')).toEqual([]);
     });
   });

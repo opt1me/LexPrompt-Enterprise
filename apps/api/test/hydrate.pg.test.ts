@@ -6,14 +6,14 @@ import { ROOT } from './sourceScan.ts';
 import { memoryBlobStore } from './helpers/memoryBlobs.ts';
 import {
   WS, MODEL, aMatter, aModelChoice, aReview, aRun, aUser, assertStatesAgree,
-  fakeGateway, workerDeps,
+  fakeGateway, parseDeps, workerDeps,
 } from './helpers/runHarness.ts';
 import { runOneStep } from '../src/run/worker.ts';
 import {
   documentFileForReview, documentFileForViewing, makePageImageCache,
 } from '../src/parse/hydrate.ts';
 import { parseDocument } from '../src/parse/parseDocument.ts';
-import { parseOneDocument } from '../src/parse/parseWorker.ts';
+import { parseOneDocument, reportStuckDocuments } from '../src/parse/parseWorker.ts';
 import { dbOn } from './helpers/pgHarness.ts';
 import type { Tx } from '../src/db/pool.ts';
 import type { DocumentRecord } from '../src/db/rows.ts';
@@ -56,7 +56,9 @@ const record = (over: Partial<DocumentRecord> = {}): DocumentRecord => ({
   ...over,
 });
 
-async function aScannedDocument(t: Tx, id: string, matterId: string): Promise<void> {
+async function aScannedDocument(
+  t: Tx, id: string, matterId: string, name = 'scanned-lease.pdf',
+): Promise<void> {
   // The text a REAL parse produces for this fixture: markers and nothing
   // else. Written through `parseDocument` rather than typed out, so the
   // fixture cannot drift away from what the parse worker would store.
@@ -65,9 +67,9 @@ async function aScannedDocument(t: Tx, id: string, matterId: string): Promise<vo
   await t.query(
     `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text, parse_state,
                            byte_size, mime, blob_key, role, added_at)
-     values ($1, $2, 'matter', $3, 'scanned-lease.pdf', 'pdf', $4, 'parsed', $5,
+     values ($1, $2, 'matter', $3, $7, 'pdf', $4, 'parsed', $5,
              'application/pdf', $6, 'standalone', now())`,
-    [id, WS, matterId, parsed.text, SCAN.byteLength, `workspace/${WS}/document/${id}`]);
+    [id, WS, matterId, parsed.text, SCAN.byteLength, `workspace/${WS}/document/${id}`, name]);
 }
 
 describe('the worker hands the extractor a REVIEW-hydrated document', () => {
@@ -282,7 +284,7 @@ describe('the parse worker is the one writer of a parse_state change', () => {
       await blobs.put(`workspace/${WS}/document/h-d3`,
         Buffer.from('Clause 1. The term is ten years.'), 'text/plain');
 
-      expect(await parseOneDocument({ db: dbOn(t), blobs, pollMs: 1 })).toBe(true);
+      expect(await parseOneDocument(parseDeps(dbOn(t), blobs))).toBe(true);
       const rows = await t.query<{ parse_state: string; text: string; parse_error: string | null }>(
         'select parse_state, text, parse_error from document where id = $1', ['h-d3']);
       expect(rows[0].parse_state).toBe('parsed');
@@ -290,7 +292,7 @@ describe('the parse worker is the one writer of a parse_state change', () => {
       expect(rows[0].parse_error).toBeNull();
 
       // …and there is nothing left to claim.
-      expect(await parseOneDocument({ db: dbOn(t), blobs, pollMs: 1 })).toBe(false);
+      expect(await parseOneDocument(parseDeps(dbOn(t), blobs))).toBe(false);
     });
   });
 
@@ -307,7 +309,7 @@ describe('the parse worker is the one writer of a parse_state change', () => {
       await blobs.put(`workspace/${WS}/document/h-d4`,
         Buffer.from('this is not a pdf at all'), 'application/pdf');
 
-      expect(await parseOneDocument({ db: dbOn(t), blobs, pollMs: 1 })).toBe(true);
+      expect(await parseOneDocument(parseDeps(dbOn(t), blobs))).toBe(true);
       const rows = await t.query<{ parse_state: string; parse_error: string; text: string }>(
         'select parse_state, parse_error, text from document where id = $1', ['h-d4']);
       expect(rows[0].parse_state).toBe('failed');
@@ -327,7 +329,7 @@ describe('the parse worker is the one writer of a parse_state change', () => {
         [WS, `workspace/${WS}/document/h-d5`]);
 
       expect(await parseOneDocument({
-        db: dbOn(t), blobs: memoryBlobStore(), pollMs: 1,
+        ...parseDeps(dbOn(t), memoryBlobStore()),
       })).toBe(true);
       const rows = await t.query<{ parse_state: string; parse_error: string }>(
         'select parse_state, parse_error from document where id = $1', ['h-d5']);
@@ -351,7 +353,7 @@ describe('the parse worker is the one writer of a parse_state change', () => {
       const blobs = memoryBlobStore();
       await blobs.put(`workspace/${WS}/document/h-d6`, Buffer.from('   \n  '), 'text/plain');
 
-      expect(await parseOneDocument({ db: dbOn(t), blobs, pollMs: 1 })).toBe(true);
+      expect(await parseOneDocument(parseDeps(dbOn(t), blobs))).toBe(true);
       const rows = await t.query<{ parse_state: string; parse_error: string }>(
         'select parse_state, parse_error from document where id = $1', ['h-d6']);
       expect(rows[0].parse_state).toBe('failed');
@@ -371,11 +373,216 @@ describe('the parse worker is the one writer of a parse_state change', () => {
       const blobs = memoryBlobStore();
       await blobs.put(`workspace/${WS}/document/h-d7`, Buffer.from(SCAN), 'application/pdf');
 
-      expect(await parseOneDocument({ db: dbOn(t), blobs, pollMs: 1 })).toBe(true);
+      expect(await parseOneDocument(parseDeps(dbOn(t), blobs))).toBe(true);
       const rows = await t.query<{ parse_state: string; text: string }>(
         'select parse_state, text from document where id = $1', ['h-d7']);
       expect(rows[0].parse_state).toBe('parsed');
       expect(rows[0].text).toContain('[Page 3]');
     });
   }, 30_000);
+});
+
+/**
+ * M8: THE CELL'S TOTAL, refused before the call — through the worker, not
+ * only through the helper.
+ *
+ * `withImages` enforces `runImageBytesMax` per DOCUMENT, and
+ * `extractCollectionClause` concatenates `present.flatMap(p =>
+ * p.document.pageImages ?? [])` into ONE body. Three scanned members at 70%
+ * of the budget each passed three per-document checks and sent 210% of the
+ * ceiling, and the operator got a raw 413 from nginx or the gateway instead
+ * of the sentence naming the documents and the two keys to move.
+ *
+ * Driven through `runOneStep` rather than through `cellImagesRefusal`
+ * directly, because the shape this stage keeps producing is a correct
+ * mechanism with no path to it: a helper nothing calls refuses nothing.
+ */
+describe('a collection cell is refused by name when its members will not fit in one call', () => {
+  it('refuses before the model call, naming every member and both keys', async () => {
+    await withPg(async t => {
+      const userId = await aUser(t);
+      await aMatter(t, 'h-m-col');
+      await aScannedDocument(t, 'h-d-base', 'h-m-col', 'lease.pdf');
+      await aScannedDocument(t, 'h-d-var', 'h-m-col', 'deed-of-variation.pdf');
+      await t.query(
+        `insert into collection (id, workspace_id, matter_id, name, base_document_id,
+                                 varies_document_ids, created_at)
+         values ('h-col', $1, 'h-m-col', 'Lease and DoV', 'h-d-base', '["h-d-var"]'::jsonb, now())`,
+        [WS]);
+      await aReview(t, 'h-r-col', 'h-m-col',
+        { kind: 'collection', collectionId: 'h-col', documentIds: ['h-d-base', 'h-d-var'] }, ['c1']);
+      await aModelChoice(t);
+      await aRun(t, 'h-run-col', 'h-r-col', [{ key: 'h-col', clause: 'c1' }], userId);
+
+      const { gateway, log } = fakeGateway();
+      // 1,200 bytes for the cell. Each member holds 700 — comfortably under
+      // it on its own, which is exactly why three per-document checks said
+      // nothing — and 1,400 between them.
+      const deps = workerDeps(t, gateway, { runImageBytesMax: 1_200 });
+      for (const id of ['h-d-base', 'h-d-var']) {
+        deps.cache.set(id, [{ mime: 'image/jpeg', data: 'x'.repeat(700) }]);
+      }
+      await runOneStep(deps, 'w#1', [MODEL]);
+
+      const rows = await t.query<{ status: string; error: string }>(
+        'select status, error from finding where review_id = $1', ['h-r-col']);
+      expect(rows[0].status).toBe('error');
+      expect(rows[0].error).toContain('lease.pdf');
+      expect(rows[0].error).toContain('deed-of-variation.pdf');
+      expect(rows[0].error).toContain('API_RUN_IMAGE_BYTES_MAX');
+      expect(rows[0].error).toContain('API_MAX_BODY_BYTES');
+      // BEFORE the call. A 413 from the hop is loud but names nothing.
+      expect(log.infer).toHaveLength(0);
+      await assertStatesAgree(t);
+    });
+  });
+
+  it('sends a collection whose members DO fit, which is what makes the refusal about the total', async () => {
+    await withPg(async t => {
+      const userId = await aUser(t);
+      await aMatter(t, 'h-m-fit');
+      await aScannedDocument(t, 'h-d-fitbase', 'h-m-fit');
+      await aScannedDocument(t, 'h-d-fitvar', 'h-m-fit');
+      await t.query(
+        `insert into collection (id, workspace_id, matter_id, name, base_document_id,
+                                 varies_document_ids, created_at)
+         values ('h-colfit', $1, 'h-m-fit', 'Lease and DoV', 'h-d-fitbase',
+                 '["h-d-fitvar"]'::jsonb, now())`, [WS]);
+      await aReview(t, 'h-r-fit', 'h-m-fit',
+        { kind: 'collection', collectionId: 'h-colfit',
+          documentIds: ['h-d-fitbase', 'h-d-fitvar'] }, ['c1']);
+      await aModelChoice(t);
+      await aRun(t, 'h-run-fit', 'h-r-fit', [{ key: 'h-colfit', clause: 'c1' }], userId);
+
+      const { gateway, log } = fakeGateway({
+        content: () => JSON.stringify({
+          trail: [
+            { document: 1, effect: 'Sets a ten-year term.', citations: [] },
+            { document: 2, effect: 'Extends it to fifteen.', citations: [] },
+          ],
+          net_position: 'The term is fifteen years.',
+        }),
+      });
+      const deps = workerDeps(t, gateway, { runImageBytesMax: 5_000 });
+      for (const id of ['h-d-fitbase', 'h-d-fitvar']) {
+        deps.cache.set(id, [{ mime: 'image/jpeg', data: 'x'.repeat(700) }]);
+      }
+      await runOneStep(deps, 'w#1', [MODEL]);
+
+      expect(log.infer).toHaveLength(1);
+      const rows = await t.query<{ status: string }>(
+        'select status from finding where review_id = $1', ['h-r-fit']);
+      expect(rows[0].status).toBe('done');
+      await assertStatesAgree(t);
+    });
+  });
+});
+
+/**
+ * M6: THE PARSE QUEUE HAS A BOUND NOW, AND SAYS WHEN A DOCUMENT IS STUCK.
+ *
+ * Every other loop in this stage declares one — `runCellTimeoutMs`,
+ * `pageRenderTimeoutMs`, `runAttemptsMax`, `runLeaseMs`. This one had none:
+ * `parseDocument` ran inside the claim transaction with no deadline and no
+ * signal, and `statement_timeout` bounds statements, not `pdfjs`.
+ *
+ * `parseWorkers` defaults to **1** and the claim is `order by added_at asc,
+ * id asc` — strict FIFO with no skipping — so one slow document at the head
+ * blocked every other document in the deployment, in every workspace, and a
+ * genuine hang blocked them forever. The only message anybody could reach
+ * was `routes/runs.ts`'s *"has not finished being read. Nothing was started;
+ * try again in a moment"*, repeated for as long as it took.
+ *
+ * The bound takes the document OUT of `pending`, which is what unblocks
+ * everything behind it, and says why by name.
+ */
+describe('the parse queue is bounded, and a stuck queue is not silent', () => {
+  it('marks a document that outruns its budget FAILED, naming the key', async () => {
+    await withPg(async t => {
+      await aMatter(t, 'h-m-slow');
+      await t.query(
+        `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text,
+                               parse_state, byte_size, mime, blob_key, role, added_at)
+         values ('h-d-slow', $1, 'matter', 'h-m-slow', 'huge.pdf', 'pdf', '', 'pending', $2,
+                 'application/pdf', $3, 'standalone', now())`,
+        [WS, SCAN.byteLength, `workspace/${WS}/document/h-d-slow`]);
+      const blobs = memoryBlobStore();
+      await blobs.put(`workspace/${WS}/document/h-d-slow`, Buffer.from(SCAN), 'application/pdf');
+
+      // A budget nothing can meet. The document is not the point — the
+      // point is that a parse which does not finish inside its budget leaves
+      // `pending` rather than holding the single FIFO slot.
+      // A parse that never returns — the case a check-after cannot see, and
+      // the one the FIFO queue could not survive.
+      const never = () => new Promise<never>(() => { /* deliberately hangs */ });
+      expect(await parseOneDocument(parseDeps(dbOn(t), blobs, {
+        parseTimeoutMs: 30, parse: never as never,
+      }))).toBe(true);
+
+      const rows = await t.query<{ parse_state: string; parse_error: string; text: string }>(
+        'select parse_state, parse_error, text from document where id = $1', ['h-d-slow']);
+      expect(rows[0].parse_state).toBe('failed');
+      expect(rows[0].parse_error).toContain('huge.pdf');
+      expect(rows[0].parse_error).toContain('API_PARSE_TIMEOUT_MS');
+      expect(rows[0].parse_error).toMatch(/has NOT been read/);
+      expect(rows[0].text).toBe('');
+    });
+  });
+
+  it('unblocks the document behind it, which is the whole reason for the bound', async () => {
+    // Strict FIFO with one slot: before the timeout, the second document was
+    // unreachable for as long as the first took.
+    await withPg(async t => {
+      await aMatter(t, 'h-m-fifo');
+      const blobs = memoryBlobStore();
+      for (const [id, added] of [['h-d-first', '2 hours'], ['h-d-second', '1 hour']] as const) {
+        await t.query(
+          `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text,
+                                 parse_state, byte_size, mime, blob_key, role, added_at)
+           values ($1, $2, 'matter', 'h-m-fifo', $3, 'pdf', '', 'pending', $4,
+                   'application/pdf', $5, 'standalone', now() - $6::interval)`,
+          [id, WS, `${id}.pdf`, SCAN.byteLength, `workspace/${WS}/document/${id}`, added]);
+        await blobs.put(`workspace/${WS}/document/${id}`, Buffer.from(SCAN), 'application/pdf');
+      }
+
+      // The head of the queue cannot be read inside its budget…
+      const never = () => new Promise<never>(() => { /* deliberately hangs */ });
+      await parseOneDocument(parseDeps(dbOn(t), blobs, {
+        parseTimeoutMs: 30, parse: never as never,
+      }));
+      // …and the next claim reaches the SECOND document rather than the same
+      // one again.
+      await parseOneDocument(parseDeps(dbOn(t), blobs));
+      const rows = await t.query<{ id: string; parse_state: string }>(
+        "select id, parse_state from document where matter_id = 'h-m-fifo' order by id");
+      expect(rows).toEqual([
+        { id: 'h-d-first', parse_state: 'failed' },
+        { id: 'h-d-second', parse_state: 'parsed' },
+      ]);
+    });
+  }, 60_000);
+
+  it('reports a document that has been waiting far too long, without failing it', async () => {
+    // A busy queue is not a broken one — the same rule the reaper keeps for a
+    // queued run. What must not happen is a queue whose only symptom is a
+    // person being told to try again in a moment, forever.
+    await withPg(async t => {
+      await aMatter(t, 'h-m-stuck');
+      await t.query(
+        `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text,
+                               parse_state, byte_size, mime, blob_key, role, added_at)
+         values ('h-d-stuck', $1, 'matter', 'h-m-stuck', 'waiting.pdf', 'pdf', '', 'pending', 4,
+                 'application/pdf', $2, 'standalone', now() - interval '2 hours')`,
+        [WS, `workspace/${WS}/document/h-d-stuck`]);
+
+      const deps = parseDeps(dbOn(t), memoryBlobStore(), { parseStuckReportMs: 60_000 });
+      expect(await reportStuckDocuments(deps)).toBe(1);
+      // …and it is still `pending`. A report is not a state change.
+      expect((await t.query<{ parse_state: string }>(
+        "select parse_state from document where id = 'h-d-stuck'"))[0].parse_state).toBe('pending');
+      // A document added a moment ago is ordinary and says nothing.
+      expect(await reportStuckDocuments(
+        parseDeps(dbOn(t), memoryBlobStore(), { parseStuckReportMs: 6 * 60 * 60 * 1000 }))).toBe(0);
+    });
+  });
 });

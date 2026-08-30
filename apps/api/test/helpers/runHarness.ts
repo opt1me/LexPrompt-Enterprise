@@ -1,11 +1,13 @@
 import { expect } from 'vitest';
 import type { AllowedModel, Jurisdiction, ProviderId } from '@lexprompt/core';
-import type { Tx } from '../../src/db/pool.ts';
+import type { Db, Tx } from '../../src/db/pool.ts';
 import { dbOn } from './pgHarness.ts';
 import { memoryBlobStore, type MemoryBlobStore } from './memoryBlobs.ts';
 import { makePageImageCache } from '../../src/parse/hydrate.ts';
+import type { BlobStore } from '../../src/blob/store.ts';
 import type { GatewayClient } from '../../src/gatewayClient.ts';
 import type { RunWorkerCaps, RunWorkerDeps } from '../../src/run/worker.ts';
+import type { ParseWorkerDeps } from '../../src/parse/parseWorker.ts';
 
 /**
  * The fixtures the three run suites share — the queue's, the worker's and
@@ -128,6 +130,23 @@ export const CAPS: RunWorkerCaps = {
   pageImageMaxPages: 10,
   runImageBytesMax: 12_000_000,
 };
+
+/**
+ * The parse worker's deps, with its two caps at test scale.
+ *
+ * A helper rather than an object literal at each call site: `parseTimeoutMs`
+ * and `parseStuckReportMs` were added because the parse queue shipped with
+ * NO bound at all, and six inline literals is how the next cap added to that
+ * interface gets a different value in each suite.
+ *
+ * The timeout is generous (30s) because these suites parse real PDFs on a
+ * laptop; a test that wants to see the bound bite passes its own.
+ */
+export function parseDeps(
+  db: Db, blobs: BlobStore, over: Partial<ParseWorkerDeps> = {},
+): ParseWorkerDeps {
+  return { db, blobs, pollMs: 1, parseTimeoutMs: 30_000, parseStuckReportMs: 300_000, ...over };
+}
 
 export function workerDeps(
   t: Tx,

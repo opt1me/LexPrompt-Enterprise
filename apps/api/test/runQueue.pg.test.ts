@@ -388,3 +388,150 @@ describe('reading a run back', () => {
     });
   });
 });
+
+/**
+ * M9: RE-RUNNING A CLAUSE RESETS ITS VERIFICATION, one layer below the
+ * browser rule of the same name.
+ *
+ * `createRun` deliberately puts every finding back to `pending` and blanks
+ * `summary`, `risk_level`, `citations`, `net_position` and the position
+ * fields. It used to leave `finding_disposition` alone, on the reasoning
+ * that the reset "belongs with the re-run in Task 16" — but
+ * `POST /v1/reviews/:id/runs` is registered, authenticated at `reviewer` and
+ * SHIPPED, so a second run over a verified review produced a finding row
+ * with new model output beside a disposition still saying `verified` by A at
+ * the old timestamp. That is CLAUDE.md's *"keeping the old verification
+ * would let an export claim a human checked text they never saw"*, inverted.
+ *
+ * And the mechanism that makes it right was already shipped and unreachable:
+ * the `rerun_reset` cause, its CHECK constraint and `setDisposition`'s
+ * branch for it existed with no caller anywhere.
+ */
+describe('a re-run clears the judgement it is about to invalidate', () => {
+  async function verified(t: Tx, actorId: string, clause: string, at: Date): Promise<void> {
+    await t.query(
+      `insert into finding_disposition
+         (review_id, findings_key, clause_id, workspace_id, state, by_user_id, at, changed_count)
+       values ('rq-rr', 'rq-d1', $1, $2, 'verified', $3, $4, 1)`, [clause, WS, actorId, at]);
+    await t.query(
+      `insert into finding_disposition_event
+         (review_id, findings_key, clause_id, workspace_id, from_state, to_state, cause,
+          by_user_id, at)
+       values ('rq-rr', 'rq-d1', $1, $2, 'unchecked', 'verified', 'human', $3, $4)`,
+      [clause, WS, actorId, at]);
+  }
+
+  const dispositions = (t: Tx) => t.query<{
+    clause_id: string; state: string; by_user_id: string | null; changed_count: number;
+  }>(`select clause_id, state, by_user_id::text as by_user_id, changed_count
+        from finding_disposition where review_id = 'rq-rr' order by clause_id`);
+
+  it('resets a verified disposition to unchecked, in the SAME transaction as the run', async () => {
+    await withPg(async t => {
+      const actorId = await aUser(t);
+      await aMatter(t);
+      await aDocument(t, 'rq-d1');
+      await aReview(t, 'rq-rr', { kind: 'documents', documentIds: ['rq-d1'] }, ['c1', 'c2']);
+      await t.query(
+        `insert into finding (review_id, findings_key, clause_id, workspace_id, status, summary)
+         values ('rq-rr', 'rq-d1', 'c1', $1, 'done', 'The break notice is six months.'),
+                ('rq-rr', 'rq-d1', 'c2', $1, 'done', 'The rent review is upward only.')`, [WS]);
+      await verified(t, actorId, 'c1', new Date(1_700_000_000_000));
+
+      const h = harness(t, actorId);
+      await h.post('/v1/reviews/rq-rr/runs');
+
+      const after = await dispositions(t);
+      expect(after).toHaveLength(1);
+      expect(after[0].state).toBe('unchecked');
+      // The finding it described is `pending` with nothing in it, which is
+      // the whole reason the judgement had to go.
+      const finding = await t.query<{ status: string; summary: string | null }>(
+        "select status, summary from finding where review_id = 'rq-rr' and clause_id = 'c1'");
+      expect(finding[0]).toMatchObject({ status: 'pending', summary: null });
+    });
+  });
+
+  it('records the clearing as rerun_reset, attributed to whoever asked for the run', async () => {
+    await withPg(async t => {
+      const owner = await aUser(t);
+      const rerunner = await aUser(t);
+      await aMatter(t);
+      await aDocument(t, 'rq-d1');
+      await aReview(t, 'rq-rr', { kind: 'documents', documentIds: ['rq-d1'] }, ['c1']);
+      await t.query(
+        `insert into finding (review_id, findings_key, clause_id, workspace_id, status)
+         values ('rq-rr', 'rq-d1', 'c1', $1, 'done')`, [WS]);
+      await verified(t, owner, 'c1', new Date(1_700_000_000_000));
+
+      const h = harness(t, rerunner);
+      await h.post('/v1/reviews/rq-rr/runs');
+
+      const events = await t.query<{
+        from_state: string; to_state: string; cause: string; by: string;
+      }>(`select from_state, to_state, cause, by_user_id::text as by
+            from finding_disposition_event where review_id = 'rq-rr' order by id`);
+      expect(events).toHaveLength(2);
+      // The engine's own write, and `rerun_reset_only_unchecks` means it can
+      // only ever REMOVE a claim of human checking, never manufacture one.
+      expect(events[1]).toMatchObject({
+        from_state: 'verified', to_state: 'unchecked', cause: 'rerun_reset', by: rerunner,
+      });
+      // The person who verified is still in the history — the evidence of
+      // what they did is not what the reset removes.
+      expect(events[0]).toMatchObject({ to_state: 'verified', cause: 'human', by: owner });
+    });
+  });
+
+  it('writes NO event for a finding nobody had judged', async () => {
+    // A never-touched disposition has no judgement to clear, and a history
+    // full of rows saying nothing happened buries the one that did.
+    await withPg(async t => {
+      const actorId = await aUser(t);
+      await aMatter(t);
+      await aDocument(t, 'rq-d1');
+      await aReview(t, 'rq-rr', { kind: 'documents', documentIds: ['rq-d1'] }, ['c1']);
+      await t.query(
+        `insert into finding (review_id, findings_key, clause_id, workspace_id, status)
+         values ('rq-rr', 'rq-d1', 'c1', $1, 'done')`, [WS]);
+      await t.query(
+        `insert into finding_disposition
+           (review_id, findings_key, clause_id, workspace_id, state, changed_count)
+         values ('rq-rr', 'rq-d1', 'c1', $1, 'unchecked', 0)`, [WS]);
+
+      const h = harness(t, actorId);
+      await h.post('/v1/reviews/rq-rr/runs');
+
+      expect(await t.query("select 1 from finding_disposition_event where review_id = 'rq-rr'"))
+        .toEqual([]);
+      expect((await dispositions(t))[0]).toMatchObject({ changed_count: 0, by_user_id: null });
+    });
+  });
+
+  it('leaves a judgement about a clause this run does not touch', async () => {
+    // The reset is about the answer being replaced. A clause outside this
+    // run's cell set keeps its verification, because nothing is replacing
+    // what it was made about.
+    await withPg(async t => {
+      const actorId = await aUser(t);
+      await aMatter(t);
+      await aDocument(t, 'rq-d1');
+      // The snapshot names c1 only; `c-gone` is a clause a previous playbook
+      // version had.
+      await aReview(t, 'rq-rr', { kind: 'documents', documentIds: ['rq-d1'] }, ['c1']);
+      await t.query(
+        `insert into finding (review_id, findings_key, clause_id, workspace_id, status)
+         values ('rq-rr', 'rq-d1', 'c1', $1, 'done'), ('rq-rr', 'rq-d1', 'c-gone', $1, 'done')`,
+        [WS]);
+      await verified(t, actorId, 'c1', new Date(1_700_000_000_000));
+      await verified(t, actorId, 'c-gone', new Date(1_700_000_001_000));
+
+      const h = harness(t, actorId);
+      await h.post('/v1/reviews/rq-rr/runs');
+
+      const after = await dispositions(t);
+      expect(after.find(d => d.clause_id === 'c1')?.state).toBe('unchecked');
+      expect(after.find(d => d.clause_id === 'c-gone')?.state).toBe('verified');
+    });
+  });
+});

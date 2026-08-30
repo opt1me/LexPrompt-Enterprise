@@ -13,9 +13,9 @@ import { fromWorkspaceSettingRow, type WorkspaceSettingRow } from '../routes/wor
 import { toFindingRow, FINDING_COLUMNS, findingValues } from '../findings/rows.ts';
 import { workerModelClient } from './modelClient.ts';
 import { appendEvent } from './events.ts';
-import { cancelPendingCells, exhaustCell } from './lifecycle.ts';
+import { cancelPendingCells } from './lifecycle.ts';
 import { settleRunIfFinished, type RunCellRow, type RunRow } from './queue.ts';
-import { documentFileForReview, type PageImageCache } from '../parse/hydrate.ts';
+import { cellImagesRefusal, documentFileForReview, type PageImageCache } from '../parse/hydrate.ts';
 
 /**
  * The run worker — leasing, one cell per transaction, every cap declared.
@@ -316,7 +316,7 @@ function parsedJson(value: unknown): unknown {
  * a throw, so one absent document costs one cell and not the run.
  */
 async function hydrateForReview(
-  db: Db, deps: RunWorkerDeps, workspaceId: string, documentId: string,
+  db: Db, deps: RunWorkerDeps, workspaceId: string, documentId: string, signal: AbortSignal,
 ): Promise<DocumentFile | null> {
   const rows = await db.query<DocumentRow>(
     "select * from document where id = $1 and workspace_id = $2 and kind = 'matter'",
@@ -333,6 +333,13 @@ async function hydrateForReview(
     pageRenderTimeoutMs: deps.caps.pageRenderTimeoutMs,
     pageImageMaxPages: deps.caps.pageImageMaxPages,
     runImageBytesMax: deps.caps.runImageBytesMax,
+    // THE CELL'S OWN ABORT, reaching the one part of a cell that is CPU
+    // work rather than a network call. `runOneStep` awaits `documentForCell`
+    // / `collectionMembers` BEFORE the model call, so a render that never
+    // returned held the slot with `API_RUN_CELL_TIMEOUT_MS` firing into
+    // nothing and the lease eventually handing the same page to the next
+    // slot.
+    signal,
   });
 }
 
@@ -347,7 +354,7 @@ async function hydrateForReview(
  * record is authoritative.
  */
 async function collectionMembers(
-  db: Db, deps: RunWorkerDeps, workspaceId: string, collectionId: string,
+  db: Db, deps: RunWorkerDeps, workspaceId: string, collectionId: string, signal: AbortSignal,
 ): Promise<CollectionMember<DocumentFile>[]> {
   const rows = await db.query<CollectionRow>(
     'select * from collection where id = $1 and workspace_id = $2', [collectionId, workspaceId]);
@@ -361,18 +368,44 @@ async function collectionMembers(
   const ids = [collection.baseDocumentId, ...collection.variesDocumentIds];
   const files: DocumentFile[] = [];
   for (const id of ids) {
-    const file = await hydrateForReview(db, deps, workspaceId, id);
+    const file = await hydrateForReview(db, deps, workspaceId, id, signal);
     if (file) files.push(file);
   }
+  // THE WIRE CEILING AT THE SCALE IT WAS DOCUMENTED AT. `withImages`
+  // enforces `runImageBytesMax` per DOCUMENT, but `extractCollectionClause`
+  // concatenates every present member's images into ONE body — so three
+  // scanned members at 70% of the budget each passed three checks and sent
+  // 210% of it, and the operator got a raw 413 from the hop instead of the
+  // sentence naming the documents and the two keys to move. Refused before
+  // the call, by name: `runOneStep` turns this into one cell's error
+  // finding, which is what a refusal has to be here.
+  const refusal = cellImagesRefusal(files, deps.caps.runImageBytesMax);
+  if (refusal) throw new Error(refusal);
+
   // `orderedMembers` puts a missing document back at its rightful position
   // with `document: null` rather than dropping it, so the base is never
   // silently promoted away from position 1 by an amendment moving up.
   return orderedMembers(collection, files);
 }
 
-/** The gateway's allowlist, fetched once per poll cycle rather than per
- *  cell: forty cells is forty identical calls otherwise. */
-async function allowlistOf(gateway: GatewayClient): Promise<AllowedModel[]> {
+/**
+ * The gateway's allowlist, fetched once per CLAIMED CELL — and never by an
+ * idle loop.
+ *
+ * It used to run before `runOneStep`, inside `while (running)`, so an idle
+ * process issued `runWorkers` calls every `runPollMs` forever: two a second
+ * at the defaults, against the very gateway whose rate limiter this stage
+ * documents as the binding constraint, and two stderr lines a second on top
+ * of that during an outage. A busy loop's call rate is unchanged — it
+ * already ran once per cell, because a loop that claimed something does not
+ * sleep — so what moved is only the traffic nobody needed.
+ *
+ * Still per cell rather than cached: capability is checked BEFORE the call
+ * (`withCapabilities` refuses rather than defaulting `modelSupportsImages`
+ * to `false`), and a cached allowlist would let a model removed from the
+ * firm's list keep answering for the life of the process.
+ */
+export async function allowlistOf(gateway: GatewayClient): Promise<AllowedModel[]> {
   const { status, json } = await gateway.models();
   if (status >= 400) {
     throw new Error(
@@ -480,12 +513,12 @@ export async function runOneCell(
   const finding = isCollectionTarget(context.target)
     ? await extractCollectionClause(
       client,
-      await collectionMembers(deps.db, deps, run.workspace_id, context.target.collectionId),
+      await collectionMembers(deps.db, deps, run.workspace_id, context.target.collectionId, signal),
       context.clause, context.template, context.settings, signal,
       { matterId: context.matterId, reviewId: run.review_id })
     : await extractClause(
       client,
-      await documentForCell(deps, run.workspace_id, cell.findings_key),
+      await documentForCell(deps, run.workspace_id, cell.findings_key, signal),
       context.clause, context.template, context.settings, signal,
       { matterId: context.matterId, reviewId: run.review_id });
 
@@ -508,9 +541,9 @@ export async function runOneCell(
  * answers with *"Could not read X"*: one cell's error, not the run's.
  */
 async function documentForCell(
-  deps: RunWorkerDeps, workspaceId: string, documentId: string,
+  deps: RunWorkerDeps, workspaceId: string, documentId: string, signal: AbortSignal,
 ): Promise<DocumentFile> {
-  const file = await hydrateForReview(deps.db, deps, workspaceId, documentId);
+  const file = await hydrateForReview(deps.db, deps, workspaceId, documentId, signal);
   if (file) return file;
   return {
     id: documentId,
@@ -688,12 +721,23 @@ export async function writeCellResult(
  * One full step: claim, call, write. Exported so a test can drive exactly
  * one rather than racing a loop — a suite that starts a pool and waits
  * proves whatever the clock happened to allow.
+ *
+ * `allowlist` may be a THUNK, and the loop below passes one. It used to be
+ * fetched before the claim, inside `while (running)`: with `runPollMs = 1000`
+ * and `runWorkers = 2` an idle process issued two `GET /v1/models` per second
+ * forever, against the very gateway whose rate limiter this stage documents
+ * as the binding constraint, and during an outage it wrote two stderr lines a
+ * second with it. An array is still accepted, because every test hands one
+ * over and a signature change buys them nothing.
  */
 export async function runOneStep(
-  deps: RunWorkerDeps, workerId: string, allowlist: AllowedModel[],
+  deps: RunWorkerDeps, workerId: string,
+  allowlist: AllowedModel[] | (() => Promise<AllowedModel[]>),
 ): Promise<boolean> {
   const leased = await leaseCell(deps.db, deps, workerId);
   if (!leased) return false;
+  // AFTER the claim. There is work to do, so the call is not idle chatter.
+  const models = typeof allowlist === 'function' ? await allowlist() : allowlist;
 
   // THE TWO REASONS A CELL STOPS EARLY, and one controller so the extractors
   // see the single `AbortSignal` they already understand.
@@ -724,7 +768,7 @@ export async function runOneStep(
 
   let outcome: CellOutcome;
   try {
-    outcome = await runOneCell(deps, leased, allowlist, controller.signal);
+    outcome = await runOneCell(deps, leased, models, controller.signal);
   } catch (error) {
     // Everything the extractors do NOT catch: a review deleted mid-run, a
     // clause missing from the snapshot, a collection whose record is gone, a
@@ -838,8 +882,7 @@ export function startWorkerPool(deps: RunWorkerDeps): WorkerHandle {
     while (running) {
       let did = false;
       try {
-        const allowlist = await allowlistOf(deps.gateway);
-        did = await runOneStep(deps, workerId, allowlist);
+        did = await runOneStep(deps, workerId, () => allowlistOf(deps.gateway));
       } catch (error) {
         // A failure to CLAIM, or to reach the gateway for the allowlist. It
         // must not kill the loop and must not spin: the run stays live, its
@@ -890,5 +933,3 @@ export function startWorkerPool(deps: RunWorkerDeps): WorkerHandle {
     },
   };
 }
-
-export { exhaustCell };

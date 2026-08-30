@@ -1,5 +1,5 @@
 import type { DocumentFile, DocumentRecord } from '../types';
-import { pageSegments, SCAN_TEXT_THRESHOLD, uid } from '@lexprompt/core';
+import { isNotYetRead, notYetReadMessage, pageSegments, SCAN_TEXT_THRESHOLD, uid } from '@lexprompt/core';
 import type { PdfPageText } from '@lexprompt/core';
 import { debug } from './debug';
 import { detectDocxMarkup, markupNoticeFor, MARKUP_UNCHECKED_NOTICE } from './docxMarkup';
@@ -366,7 +366,15 @@ function carriedMarkupNotice(record: DocumentRecord): { markupNotice?: string } 
  *  `blob === null` (the document's bytes could not be found — see
  *  `getDocumentBlob`) degrades to a viewer-less placeholder rather than
  *  throwing: the document's metadata (name, kind, extracted text) is still
- *  real and still shown, only the original file is unavailable. */
+ *  real and still shown, only the original file is unavailable.
+ *
+ *  A record the server has not finished reading (`parseState: 'pending'`)
+ *  carries `text: ''`, and BOTH hydrations say so rather than handing back
+ *  a document that appears to be silent. Before this, the upload's own
+ *  blanked row was the browser's only copy of a document's text after a
+ *  reload, and every clause of a review over it came back *"It may have
+ *  failed to parse, or be a scan with no extractable content"* — false in
+ *  both branches, for a document that simply had not been read yet. */
 export function documentFileForViewing(record: DocumentRecord, blob: Blob | null): DocumentFile {
   return {
     id: record.id,
@@ -374,7 +382,12 @@ export function documentFileForViewing(record: DocumentRecord, blob: Blob | null
     text: record.text,
     file: blob ? new File([blob], record.name, { type: blob.type }) : new File([], record.name),
     kind: record.kind,
-    parseError: record.parseError ?? (blob ? undefined : BLOB_UNAVAILABLE_MESSAGE),
+    // The not-yet-read sentence wins over the missing-blob one: a document
+    // still being read is on its way to working, and "add the file again"
+    // is the wrong instruction for it.
+    parseError: isNotYetRead(record)
+      ? notYetReadMessage(record.name)
+      : (record.parseError ?? (blob ? undefined : BLOB_UNAVAILABLE_MESSAGE)),
     ...carriedMarkupNotice(record),
   };
 }
@@ -406,6 +419,22 @@ export function documentFileForViewing(record: DocumentRecord, blob: Blob | null
  *  `pageImages` alone cannot tell an unreadable scan from a document that
  *  never needed images, so it must check `parseError` too. */
 export async function documentFileForReview(record: DocumentRecord, blob: Blob | null): Promise<DocumentFile> {
+  // FIRST, before the blob and before the stored `parseError`. A document
+  // the server has not finished reading has `text: ''` and no `parseError`
+  // at all, so every check below it would pass it through as a document
+  // that says nothing — the founding defect, arriving through the upload's
+  // own write path rather than through a scan.
+  if (isNotYetRead(record)) {
+    return {
+      id: record.id,
+      name: record.name,
+      text: record.text,
+      file: blob ? new File([blob], record.name, { type: blob.type }) : new File([], record.name),
+      kind: record.kind,
+      parseError: notYetReadMessage(record.name),
+      ...carriedMarkupNotice(record),
+    };
+  }
   if (!blob) {
     return {
       id: record.id,

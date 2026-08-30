@@ -1,6 +1,11 @@
 import { assertIssuerUsable, type AuthConfig } from './oidc.ts';
 import { parseRoleMappings, type RoleMapping } from './auth/roles.ts';
 import type { BlobCredentialConfig } from './blob/credential.ts';
+// IMPORTED, not restated. `assertBackoffOutlivedByHeartbeat` below is only
+// correct while it counts the same number of missed heartbeats the reaper
+// actually counts, and a second `3` here is precisely the sibling drift this
+// project has six findings about.
+import { MISSED_HEARTBEATS_BEFORE_DEAD } from './run/reaper.ts';
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -223,6 +228,26 @@ export interface ApiConfig {
    * `parseWorkers` — the same, for the parse queue, which is separate
    * because a document being read and a clause being reviewed compete for
    * nothing except this process.
+   *
+   * `parseTimeoutMs` — THE PARSE QUEUE'S OWN BOUND, and its absence was the
+   * fourth undeclared-cap defect on the scanned-document path. Every other
+   * loop in this service declares one; this one had no timeout, no attempt
+   * counter, no reaper and nothing that reported a document stuck
+   * `pending`. `parseWorkers` defaults to 1 and the claim is strict FIFO
+   * (`order by added_at asc, id asc`) with no skipping, so ONE slow document
+   * blocks every other document in the deployment, in every workspace, for
+   * as long as it takes — and a genuine hang blocks them forever, while the
+   * only sentence anybody can reach is *"try again in a moment"*.
+   * `statement_timeout` does not help: `pdfjs` is CPU work in Node, not a
+   * query. Exceeding this marks the document `failed` with a message that
+   * names the key, which is a loud answer and, crucially, takes it OUT of
+   * `pending` so the queue moves.
+   *
+   * `parseStuckReportMs` — how long a document may sit `pending` before the
+   * worker says so on stderr. Not a failure and not a bound: a busy queue is
+   * not a broken one, and a document waiting behind nine others is normal.
+   * It exists because the alternative is a queue whose only symptom is a
+   * user being told to try again in a moment, forever.
    */
   runWorkers: number;
   runLeaseMs: number;
@@ -233,6 +258,8 @@ export interface ApiConfig {
   runPollMs: number;
   workspaceRunConcurrency: number;
   parseWorkers: number;
+  parseTimeoutMs: number;
+  parseStuckReportMs: number;
   /**
    * The outbox's retention and its page size (§6.5, P22).
    *
@@ -464,6 +491,47 @@ export function assertLeaseOutlastsCell(cfg: ApiConfig): void {
   }
 }
 
+/**
+ * A run must still be heartbeating while its cells sit out a retry backoff.
+ *
+ * A cell parked after a retryable 429/5xx keeps `state = 'leased'` and sets
+ * `leased_by = null`, which is exactly the shape the claim query understands.
+ * But the worker pool's `active` set — the runs it beats a heartbeat for — is
+ * built from `leased_by like '<workerId>#%'`, so a parked cell contributes
+ * nothing to it; and parked cells still consume the per-run concurrency
+ * budget, so no replacement cell can be claimed for that run. If every
+ * in-flight cell of a run is parked, the run's `heartbeat_at` FREEZES for the
+ * length of the backoff.
+ *
+ * The reaper calls a run dead after `MISSED_HEARTBEATS_BEFORE_DEAD` (3)
+ * intervals. At the defaults this survives by fifteen seconds — 30s of
+ * backoff against 45s of staleness — which is not a margin anybody chose.
+ * Set `API_RUN_RETRY_BACKOFF_MS=60000`, a perfectly reasonable answer to a
+ * per-minute rate limiter and the exact case that key's own docstring
+ * describes, and every rate-limited run is reaped as `failed` with *"This run
+ * stopped without finishing"* while it was doing precisely what it was
+ * configured to do.
+ *
+ * `caps.test.ts`'s preamble names this failure — "a heartbeat that is too
+ * slow reaps a healthy run" — and the instance was missing. STRICTLY less
+ * than, with no fudge: equality is the case where the sweep and the wake-up
+ * race, and a race is not a margin.
+ */
+export function assertBackoffOutlivedByHeartbeat(cfg: ApiConfig): void {
+  const stale = cfg.runHeartbeatMs * MISSED_HEARTBEATS_BEFORE_DEAD;
+  if (cfg.runRetryBackoffMs >= stale) {
+    throw new ConfigError(
+      `API_RUN_RETRY_BACKOFF_MS is ${cfg.runRetryBackoffMs}ms and API_RUN_HEARTBEAT_MS is `
+      + `${cfg.runHeartbeatMs}ms, so the reaper calls a run dead after ${stale}ms `
+      + `(${MISSED_HEARTBEATS_BEFORE_DEAD} missed heartbeats). A run whose cells are all `
+      + 'parked waiting out a retry stops heartbeating for the length of that backoff, so a '
+      + 'backoff at or above the staleness window marks a healthy, rate-limited run as failed '
+      + 'with "This run stopped without finishing". Lower the backoff, or raise the heartbeat '
+      + 'interval above a third of it.',
+    );
+  }
+}
+
 /** The image budget must fit inside the body limit that carries it. */
 export function assertImagesFitTheBody(cfg: ApiConfig): void {
   if (cfg.runImageBytesMax >= cfg.maxBodyBytes) {
@@ -515,6 +583,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     runPollMs: int(env, 'API_RUN_POLL_MS', 1_000),
     workspaceRunConcurrency: int(env, 'API_WORKSPACE_RUN_CONCURRENCY', 8),
     parseWorkers: int(env, 'API_PARSE_WORKERS', 1),
+    parseTimeoutMs: int(env, 'API_PARSE_TIMEOUT_MS', 180_000),
+    parseStuckReportMs: int(env, 'API_PARSE_STUCK_REPORT_MS', 300_000),
     eventRetentionDays: int(env, 'API_EVENT_RETENTION_DAYS', 7),
     eventPageMax: int(env, 'API_EVENT_PAGE_MAX', 500),
   };
@@ -523,6 +593,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
   assertWorkerPoolFits(cfg);
   assertLeaseOutlastsCell(cfg);
   assertImagesFitTheBody(cfg);
+  assertBackoffOutlivedByHeartbeat(cfg);
   return cfg;
 }
 
@@ -593,6 +664,12 @@ export function describeConfig(cfg: ApiConfig): string {
       + `heartbeat ${cfg.runHeartbeatMs}ms, poll ${cfg.runPollMs}ms, `
       + `retry backoff ${cfg.runRetryBackoffMs}ms, `
       + `${cfg.runAttemptsMax} attempt(s), ${cfg.workspaceRunConcurrency} cell(s) per workspace`,
+    // The parse queue's own bounds, on their own line. It is a SEPARATE
+    // queue with a separate failure — one slow document at the head of a
+    // single-slot FIFO blocks every upload in the deployment — and its caps
+    // were the fourth undeclared-cap defect on the scanned-document path.
+    `Parse queue: read within ${cfg.parseTimeoutMs}ms, `
+      + `report a document still waiting after ${cfg.parseStuckReportMs}ms`,
     `Events: kept ${cfg.eventRetentionDays} day(s), at most ${cfg.eventPageMax} per page`,
     `Database: ${redactDsn(cfg.databaseUrl)}`,
     // The WORKER's connection, named separately and redacted the same way.

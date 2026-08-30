@@ -343,3 +343,30 @@ describe('the events route', () => {
     });
   });
 });
+
+/**
+ * n3: the route's own query has an index.
+ *
+ * `readEvents` filters `where workspace_id = $1 and run_id = $2 and id > $3`,
+ * and `event` carried only `event_review_idx (workspace_id, review_id, id)`,
+ * `event_at_idx (at)` and the primary key — so every poll of a live run
+ * scanned the workspace's whole seven-day buffer. Stage 4's socket polls this
+ * harder than the HTTP route does. Migration 009 adds `event_run_idx`.
+ *
+ * Asserted against the DATABASE rather than by reading the migration text: an
+ * index is a property of the schema that is actually deployed, and a text
+ * scan cannot see one that was never applied.
+ */
+describe('the events route has an index that matches its predicate', () => {
+  it('has (workspace_id, run_id, id), in that order', async () => {
+    await withPg(async t => {
+      const rows = await t.query<{ indexdef: string }>(
+        "select indexdef from pg_indexes where tablename = 'event' and indexname = 'event_run_idx'");
+      expect(rows, 'event_run_idx is missing; migration 009 has not been applied').toHaveLength(1);
+      // Column ORDER matters: the two equalities first, the range last, so
+      // `id > $3` scans the tail of a matching prefix rather than filtering
+      // after one.
+      expect(rows[0].indexdef).toMatch(/\(workspace_id,\s*run_id,\s*id\)/);
+    });
+  });
+});

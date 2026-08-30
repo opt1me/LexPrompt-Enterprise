@@ -95,6 +95,108 @@ describe('the run worker can write what a model produced', () => {
   });
 });
 
+/**
+ * THE ONE PAIR OF TABLES THIS WHOLE FILE EXISTS FOR, and until Part 3A's
+ * review nobody attempted them.
+ *
+ * `grep finding_disposition` over this file came back EMPTY. It opened with
+ * "§14: the grant is the guarantee", `pgHarness.workerDb`'s docstring said
+ * this suite proves the worker cannot "read or write a disposition", and
+ * `runWorker.pg.test.ts:530` named it as one of a three-legged proof — and
+ * the leg about dispositions did not exist. What was tested was notes,
+ * `delete on finding`, `app_user.email`, `delete on event` and three
+ * document columns: every neighbour of the thing, and not the thing.
+ *
+ * The mutation that used to leave every suite in this repository green:
+ * `grant select, insert, update on finding_disposition to lexprompt_worker;`
+ * applied to a live database outside the migrations. `caps.test.ts` scans
+ * MIGRATION TEXT and cannot see a grant applied from `infra/postgres`, an
+ * Azure deployment step, or a DBA — and 006's own comment says the explicit
+ * REVOKE exists precisely because a future blanket grant "would silently
+ * undo it", which a text scan cannot see either. This asks the database.
+ *
+ * SELECT is refused too, and that is 006's ruling rather than an
+ * over-reach: the worker has no reason to read a disposition, and a select
+ * grant is how a future "just check whether it was verified before
+ * overwriting" gets written.
+ */
+describe('the run worker cannot read or write a human s judgement', () => {
+  it('refuses the worker role every statement against finding_disposition', async () => {
+    await withSeed('disp', async ({ userId }) => {
+      const db = workerDb();
+      await expect(db.query("select state from finding_disposition where review_id = 'wg-r-disp'"))
+        .rejects.toThrow(/permission denied/i);
+      await expect(db.query(
+        `insert into finding_disposition
+           (review_id, findings_key, clause_id, workspace_id, state, changed_count, by_user_id, at)
+         values ('wg-r-disp', 'd1', 'c1', $1, 'verified', 1, $2, now())`, [WS, userId]))
+        .rejects.toThrow(/permission denied/i);
+      await expect(db.query(
+        "update finding_disposition set state = 'verified' where review_id = 'wg-r-disp'"))
+        .rejects.toThrow(/permission denied/i);
+      await expect(db.query("delete from finding_disposition where review_id = 'wg-r-disp'"))
+        .rejects.toThrow(/permission denied/i);
+    });
+  });
+
+  it('refuses the worker role every statement against finding_disposition_event', async () => {
+    await withSeed('dispev', async ({ userId }) => {
+      const db = workerDb();
+      await expect(db.query(
+        "select to_state from finding_disposition_event where review_id = 'wg-r-dispev'"))
+        .rejects.toThrow(/permission denied/i);
+      await expect(db.query(
+        `insert into finding_disposition_event
+           (review_id, findings_key, clause_id, workspace_id, from_state, to_state, cause,
+            by_user_id, at)
+         values ('wg-r-dispev', 'd1', 'c1', $1, 'unchecked', 'verified', 'human', $2, now())`,
+        [WS, userId])).rejects.toThrow(/permission denied/i);
+      await expect(db.query("delete from finding_disposition_event where review_id = 'wg-r-dispev'"))
+        .rejects.toThrow(/permission denied/i);
+      // …and not the sequence behind the identity column either, which is
+      // 006's second REVOKE and the door an INSERT would otherwise need.
+      await expect(db.query("select nextval('finding_disposition_event_id_seq')"))
+        .rejects.toThrow(/permission denied/i);
+    });
+  });
+
+  it('...and the APP role can do all of it, which is what makes the refusals about the ROLE', async () => {
+    // THE SANITY CHECK. Without it, a `finding_disposition` table that did
+    // not exist, a renamed column, or a typo in `to_state` would produce
+    // failures of roughly the right shape and the three tests above would
+    // prove nothing — which is exactly how one of Stage 2's grant tests came
+    // to prove nothing, and how this file came to be missing these at all.
+    await withSeed('dispok', async ({ userId }) => {
+      await withPg(async (t: Tx) => {
+        await expect(t.query(
+          `insert into finding_disposition
+             (review_id, findings_key, clause_id, workspace_id, state, changed_count)
+           values ('wg-r-dispok', 'd1', 'c1', $1, 'unchecked', 0)`, [WS]))
+          .resolves.toBeDefined();
+        await expect(t.query(
+          `update finding_disposition set state = 'verified', changed_count = 1,
+                  by_user_id = $1, at = now()
+            where review_id = 'wg-r-dispok'`, [userId])).resolves.toBeDefined();
+        await expect(t.query(
+          `insert into finding_disposition_event
+             (review_id, findings_key, clause_id, workspace_id, from_state, to_state, cause,
+              by_user_id, at)
+           values ('wg-r-dispok', 'd1', 'c1', $1, 'unchecked', 'verified', 'human', $2, now())`,
+          [WS, userId])).resolves.toBeDefined();
+        await expect(t.query(
+          "select to_state from finding_disposition_event where review_id = 'wg-r-dispok'"))
+          .resolves.toHaveLength(1);
+        // The app role may not DELETE from the history either — that is what
+        // "INSERT-only to every application role, which is what makes it
+        // evidence rather than a claim" means, and migration 009 closed the
+        // cascade that went around it.
+        await expect(t.query("delete from finding_disposition_event where review_id = 'wg-r-dispok'"))
+          .rejects.toThrow(/permission denied/i);
+      }, appDb());
+    });
+  });
+});
+
 describe('the run worker cannot write a person s remark', () => {
   it('refuses the worker role a note', async () => {
     await withSeed('note', async ({ userId }) => {

@@ -64,6 +64,8 @@ const BASE: ApiConfig = {
   runRetryBackoffMs: 30_000,
   workspaceRunConcurrency: 8,
   parseWorkers: 1,
+  parseTimeoutMs: 180_000,
+  parseStuckReportMs: 300_000,
   eventRetentionDays: 7,
   eventPageMax: 500,
 };

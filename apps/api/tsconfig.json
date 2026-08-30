@@ -10,6 +10,13 @@
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "noEmit": true,
+    // An unused import survived `npm run typecheck` — one of the three gates
+    // CLAUDE.md names — because nothing here asked. `findings/write.ts`
+    // imported `dispositionFor` and never called it, which reads to the next
+    // person as a dependency this module has. `noUnusedLocals` alone, not
+    // `strict`: turning on the whole family across a shipped service is a
+    // change with its own review, and this is the one the gate missed.
+    "noUnusedLocals": true,
     "paths": { "@lexprompt/core": ["../../packages/core/src/index.ts"] }
   },
   "include": ["src", "test"]

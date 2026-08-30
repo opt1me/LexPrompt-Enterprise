@@ -4,6 +4,7 @@ import {
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 import { appendEvent } from './events.ts';
+import { setDisposition } from '../dispositions/service.ts';
 
 /**
  * The queue: a run is a row, its work is one `run_cell` per unit, and
@@ -233,11 +234,13 @@ export async function createRun(
   // its old answer while the new run is in flight — an answer attributed to
   // a run that is not the one on screen.
   //
-  // It does NOT touch the disposition. Resetting a verification when a
-  // clause is re-run is a rule this system keeps (`resetVerification`), and
-  // it belongs with the re-run in Task 16, on a path that writes a
-  // `rerun_reset` history row saying the system did it. Doing it here, from
-  // the route, would clear a human's judgement with no record of why.
+  // The disposition is reset with it, by `resetDispositions` below and in
+  // this same transaction. Leaving it was tried and is wrong: the content
+  // this row carries is about to be replaced, and a `finding_disposition`
+  // still saying `verified` by A at yesterday's timestamp re-attaches a
+  // person's judgement to text nobody has seen. That is `resetVerification`
+  // — *"keeping the old verification would let an export claim a human
+  // checked text they never saw"* — inverted, one layer down.
   await t.query(
     `insert into finding (review_id, findings_key, clause_id, workspace_id, status)
      select $1, k, c, $2, 'pending' from unnest($3::text[], $4::text[]) as a(k, c)
@@ -249,6 +252,8 @@ export async function createRun(
            version = finding.version + 1, updated_at = now()
      where finding.workspace_id = $2`,
     [review.reviewId, ws, keys, clauseIds]);
+
+  await resetDispositions(t, review.reviewId, ws, keys, clauseIds, actor);
 
   const row = (await t.query<RunRow>(
     'select * from run where id = $1 and workspace_id = $2', [runId, ws]))[0];
@@ -266,6 +271,62 @@ export async function createRun(
   });
 
   return fromRunRow(row, counts);
+}
+
+/**
+ * RE-RUNNING A CLAUSE RESETS ITS VERIFICATION — the server's copy of the
+ * rule `resetVerification` keeps in the browser, and the caller `rerun_reset`
+ * was built for.
+ *
+ * `createRun` has just put every one of this run's findings back to
+ * `pending` and blanked the model's answer. A `finding_disposition` left
+ * alone then says a person verified an answer that no longer exists, and the
+ * next export says a human checked text they never saw. CLAUDE.md calls that
+ * rule load-bearing and mutation-tested in the browser; this is the same
+ * rule one layer down, where the row outlives the blob.
+ *
+ * Three things make this the honest version of the reset rather than an
+ * UPDATE that would do the job:
+ *
+ *  - It goes through `setDisposition`, the ONE writer of both tables, so the
+ *    history row is written in the same transaction and cannot be forgotten.
+ *  - Its cause is `rerun_reset`, not `human`. The engine did this, and
+ *    `rerun_reset_only_unchecks` means the one write the system performs on
+ *    its own behalf can only ever REMOVE a claim of human checking.
+ *  - It touches only dispositions that are not already `unchecked`. A
+ *    never-touched finding has no judgement to clear, and writing an event
+ *    for one would fill the evidence table with rows saying nothing
+ *    happened.
+ *
+ * Anything this leaves is a judgement about an answer that still exists: a
+ * clause NOT in this run's cell set keeps its verification, because nothing
+ * is replacing what it was made about.
+ */
+async function resetDispositions(
+  t: Tx, reviewId: string, workspaceId: string,
+  keys: string[], clauseIds: string[], actor: CreateRunActor,
+): Promise<number> {
+  const touched = await t.query<{
+    findings_key: string; clause_id: string; version: string | number;
+  }>(
+    `select findings_key, clause_id, version from finding_disposition
+      where review_id = $1 and workspace_id = $2 and state <> 'unchecked'
+        and (findings_key, clause_id) in (
+          select k, c from unnest($3::text[], $4::text[]) as a(k, c))`,
+    [reviewId, workspaceId, keys, clauseIds]);
+
+  const at = new Date();
+  for (const row of touched) {
+    await setDisposition(
+      t,
+      { reviewId, findingsKey: row.findings_key, clauseId: row.clause_id },
+      { state: 'unchecked' },
+      'rerun_reset',
+      { id: actor.id },
+      at,
+      typeof row.version === 'number' ? row.version : Number(row.version));
+  }
+  return touched.length;
 }
 
 /**

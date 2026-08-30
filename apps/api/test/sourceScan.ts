@@ -50,7 +50,28 @@ export function rel(full: string): string {
  * Whitespace is substituted so offsets and line numbers still line up with
  * the file on disk.
  */
+/**
+ * MEMOISED, by absolute path.
+ *
+ * Every call parses a whole TypeScript file with the real compiler, and the
+ * scanner suites call it over the same few hundred files several times each
+ * — `caps.test.ts` walks `apps/api/src` twice, `stage3aDoD.test.ts` walks
+ * four workspaces. Nothing rewrites a source file during a run, so the parse
+ * is pure; without the cache the guards were slow enough to trip Vitest's
+ * 5s default under parallel load, which reads as a flaky scanner rather than
+ * as a budget.
+ */
+const parsed = new Map<string, string>();
+
 export function codeOf(file: string): string {
+  const hit = parsed.get(file);
+  if (hit !== undefined) return hit;
+  const result = parseOf(file);
+  parsed.set(file, result);
+  return result;
+}
+
+function parseOf(file: string): string {
   const text = readFileSync(file, 'utf8');
   const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, kind);

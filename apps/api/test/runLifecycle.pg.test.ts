@@ -6,7 +6,7 @@ import {
   fakeGateway, workerDeps,
 } from './helpers/runHarness.ts';
 import { leaseCell, runOneStep } from '../src/run/worker.ts';
-import { MISSED_HEARTBEATS_BEFORE_DEAD, reapOnce } from '../src/run/reaper.ts';
+import { MISSED_HEARTBEATS_BEFORE_DEAD, reapOnce, stalledQueuedRuns } from '../src/run/reaper.ts';
 import type { Tx } from '../src/db/pool.ts';
 import type { RunView } from '@lexprompt/core';
 
@@ -395,6 +395,146 @@ describe('the four endings stay distinguishable', () => {
       expect((await runRow(t, 'l-run-died')).error).toBeTruthy();
       expect(userA).not.toBe(userB);
       await assertStatesAgree(t);
+    });
+  });
+});
+
+/**
+ * M5: A RUN WHOSE LAST CELL WAS EXHAUSTED IS `succeeded`, NOT `failed`.
+ *
+ * `exhaustSpentCells` closed the cell and returned. `settleRunIfFinished`
+ * has four call sites and none of them was here, so if the exhausted cell
+ * was the run's last live one, `queued + leased` reached zero with nobody to
+ * notice: the run's lease was gone, so the worker pool stopped heartbeating
+ * for it, and ~45s later `reapDeadRuns` marked it **failed** with *"This run
+ * stopped without finishing. No worker has reported on it since …"* — for a
+ * run in which every cell has an answer and most of them are `done`.
+ *
+ * 008's opening comment is explicit that telling `succeeded` from `failed`
+ * is the file's whole purpose, and that "collapsing any pair of those is
+ * this stage's version of answering quietly wrong". This collapsed exactly
+ * that pair, and attributed it to a worker that never went away.
+ */
+describe('exhausting the last cell settles the run, rather than leaving it to be reaped', () => {
+  it('settles a run whose only cell was exhausted as succeeded, with a run.finished event', async () => {
+    await withPg(async t => {
+      await seed(t, 'settle1', ['c1']);
+      await t.query(
+        `update run_cell set state = 'leased', attempts = 3,
+                             lease_expires_at = now() - interval '1 minute',
+                             last_error = 'the provider timed out'
+          where run_id = $1`, ['l-run-settle1']);
+      await t.query("update run set state = 'running', heartbeat_at = now() where id = $1",
+        ['l-run-settle1']);
+
+      const result = await reapOnce({
+        db: dbOn(t), heartbeatMs: 15_000, eventRetentionDays: 7, attemptsMax: 3,
+      });
+      expect(result.exhausted).toBe(1);
+
+      const run = await runRow(t, 'l-run-settle1');
+      // NOT `failed`, and not still `running`. Every cell has an answer.
+      expect(run.state).toBe('succeeded');
+      expect(run.finished_at).not.toBeNull();
+      expect(run.error).toBeNull();
+
+      const events = await t.query<{ type: string; payload: unknown }>(
+        "select type, payload from event where run_id = $1 and type = 'run.finished'",
+        ['l-run-settle1']);
+      expect(events).toHaveLength(1);
+      await assertStatesAgree(t);
+    });
+  });
+
+  it('leaves a run with a live cell alone — settling is idempotent, not eager', async () => {
+    await withPg(async t => {
+      await seed(t, 'settle2', ['c1', 'c2']);
+      // One cell spent; the other still queued and perfectly claimable.
+      await t.query(
+        `update run_cell set state = 'leased', attempts = 3,
+                             lease_expires_at = now() - interval '1 minute'
+          where run_id = $1 and clause_id = 'c1'`, ['l-run-settle2']);
+      await t.query("update run set state = 'running', heartbeat_at = now() where id = $1",
+        ['l-run-settle2']);
+
+      await reapOnce({
+        db: dbOn(t), heartbeatMs: 15_000, eventRetentionDays: 7, attemptsMax: 3,
+      });
+
+      const run = await runRow(t, 'l-run-settle2');
+      expect(run.state).toBe('running');
+      expect(run.finished_at).toBeNull();
+      expect(await t.query(
+        "select 1 from event where run_id = $1 and type = 'run.finished'", ['l-run-settle2']))
+        .toEqual([]);
+      await assertStatesAgree(t);
+    });
+  });
+
+  it('does not overwrite an answer a cell already produced', async () => {
+    // n1: `exhaustCell` shipped WITHOUT the `status in ('pending','running')`
+    // guard the reaper's inline copy had, so calling it — which nothing did —
+    // would have replaced a `done` answer with an error message. The reaper
+    // now goes through it, so the guard has to be in the shared function.
+    await withPg(async t => {
+      await seed(t, 'settle3', ['c1']);
+      await t.query(
+        `update run_cell set state = 'leased', attempts = 3,
+                             lease_expires_at = now() - interval '1 minute'
+          where run_id = $1`, ['l-run-settle3']);
+      await t.query("update run set state = 'running', heartbeat_at = now() where id = $1",
+        ['l-run-settle3']);
+      await t.query(
+        `update finding set status = 'done', summary = 'The break notice is six months.'
+          where review_id = $1`, ['l-r-settle3']);
+
+      await reapOnce({
+        db: dbOn(t), heartbeatMs: 15_000, eventRetentionDays: 7, attemptsMax: 3,
+      });
+
+      const rows = await t.query<{ status: string; summary: string | null; error: string | null }>(
+        'select status, summary, error from finding where review_id = $1', ['l-r-settle3']);
+      expect(rows[0].status).toBe('done');
+      expect(rows[0].summary).toBe('The break notice is six months.');
+      expect(rows[0].error).toBeNull();
+    });
+  });
+});
+
+/**
+ * n9: a `queued` run nothing will ever lease is REPORTED, never reaped.
+ *
+ * Not reaping it is right: a busy queue is not a broken one, and turning
+ * every burst of work into a wall of failures is worse than the wait. But
+ * `run_one_live_per_review` then makes every later POST on that review
+ * answer 409 "This review is already running", for a run that is not
+ * running and never will be, and the only exit is a cancel route nothing in
+ * Part 3A calls and nothing tells an operator about.
+ */
+describe('a queued run with no worker is reported, and still not reaped', () => {
+  it('names it once it has waited longer than the reaper s own staleness window', async () => {
+    await withPg(async t => {
+      await seed(t, 'stall', ['c1']);
+      await t.query(
+        "update run set state = 'queued', heartbeat_at = null, created_at = now() - interval '1 hour' "
+        + 'where id = $1', ['l-run-stall']);
+
+      const deps = { db: dbOn(t), heartbeatMs: 1_000, eventRetentionDays: 7, attemptsMax: 3 };
+      expect(await stalledQueuedRuns(deps)).toEqual(['l-run-stall']);
+      // …and it is still QUEUED. A report is not a state change.
+      expect((await runRow(t, 'l-run-stall')).state).toBe('queued');
+      expect((await reapOnce(deps)).reaped).toEqual([]);
+      expect((await runRow(t, 'l-run-stall')).state).toBe('queued');
+    });
+  });
+
+  it('says nothing about a run that has only just been created', async () => {
+    await withPg(async t => {
+      await seed(t, 'fresh', ['c1']);
+      await t.query("update run set state = 'queued', heartbeat_at = null where id = $1",
+        ['l-run-fresh']);
+      expect(await stalledQueuedRuns(
+        { db: dbOn(t), heartbeatMs: 1_000, eventRetentionDays: 7, attemptsMax: 3 })).toEqual([]);
     });
   });
 });

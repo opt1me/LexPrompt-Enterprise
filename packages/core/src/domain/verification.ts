@@ -22,6 +22,29 @@ export function requiresReason(state: VerificationState): boolean {
   return state === 'rejected';
 }
 
+/**
+ * The reason that SURVIVES a move to `state` — `null` when the state does
+ * not take one.
+ *
+ * `applyVerification` has dropped a reason on anything but `rejected` since
+ * this module existed, and the server's `setDisposition` re-stated the same
+ * rule as `requiresReason(state) && reason ? reason : null`. Two copies, and
+ * a third place — the shadow writer's blob reader — kept the reason for
+ * EVERY state and then compared its undropped value against the stored,
+ * dropped one. That comparison could never be equal, so a flagged finding
+ * carrying a reason wrote a fresh history row on every autosave: roughly one
+ * every two seconds for the length of a run, into the INSERT-only evidence
+ * table, burying the one real change.
+ *
+ * So the rule is a function now, and there is one of it. `null` rather than
+ * `undefined` because both database columns are nullable and every caller
+ * compares against a stored `reason` that is `null` when absent.
+ */
+export function effectiveReason(state: VerificationState, reason?: string): string | null {
+  const trimmed = reason?.trim();
+  return requiresReason(state) && trimmed ? trimmed : null;
+}
+
 export interface VerificationChange {
   state: VerificationState;
   reason?: string;

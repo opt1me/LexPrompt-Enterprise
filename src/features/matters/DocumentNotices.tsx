@@ -1,6 +1,6 @@
 import React from 'react';
 import type { DocumentRecord } from '../../types';
-import { assessDocument } from '@lexprompt/core';
+import { assessDocument, isNotYetRead, STILL_READING_NOTICE } from '@lexprompt/core';
 
 /**
  * A document record carries no page images by design (derived data,
@@ -42,13 +42,22 @@ export const SCAN_DISCLOSURE =
 export function DocumentNotices({ doc }: { doc: DocumentRecord }) {
   return (
     <>
-      {doc.parseError && (
+      {/* FIRST, and ahead of both sentences below. A document the server
+          has not finished reading carries `text: ''` and no `parseError`,
+          so the scan disclosure announced "no text could be extracted —
+          it looks like a scan" about a document nothing had yet tried to
+          extract. Neither half of that was true, and it is the founding
+          defect's shape one screen earlier than the review. */}
+      {isNotYetRead(doc) && (
+        <p className="text-xs text-risk-med mt-0.5">{STILL_READING_NOTICE}</p>
+      )}
+      {!isNotYetRead(doc) && doc.parseError && (
         <p className="text-xs text-risk-high mt-0.5">Unreadable: {doc.parseError}</p>
       )}
       {/* Only when the document did not also fail to parse: a parse error
           already says why there is no text, and two explanations for one
           fact read as two problems. */}
-      {!doc.parseError && noUsableText(doc) && (
+      {!isNotYetRead(doc) && !doc.parseError && noUsableText(doc) && (
         <p className="text-xs text-risk-med mt-0.5">{SCAN_DISCLOSURE}</p>
       )}
       {/* risk-med, not risk-high, and never "unreadable": this document

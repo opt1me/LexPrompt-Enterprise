@@ -82,7 +82,7 @@ export type { PdfTextItem, PdfPageText, QuoteRect } from './domain/citations.ts'
 export { derivePage } from './domain/citationPage.ts';
 export { repairCitations } from './domain/citationRepair.ts';
 export {
-  VerificationError, unchecked, requiresReason, applyVerification,
+  VerificationError, unchecked, requiresReason, effectiveReason, applyVerification,
   resetVerification, findingKey, makeNote,
 } from './domain/verification.ts';
 export type { VerificationChange } from './domain/verification.ts';
@@ -96,6 +96,10 @@ export { DEFAULT_RISK_TOLERANCE, resolveRiskCriteria, riskCriteriaBlock } from '
 export { isCollectionTarget, targetDocumentIds, findingsKeyFor } from './domain/reviewTarget.ts';
 export { extractableText, usableText, assessDocument, contextBudgetChars } from './domain/modelContext.ts';
 export type { ReadableSource, DocumentReadability } from './domain/modelContext.ts';
+export {
+  isNotYetRead, notYetReadMessage, notYetReadMessageFor, STILL_READING_NOTICE,
+} from './domain/parseState.ts';
+export type { ParseStateSource } from './domain/parseState.ts';
 export { orderedMembers } from './domain/collectionOrder.ts';
 export type { CollectionMember } from './domain/collectionOrder.ts';
 export { buildCollectionPrompt } from './domain/collectionPrompt.ts';

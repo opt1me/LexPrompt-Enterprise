@@ -3,7 +3,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { ROOT, walk, rel, codeOf } from './sourceScan.ts';
 import {
-  ConfigError, assertImagesFitTheBody, assertLeaseOutlastsCell, assertWorkerPoolFits,
+  ConfigError, assertBackoffOutlivedByHeartbeat, assertImagesFitTheBody, assertLeaseOutlastsCell,
+  assertWorkerPoolFits,
   describeConfig, loadConfig,
 } from '../src/config.ts';
 
@@ -41,6 +42,7 @@ const DECLARED = [
   'API_RUN_CELL_TIMEOUT_MS', 'API_RUN_LEASE_MS', 'API_RUN_HEARTBEAT_MS',
   'API_RUN_ATTEMPTS_MAX', 'API_RUN_WORKERS', 'API_RUN_POLL_MS', 'API_RUN_RETRY_BACKOFF_MS',
   'API_WORKSPACE_RUN_CONCURRENCY', 'API_PARSE_WORKERS',
+  'API_PARSE_TIMEOUT_MS', 'API_PARSE_STUCK_REPORT_MS',
   'API_PAGE_RENDER_TIMEOUT_MS', 'API_PAGE_IMAGE_MAX_PAGES', 'API_PAGE_IMAGE_LRU_BYTES',
   'API_RUN_IMAGE_BYTES_MAX', 'API_WORKER_POOL_MAX',
   'API_EVENT_RETENTION_DAYS', 'API_EVENT_PAGE_MAX',
@@ -106,6 +108,43 @@ describe('every declared cap has a reader, and every reader has a declaration', 
     }
   });
 
+  it('gives every worker loop a declared TIMEOUT, which is the direction this suite was missing', () => {
+    /*
+     * THE SECOND DIRECTION, and it was named in the describe title and never
+     * written. "Every declared cap has a reader" was the only half that
+     * existed, so the missing-parse-timeout defect — the fourth in the
+     * family this suite's preamble names, on the same scanned-document path
+     * — was invisible to the suite written to catch exactly it.
+     *
+     * A general "no numeric literal acts as a bound" scan is not writeable
+     * without a pile of exemptions. This is the specific shape that has
+     * actually gone wrong twice: a loop that claims a unit of work and does
+     * it, with nothing bounding how long the doing may take. The parse
+     * worker had no timeout, no attempt counter and no reaper, and one slow
+     * document at the head of a single-slot FIFO blocked every upload in the
+     * deployment while the only reachable message said "try again in a
+     * moment".
+     */
+    const loops = walk(path.join(ROOT, 'apps/api/src'))
+      .filter(f => /while\s*\(running\)/.test(codeOf(f)));
+    // The sanity check: the scan finds the loops it is about. A pattern that
+    // matched nothing would pass this test with every bound removed.
+    expect(loops.map(rel).sort()).toEqual([
+      'apps/api/src/parse/parseWorker.ts',
+      'apps/api/src/run/worker.ts',
+    ]);
+    const timeouts = DECLARED.filter(n => /_TIMEOUT_MS$/.test(n)).map(fieldNameFor);
+    expect(timeouts.length).toBeGreaterThan(0);
+    for (const file of loops) {
+      const code = codeOf(file);
+      expect(
+        timeouts.some(field => code.includes(field)),
+        `${rel(file)} claims work in a loop and names no declared timeout, so nothing bounds how `
+        + 'long one unit of it may take',
+      ).toBe(true);
+    }
+  }, 20_000);
+
   it('names each cap in the boot banner, so an operator can read what is in force', () => {
     // The banner is where "why is this run crawling" gets answered. A cap
     // that is read and never printed is one an operator has to read the
@@ -161,12 +200,48 @@ describe('the caps that constrain each other are checked at load, not at runtime
     expect(() => assertImagesFitTheBody(cfg)).not.toThrow();
   });
 
+  it('refuses a retry backoff the reaper would sweep a healthy run out from under', () => {
+    /*
+     * M10. A cell parked after a retryable 429/5xx keeps `state = 'leased'`
+     * and clears `leased_by`, and the worker pool's `active` set — the runs
+     * it heartbeats for — is built from `leased_by like '<workerId>#%'`. So
+     * a run whose in-flight cells are ALL parked stops heartbeating for the
+     * length of the backoff, and the reaper calls a run dead after three
+     * missed intervals.
+     *
+     * At the defaults this survives by fifteen seconds, which nobody chose.
+     * `API_RUN_RETRY_BACKOFF_MS=60000` — the exact answer that key's own
+     * docstring invites for a per-minute rate limiter — reaped every
+     * rate-limited run as `failed` with "This run stopped without finishing"
+     * while it was doing precisely what it was configured to do.
+     */
+    expect(() => loadConfig({
+      ...BASE, API_RUN_RETRY_BACKOFF_MS: '60000', API_RUN_HEARTBEAT_MS: '15000',
+    })).toThrow(/API_RUN_RETRY_BACKOFF_MS/);
+    // Equality races the sweep, and a race is not a margin.
+    expect(() => loadConfig({
+      ...BASE, API_RUN_RETRY_BACKOFF_MS: '45000', API_RUN_HEARTBEAT_MS: '15000',
+    })).toThrow(ConfigError);
+    // …and the repair the message names actually works, in both directions.
+    expect(loadConfig({
+      ...BASE, API_RUN_RETRY_BACKOFF_MS: '44000', API_RUN_HEARTBEAT_MS: '15000',
+    }).runRetryBackoffMs).toBe(44_000);
+    expect(loadConfig({
+      ...BASE, API_RUN_RETRY_BACKOFF_MS: '60000', API_RUN_HEARTBEAT_MS: '30000',
+    }).runRetryBackoffMs).toBe(60_000);
+    // The defaults pass, which is what makes the refusal about the operator's
+    // values rather than about the check being impossible to satisfy.
+    expect(() => loadConfig({ ...BASE })).not.toThrow();
+  });
+
   it('each assertion is reachable on its own, so a caller can be checked in isolation', () => {
     const cfg = loadConfig({ ...BASE });
     expect(() => assertWorkerPoolFits({ ...cfg, runWorkers: 99 })).toThrow(ConfigError);
     expect(() => assertLeaseOutlastsCell({ ...cfg, runCellTimeoutMs: cfg.runLeaseMs }))
       .toThrow(ConfigError);
     expect(() => assertImagesFitTheBody({ ...cfg, runImageBytesMax: cfg.maxBodyBytes }))
+      .toThrow(ConfigError);
+    expect(() => assertBackoffOutlivedByHeartbeat({ ...cfg, runRetryBackoffMs: 10 * 60_000 }))
       .toThrow(ConfigError);
   });
 });

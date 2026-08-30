@@ -1,7 +1,9 @@
-import type { DocumentFile } from '@lexprompt/core';
+import { isNotYetRead, notYetReadMessage, type DocumentFile } from '@lexprompt/core';
 import type { DocumentRecord } from '../db/rows.ts';
 import { sparsePagesOf } from './parseDocument.ts';
-import { PageRenderTimeoutError, renderPageImages, type PageImage } from './pageImages.ts';
+import {
+  PageRenderAbortedError, PageRenderTimeoutError, renderPageImages, type PageImage,
+} from './pageImages.ts';
 
 /**
  * The two hydrations, server-side — and THE HYDRATION MODE MATTERS AS MUCH
@@ -111,6 +113,17 @@ export interface HydrationDeps {
   /** `API_RUN_IMAGE_BYTES_MAX` — the wire ceiling. See `config.ts` for why
    *  exceeding it is a refusal rather than a batch. */
   runImageBytesMax: number;
+  /**
+   * The cell's abort, passed straight to the renderer.
+   *
+   * `runOneStep`'s `AbortController` is the only enforcement of
+   * `API_RUN_CELL_TIMEOUT_MS` and the only thing a cancel can reach. It used
+   * to stop at the model call, and hydration happens BEFORE that call, in
+   * the same `await` — so the timeout fired into nothing while a page render
+   * held the slot. Optional, because the parse worker and the viewer paths
+   * have no cell to be cancelled with.
+   */
+  signal?: AbortSignal;
 }
 
 export const BLOB_UNAVAILABLE_MESSAGE =
@@ -132,6 +145,13 @@ function fileFor(record: DocumentRecord, bytes: Buffer | null, mime: string): Fi
  * A missing blob degrades to a placeholder rather than throwing: the
  * document's metadata and extracted text are still real and still shown,
  * and only the original file is unavailable (§9).
+ *
+ * A record the parse worker has not reached yet (`parseState: 'pending'`)
+ * carries `text: ''` and NO `parseError`, so before this branch existed it
+ * came back cleanly as a document that says nothing. `routes/runs.ts` knew
+ * the difference and guarded one entry point; every other reader — this one
+ * included — did not. The sentence is `@lexprompt/core`'s, shared with the
+ * browser's two hydrations and with the run route's refusal.
  */
 export function documentFileForViewing(
   record: DocumentRecord, bytes: Buffer | null, mime: string,
@@ -142,7 +162,9 @@ export function documentFileForViewing(
     text: record.text,
     file: fileFor(record, bytes, mime),
     kind: record.kind,
-    parseError: record.parseError ?? (bytes ? undefined : BLOB_UNAVAILABLE_MESSAGE),
+    parseError: isNotYetRead(record)
+      ? notYetReadMessage(record.name)
+      : (record.parseError ?? (bytes ? undefined : BLOB_UNAVAILABLE_MESSAGE)),
     ...(record.markupNotice ? { markupNotice: record.markupNotice } : {}),
   };
 }
@@ -180,6 +202,13 @@ export async function documentFileForReview(
     kind: record.kind,
     ...(record.markupNotice ? { markupNotice: record.markupNotice } : {}),
   };
+
+  // NOT YET READ comes first, and it is not a failure. A `pending` record
+  // has `text: ''` and no `parseError`, so every check below it would pass
+  // it through as a document that genuinely says nothing — and the
+  // extractor would then answer "it may have failed to parse, or be a scan
+  // with no extractable content" for a document nothing had read yet.
+  if (isNotYetRead(record)) return { ...base, parseError: notYetReadMessage(record.name) };
 
   // A document already marked failed is not re-parsed: re-running a parse
   // that failed once is unlikely to succeed differently and would discard
@@ -237,14 +266,18 @@ export async function documentFileForReview(
       maxPages: deps.pageImageMaxPages,
       timeoutMs: deps.pageRenderTimeoutMs,
       pages: sparse,
+      ...(deps.signal ? { signal: deps.signal } : {}),
     });
   } catch (error) {
     // `PageRenderTimeoutError` already says how many pages of how many were
-    // rendered and that the document has NOT been reviewed. Anything else
-    // gets its own message. Either way this is a `parseError`, not silence.
+    // rendered and that the document has NOT been reviewed, and
+    // `PageRenderAbortedError` says the cell that wanted them stopped.
+    // Anything else gets its own message. Either way this is a `parseError`,
+    // not silence.
     return {
       ...base,
       parseError: error instanceof PageRenderTimeoutError
+        || error instanceof PageRenderAbortedError
         ? error.message
         : `The pages of ${record.name} could not be rendered for review `
           + `(${error instanceof Error ? error.message : String(error)}).`,
@@ -284,15 +317,59 @@ function withImages(
 ): DocumentFile {
   const bytes = sizeOf(images);
   if (bytes > deps.runImageBytesMax) {
-    return {
-      ...base,
-      parseError: `${record.name} is a scan of ${images.length} page(s), which is about `
-        + `${bytes} bytes of image data — more than one model call may carry `
-        + `(${deps.runImageBytesMax}, set by API_RUN_IMAGE_BYTES_MAX). LexPrompt will not send `
-        + 'part of a scan: the pages left out would read back as clauses the document is silent '
-        + 'on. Review it in smaller pieces, or ask an administrator to raise '
-        + 'API_RUN_IMAGE_BYTES_MAX and API_MAX_BODY_BYTES together.',
-    };
+    return { ...base, parseError: imageCeilingMessage(record.name, images.length, bytes, deps.runImageBytesMax) };
   }
   return { ...base, pageImages: images };
+}
+
+/**
+ * The refusal itself, in ONE place, because the ceiling has to be applied at
+ * TWO scales and the sentence must not be written twice.
+ *
+ * `config.ts` calls `runImageBytesMax` "the wire ceiling on **one clause's**
+ * page images", but `withImages` runs once per DOCUMENT — and
+ * `extractCollectionClause` builds its body from
+ * `present.flatMap(p => p.document.pageImages ?? [])`. Three scanned members
+ * at 70% of the budget each passed three per-document checks and sent 210%
+ * of the ceiling, and what the operator then got was a raw 413 from nginx
+ * or the gateway instead of the sentence this function exists to say. 413 is
+ * loud — it is not retryable, so it lands as an error finding rather than
+ * being retried forever — but a status code names neither the documents, nor
+ * their page counts, nor the two keys to move.
+ */
+export function imageCeilingMessage(
+  subject: string, pages: number, bytes: number, max: number,
+): string {
+  return `${subject} needs an image of ${pages} scanned page(s), about `
+    + `${bytes} bytes — more than one model call may carry `
+    + `(${max}, set by API_RUN_IMAGE_BYTES_MAX). LexPrompt will not send `
+    + 'part of a scan: the pages left out would read back as clauses the document is silent '
+    + 'on. Review it in smaller pieces, or ask an administrator to raise '
+    + 'API_RUN_IMAGE_BYTES_MAX and API_MAX_BODY_BYTES together.';
+}
+
+/**
+ * The CELL's total, across every member of a collection — the scale the
+ * ceiling was documented at and had never been applied at.
+ *
+ * Returns the refusal, or `undefined` when the whole cell fits. A member
+ * that already carries a `parseError` contributes no images and is not
+ * counted: it is refused for its own reason and its pages are not in the
+ * body.
+ */
+export function cellImagesRefusal(
+  documents: (DocumentFile | null)[], runImageBytesMax: number,
+): string | undefined {
+  const withPages = documents.filter((d): d is DocumentFile => !!d && !d.parseError
+    && (d.pageImages?.length ?? 0) > 0);
+  if (withPages.length === 0) return undefined;
+  const pages = withPages.reduce((n, d) => n + (d.pageImages?.length ?? 0), 0);
+  const bytes = withPages.reduce(
+    (n, d) => n + (d.pageImages ?? []).reduce((m, i) => m + i.data.length, 0), 0);
+  if (bytes <= runImageBytesMax) return undefined;
+  // Named by DOCUMENT, because "review it in smaller pieces" is only
+  // actionable if the reader knows which pieces.
+  return imageCeilingMessage(
+    `This clause reads ${withPages.map(d => d.name).join(', ')} together, and between them it`,
+    pages, bytes, runImageBytesMax);
 }

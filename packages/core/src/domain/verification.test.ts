@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  unchecked, applyVerification, requiresReason, resetVerification,
+  unchecked, applyVerification, requiresReason, effectiveReason, resetVerification,
   findingKey, makeNote, VerificationError,
 } from './verification.ts';
 
@@ -107,5 +107,48 @@ describe('makeNote', () => {
       byUserId: 'user-1',
       at: 99,
     });
+  });
+});
+
+/**
+ * M4: the reason a state actually carries.
+ *
+ * `applyVerification` has dropped a reason on anything but `rejected` since
+ * this module existed, and `setDisposition` restated the same rule on the
+ * server. A THIRD place — the shadow writer's blob reader — kept the reason
+ * for every state and then compared its undropped value against the stored,
+ * dropped one. That comparison could never be equal, so a flagged finding
+ * carrying a reason wrote a fresh row into the INSERT-only evidence table on
+ * every autosave: roughly one every two seconds for the length of a run,
+ * burying the one real change, with a `reconcileFindings` discrepancy that
+ * no number of saves would clear.
+ */
+describe('effectiveReason', () => {
+  it('keeps a reason only on rejected', () => {
+    expect(effectiveReason('rejected', 'The cap is in schedule 6.')).toBe('The cap is in schedule 6.');
+    expect(effectiveReason('flagged', 'look at this')).toBeNull();
+    expect(effectiveReason('verified', 'look at this')).toBeNull();
+    expect(effectiveReason('unchecked', 'look at this')).toBeNull();
+  });
+
+  it('answers null, not undefined, so it compares equal to a nullable column', () => {
+    // Both database columns are nullable and every caller compares against a
+    // stored `reason` that is `null` when absent. `undefined === null` is
+    // false, which is exactly the comparison that never settled.
+    expect(effectiveReason('flagged')).toBeNull();
+    expect(effectiveReason('rejected', '   ')).toBeNull();
+  });
+
+  it('trims, so whitespace is not a reason', () => {
+    expect(effectiveReason('rejected', '  wrong clause  ')).toBe('wrong clause');
+  });
+
+  it('agrees with applyVerification, which is the point of there being one of it', () => {
+    const flagged = applyVerification(unchecked(), { state: 'flagged', reason: 'x' }, 'u1', 1);
+    expect(flagged.reason).toBeUndefined();
+    expect(effectiveReason('flagged', 'x')).toBeNull();
+    const rejected = applyVerification(unchecked(), { state: 'rejected', reason: 'x' }, 'u1', 1);
+    expect(rejected.reason).toBe('x');
+    expect(effectiveReason('rejected', 'x')).toBe('x');
   });
 });

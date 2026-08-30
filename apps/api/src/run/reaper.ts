@@ -1,7 +1,7 @@
 import type { Db } from '../db/pool.ts';
 import { appendEvent, pruneEvents } from './events.ts';
-import { failRunCells } from './lifecycle.ts';
-import { cellCounts, type RunRow } from './queue.ts';
+import { exhaustCell, failRunCells } from './lifecycle.ts';
+import { cellCounts, settleRunIfFinished, type RunRow } from './queue.ts';
 
 /**
  * The reaper: A RUN THAT DIED MUST NOT LOOK FINISHED — and must not look
@@ -59,12 +59,53 @@ export const MISSED_HEARTBEATS_BEFORE_DEAD = 3;
  * nobody can tell from a sweeper that is not running.
  */
 export async function reapOnce(deps: ReaperDeps): Promise<{
-  reaped: string[]; exhausted: number; pruned: number;
+  reaped: string[]; exhausted: number; pruned: number; stalled: string[];
 }> {
   const reaped = await reapDeadRuns(deps);
   const exhausted = await exhaustSpentCells(deps);
+  const stalled = await stalledQueuedRuns(deps);
   const pruned = await pruneEvents(deps.db, deps.eventRetentionDays);
-  return { reaped, exhausted, pruned };
+  return { reaped, exhausted, pruned, stalled };
+}
+
+/**
+ * A `queued` run that no worker has picked up, REPORTED and never reaped.
+ *
+ * Not reaping it is right and is argued above: a busy queue is not a broken
+ * one, and turning every burst of work into a wall of failures is worse than
+ * the wait. But there is a state that is genuinely stuck and looks identical
+ * from the outside — the API restarted between the POST and the first
+ * claim, or every worker slot is held — and `run_one_live_per_review` then
+ * makes every later POST on that review answer 409 *"This review is already
+ * running"*, for a run that is not running and never will. The only exit is
+ * `POST /v1/runs/:id/cancel`, which nothing in Part 3A calls and nothing
+ * tells an operator about.
+ *
+ * So it is a line in the log naming the run and the review, not a state
+ * change. Bounded at three staleness windows — the same unit the reaper
+ * counts in — because a run queued for a few seconds behind a long one is
+ * ordinary.
+ *
+ * Exported so a test can assert on the ids rather than on a log line.
+ */
+export async function stalledQueuedRuns(deps: ReaperDeps): Promise<string[]> {
+  const staleMs = deps.heartbeatMs * MISSED_HEARTBEATS_BEFORE_DEAD;
+  const rows = await deps.db.query<{ id: string; review_id: string }>(
+    `select id, review_id from run
+      where state = 'queued'
+        and heartbeat_at is null
+        and created_at < now() - ($1 || ' milliseconds')::interval
+      order by created_at asc
+      limit 20`,
+    [String(staleMs)]);
+  if (rows.length > 0) {
+    process.stderr.write(
+      `api: ${rows.length} run(s) have been queued for more than ${staleMs}ms with no worker: `
+      + `${rows.map(r => `${r.id} (review ${r.review_id})`).join(', ')}. They are NOT failed — a `
+      + 'busy queue is not a broken one — but while one is queued its review answers 409 to '
+      + 'every new run, and the only way out is POST /v1/runs/<id>/cancel.\n');
+  }
+  return rows.map(r => r.id);
 }
 
 async function reapDeadRuns(deps: ReaperDeps): Promise<string[]> {
@@ -155,17 +196,26 @@ async function exhaustSpentCells(deps: ReaperDeps): Promise<number> {
       : `This clause was attempted ${deps.attemptsMax} times and never finished. The worker `
         + 'stopped each time without reporting why. Retry it by hand once the run is over.';
     await deps.db.tx(async t => {
-      await t.query(
-        `update run_cell set state = 'error', last_error = $4, leased_by = null,
-                             lease_expires_at = null
-          where run_id = $1 and findings_key = $2 and clause_id = $3 and state = 'leased'`,
-        [cell.run_id, cell.findings_key, cell.clause_id, reason]);
-      await t.query(
-        `update finding set status = 'error', error = $4, version = version + 1,
-                            updated_at = now()
-          where review_id = $1 and findings_key = $2 and clause_id = $3
-            and status in ('pending','running')`,
-        [cell.review_id, cell.findings_key, cell.clause_id, reason]);
+      // `exhaustCell`, not a second copy of it. The two had already drifted:
+      // this sweep guarded the finding update on `status in
+      // ('pending','running')` and `lifecycle.ts`'s version did not, so the
+      // dead one would have overwritten a `done` answer with an error.
+      await exhaustCell(t, {
+        runId: cell.run_id,
+        reviewId: cell.review_id,
+        findingsKey: cell.findings_key,
+        clauseId: cell.clause_id,
+      }, cell.workspace_id, reason);
+      // AND THEN SETTLE. Without this a run whose LAST live cell was the one
+      // just exhausted has `queued + leased = 0` and nobody to notice: its
+      // lease is gone, so the worker pool stops heartbeating for it, and
+      // ~45s later `reapDeadRuns` calls it `failed` — *"This run stopped
+      // without finishing"* — for a run in which every cell has an answer
+      // and most of them are `done`. 008's whole purpose is telling
+      // `succeeded` from `failed`, and collapsing that pair is this stage's
+      // version of answering quietly wrong. `settleRunIfFinished` is
+      // idempotent and returns `null` while any cell is still live.
+      await settleRunIfFinished(t, cell.run_id, cell.workspace_id);
     });
   }
   return spent.length;

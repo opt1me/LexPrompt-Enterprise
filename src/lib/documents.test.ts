@@ -661,3 +661,79 @@ describe('hydration carries the markup notice', () => {
     expect('markupNotice' in (await documentFileForReview(clean, new Blob(['x'])))).toBe(false);
   });
 });
+
+/**
+ * C1: THE UPLOAD RETURNS BEFORE THE TEXT EXISTS, AND THE BROWSER IS ITS
+ * ONLY CLIENT.
+ *
+ * Since Stage 3 `POST /v1/documents` stores the bytes, writes the row
+ * `parse_state = 'pending'`, `text = ''`, and returns; a parse worker reads
+ * the file a moment later. `src/lib/db/documents.ts` is an HTTP client over
+ * that route and `saveDocument` reads nothing back, so after a reload the
+ * browser's only copy of a document's text is the row the upload just
+ * blanked.
+ *
+ * What that produced: `documentFileForReview` handed the extractor a
+ * document with `text: ''` and no `parseError`, `assessDocument` answered
+ * `unreadable`, and every clause came back *"X has no readable text or
+ * images to review. It may have failed to parse, or be a scan with no
+ * extractable content."* — false in BOTH branches, for a document nothing
+ * had tried to read yet. `parseState` was on the wire with zero readers in
+ * `src/`.
+ *
+ * These are the readers.
+ */
+describe('a document that has not finished being read is loudly not-yet-read', () => {
+  const pending: DocumentRecord = {
+    id: 'd-pending',
+    matterId: 'm1',
+    name: 'lease.pdf',
+    kind: 'pdf',
+    text: '',
+    parseState: 'pending',
+    byteSize: 4_000_000,
+    addedAt: Date.now(),
+    addedByUserId: 'u1',
+    role: 'standalone',
+  };
+
+  it('says so on the review hydration, rather than handing over an empty document', async () => {
+    const doc = await documentFileForReview(pending, new Blob(['%PDF-1.4']));
+    expect(doc.parseError).toBeTruthy();
+    expect(doc.parseError).toContain('lease.pdf');
+    expect(doc.parseError).toMatch(/has not finished being read/);
+    // …and it does NOT read as a parse failure or as a scan, which is the
+    // whole distinction.
+    expect(doc.parseError).not.toMatch(/failed to parse|scan/i);
+  });
+
+  it('says so on the viewer hydration too, and wins over the missing-blob message', () => {
+    const doc = documentFileForViewing(pending, null);
+    expect(doc.parseError).toMatch(/has not finished being read/);
+    expect(doc.parseError).not.toBe(BLOB_UNAVAILABLE_MESSAGE);
+  });
+
+  it('leaves a parsed document exactly as it was — absent parseState is not pending', async () => {
+    // A record the browser built for itself has never been anywhere that
+    // could answer the question, and treating "we do not know" as "still
+    // reading" would refuse a review of a document sitting parsed in memory.
+    const unknown: DocumentRecord = { ...pending, text: 'The term is ten years.' };
+    delete unknown.parseState;
+    const doc = await documentFileForReview(unknown, new Blob(['%PDF-1.4']));
+    expect(doc.parseError).toBeUndefined();
+    expect(doc.text).toBe('The term is ten years.');
+
+    const parsed = await documentFileForReview(
+      { ...pending, parseState: 'parsed', text: 'The term is ten years.' },
+      new Blob(['%PDF-1.4']));
+    expect(parsed.parseError).toBeUndefined();
+  });
+
+  it('carries a real parse failure through unchanged — the two are different facts', async () => {
+    const failed: DocumentRecord = {
+      ...pending, parseState: 'failed', parseError: 'This PDF is encrypted and could not be read.',
+    };
+    const doc = await documentFileForReview(failed, new Blob(['%PDF-1.4']));
+    expect(doc.parseError).toBe('This PDF is encrypted and could not be read.');
+  });
+});

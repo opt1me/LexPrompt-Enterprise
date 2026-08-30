@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import {
-  ModelError, targetDocumentIds, type ReviewTarget, type RunEventPage, type RunView,
+  ModelError, notYetReadMessageFor, targetDocumentIds,
+  type ReviewTarget, type RunEventPage, type RunView,
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 import { createRun, readRun, settleRunIfFinished, type RunRow } from '../run/queue.ts';
@@ -229,9 +230,11 @@ async function refuseUnparsedDocuments(
   const pending = rows.filter(r => r.parse_state === 'pending');
   const failed = rows.filter(r => r.parse_state === 'failed');
   if (pending.length > 0) {
-    throw new ModelError(
-      `${pending.map(r => r.name).join(', ')} has not finished being read. Nothing was started; `
-      + 'try again in a moment.', 'conflict', 409);
+    // The sentence is `@lexprompt/core`'s, shared with both hydrations on
+    // each side and with the browser's own pre-flight. This refusal was the
+    // ONLY reader of `parse_state` anywhere, which is how a blanked `text`
+    // reached a review through every other door.
+    throw new ModelError(notYetReadMessageFor(pending.map(r => r.name)), 'conflict', 409);
   }
   if (failed.length > 0) {
     throw new ModelError(

@@ -182,7 +182,14 @@ async function main(): Promise<void> {
   // and stealing its cell would put two writers on one finding).
   const workerId = `api-${hostname()}`;
   const parseWorkers = startParseWorkers(
-    { db: workerDb, blobs, pollMs: config.runPollMs }, config.parseWorkers);
+    {
+      db: workerDb,
+      blobs,
+      pollMs: config.runPollMs,
+      parseTimeoutMs: config.parseTimeoutMs,
+      parseStuckReportMs: config.parseStuckReportMs,
+    },
+    config.parseWorkers);
   const runWorkers = startWorkerPool({
     db: workerDb, blobs, gateway, cache, workerId,
     caps: {

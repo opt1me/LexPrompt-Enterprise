@@ -304,8 +304,13 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(TOUCHES.test('revoke update (findings) on review from lexprompt_app;')).toBe(true);
     expect(TOUCHES.test('create table finding (review_id text not null);')).toBe(false);
     expect(TOUCHES.test(sql), 'a migration in Part 3A changes review.findings').toBe(false);
-    expect(there('apps/api/migrations/009_freeze_findings.sql'), 'Task 22 arrived early')
-      .toBe(false);
+    // By CONTENT of the name, not by its number. This read
+    // `there('apps/api/migrations/009_freeze_findings.sql')`, and 009 is now
+    // taken (`009_evidence_and_indexes.sql`), so Task 22's file will be 010
+    // and the old assertion would have gone vacuously true — a guard that
+    // stops guarding the moment somebody adds an unrelated migration.
+    const freezes = readdirSync(MIGRATIONS).filter(f => /freeze_findings/.test(f));
+    expect(freezes, 'Task 22 arrived early').toEqual([]);
     // The column and the check that keeps it an object are still there.
     expect(sql).toMatch(/jsonb_typeof\(findings\)\s*=\s*'object'/);
   });
@@ -324,11 +329,15 @@ describe('Part 3A does not claim Stage 3 is done, and says which clauses are ope
      *  - *"re-running a clause clears its disposition and its net position in
      *    ONE TRANSACTION and records the clearing in
      *    `finding_disposition_event`, attributed to whoever asked for the
-     *    re-run"* — the server-side retry is Task 16. Today a re-run happens
-     *    in the browser, `resetVerification`/`resetPosition` clear the blob,
-     *    and the shadow writer translates that into a disposition change
-     *    attributed to the person saving. Same outcome, different mechanism,
-     *    and not the one transaction the clause names.
+     *    re-run"* — NOW MET FOR A WHOLE-REVIEW RE-RUN and still open for a
+     *    per-clause retry. `createRun` resets every disposition its cells
+     *    cover, through `setDisposition` with cause `rerun_reset`, in the
+     *    same transaction that blanks the findings (Part 3A's adversarial
+     *    review, M9: the route is registered, authenticated and shipped, so
+     *    leaving the judgement behind re-attached a person's verification to
+     *    text nobody had seen). What remains Task 16's is
+     *    `POST /v1/runs/:id/retry` — one clause rather than a review — which
+     *    is what the assertion below still watches for.
      *  - *"`carryHumanState` is deleted and nothing regressed"* — Task 21,
      *    and the test above exists to keep it from arriving early.
      *
@@ -404,6 +413,78 @@ describe('Part 3A does not claim Stage 3 is done, and says which clauses are ope
 });
 
 /* ------------------------------------------------------------------ *
+ *  3b. Every table the engine touches is tried AS THE ENGINE'S ROLE   *
+ * ------------------------------------------------------------------ */
+
+/** Every table the schema actually declares, read from the migrations. A
+ *  literal list here would agree with whatever it was written against. */
+function schemaTables(): string[] {
+  const names = [...migrationSql().matchAll(/create\s+table\s+(?:if\s+not\s+exists\s+)?"?(\w+)"?/gi)]
+    .map(m => m[1].toLowerCase());
+  return [...new Set(names)].sort();
+}
+
+/** Of those, the ones the ENGINE's own statements name. */
+function tablesTheEngineTouches(): string[] {
+  const code = [
+    ...walk(path.join(ROOT, 'apps/api/src/run')),
+    ...walk(path.join(ROOT, 'apps/api/src/parse')),
+  ].flatMap(f => statementsIn(codeOf(f)));
+  const touched = schemaTables().filter(table => code.some(s =>
+    new RegExp(String.raw`\b(?:from|into|update|join)\s+(?:only\s+)?"?${table}"?\b`, 'i').test(s)));
+  return touched.sort();
+}
+
+describe('every table the engine touches is attempted as the role the engine runs as', () => {
+  /*
+   * WHY THIS EXISTS. `run/worker.ts` reads `app_user` to attribute each
+   * gateway call, and `lexprompt_worker` held no grant on it: every cell of
+   * the first real run failed with "permission denied for table app_user".
+   * The whole suite was green beforehand, because `runHarness.workerDeps`
+   * builds the worker's `db` from the harness's pinned APP connection — a
+   * real limitation of running a suite inside a rolled-back transaction, and
+   * one that cannot be removed without giving up the rollback. The repair
+   * was a new grant with NO test that would catch the next one.
+   *
+   * This is that test. It cannot ask the database (there is none here), so
+   * it asks the only other question worth asking: is every table the engine
+   * names actually ATTEMPTED, as the worker role, somewhere in
+   * `workerGrants.pg.test.ts`? A new engine module reading a table nobody
+   * granted now fails here, at `npm test`, naming the table.
+   */
+  const GRANTS = 'apps/api/test/workerGrants.pg.test.ts';
+
+  it('finds the schema, and the engine s share of it (a scan of nothing passes vacuously)', () => {
+    const all = schemaTables();
+    expect(all.length).toBeGreaterThanOrEqual(15);
+    expect(all).toContain('finding');
+    expect(all).toContain('finding_disposition_event');
+    const touched = tablesTheEngineTouches();
+    // The engine reads a document and a review and writes a finding; if this
+    // list ever came back short, the scan below would pass by finding
+    // nothing to check.
+    expect(touched).toEqual(expect.arrayContaining(
+      ['collection', 'document', 'event', 'finding', 'review', 'run', 'run_cell']));
+    // …and a SUBSET of the schema, not all of it: a scan that matched every
+    // table would make the check below meaningless.
+    expect(touched.length).toBeLessThan(all.length);
+  }, 20_000);
+
+  it('names every one of them in the grants suite, as the worker role', () => {
+    const grants = readFileSync(at(GRANTS), 'utf8');
+    const missing = tablesTheEngineTouches().filter(t =>
+      !new RegExp(String.raw`\b${t}\b`).test(grants));
+    expect(missing, `no statement in ${GRANTS} touches these as lexprompt_worker`).toEqual([]);
+    // The two the engine must NOT touch are attempted there too, and they
+    // are the ones the file was missing entirely: it opened with "the grant
+    // is the guarantee" and contained no statement against either.
+    expect(grants).toMatch(/finding_disposition\b/);
+    expect(grants).toMatch(/finding_disposition_event\b/);
+    expect(grants).toMatch(/permission denied/);
+  }, 20_000);
+});
+
+/* ------------------------------------------------------------------ *
  *  4. The engine's own statements are scoped to a workspace           *
  * ------------------------------------------------------------------ */
 
@@ -449,22 +530,130 @@ describe('the engine s statements name a workspace, which workspaceScope.test.ts
     expect(namesScoped('SAVEPOINT sp1')).toBeUndefined();
   });
 
-  it('every engine module but the reaper names a workspace in its scoped statements', () => {
-    // The reaper is the ONE exemption, and it is named as a file here
-    // because the whole file is the sweep — not as a directory, and not as
-    // a pattern that would quietly cover the next module too.
-    const ACROSS_WORKSPACES = 'apps/api/src/run/reaper.ts';
+  /**
+   * THE STATEMENTS THAT LEGITIMATELY CARRY NO WORKSPACE PREDICATE, one at a
+   * time, each with the reason it is allowed to.
+   *
+   * This replaces a FILE-level rule, and the file-level rule was vacuous.
+   * It read `if (!/workspace_id/.test(code))` — whether the string appears
+   * anywhere in the module — and `queue.ts:45` declares
+   * `workspace_id: string` on `RunRow`, so every engine file satisfied it by
+   * its TYPE DECLARATIONS alone. The mutation that left it green: delete
+   * `and workspace_id = $2` from every SQL literal in `queue.ts`, including
+   * `readRun`'s, which serves `GET /v1/runs/:id` from an id in a URL. The
+   * interface field survived, the test passed, and one firm could read
+   * another's run.
+   *
+   * Matching is on the statement's own normalised text, so an exempt
+   * statement that is EDITED stops matching and has to be re-justified here.
+   * That friction is the point: it is the same reasoning `PdfCanvas`'s
+   * file-level palette exemption taught this repository, one layer down —
+   * an exemption should cover the line somebody argued for, not everything
+   * that happens to sit beside it.
+   */
+  const norm = (s: string): string => s.replace(/\s+/g, ' ').trim();
+  const UNSCOPED_BY_DESIGN = new Map<string, string>([
+    // --- the reaper's sweep is across workspaces, and that is its job ---
+    [norm(`select * from run where state in ('running','cancelling') and heartbeat_at is not null
+           and heartbeat_at < now() - ($1 || ' milliseconds')::interval`),
+      'the reaper sweeps every workspace: a dead run is dead in all of them'],
+    [norm(`select * from run where id = $1 and state in ('running','cancelling')
+           and heartbeat_at < now() - ($2 || ' milliseconds')::interval for update`),
+      'the reaper re-reads a run it already selected, by primary key, under for update'],
+    [norm(`update run set state = 'failed', finished_at = now(), error = $2, version = version + 1
+           where id = $1 returning *`),
+      'the reaper writes the run it just locked by primary key'],
+    [norm(`select id, review_id from run where state = 'queued' and heartbeat_at is null
+           and created_at < now() - ($1 || ' milliseconds')::interval
+           order by created_at asc limit 20`),
+      'the stalled-queue REPORT is across workspaces, like the sweep it runs beside'],
+    // --- the outbox's own bookkeeping ---
+    [norm('select min(id) as oldest from event'),
+      'the resync watermark is the table minimum, deliberately: a per-run minimum would '
+      + 'report a resync for every client that connected before its run wrote an event'],
+    [norm("delete from event where at < now() - ($1 || ' days')::interval returning id"),
+      'the pruner is a retention sweep across every workspace'],
+    // --- writes keyed by a row this process already claimed ---
+    [norm(`update run set state = 'running', started_at = coalesce(started_at, now()),
+           heartbeat_at = now(),
+           version = case when state = 'queued' then version + 1 else version end
+           where id = $1 returning *`),
+      'promotes the run whose cell CLAIM (workspace-checked) just returned, by primary key'],
+    [norm(`update run set provider = coalesce(provider, $2), jurisdiction = coalesce(jurisdiction, $3::jsonb),
+           model = coalesce(model, $4)
+           where id = $1 and (provider is null or jurisdiction is null or model is null)`),
+      'writes what the gateway said onto the run this worker holds a lease on'],
+    [norm('select cancel_requested_at from run where id = $1'),
+      'the cancel poll reads the run this worker holds a lease on'],
+    [norm('update run set heartbeat_at = now() where id = any($1::text[])'),
+      'the heartbeat writes the runs whose leases this process holds'],
+    [norm(`update run_cell set state = 'cancelled', leased_by = null, lease_expires_at = null
+           where run_id = $1 and findings_key = $2 and clause_id = $3`),
+      'releases the cell this worker leased and re-read under for update'],
+    [norm(`update run_cell set leased_by = null, last_error = $4,
+           lease_expires_at = now() + ($5 || ' milliseconds')::interval
+           where run_id = $1 and findings_key = $2 and clause_id = $3`),
+      'parks the cell this worker leased and re-read under for update'],
+    [norm(`update run_cell set state = 'error', last_error = $4, leased_by = null,
+           lease_expires_at = null where run_id = $1 and findings_key = $2 and clause_id = $3`),
+      'closes the cell this worker leased and re-read under for update'],
+    [norm(`update run_cell set state = $4, last_error = $5, leased_by = null, lease_expires_at = null
+           where run_id = $1 and findings_key = $2 and clause_id = $3`),
+      'writes the result onto the cell this worker leased and re-read under for update'],
+    [norm(`update run_cell set lease_expires_at = now() - interval '1 second', leased_by = null
+           where state = 'leased' and leased_by like $1 and lease_expires_at > now()
+           returning run_id`),
+      'releases leases stamped with THIS PROCESS\'s own identity, in any workspace'],
+    // Truncated where the source string is: the statement is built by
+    // concatenation, and `statementsIn` sees one literal at a time.
+    [norm("select distinct run_id from run_cell where state = 'leased' and leased_by like $1"),
+      'the active-run set is this process\'s own leases, in any workspace'],
+    // --- one template literal that is split by an interpolation ---
+    [norm("update finding set ${FINDING_COLUMNS.slice(4).map((c, i) =>"
+      + " (c === 'citations' || c === 'net_position' ?"),
+      'a fragment: the interpolation ends the literal, and the WHERE half — which does name '
+      + 'workspace_id — is a later chunk of the same template'],
+  ]);
+
+  it('every scoped statement names a workspace, or is exempt BY STATEMENT with a reason', () => {
     const silent: string[] = [];
     for (const file of ENGINE) {
-      if (rel(file) === ACROSS_WORKSPACES) continue;
-      const code = codeOf(file);
-      const scoped = statementsIn(code).filter(s => namesScoped(s));
-      if (scoped.length === 0) continue;
-      if (!/workspace_id/.test(code)) silent.push(rel(file));
+      for (const statement of statementsIn(codeOf(file))) {
+        if (!namesScoped(statement)) continue;
+        if (/workspace_id/.test(statement)) continue;
+        if (UNSCOPED_BY_DESIGN.has(norm(statement))) continue;
+        silent.push(`${rel(file)}: ${norm(statement)}`);
+      }
     }
-    expect(silent).toEqual([]);
-    // …and the exemption is still a file that exists and still sweeps.
-    expect(there(ACROSS_WORKSPACES)).toBe(true);
-    expect(codeOf(at(ACROSS_WORKSPACES))).toMatch(/heartbeat_at/);
+    expect(silent, 'an engine statement against a tenant table names no workspace').toEqual([]);
+  });
+
+  it('the exemption list has no stale entries, and every reason is a real one', () => {
+    // A list of exemptions that no longer match anything is a list nobody is
+    // maintaining, and it hides the day one of them comes back scoped.
+    const present = new Set(ENGINE.flatMap(f => statementsIn(codeOf(f))).map(norm));
+    const stale = [...UNSCOPED_BY_DESIGN.keys()].filter(k => !present.has(k));
+    expect(stale, 'exempted statements that no longer appear in the engine').toEqual([]);
+    for (const reason of UNSCOPED_BY_DESIGN.values()) {
+      expect(reason.length).toBeGreaterThan(20);
+    }
+  });
+
+  it('and the guard bites on the mutation that used to pass: readRun losing its predicate', () => {
+    // `readRun` serves `GET /v1/runs/:id` with an id from a URL. Stripping
+    // its `and workspace_id = $2` is a cross-tenant read, and the file-wide
+    // predicate this replaced could not see it — `RunRow.workspace_id` on
+    // line 45 satisfied it on its own.
+    const scoped = 'select * from run where id = $1 and workspace_id = $2';
+    expect(codeOf(at('apps/api/src/run/queue.ts'))).toContain(scoped);
+    const mutated = 'select * from run where id = $1';
+    expect(namesScoped(mutated)).toBe('run');
+    expect(/workspace_id/.test(mutated)).toBe(false);
+    expect(UNSCOPED_BY_DESIGN.has(norm(mutated))).toBe(false);
+  });
+
+  it('the reaper still exists and still sweeps, since its statements are what the list exempts', () => {
+    expect(there('apps/api/src/run/reaper.ts')).toBe(true);
+    expect(codeOf(at('apps/api/src/run/reaper.ts'))).toMatch(/heartbeat_at/);
   });
 });

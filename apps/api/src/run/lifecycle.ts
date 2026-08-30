@@ -112,10 +112,18 @@ export async function exhaustCell(
   await t.query(
     `update run_cell set state = 'error', last_error = $4, leased_by = null,
                          lease_expires_at = null
-      where run_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $5`,
+      where run_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $5
+        and state = 'leased'`,
     [key.runId, key.findingsKey, key.clauseId, message, workspaceId]);
+  // `status = any(OPEN_FINDING_STATES)`, like the two sweeps above it. This
+  // function shipped WITHOUT that predicate while `reaper.ts` implemented the
+  // same idea inline WITH it — the drift the file docstring above denies, in
+  // the one direction that matters: a `done` answer overwritten with an
+  // error message. The reaper now calls this rather than keeping a second
+  // copy, so there is one statement to get right.
   await t.query(
     `update finding set status = 'error', error = $4, version = version + 1, updated_at = now()
-      where review_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $5`,
-    [key.reviewId, key.findingsKey, key.clauseId, message, workspaceId]);
+      where review_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $5
+        and status = any($6::text[])`,
+    [key.reviewId, key.findingsKey, key.clauseId, message, workspaceId, OPEN_FINDING_STATES]);
 }

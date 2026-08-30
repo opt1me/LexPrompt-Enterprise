@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
-import { withPg, dbOn } from './helpers/pgHarness.ts';
+import { withPg, dbOn, migratorDb } from './helpers/pgHarness.ts';
 import { buildTestApi } from './helpers/apiHarness.ts';
 import type { Tx } from '../src/db/pool.ts';
 import type { Review } from '../src/db/rows.ts';
@@ -359,8 +359,27 @@ describe('re-running a clause resets its verification and its net position, in t
   });
 });
 
-describe('a key the body no longer carries leaves no orphan', () => {
-  it('deletes the finding, its disposition and its history when a clause is removed', async () => {
+describe('a key the body no longer carries leaves no orphan, and its history survives', () => {
+  /*
+   * CHANGED BY MIGRATION 009, deliberately, and this assertion moved with
+   * the behaviour rather than being made to agree with it.
+   *
+   * It used to assert `eventCount(t, 'd2', 'c1') === 0` — the history
+   * cascading away with the finding. 006 calls that table "INSERT-only to
+   * every application role, which is what makes it evidence rather than a
+   * claim", and a transitive DELETE through a cascade is a delete: one
+   * `delete from finding` and who verified that clause, when, and what they
+   * changed it from was gone. 005's justification for the app role's DELETE
+   * ("a key absent from the blob is a judgement that no longer exists in the
+   * record of truth either") covers the CURRENT disposition, which the blob
+   * mirrors, and not the history, which the blob never carried.
+   *
+   * So the history's parent is now the REVIEW. The finding and its current
+   * disposition still go; the evidence outlives them, and goes only when the
+   * whole review does — which the next test asserts, so this one cannot be
+   * read as "the history is never cleaned up".
+   */
+  it('deletes the finding and its disposition when a clause is removed, and KEEPS its history', async () => {
     await withPg(async t => {
       await aUser(t, PARTNER, 'P Partner');
       await aMatterAndDocuments(t);
@@ -379,12 +398,39 @@ describe('a key the body no longer carries leaves no orphan', () => {
 
       const keys = await t.query<{ findings_key: string }>('select findings_key from finding');
       expect(keys.map(k => k.findings_key)).toEqual(['d1']);
-      expect(await eventCount(t, 'd2', 'c1')).toBe(0);
+      // The finding is gone and so is its CURRENT disposition — that one is
+      // the blob's mirror, and the blob no longer carries the key.
+      expect(await t.query(
+        "select 1 from finding_disposition where findings_key = 'd2'")).toEqual([]);
+      // The EVIDENCE is not. Somebody flagged d2/c1 at a particular instant
+      // and that remains answerable.
+      expect(await eventCount(t, 'd2', 'c1')).toBe(1);
       // …and the surviving key kept its own judgement and its own history.
       expect(await eventCount(t, 'd1', 'c1')).toBe(1);
       expect((await t.query<{ state: string }>(
         "select state from finding_disposition where findings_key = 'd1'"))[0].state)
         .toBe('verified');
+      await h.app.close();
+    });
+  });
+
+  it('and the whole review going takes the history with it, which is the one deletion that should', async () => {
+    // The other half of the rule above: the history is not immortal, it is
+    // just not something a per-key shadow write may remove. A deleted review
+    // is a deliberate, whole-record deletion by somebody who asked for it,
+    // and that is the case 005's justification actually covers.
+    await withPg(async t => {
+      await aUser(t, PARTNER, 'P Partner');
+      await aMatterAndDocuments(t);
+      const h = harness(t, PARTNER);
+      await h.put(REVIEW({ findings: {
+        d1: { c1: finding({ verification: { state: 'verified', byUserId: PARTNER,
+          at: 1_700_000_030_000 } }) },
+      } }));
+      expect(await eventCount(t, 'd1', 'c1')).toBe(1);
+
+      await t.query("delete from review where id = 'sr1'");
+      expect(await t.query('select 1 from finding_disposition_event')).toEqual([]);
       await h.app.close();
     });
   });
@@ -474,3 +520,167 @@ describe('the reconciliation can find something', () => {
 
 class Rollback extends Error {}
 function swallow(err: unknown): void { if (!(err instanceof Rollback)) throw err; }
+
+/**
+ * M4: A VERIFICATION CARRYING A REASON WROTE A HISTORY ROW ON EVERY
+ * AUTOSAVE.
+ *
+ * `readCell` kept `reason` for ANY state; `setDisposition` drops a reason on
+ * anything but `rejected`. `writeDisposition` then compared the undropped
+ * blob value against the dropped stored one — `null === 'look at this'`,
+ * false, forever. So a body carrying `{ state: 'flagged', reason: '…' }`
+ * called `setDisposition` again on every whole-review save: `changed_count +
+ * 1`, `version + 1`, and one more row in the INSERT-only evidence table.
+ * The browser debounces one save roughly every two seconds during a run, so
+ * a five-minute run produced about 150 spurious rows on that one clause and
+ * the real change became unfindable — the exact outcome that function's own
+ * docstring says it was designed to prevent.
+ *
+ * `reconcileFindings` compared `disposition.reason` for every state too, so
+ * it reported a discrepancy on that key that no number of saves could clear:
+ * the reconciliation that PROVES the shadow write is correct was
+ * permanently red for such a review.
+ *
+ * The shipped browser's `applyVerification` drops the reason, so this was
+ * not reachable from today's UI. It was one hand-written `PUT
+ * /v1/reviews/:id` away — and Stage 3's whole premise is that the API is the
+ * contract, not the browser.
+ */
+describe('a reason on a state that does not take one settles, rather than repeating forever', () => {
+  const flaggedWithReason = () => finding({ verification: {
+    state: 'flagged', reason: 'look at this', byUserId: PARTNER, at: 1_700_000_009_000 } });
+
+  it('writes ONE event for a flagged verification carrying a reason, however many saves follow', async () => {
+    await withPg(async t => {
+      await aUser(t, PARTNER, 'P Partner');
+      await aMatterAndDocuments(t);
+      const h = harness(t, PARTNER);
+
+      const first = await h.put(REVIEW({ findings: { d1: { c1: flaggedWithReason() } } }));
+      expect(await eventCount(t, 'd1', 'c1')).toBe(1);
+
+      let version = first.version;
+      for (const summary of ['a', 'b', 'c', 'd', 'e']) {
+        const saved = await h.put({
+          ...REVIEW({ findings: { d1: { c1: flaggedWithReason() },
+            d2: { c1: finding({ summary }) } } }), version });
+        version = saved.version;
+      }
+      // Six saves, one event. Before the fix this was six.
+      expect(await eventCount(t, 'd1', 'c1')).toBe(1);
+      const disposition = await t.query<{ state: string; reason: string | null; changed_count: number }>(
+        "select state, reason, changed_count from finding_disposition where findings_key = 'd1'");
+      expect(disposition[0]).toMatchObject({ state: 'flagged', reason: null, changed_count: 1 });
+      await h.app.close();
+    });
+  });
+
+  it('reconciles clean, rather than reporting a disposition.reason discrepancy forever', async () => {
+    await withPg(async t => {
+      await aUser(t, PARTNER, 'P Partner');
+      await aMatterAndDocuments(t);
+      const h = harness(t, PARTNER);
+      await h.put(REVIEW({ findings: { d1: { c1: flaggedWithReason() } } }));
+      const found = await reconcileFindings(t, 'sr1');
+      expect(found, describeDiscrepancies(found)).toEqual([]);
+      await h.app.close();
+    });
+  });
+
+  it('still keeps the reason on a REJECTED finding, which is the one state that takes one', async () => {
+    await withPg(async t => {
+      await aUser(t, PARTNER, 'P Partner');
+      await aMatterAndDocuments(t);
+      const h = harness(t, PARTNER);
+      await h.put(REVIEW({ findings: { d1: { c1: finding({ verification: {
+        state: 'rejected', reason: 'The cap is in schedule 6.',
+        byUserId: PARTNER, at: 1_700_000_009_000 } }) } } }));
+      const disposition = await t.query<{ state: string; reason: string | null }>(
+        "select state, reason from finding_disposition where findings_key = 'd1'");
+      expect(disposition[0]).toEqual({ state: 'rejected', reason: 'The cap is in schedule 6.' });
+      expect(await reconcileFindings(t, 'sr1')).toEqual([]);
+      await h.app.close();
+    });
+  });
+});
+
+/**
+ * n8: a save that changes nothing does not bump a finding's version.
+ *
+ * `version` is what an event carries so a client can drop a stale one, and
+ * the browser autosaves the whole review roughly every two seconds while a
+ * run is live. An unconditional `version = finding.version + 1` meant that
+ * after one run a finding's version was dominated by saves that wrote the
+ * identical row back — a version that moves when nothing moved says nothing.
+ */
+describe('an autosave that changes nothing leaves the version alone', () => {
+  it('bumps a finding s version only when its content actually changed', async () => {
+    await withPg(async t => {
+      await aUser(t, PARTNER, 'P Partner');
+      await aMatterAndDocuments(t);
+      const h = harness(t, PARTNER);
+      const versionOf = async (): Promise<number> => Number((await t.query<{ version: string }>(
+        "select version from finding where findings_key = 'd1' and clause_id = 'c1'"))[0].version);
+
+      const first = await h.put(REVIEW({ findings: { d1: { c1: finding({ summary: 'six months' }) } } }));
+      const before = await versionOf();
+
+      // Two saves whose d1/c1 content is byte-identical.
+      let version = first.version;
+      for (const other of ['a', 'b']) {
+        const saved = await h.put({
+          ...REVIEW({ findings: { d1: { c1: finding({ summary: 'six months' }) },
+            d2: { c1: finding({ summary: other }) } } }), version });
+        version = saved.version;
+      }
+      expect(await versionOf()).toBe(before);
+
+      // …and a real change still moves it.
+      await h.put({
+        ...REVIEW({ findings: { d1: { c1: finding({ summary: 'twelve months' }) } } }), version });
+      expect(await versionOf()).toBe(before + 1);
+      await h.app.close();
+    });
+  });
+});
+
+/**
+ * n5: the upsert's own silent failure.
+ *
+ * `on conflict … do update … where finding.workspace_id = excluded.workspace_id`
+ * performs NEITHER the insert nor the update when that predicate is false,
+ * and Postgres reports success — a save that wrote nothing and said it
+ * worked, which is the failure shape this whole file exists to prevent. The
+ * row is unreachable in practice (review ids are unique), and it is refused
+ * rather than trusted to stay that way.
+ */
+describe('a finding row that belongs to another workspace is refused, never silently skipped', () => {
+  it('answers 400 naming the key rather than reporting a save that wrote nothing', async () => {
+    // On the MIGRATOR connection, and only this test: reaching the state the
+    // predicate guards needs a second workspace, and the app role holds no
+    // insert grant on that table — which is itself why this is unreachable
+    // in practice. What is under test is the service's refusal, not a
+    // grant; every other test in this file runs as the app role.
+    await withPg(async t => {
+      await aUser(t, PARTNER, 'P Partner');
+      await aMatterAndDocuments(t);
+      const h = harness(t, PARTNER);
+      const first = await h.put(REVIEW());
+
+      // A second workspace, and this review's finding row moved into it —
+      // the state the predicate exists for, reached the only way it can be.
+      const other = '00000000-0000-0000-0000-0000000000ff';
+      await t.query(
+        "insert into workspace (id, name) values ($1, 'Other firm') on conflict (id) do nothing",
+        [other]);
+      await t.query(
+        "update finding set workspace_id = $1 where review_id = 'sr1'", [other]);
+
+      const res = await h.raw({ ...REVIEW(), version: first.version });
+      expect(res.statusCode).toBe(400);
+      expect(res.body).toContain('d1/c1');
+      expect(res.body).toMatch(/different workspace/);
+      await h.app.close();
+    }, migratorDb());
+  });
+});

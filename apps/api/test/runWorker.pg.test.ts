@@ -5,7 +5,7 @@ import {
   fakeGateway, workerDeps,
 } from './helpers/runHarness.ts';
 import {
-  leaseCell, releaseOwnOrphanedLeases, runOneStep, withCapabilities,
+  allowlistOf, leaseCell, releaseOwnOrphanedLeases, runOneStep, withCapabilities,
 } from '../src/run/worker.ts';
 import type { Tx } from '../src/db/pool.ts';
 
@@ -592,6 +592,39 @@ describe('a process reclaims the leases it left behind, and nobody else s', () =
       expect(rows[1]).toMatchObject({ clause_id: 'c2', leased_by: 'api-other-host#1', live: true });
 
       expect((await leaseCell(deps.db, deps, `${deps.workerId}#1`))?.cell.clause_id).toBe('c1');
+    });
+  });
+});
+
+/**
+ * n2: an idle worker does not talk to the gateway.
+ *
+ * `allowlistOf(deps.gateway)` ran BEFORE `runOneStep`, inside
+ * `while (running)`. With `runPollMs = 1000` and `runWorkers = 2` an idle
+ * process issued two `GET /v1/models` per second, forever, against the very
+ * gateway whose rate limiter this stage documents as the binding constraint
+ * — and during an outage it also wrote two stderr lines a second,
+ * indefinitely. The allowlist is only needed once there is a cell to run.
+ */
+describe('the gateway is asked for its allowlist only when there is work', () => {
+  it('does not fetch the allowlist when there is nothing to claim', async () => {
+    await withPg(async t => {
+      const { gateway, log } = fakeGateway();
+      // No run, no cells: `leaseCell` returns null.
+      expect(await runOneStep(workerDeps(t, gateway), 'w#1', () => allowlistOf(gateway)))
+        .toBe(false);
+      expect(log.models).toBe(0);
+    });
+  });
+
+  it('fetches it once a cell IS claimed, so the model is still checked before the call', async () => {
+    await withPg(async t => {
+      await seedOneCell(t, 'allow');
+      const { gateway, log } = fakeGateway();
+      expect(await runOneStep(workerDeps(t, gateway), 'w#1', () => allowlistOf(gateway)))
+        .toBe(true);
+      expect(log.models).toBe(1);
+      expect(log.infer).toHaveLength(1);
     });
   });
 });
