@@ -4,6 +4,7 @@ import type { Db } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
 import { fromReviewRow, toReviewRow, type Review, type ReviewRow } from '../db/rows.ts';
 import { refuseForeignDocuments } from './matterMembership.ts';
+import { writeFindingRows } from '../findings/write.ts';
 
 /**
  * The `reviews` repository, server side — Task 9's seven properties, plus
@@ -210,6 +211,23 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
           'select * from review where id = $1 and workspace_id = $2', [row.id, ws]);
         throw new ConflictError(current[0] ? fromReviewRow(current[0]) : undefined);
       }
+
+      // P17, and it is temporary by design (deleted in Task 22). The browser
+      // still owns the findings blob for the whole of Part 3A; these rows are
+      // its shadow, written in the SAME transaction so a crash cannot leave
+      // them disagreeing. The blob stays authoritative until Task 14 flips
+      // the reader.
+      //
+      // After the upsert, so the `review` row a finding's foreign key names
+      // exists; after the version check, so a refused save writes no rows
+      // either. `writeFindingRows` refuses a body it cannot store faithfully
+      // — a note naming nobody, a rejection with no reason, a findings key
+      // this review's own target does not explain — with a 400 that says
+      // which cell, rather than letting Postgres answer with a constraint
+      // name.
+      await writeFindingRows(t, { id: row.id, target: input.target, findings: input.findings },
+        ws, req.actor!);
+
       return fromReviewRow(rows[0]);
     });
   });

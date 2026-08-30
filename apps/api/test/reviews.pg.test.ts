@@ -33,7 +33,29 @@ async function aUser(t: Tx): Promise<string> {
   return rows[0].id;
 }
 
+/**
+ * The person whose judgements these fixtures carry, as a REAL `app_user` with
+ * a fixed id.
+ *
+ * It used to be the string `HUMAN`, which was fine while a verification
+ * and a note were fields inside an opaque jsonb blob. Stage 3 Task 7 makes
+ * both of them ROWS whose author is a foreign key to `app_user`, so a
+ * placeholder that resolves to nobody is now refused — by the shadow writer
+ * with a sentence, and by Postgres with a constraint name if it were not. A
+ * note is a person's remark; "somebody wrote this about your clause" with no
+ * somebody is not one anybody can weigh.
+ */
+const HUMAN = '00000000-0000-0000-0000-0000000000a1';
+
+async function aHuman(t: Tx): Promise<void> {
+  await t.query(
+    `insert into app_user (id, workspace_id, issuer, subject, display_name, initials, role, status)
+     values ($1, $2, 'i', 'the-human', 'H Human', 'HH', 'reviewer', 'active')
+     on conflict (id) do nothing`, [HUMAN, WS]);
+}
+
 async function aMatter(t: Tx, id = 'm1', ws = WS): Promise<void> {
+  await aHuman(t);
   await t.query(
     `insert into matter (id, workspace_id, name, created_at, updated_at)
      values ($1, $2, 'Brookvale', now(), now())`, [id, ws]);
@@ -73,9 +95,9 @@ const finding = (over: Record<string, unknown> = {}) => ({
   status: 'done',
   summary: 'The break notice period is six months.',
   citations: [{ quote: 'six months', documentId: 'd1', page: 4, clauseRef: '14.2' }],
-  verification: { state: 'verified', byUserId: 'u-human', at: 1_700_000_009_000 },
+  verification: { state: 'verified', byUserId: HUMAN, at: 1_700_000_009_000 },
   notes: [{ id: 'n1', findingId: 'd1::c1', text: 'Checked against the deed.',
-    byUserId: 'u-human', at: 1_700_000_010_000 }],
+    byUserId: HUMAN, at: 1_700_000_010_000 }],
   ...over,
 });
 
@@ -182,10 +204,10 @@ describe('a review round-trips through Postgres unchanged', () => {
       const saved = await h.put('/v1/reviews/r1', REVIEW());
       const f = (saved.findings as Record<string, Record<string, Record<string, unknown>>>).d1.c1;
       expect(f.verification).toEqual({
-        state: 'verified', byUserId: 'u-human', at: 1_700_000_009_000,
+        state: 'verified', byUserId: HUMAN, at: 1_700_000_009_000,
       });
       expect(f.notes).toEqual([{ id: 'n1', findingId: 'd1::c1',
-        text: 'Checked against the deed.', byUserId: 'u-human', at: 1_700_000_010_000 }]);
+        text: 'Checked against the deed.', byUserId: HUMAN, at: 1_700_000_010_000 }]);
       await h.app.close();
     });
   });
@@ -328,7 +350,7 @@ describe('a save that would lose somebody else s work is refused', () => {
       await h.put('/v1/reviews/r1', {
         ...running,
         findings: { d1: { c1: finding({
-          verification: { state: 'verified', byUserId: 'u-human', at: 1_700_000_009_000 },
+          verification: { state: 'verified', byUserId: HUMAN, at: 1_700_000_009_000 },
         }) } },
       });
 
@@ -345,7 +367,7 @@ describe('a save that would lose somebody else s work is refused', () => {
       const now = await h.get('/v1/reviews/r1') as Review;
       const v = (now.findings as Record<string, Record<string, Record<string, unknown>>>)
         .d1.c1.verification;
-      expect(v).toEqual({ state: 'verified', byUserId: 'u-human', at: 1_700_000_009_000 });
+      expect(v).toEqual({ state: 'verified', byUserId: HUMAN, at: 1_700_000_009_000 });
       await h.app.close();
     });
   });
@@ -520,7 +542,7 @@ describe('a review may only name documents in its own matter', () => {
           target: { kind: 'documents', documentIds: ['d1', 'd2'] },
           findings: {
             d1: { c1: finding({ verification: {
-              state: 'verified', byUserId: 'u-human', at: 1_700_000_099_000,
+              state: 'verified', byUserId: HUMAN, at: 1_700_000_099_000,
             } }) },
           },
         }),
