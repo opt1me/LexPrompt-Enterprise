@@ -1,4 +1,4 @@
-import { ModelError } from '@lexprompt/core';
+import { ModelError, type RunView } from '@lexprompt/core';
 import { DbBlockedError, DbOpenTimeoutError } from './db/open';
 import { UnconvertedPlaybookError } from './db/playbookMigration';
 
@@ -50,4 +50,55 @@ export function describeLoadError(e: unknown, fallback: string): string {
     || e instanceof ModelError
   ) return e.message;
   return fallback;
+}
+
+/**
+ * HOW A RUN ENDED — the fourth fact a run has, which is neither a load
+ * error nor a success.
+ *
+ * `describeLoadError` above gains nothing from Stage 3: a failed READ is a
+ * failed read whatever it was reading. What is new is that a RUN can end in
+ * a way that is not an error and not a success, and the two must not
+ * collapse into one sentence:
+ *
+ *  - `cancelled` — a person asked it to stop. Rendered CALMLY. Everything
+ *    already completed stays completed, and a reviewer is entitled to the
+ *    twelve findings a stopped run produced; calling that a failure would
+ *    tell them their work is suspect when it is not.
+ *  - `failed` — it stopped WITHOUT being asked: a reaped heartbeat, or a
+ *    fatal error. It says why, from the run's own `error`, because a run
+ *    that failed and cannot say why is a run nobody can act on.
+ *  - `succeeded` — over, and there is nothing to say about the ENDING. A
+ *    cell in `error` is a finding a person can retry; the run itself is
+ *    fine. `null` rather than a cheerful notice, so a completed run's
+ *    screen is the findings and not a banner.
+ *
+ * This is the same rule `Finding.status`'s `cancelled` already follows, one
+ * level up: 'cancelled' is distinct from 'error' and is never rendered as a
+ * failure.
+ *
+ * The COUNTS travel with it because a partial run must never read as a
+ * complete one — "12 of 40" is a fact the reader is entitled to, and a
+ * `state` alone cannot carry it.
+ */
+export function describeRunEnding(
+  run: Pick<RunView, 'state' | 'error' | 'cells'>,
+): { message: string; tone: 'error' | 'info' } | null {
+  const done = run.cells.done + run.cells.error;
+  const of = `${done} of ${run.cells.total} ${run.cells.total === 1 ? 'clause' : 'clauses'}`;
+  if (run.state === 'cancelled') {
+    return {
+      message: `This review was stopped. ${of} were reviewed, and those findings are unchanged.`,
+      tone: 'info',
+    };
+  }
+  if (run.state === 'failed') {
+    return {
+      message: run.error
+        ? `This review stopped: ${run.error} ${of} were reviewed.`
+        : `This review stopped before it finished. ${of} were reviewed.`,
+      tone: 'error',
+    };
+  }
+  return null;
 }

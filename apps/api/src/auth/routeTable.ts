@@ -186,6 +186,9 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // IS one — a run over a single cell — and because clearing the judgement
   // that described the answer being replaced is part of re-running it.
   'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/retry': 'reviewer',
+  // A review's live run, so a reload or a second tab can pick one up.
+  // Reading it is the same act as reading the review.
+  'GET /v1/reviews/:id/runs/live': 'reviewer',
   'GET /v1/runs/:id': 'reviewer',
   'POST /v1/runs/:id/cancel': 'reviewer',
   'GET /v1/runs/:id/events': 'reviewer',

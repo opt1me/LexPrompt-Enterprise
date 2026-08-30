@@ -236,6 +236,41 @@ export function registerRuns(app: FastifyInstance, db: Db, config: RunRoutesConf
   });
 
   /**
+   * THE REVIEW'S LIVE RUN, IF IT HAS ONE — and the whole point of the stage,
+   * seen from the reader's side.
+   *
+   * A run used to live in React state and die with the tab. It is a row now,
+   * so a review opened in another tab, or after a reload, or by a colleague,
+   * can be picked up and watched to completion. Without this route the
+   * browser would have no way to ASK, and "the work outlives the request
+   * that asked for it" would be true of the server and invisible to the
+   * person who started it.
+   *
+   * `null` — 200, not 404 — for a review with no live run. That is a fact
+   * about the review, not a failure to find it, and the difference matters
+   * at exactly the place this codebase keeps insisting it does: a 404 here
+   * would be indistinguishable from "there is no such review", and the
+   * browser would show a load error over a review that is simply idle. The
+   * review's own existence IS checked, so a bad id still answers 404.
+   *
+   * There is at most one, enforced by 008's unique partial index — the same
+   * fact the two refusals above rest on.
+   */
+  app.get('/v1/reviews/:id/runs/live', async (req): Promise<RunView | null> => {
+    const ws = req.actor!.workspaceId;
+    const { id } = req.params as { id: string };
+    const reviews = await db.query<{ id: string }>(
+      'select id from review where id = $1 and workspace_id = $2', [id, ws]);
+    if (!reviews[0]) throw new ModelError('There is no such review.', 'not_found', 404);
+
+    const live = await db.query<{ id: string }>(
+      `select id from run where review_id = $1 and workspace_id = $2
+        and state in ('queued','running','cancelling')`, [id, ws]);
+    if (!live[0]) return null;
+    return (await readRun(db, live[0].id, ws))!;
+  });
+
+  /**
    * Cancel: a person asked it to stop, which is NOT a failure.
    *
    * Everything already completed stays completed — a `done` cell is never

@@ -104,7 +104,7 @@ describe('the scanners find something (a guard that matches nothing passes vacuo
       'apps/api/src/findings/write.ts', 'apps/api/src/findings/reconcile.ts',
       'apps/api/src/findings/backfill.ts', 'apps/api/src/findings/read.ts',
       'apps/api/src/dispositions/service.ts', 'apps/api/src/routes/findings.ts',
-      'src/lib/api/findings.ts',
+      'src/lib/api/findings.ts', 'src/lib/api/runs.ts', 'src/lib/loadError.ts',
       'apps/api/src/run/worker.ts', 'apps/api/src/run/queue.ts', 'apps/api/src/run/reaper.ts',
       'apps/api/src/main.ts',
       'apps/api/test/dispositions.pg.test.ts', 'apps/api/test/shadowWrite.pg.test.ts',
@@ -244,17 +244,22 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(codeOf(at('src/lib/db/reviews.ts'))).toContain('scheduleSave');
   });
 
-  it('the browser calls no run, disposition or note route — the engine is unreachable from it', () => {
+  it('names a run route in ONE module — the transport — and nowhere else', () => {
     /*
-     * The strongest single statement of "no user-visible change": the whole
-     * queue landed in Part 3A, every one of its routes is registered and
-     * authenticated, and the shipped browser does not know they exist. Task
-     * 17 writes the client and Task 18 is the first call.
+     * This assertion started as "the browser calls no run route at all",
+     * which was Part 3A's strongest statement of "no user-visible change".
+     * TASK 17 LANDED THE CLIENT, so what it guards now is the property that
+     * outlives the flip and that P22 is about: the poll lives in ONE module,
+     * so Stage 4 replaces the transport inside it and changes no caller.
+     *
+     * A second file naming `/v1/runs/…` would be a component reaching past
+     * the client — and the socket that replaces the poll would then leave
+     * that one behind, polling, with nothing on screen to say so.
      *
      * Scanned over `src/` — the browser — rather than over the API, because
-     * the routes SHOULD exist server-side. What must not exist is a caller.
+     * the routes SHOULD exist server-side.
      */
-    const CALLS = /['"`]\/v1\/runs|\/runs['"`]|\/v1\/dispositions|\/v1\/notes|\/verification['"`]/;
+    const CALLS = /['"`]\/v1\/runs|\/runs['"`]|\/runs\/live|\/v1\/dispositions|\/v1\/notes/;
     // The scan bites on each shape a caller could take, including a template
     // literal, which is how every other id-bearing path in this client is
     // written.
@@ -264,10 +269,15 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(CALLS.test("apiGet('/v1/reviews/' + id)")).toBe(false);
 
     const callers = WEB_SOURCES.filter(f => CALLS.test(codeOf(f))).map(rel);
-    expect(callers).toEqual([]);
+    expect(callers).toEqual(['src/lib/api/runs.ts']);
     expect(WEB_SOURCES.length).toBeGreaterThan(120);        // the sanity check
-    // …and Task 17's client has not landed early.
-    expect(there('src/lib/api/runs.ts'), 'Task 17 arrived early').toBe(false);
+
+    // …and the poll it holds is a poll, with a cursor, which is the shape
+    // Stage 4's socket inherits rather than replaces.
+    const client = codeOf(at('src/lib/api/runs.ts'));
+    expect(client).toContain('watchRun');
+    expect(client).toMatch(/after=\$\{cursor\}/);
+    expect(client).toContain('resyncRequired');
   });
 
   it('READS a finding out of a row, and the blob reaches no reader — Task 14 has landed', () => {
