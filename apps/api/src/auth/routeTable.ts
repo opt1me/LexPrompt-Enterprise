@@ -84,6 +84,10 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'GET /v1/documents/:id': 'reviewer',
   'GET /v1/documents/:id/bytes': 'reviewer',
   'PATCH /v1/documents/:id/role': 'reviewer',
+  // Re-queues a FAILED parse. `reviewer`, like every other write on a
+  // document: it changes no content and no judgement — it asks the same
+  // bytes to be read again.
+  'POST /v1/documents/:id/reparse': 'reviewer',
   'DELETE /v1/documents/:id': 'reviewer',
 
   // Precedent sets and precedent documents (§11.1). `reviewer` throughout:

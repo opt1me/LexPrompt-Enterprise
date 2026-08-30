@@ -561,6 +561,116 @@ describe('deleting a document', () => {
   });
 });
 
+describe('reading a document again after its parse failed (Task 24)', () => {
+  /*
+   * A parse fails for reasons that are not properties of the file: the
+   * worker killed mid-read, a read that outran `API_PARSE_TIMEOUT_MS` on a
+   * busy host, a blob store briefly unreachable. The bytes are still stored
+   * and the row still points at them, so the honest affordance is to put the
+   * document back in the queue.
+   *
+   * What that replaces matters: the failure message used to tell a reviewer
+   * to "add the file again", which loses the document's id — and with it its
+   * collection membership and its place in every review that names it.
+   */
+  const fail = (t: Tx) => t.query(
+    `update document set parse_state = 'failed', parse_error = 'It ran out of time.', text = ''
+      where id = 'd1'`);
+
+  it('puts a FAILED document back in the queue, clearing the error and the text', async () => {
+    await withPg(async t => {
+      await aMatter(t);
+      const h = harness(t, await aUser(t));
+      await h.post(RECORD);
+      await fail(t);
+      // The state this is recovering from, asserted so the success below is
+      // about the route rather than about a document that never failed.
+      expect((await h.get('/v1/documents/d1')).parseState).toBe('failed');
+
+      const res = await h.raw('POST', '/v1/documents/d1/reparse', {});
+      expect(res.statusCode, res.body).toBe(200);
+      const back = res.json() as DocumentRecord;
+      expect(back.parseState).toBe('pending');
+      // Both cleared, in the same statement. A row that said `pending` while
+      // still carrying the old error would show "Reading…" and the failure
+      // at once.
+      expect('parseError' in back, 'the old failure is still on the record').toBe(false);
+      expect(back.text).toBe('');
+      // …and the bytes are untouched, which is the whole reason this is
+      // possible rather than "add the file again".
+      expect(h.blobs.keys()).toEqual([blobKeyFor(WS, 'd1')]);
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES a document that was read successfully, rather than blanking it', async () => {
+    // The dangerous one. `parse_state` back to `pending` on a parsed
+    // document blanks the text every review of it was run against — the
+    // founding defect, reachable from a button — and a route that answered
+    // 200 while doing nothing would be the other half of it.
+    await withPg(async t => {
+      await aMatter(t);
+      const h = harness(t, await aUser(t));
+      await h.post(RECORD);
+      await t.query(
+        "update document set parse_state = 'parsed', text = 'The term is ten years.' "
+        + "where id = 'd1'");
+
+      const res = await h.raw('POST', '/v1/documents/d1/reparse', {});
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.message).toMatch(/read successfully/i);
+      expect(res.json().error.message).toMatch(/blank the text/i);
+      const held = await h.get('/v1/documents/d1');
+      expect(held.parseState).toBe('parsed');
+      expect(held.text).toBe('The term is ten years.');
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES a document that is already being read, rather than reporting progress', async () => {
+    await withPg(async t => {
+      await aMatter(t);
+      const h = harness(t, await aUser(t));
+      await h.post(RECORD);   // arrives `pending` by design (Task 9)
+      const res = await h.raw('POST', '/v1/documents/d1/reparse', {});
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error.message).toMatch(/already being read/i);
+      await h.app.close();
+    });
+  });
+
+  it('is 404 for a document this workspace does not have', async () => {
+    await withPg(async t => {
+      await aMatter(t);
+      const h = harness(t, await aUser(t));
+      const res = await h.raw('POST', '/v1/documents/nope/reparse', {});
+      expect(res.statusCode).toBe(404);
+      await h.app.close();
+    });
+  });
+
+  it('cannot reach another workspace s document', async () => {
+    await withPg(async t => {
+      await t.query("insert into workspace (id, name) values ($1, 'Other')", [OTHER_WS]);
+      await aMatter(t, 'theirs', OTHER_WS);
+      await t.query(
+        `insert into document (id, workspace_id, kind, matter_id, name, doc_type, text,
+                               parse_state, parse_error, byte_size, mime, blob_key, role, added_at)
+         values ('d-foreign', $1, 'matter', 'theirs', 'x.pdf', 'pdf', '', 'failed', 'boom', 1,
+                 'application/pdf', 'k', 'standalone', now())`, [OTHER_WS]);
+      const h = harness(t, await aUser(t));
+      expect((await h.raw('POST', '/v1/documents/d-foreign/reparse', {})).statusCode).toBe(404);
+      // …and it is still `failed` over there, not quietly re-queued.
+      const held = await t.query<{ parse_state: string }>(
+        "select parse_state from document where id = 'd-foreign'");
+      expect(held[0].parse_state).toBe('failed');
+      await h.app.close();
+      // `migratorDb()` — inserting a WORKSPACE needs the schema owner, and
+      // the app role is refused it. Same shape as the two upload tests above.
+    }, migratorDb());
+  }, 20_000);
+});
+
 describe('the orphan sweeper (§6.5)', () => {
   it('lists only keys under this workspace that no document row claims', async () => {
     await withPg(async t => {

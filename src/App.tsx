@@ -19,6 +19,8 @@ import {
   isSignInError,
   isServiceConfigError,
   isNotYetRead,
+  failedToRead,
+  couldNotBeReadMessageFor,
   notYetReadMessageFor,
 } from '@lexprompt/core';
 import type { WorkspaceSettings, VerificationChange, RetryResult, RunView } from '@lexprompt/core';
@@ -33,7 +35,9 @@ import {
 import {
   listMatters, getMatter, saveMatter, newMatter, deleteMatter,
 } from './lib/db/matters';
-import { listDocuments, getDocument, addDocument, deleteDocument, setDocumentRole } from './lib/db/documents';
+import {
+  listDocuments, getDocument, addDocument, deleteDocument, setDocumentRole, reparseDocument,
+} from './lib/db/documents';
 // The precedent path (§11.1) — deliberately NOT `addDocument`, which is the
 // matter ingest path: a precedent going through it would be another client's
 // deal in a matter's document list (S23).
@@ -298,8 +302,36 @@ async function hydrateRecordForViewing(record: DocumentRecord): Promise<Document
  * The sentence comes from `@lexprompt/core` and is not written here: two
  * copies of one refusal is how one of them stops being true.
  */
+/**
+ * How long to wait before asking again whether a document has been read.
+ *
+ * A second, matching `watchRun`'s poll: a parse of an ordinary contract
+ * finishes in well under that, and the interval is what a person waiting for
+ * a document they just added would call "immediately". It is a CONSTANT
+ * rather than a config key on purpose — nothing about it varies by
+ * deployment, and the declared caps table is for values an operator sets.
+ */
+const PARSE_POLL_MS = 1_000;
+
 function notYetReadNames(records: DocumentRecord[]): string[] {
   return records.filter(isNotYetRead).map(r => r.name);
+}
+
+/**
+ * The OTHER state a review may not run over: read, and the read failed.
+ *
+ * `routes/runs.ts` has refused both since Task 9; this side refused only
+ * `pending`, so a matter holding one unreadable document met the failure as
+ * a 409 after the POST rather than as a sentence before it. The server's
+ * refusal is the one that cannot be got wrong quietly, and this is the UI
+ * telling the truth rather than being the enforcement (§11).
+ *
+ * The sentence is `@lexprompt/core`'s, and it is the SAME one the route
+ * throws — extracted there at its second copy rather than written out
+ * again here.
+ */
+function couldNotBeReadNames(records: DocumentRecord[]): string[] {
+  return records.filter(failedToRead).map(r => r.name);
 }
 
 
@@ -1077,6 +1109,62 @@ function AppShell({ signIn }: { signIn: () => void }) {
     return listDocuments(matterId).then(setMatterDocuments).catch((e) => {
       setMatterDocumentsError(describeLoadError(e, 'The documents in this matter could not be loaded. Try again.'));
     });
+  };
+
+  /**
+   * WHILE ANYTHING IS STILL BEING READ, KEEP ASKING — AND STOP WHEN NOTHING
+   * IS.
+   *
+   * An upload returns before the text exists (Task 9): the bytes are stored,
+   * the row is `pending`, and a parse worker reads them a moment later.
+   * Without this the matter screen keeps saying "Still being read" until
+   * somebody reloads the page, and the document stays un-reviewable on
+   * screen long after it is ready — a screen that has quietly stopped
+   * updating, which is the same failure as a run that stops reporting.
+   *
+   * NOT A PERMANENT POLL. It is armed only by a `pending` document being on
+   * screen and it disarms the moment none is, so a tab left open on a matter
+   * does not talk to the server forever. `matterDocuments` is the dependency,
+   * so each answer re-evaluates the condition — one more read after the last
+   * document lands, and then silence.
+   *
+   * A failed read is NOT retried here. `listDocuments` failing sets
+   * `matterDocumentsError`, which the screen already renders instead of the
+   * list; polling through an error would replace a load error a person can
+   * act on with a spinner that never resolves.
+   */
+  useEffect(() => {
+    if (view !== 'matter' || !matter) return undefined;
+    if (!matterDocuments.some(isNotYetRead)) return undefined;
+    const matterId = matter.id;
+    const timer = setTimeout(() => { void loadMatterDocuments(matterId); }, PARSE_POLL_MS);
+    return () => { clearTimeout(timer); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, matter, matterDocuments]);
+
+  /**
+   * "Read it again" on a document whose parse FAILED.
+   *
+   * The bytes are still stored, so a parse that failed for a reason that is
+   * not a property of the file is recoverable without deleting the document
+   * and adding the same file again — which loses its id, and with it its
+   * collection membership and its place in every review that names it.
+   *
+   * `await-then-apply`: the list is re-read only after the store confirms
+   * the write, never optimistically. The poll above then takes over,
+   * because the row it comes back with is `pending`.
+   */
+  const handleReparseDocument = async (matterId: string, documentId: string) => {
+    try {
+      await reparseDocument(documentId);
+      await loadMatterDocuments(matterId);
+    } catch (e) {
+      notify(
+        e instanceof Error ? `That document could not be read again: ${e.message}`
+          : 'That document could not be read again.',
+        'error',
+      );
+    }
   };
 
   const loadMatterCollections = (matterId: string) => {
@@ -2950,6 +3038,11 @@ function AppShell({ signIn }: { signIn: () => void }) {
           notify(notYetReadMessageFor(reading), 'error');
           return;
         }
+        const unreadable = couldNotBeReadNames(presentRecords);
+        if (unreadable.length > 0) {
+          notify(couldNotBeReadMessageFor(unreadable), 'error');
+          return;
+        }
         const hydrated = await Promise.all(presentRecords.map(hydrateRecordForViewing));
         const members = orderedMembers(collection, hydrated);
         if (!members[0]?.document) {
@@ -2975,6 +3068,11 @@ function AppShell({ signIn }: { signIn: () => void }) {
       const reading = notYetReadNames(matterDocuments);
       if (reading.length > 0) {
         notify(notYetReadMessageFor(reading), 'error');
+        return;
+      }
+      const unreadable = couldNotBeReadNames(matterDocuments);
+      if (unreadable.length > 0) {
+        notify(couldNotBeReadMessageFor(unreadable), 'error');
         return;
       }
       const docs = await Promise.all(matterDocuments.map(hydrateRecordForViewing));
@@ -4152,6 +4250,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
               onRetryDocuments={() => loadMatterDocuments(matter.id)}
               onAddDocuments={(files) => handleAddMatterDocuments(matter.id, files)}
               onRemoveDocument={(documentId) => handleRemoveMatterDocument(matter.id, documentId)}
+              onReparseDocument={(documentId) => handleReparseDocument(matter.id, documentId)}
               collections={matterCollections}
               collectionsError={matterCollectionsError}
               onRetryCollections={() => loadMatterCollections(matter.id)}

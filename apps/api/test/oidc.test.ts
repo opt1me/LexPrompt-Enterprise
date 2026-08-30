@@ -523,6 +523,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'POST /v1/admin/blob-orphans/delete',
       'POST /v1/changesets/:id/publish',
       'POST /v1/documents',
+      'POST /v1/documents/:id/reparse',
       'POST /v1/infer',
       'POST /v1/infer/stream',
       'POST /v1/playbooks/:id/versions',
@@ -569,9 +570,10 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // every route task: 9 through Task 9, 17 with Task 11's six document
     // routes and two admin ones, 49 with Task 19's eight precedent routes,
     // 50 with Task 20's basis read and 54 with Stage 3 Task 8's four run
-    // routes. A DROP in this number without a route being removed is a route
-    // that stopped being registered.
-    expect(checked).toHaveLength(61);
+    // routes, and 62 with Stage 3 Task 24's `POST /v1/documents/:id/reparse`.
+    // A DROP in this number without a route being removed is a route that
+    // stopped being registered.
+    expect(checked).toHaveLength(62);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

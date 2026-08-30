@@ -107,6 +107,7 @@ export { extractableText, usableText, assessDocument, contextBudgetChars } from 
 export type { ReadableSource, DocumentReadability } from './domain/modelContext.ts';
 export {
   isNotYetRead, notYetReadMessage, notYetReadMessageFor, STILL_READING_NOTICE,
+  couldNotBeReadMessageFor, failedToRead,
 } from './domain/parseState.ts';
 export type { ParseStateSource } from './domain/parseState.ts';
 export { orderedMembers } from './domain/collectionOrder.ts';

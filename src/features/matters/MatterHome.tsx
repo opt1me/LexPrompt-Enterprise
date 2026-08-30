@@ -11,6 +11,7 @@ import { MatterStats } from './MatterStats';
 import { MatterActivity } from './MatterActivity';
 import { IntakeWizard } from './IntakeWizard';
 import { DocumentNotices, noUsableText } from './DocumentNotices';
+import { failedToRead, isNotYetRead } from '@lexprompt/core';
 import { suggestCollections, type CollectionSuggestion } from '../../lib/collectionSuggest';
 import { progressLabel } from '../../lib/reviewProgress';
 
@@ -26,6 +27,13 @@ export interface MatterHomeProps {
   onRetryDocuments: () => void;
   onAddDocuments: (files: File[]) => Promise<void>;
   onRemoveDocument: (documentId: string) => Promise<void>;
+  /** Asks the server to read a FAILED document's bytes again. Only ever
+   *  offered on a document whose parse failed — the bytes are still stored,
+   *  so a read that failed for a reason that is not a property of the file
+   *  is recoverable without deleting the document and adding the same file
+   *  again, which would lose its id and its place in every review that
+   *  names it. */
+  onReparseDocument: (documentId: string) => Promise<void>;
 
   /** This matter's collections (Task 7) — loaded and errored independently
    *  of `documents`/`reviews`, for the same reason those two are already
@@ -154,6 +162,7 @@ export function MatterHome({
   onRetryDocuments,
   onAddDocuments,
   onRemoveDocument,
+  onReparseDocument,
   collections,
   collectionsError,
   onRetryCollections,
@@ -177,6 +186,9 @@ export function MatterHome({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [addingDocuments, setAddingDocuments] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
+  /** The document whose re-read is in flight, so its button says what is
+   *  happening rather than looking clickable twice. */
+  const [reparsingId, setReparsingId] = useState<string | null>(null);
   const [deleteMatterOpen, setDeleteMatterOpen] = useState(false);
   const [deletingMatter, setDeletingMatter] = useState(false);
   const [runPickerOpen, setRunPickerOpen] = useState(false);
@@ -277,6 +289,19 @@ export function MatterHome({
       await onRemoveDocument(doc.id);
     } finally {
       setRemovingId(null);
+    }
+  };
+
+  /** `await-then-apply`, like every other write on this screen: the caller
+   *  re-reads the list only once the store has confirmed, and the row that
+   *  comes back is `pending`, which the matter screen's poll then follows to
+   *  `parsed` or back to `failed`. */
+  const handleReparse = async (doc: DocumentRecord) => {
+    setReparsingId(doc.id);
+    try {
+      await onReparseDocument(doc.id);
+    } finally {
+      setReparsingId(null);
     }
   };
 
@@ -502,11 +527,17 @@ export function MatterHome({
                       aria-label={`Select ${doc.name}`}
                       className="shrink-0"
                     />
-                    {doc.parseError
-                      ? <FileWarning className="w-4 h-4 text-risk-high shrink-0" />
-                      : (noUsableText(doc) || doc.markupNotice)
-                        ? <FileWarning className="w-4 h-4 text-risk-med shrink-0" />
-                        : <FileText className="w-4 h-4 text-ink-4 shrink-0" />}
+                    {/* A document still being read gets the SPINNER, not the
+                        warning triangle. It is on its way to working, and an
+                        icon that says otherwise is the same wrong sentence
+                        `DocumentNotices` exists to keep out of the text. */}
+                    {isNotYetRead(doc)
+                      ? <Loader className="w-4 h-4 text-ink-4 shrink-0 animate-spin" aria-hidden="true" />
+                      : doc.parseError
+                        ? <FileWarning className="w-4 h-4 text-risk-high shrink-0" />
+                        : (noUsableText(doc) || doc.markupNotice)
+                          ? <FileWarning className="w-4 h-4 text-risk-med shrink-0" />
+                          : <FileText className="w-4 h-4 text-ink-4 shrink-0" />}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-ink-1 truncate">{doc.name}</p>
                       <p className="font-mono text-pin text-ink-4">
@@ -514,6 +545,19 @@ export function MatterHome({
                       </p>
                       <DocumentNotices doc={doc} />
                     </div>
+                    {/* THE ONE ACTION A FAILED READ OFFERS. Not shown on a
+                        document that parsed (reading it again would blank the
+                        text every review of it was run against) and not on
+                        one still being read (it is already queued). */}
+                    {failedToRead(doc) && (
+                      <button
+                        onClick={() => handleReparse(doc)}
+                        disabled={reparsingId === doc.id}
+                        className="px-2 py-1 rounded-control border border-rule font-ui text-meta text-ink-2 hover:bg-chip-fill disabled:opacity-50 shrink-0"
+                      >
+                        {reparsingId === doc.id ? 'Reading…' : 'Read it again'}
+                      </button>
+                    )}
                     <button
                       onClick={() => handleRemove(doc)}
                       disabled={removingId === doc.id}

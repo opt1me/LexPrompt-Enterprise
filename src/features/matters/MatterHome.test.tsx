@@ -104,6 +104,7 @@ const baseProps = {
   onRetryDocuments: () => {},
   onAddDocuments: async () => {},
   onRemoveDocument: async () => {},
+  onReparseDocument: async () => {},
   collections: [],
   collectionsError: null,
   onRetryCollections: () => {},
@@ -544,5 +545,67 @@ describe('MatterHome — a scanned document says so before anyone runs a review'
     const text = container.textContent ?? '';
     expect(text).toContain('Drop contracts here');
     expect(text).not.toContain('No text could be extracted');
+  });
+});
+
+describe('MatterHome — the three parse states, on screen (Stage 3 Task 24)', () => {
+  /*
+   * §11's third load state, at ingest. An upload returns before the text
+   * exists (Task 9): the bytes are stored, the row is `pending`, and a parse
+   * worker reads them a moment later. A document in that state must look
+   * like what it is — on its way to working — and must not look like one
+   * that was read and says nothing, which is this project's founding defect
+   * one screen earlier than the review.
+   */
+  const reading = () => makeDoc({ parseState: 'pending', text: '' });
+  const failed = () => makeDoc({
+    parseState: 'failed', text: '', parseError: 'Lease.pdf took longer than 180000ms to read.',
+  });
+
+  it('a document still being READ says so, and offers no way to read it again', () => {
+    const container = mount(<MatterHome {...baseProps} documents={[reading()]} />);
+    const text = container.textContent ?? '';
+    expect(text).toContain('Still being read');
+    // NOT the scan disclosure. Nothing has tried to extract this document's
+    // text yet, so "no text could be extracted — it looks like a scan" is
+    // false in both halves.
+    expect(text).not.toContain('No text could be extracted');
+    expect(text).not.toContain('Unreadable');
+    // Already queued: a second request would read as progress while changing
+    // nothing, and the server refuses it by name.
+    expect(text).not.toContain('Read it again');
+  });
+
+  it('a document that FAILED shows why, and offers to read it again', async () => {
+    const onReparseDocument = vi.fn(async () => {});
+    const container = mount(
+      <MatterHome {...baseProps} documents={[failed()]} onReparseDocument={onReparseDocument} />,
+    );
+    const text = container.textContent ?? '';
+    expect(text).toContain('Unreadable');
+    expect(text).toContain('took longer than 180000ms');
+    expect(text).not.toContain('Still being read');
+
+    const button = Array.from(container.querySelectorAll('button'))
+      .find(b => /read it again/i.test(b.textContent || ''));
+    expect(button, 'a failed document offers no way to recover').toBeTruthy();
+    // `await act` — the handler sets `reparsingId`, awaits the caller, then
+    // clears it, so a synchronous `act` leaves the second state update
+    // outside one and React says so on stderr.
+    await act(async () => { button!.click(); });
+    // The document's OWN id. The bytes are still stored under it, which is
+    // the whole reason this is possible rather than "add the file again".
+    expect(onReparseDocument).toHaveBeenCalledWith('d1');
+  });
+
+  it('a document that was READ offers neither — it is simply a document', () => {
+    // The sanity check for the two above: without it, a component that
+    // rendered nothing at all would satisfy both `not.toContain`s.
+    const container = mount(<MatterHome {...baseProps} documents={[makeDoc()]} />);
+    const text = container.textContent ?? '';
+    expect(text).toContain('Lease.pdf');
+    expect(text).not.toContain('Still being read');
+    expect(text).not.toContain('Read it again');
+    expect(text).not.toContain('Unreadable');
   });
 });

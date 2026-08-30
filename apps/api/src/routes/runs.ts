@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import {
-  ModelError, notYetReadMessageFor, targetDocumentIds,
+  ModelError, couldNotBeReadMessageFor, notYetReadMessageFor, targetDocumentIds,
   type RetryCleared, type RetryResult, type ReviewTarget, type RunEventPage, type RunView,
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
@@ -399,10 +399,9 @@ async function refuseUnparsedDocuments(
     throw new ModelError(notYetReadMessageFor(pending.map(r => r.name)), 'conflict', 409);
   }
   if (failed.length > 0) {
-    throw new ModelError(
-      `${failed.map(r => r.name).join(', ')} could not be read, so a review of it would be a `
-      + 'review of no text at all — which reads back as "the agreement is silent on this point" '
-      + 'for every clause. Remove it from this review or add the file again. Nothing was started.',
-      'conflict', 409);
+    // The sentence is `@lexprompt/core`'s, exactly as the pending one above
+    // is. It was written out here and then a second time in the browser's
+    // pre-flight, which is the drift this project keeps paying for.
+    throw new ModelError(couldNotBeReadMessageFor(failed.map(r => r.name)), 'conflict', 409);
   }
 }

@@ -139,6 +139,25 @@ export async function setDocumentRole(
  *  A 404 RESOLVES: the caller asked for the document to be gone and it is
  *  gone. Every other failure rejects — in particular a 500 saying the bytes
  *  survived, which the reader needs to see. */
+/**
+ * Asks the server to read a FAILED document's bytes again.
+ *
+ * The bytes are still stored and the row still points at them, so a parse
+ * that failed for a reason that is not a property of the file — a worker
+ * killed mid-read, a read that outran its timeout, a blob store briefly
+ * unreachable — is recoverable without deleting the document and adding the
+ * same file again. That mattered: doing it the old way loses the document's
+ * id, and with it its collection membership and its place in every review
+ * that names it.
+ *
+ * The server refuses this on a `parsed` or a `pending` document, by name.
+ * Nothing here needs to guess which; the refusal carries its own sentence.
+ */
+export async function reparseDocument(id: string): Promise<DocumentRecord> {
+  return apiSend<DocumentRecord>(
+    'POST', `/v1/documents/${encodeURIComponent(id)}/reparse`, {});
+}
+
 export async function deleteDocument(id: string): Promise<void> {
   try {
     await apiDelete(`/v1/documents/${encodeURIComponent(id)}`);

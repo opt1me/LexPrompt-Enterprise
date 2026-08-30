@@ -65,6 +65,36 @@ export function notYetReadMessageFor(names: string[]): string {
     + 'as absent. Nothing was started; try again in a moment.';
 }
 
+/**
+ * The document was read, and the read FAILED — a different fact from either
+ * of the two above, and the one a reviewer can act on.
+ *
+ * Here rather than inline in the run route for the same reason
+ * `notYetReadMessageFor` is: the server refuses such a review and the
+ * browser refuses to start one, and a sentence written twice will be true
+ * once. Extracted at the SECOND copy, which is the rule this project has
+ * six sibling-drift findings about.
+ *
+ * It names what a review of it would actually produce, because the failure
+ * mode is not an error on screen — it is *"the agreement is silent on this
+ * point"* for every clause, which reads as an answer.
+ */
+export function couldNotBeReadMessageFor(names: string[]): string {
+  const which = names.join(', ');
+  const it = names.length === 1 ? 'it' : 'them';
+  return `${which} could not be read, so a review of ${it} would be a review of no text at `
+    + 'all — which reads back as "the agreement is silent on this point" for every clause. '
+    + `Remove ${it} from this review, or try reading the file again. Nothing was started.`;
+}
+
 /** The short form, for a document row in a list where a paragraph would not
  *  fit. Still says "reading", never "unreadable". */
 export const STILL_READING_NOTICE = 'Still being read — its text is not available yet.';
+
+/** `parseState === 'failed'`: read, and the read failed. Deliberately NOT
+ *  `!!parseError` — a `DocumentFile` the browser parsed itself carries a
+ *  `parseError` and no `parseState`, and that is a local failure with no
+ *  server row behind it to ask to be read again. */
+export function failedToRead(doc: ParseStateSource): boolean {
+  return doc.parseState === 'failed';
+}

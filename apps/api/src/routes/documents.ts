@@ -272,6 +272,56 @@ export function registerDocuments(app: FastifyInstance, db: Db, blobs: BlobStore
     return fromDocumentRow(rows[0]);
   });
 
+  /**
+   * READ IT AGAIN — the one action a `failed` document offers.
+   *
+   * A parse fails for reasons that are not properties of the file: the
+   * worker was killed mid-read, the read outran `API_PARSE_TIMEOUT_MS` on a
+   * busy host, the blob store was briefly unreachable. The bytes are still
+   * here and the row still points at them, so the honest affordance is to
+   * put it back in the queue rather than to make somebody delete a document
+   * and add the same file again — which is what the failure message used to
+   * tell them to do, and which loses the document's id, its collection
+   * membership and its place in every review that names it.
+   *
+   * ONLY from `failed`. Not from `parsed`, which would blank a document
+   * every review of it depends on and reopen the founding defect from a
+   * button; and not from `pending`, which is already queued — a second
+   * request would read as progress while changing nothing. Both are
+   * refused by name rather than answered with a no-op 200, because "we did
+   * nothing and said it worked" is the shape this app exists not to have.
+   *
+   * `parse_state` back to `'pending'`, `parse_error` cleared and `text`
+   * blanked, in ONE statement: a row that said `pending` while still
+   * carrying the old error would show "Reading…" and the failure at once.
+   * The parse worker claims `pending` rows and is the only writer of what
+   * happens next.
+   */
+  app.post('/v1/documents/:id/reparse', async (req): Promise<DocumentRecord> => {
+    const ws = req.actor!.workspaceId;
+    const { id } = req.params as { id: string };
+    const rows = await db.query<DocumentRow>(
+      `update document
+          set parse_state = 'pending', parse_error = null, text = ''
+        where id = $1 and workspace_id = $2 and parse_state = 'failed'
+        returning *`, [id, ws]);
+    if (!rows[0]) {
+      // Which of the two it is, because "nothing happened" with no reason is
+      // the answer a reader cannot act on. Read AFTER the update rather than
+      // before, so the common path is one statement.
+      const held = await db.query<{ parse_state: string; name: string }>(
+        'select parse_state, name from document where id = $1 and workspace_id = $2', [id, ws]);
+      if (!held[0]) throw new ModelError('There is no such document.', 'not_found', 404);
+      throw new ModelError(
+        held[0].parse_state === 'pending'
+          ? `${held[0].name} is already being read. Nothing was changed.`
+          : `${held[0].name} was read successfully, so there is nothing to read again. Reading `
+            + 'it again would blank the text every review of it was run against.',
+        'conflict', 409);
+    }
+    return fromDocumentRow(rows[0]);
+  });
+
   app.delete('/v1/documents/:id', async (req, reply): Promise<void> => {
     const ws = req.actor!.workspaceId;
     const { id } = req.params as { id: string };
