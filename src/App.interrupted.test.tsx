@@ -98,6 +98,32 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
 // retryCell (the fix's finishing mechanism) calls extractClause under the
 // hood — mocking it lets a retry be driven deterministically without a real
 // network call, mirroring App.authRedirect.test.tsx's precedent.
+// TASK 20: a retry is one POST, so this file drives the run client rather
+// than the browser's own extractor. What it is about — an ABANDONED review
+// reopening with a Retry that works, rather than a cell spinning forever —
+// is unchanged.
+const retryCellMock = vi.fn();
+const getFindingsMock = vi.fn();
+const RETRY_RUN = {
+  id: 'retry-run', reviewId: 'r1', state: 'running' as const, requestedByUserId: 'u1',
+  concurrency: 5, createdAt: 1,
+  cells: { total: 1, queued: 0, leased: 1, done: 0, error: 0, cancelled: 0 },
+  version: 1,
+};
+vi.mock('./lib/api/runs', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/runs')>()),
+  retryCell: (...args: unknown[]) => retryCellMock(...args),
+  startRun: vi.fn(),
+  getRun: vi.fn(async () => ({ ...RETRY_RUN, state: 'succeeded' as const, finishedAt: 9 })),
+  cancelRun: vi.fn().mockResolvedValue(undefined),
+  liveRunFor: vi.fn().mockResolvedValue(null),
+  watchRun: () => () => {},
+}));
+vi.mock('./lib/api/findings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/findings')>()),
+  getFindings: (...args: unknown[]) => getFindingsMock(...args),
+}));
+
 const extractClauseMock = vi.fn();
 // The extractors live in `@lexprompt/core` now (Stage 3 Task 3), so the
 // mock target is the barrel — spread over `importOriginal` so every other
@@ -208,6 +234,8 @@ describe('App — reopening an abandoned review (Important 1)', () => {
     saveReviewMock.mockReset().mockResolvedValue(undefined);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
     extractClauseMock.mockReset();
+    retryCellMock.mockReset();
+    getFindingsMock.mockReset();
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -232,13 +260,25 @@ describe('App — reopening an abandoned review (Important 1)', () => {
   });
 
   it('offers Retry on the stalled pending cell, and retrying it persists the result to the same matter', async () => {
-    extractClauseMock.mockResolvedValue({
-      clauseId: 'c2',
-      status: 'done',
-      citations: [{ quote: 'y', documentId: 'd1' }],
-      summary: 'Term is 12 months.',
-      verification: { state: 'unchecked' },
-      notes: [],
+    retryCellMock.mockResolvedValue({
+      run: RETRY_RUN, cleared: { verification: false, netPosition: false },
+    });
+    getFindingsMock.mockResolvedValue({
+      findings: {
+        d1: {
+          // The clause the first Retry button belongs to — the card order
+          // follows the template's clause order, and c1 is the one with an
+          // answer to re-run.
+          c1: {
+            clauseId: 'c1', status: 'done',
+            citations: [{ quote: 'y', documentId: 'd1' }],
+            summary: 'Term is 12 months.',
+            verification: { state: 'unchecked' }, notes: [],
+          },
+          c2: makeAbandonedReview().findings.d1.c2,
+        },
+      },
+      dispositionVersions: {}, findingVersions: {}, version: 1,
     });
 
     window.history.pushState(null, '', '/matters/m1/reviews/r1');
@@ -252,14 +292,12 @@ describe('App — reopening an abandoned review (Important 1)', () => {
     act(() => { (retryButtons[0] as HTMLButtonElement).click(); });
     await flush();
 
-    expect(extractClauseMock).toHaveBeenCalled();
     // Task 6A: `openReview` carries the stored review's `target` onto the
-    // in-session `ReviewRun`, and `reviewFromRun` carries it back onto the
-    // `Review` this retry persists — a review reopened without either leg
-    // of that round trip would silently forget which kind of review it is.
-    expect(saveReviewMock).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'r1', matterId: 'm1', target: { kind: 'documents', documentIds: ['d1'] } }),
-    );
+    // in-session `ReviewRun`, and `handleRetryCell` keys the request through
+    // `findingsKeyFor` over that target — a review reopened without either
+    // leg of that round trip would silently forget which kind of review it
+    // is, and ask about the wrong key.
+    expect(retryCellMock).toHaveBeenCalledWith('r1', 'd1', 'c1');
     expect(container.textContent).toContain('Term is 12 months.');
   });
 

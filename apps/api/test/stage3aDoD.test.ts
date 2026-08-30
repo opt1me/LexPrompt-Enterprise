@@ -105,6 +105,7 @@ describe('the scanners find something (a guard that matches nothing passes vacuo
       'apps/api/src/findings/backfill.ts', 'apps/api/src/findings/read.ts',
       'apps/api/src/dispositions/service.ts', 'apps/api/src/routes/findings.ts',
       'src/lib/api/findings.ts', 'src/lib/api/runs.ts', 'src/lib/loadError.ts',
+      'src/lib/documents.ts', 'apps/api/src/parse/hydrate.ts',
       'apps/api/src/run/worker.ts', 'apps/api/src/run/queue.ts', 'apps/api/src/run/reaper.ts',
       'apps/api/src/main.ts',
       'apps/api/test/dispositions.pg.test.ts', 'apps/api/test/shadowWrite.pg.test.ts',
@@ -227,10 +228,15 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
      */
     const app = codeOf(at('src/App.tsx'));
     expect(app).toContain("import { carryHumanState } from './lib/findingMerge'");
-    // Called, not merely imported — and more than once, because the three
-    // call sites are three different paths a snapshot arrives by.
+    // CALLED, not merely imported. It used to be called from three places —
+    // the live run's `onUpdate`, the retry's `onUpdate` and `failRetryCell`
+    // — because a snapshot arrived by three paths. Tasks 18 and 20 left ONE:
+    // the findings re-read, which is the only place a server-authored map
+    // now meets a human write this browser has just made. One call site,
+    // same rule, and still Task 21's to delete.
     const calls = app.match(/carryHumanState\(/g) ?? [];
-    expect(calls.length).toBeGreaterThanOrEqual(3);
+    expect(calls.length).toBeGreaterThanOrEqual(1);
+    expect(app).toMatch(/carryHumanState\(base, \{ \.\.\.base, findings \}\)/);
     expect(there('src/lib/findingMerge.ts')).toBe(true);
   });
 
@@ -250,8 +256,30 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
     expect(app).not.toMatch(/import\s*\{[^}]*\brunReview\b[^}]*\}\s*from/);
     expect(app).toContain('startRun(');
     expect(app).toContain('watchRun(');
-    // Task 20's, still standing.
-    expect(app, 'Task 20 landed; revisit this guard').toMatch(/\bretryCell\(/);
+    // TASK 20: `retryCell` is a request now, and it comes from the run
+    // CLIENT rather than from the browser's engine — which is what the
+    // import line below is asserting. The engine's own `retryCell` is gone
+    // from `runReview.ts` entirely, with `runReview` beside it.
+    expect(app).toMatch(/import \{[^}]*retryCell[^}]*\} from '\.\/lib\/api\/runs'/);
+    const engine = codeOf(at('src/features/review/runReview.ts'));
+    expect(engine).not.toMatch(/export async function runReview\b/);
+    expect(engine).not.toMatch(/export async function retryCell\b/);
+    // …and it still exports what the browser DOES own, so the two checks
+    // above are not passing because the file emptied.
+    expect(engine).toMatch(/export function emptyRun\b/);
+    // The browser runs no extractor at all any more.
+    expect(engine).not.toContain('extractClause');
+    expect(engine).not.toContain('gatewayModelClient');
+    // …and `hydrateIdForReview`/`hydrateRecordForReview` are gone with the
+    // last thing that handed a document to one. The founding-defect guard
+    // did not go with them — it moved to the server, where the extraction
+    // happens (`apps/api/src/parse/hydrate.ts`).
+    expect(app).not.toMatch(/async function hydrateIdForReview\b/);
+    expect(app).not.toMatch(/async function hydrateRecordForReview\b/);
+    expect(codeOf(at('src/lib/documents.ts')))
+      .not.toMatch(/export async function documentFileForReview\b/);
+    expect(codeOf(at('apps/api/src/parse/hydrate.ts')))
+      .toMatch(/export async function documentFileForReview\b/);
     // The debounced whole-review saver is gone from the repository too.
     const reviews = codeOf(at('src/lib/db/reviews.ts'));
     expect(reviews).not.toContain('createDebouncedReviewSaver');

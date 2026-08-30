@@ -1,20 +1,5 @@
-import {
-  mapWithConcurrency,
-  unchecked,
-  uid,
-  findingsKeyFor,
-  isCollectionTarget,
-  extractClause,
-  extractCollectionClause,
-} from '@lexprompt/core';
-// The BROWSER's `ModelClient`, handed to the extractors on every call. They
-// used to import it themselves; they now take one, so the same two functions
-// run here and in §9's worker with no second copy of either. This module is
-// browser code and is the right place for the browser's implementation to be
-// named — an extractor that reached for `getAccessToken` on a server could
-// not work at all, and would fail somewhere far from here.
-import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import type { WorkspaceSettings, CollectionMember } from '@lexprompt/core';
+import { unchecked, uid, findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
+import type { CollectionMember } from '@lexprompt/core';
 import type { DocumentFile, Finding, ReviewRun, ReviewTarget, PlaybookVersion } from '../../types';
 
 function pendingFinding(clauseId: string): Finding {
@@ -108,44 +93,34 @@ export function countNoContent(run: ReviewRun): number {
   return count;
 }
 
-function withFinding(run: ReviewRun, docId: string, finding: Finding): ReviewRun {
-  return {
-    ...run,
-    findings: {
-      ...run.findings,
-      [docId]: { ...run.findings[docId], [finding.clauseId]: finding },
-    },
-  };
-}
-
-function isAbort(error: unknown): boolean {
-  return (error instanceof DOMException && error.name === 'AbortError') ||
-    (error as { name?: string } | null)?.name === 'AbortError';
-}
-
-/**
- * Marks every cell still `pending` at the moment a run is cancelled as
- * `cancelled` instead. Without this, a queued cell that never got a turn
- * before `AbortController.abort()` fired stayed "Pending" forever — with
- * nothing on screen to say the run had actually stopped, contradicting
- * App.tsx's own (correct) treatment of an abort as a deliberate stop, not a
- * failure. `running` cells are not swept here: each one resolves through
- * `extractClause`'s own AbortError handling to a `cancelled` Finding on its
- * own, via the normal `onUpdate` call below.
+/*
+ * `runReview` AND `retryCell` ARE GONE (Tasks 18 and 20).
+ *
+ * They were the browser's review engine: `runReview` fanned `extractClause`
+ * across a document x clause matrix with bounded concurrency, and
+ * `retryCell` re-ran one cell. Both are the server's now — a run is
+ * `POST /v1/reviews/:id/runs` and a retry is
+ * `POST /v1/reviews/:id/findings/:key/:clause/retry` — which is what makes
+ * the work outlive the tab that asked for it, and what makes "one writer
+ * per finding" true rather than hoped for.
+ *
+ * They did not move as code. `apps/api/src/run/worker.ts` leases one cell
+ * per transaction and calls the SAME `extractClause` /
+ * `extractCollectionClause` out of `@lexprompt/core` (§13 Stage 0's whole
+ * point: one review engine, two processes). What is deleted here is the
+ * orchestration, not the extraction.
+ *
+ * What stays in this file is what the BROWSER still owns: `emptyRun`, the
+ * optimistic shape a just-clicked run renders between the click and the
+ * server's first answer; `runProgress` and `countNoContent`, which read a
+ * run that is already on screen; and `CollectionRunInput`, which the
+ * collection run flow still builds.
+ *
+ * The abort machinery went with them. A cancellation is a request now
+ * (`POST /v1/runs/:id/cancel`), and `cancelPendingCells` lives server-side
+ * in `run/lifecycle.ts` — where it can also tell a run somebody STOPPED
+ * from one that was reaped, which an `AbortController` never could.
  */
-function cancelPendingCells(run: ReviewRun): ReviewRun {
-  let next = run;
-  for (const [docId, byClause] of Object.entries(run.findings)) {
-    for (const finding of Object.values(byClause)) {
-      if (finding.status === 'pending') {
-        next = withFinding(next, docId, {
-          clauseId: finding.clauseId, status: 'cancelled', citations: [], verification: unchecked(), notes: [],
-        });
-      }
-    }
-  }
-  return next;
-}
 
 /**
  * What a collection run needs beyond the ordinary per-document fan-out: the
@@ -162,131 +137,4 @@ function cancelPendingCells(run: ReviewRun): ReviewRun {
 export interface CollectionRunInput {
   target: Extract<ReviewTarget, { kind: 'collection' }>;
   members: CollectionMember<DocumentFile>[];
-}
-
-export async function runReview(
-  initial: ReviewRun,
-  docs: DocumentFile[],
-  settings: WorkspaceSettings,
-  onUpdate: (run: ReviewRun) => void,
-  signal?: AbortSignal,
-  collection?: CollectionRunInput,
-  matterId?: string,
-): Promise<ReviewRun> {
-  const template = initial.templateSnapshot;
-  // The run's own id IS the review's id (App.tsx's `reviewFromRun` writes
-  // `id: run.id` unchanged) — the one id every clause call this run makes
-  // can carry from the moment the run starts, before anything is ever
-  // persisted.
-  const reviewId = initial.id;
-
-  let current = initial;
-
-  try {
-    if (collection) {
-      // A collection review makes ONE model call per clause over every
-      // member together, not one call per document per clause — a different
-      // *shape* of work list, not a different engine: same concurrency
-      // limiter, same abort handling, same progressive onUpdate emission.
-      const key = findingsKeyFor(collection.target);
-      await mapWithConcurrency(
-        template.clauses,
-        settings.concurrency,
-        async clause => {
-          current = withFinding(current, key, {
-            clauseId: clause.id, status: 'running', citations: [], verification: unchecked(), notes: [],
-          });
-          onUpdate(current);
-
-          const finding = await extractCollectionClause(
-            gatewayModelClient, collection.members, clause, template, settings, signal,
-            { matterId, reviewId },
-          );
-          current = withFinding(current, key, finding);
-          onUpdate(current);
-        },
-        signal,
-      );
-    } else {
-      // The standalone path, unchanged: every document x every clause.
-      const cells = docs.flatMap(doc => template.clauses.map(clause => ({ doc, clause })));
-      await mapWithConcurrency(
-        cells,
-        settings.concurrency,
-        async ({ doc, clause }) => {
-          current = withFinding(current, doc.id, {
-            clauseId: clause.id, status: 'running', citations: [], verification: unchecked(), notes: [],
-          });
-          onUpdate(current);
-
-          const finding = await extractClause(
-            gatewayModelClient, doc, clause, template, settings, signal, { matterId, reviewId },
-          );
-          current = withFinding(current, doc.id, finding);
-          onUpdate(current);
-        },
-        signal,
-      );
-    }
-  } catch (error) {
-    if (isAbort(error)) {
-      current = { ...cancelPendingCells(current), cancelledAt: Date.now() };
-      onUpdate(current);
-    }
-    throw error;
-  }
-
-  current = { ...current, completedAt: Date.now() };
-  onUpdate(current);
-  return current;
-}
-
-/**
- * `collection` is the SAME optional `CollectionRunInput` shape `runReview`
- * takes (Task 8A) — not a second, narrower one — so the two agree on what a
- * collection retry needs. When present, this re-runs the COLLECTION
- * extractor (`extractCollectionClause`) over `collection.members` and writes
- * under `findingsKeyFor(collection.target)`, never under `doc.id`: a
- * collection's answer is a synthesis across every member document, and
- * silently falling back to `extractClause` — the single-document extractor —
- * would replace that synthesis with a one-document answer with no sign
- * anything had gone wrong. When absent, behaviour is exactly as before this
- * parameter existed: `doc` is retried through `extractClause` and the result
- * written under `doc.id`.
- */
-export async function retryCell(
-  run: ReviewRun,
-  doc: DocumentFile,
-  clauseId: string,
-  settings: WorkspaceSettings,
-  onUpdate: (run: ReviewRun) => void,
-  collection?: CollectionRunInput,
-  matterId?: string,
-): Promise<ReviewRun> {
-  const clause = run.templateSnapshot.clauses.find(c => c.id === clauseId);
-  // Deliberately return the identical `run` reference: an unknown clause id
-  // is a genuine no-op, and a caller memoising on identity (e.g. React)
-  // should see no change rather than being handed a fresh object that
-  // triggers a pointless re-render.
-  if (!clause) return run;
-
-  const key = collection ? findingsKeyFor(collection.target) : doc.id;
-
-  let current = withFinding(run, key, {
-    clauseId, status: 'running', citations: [], verification: unchecked(), notes: [],
-  });
-  onUpdate(current);
-
-  const finding = collection
-    ? await extractCollectionClause(
-        gatewayModelClient, collection.members, clause, run.templateSnapshot, settings, undefined,
-        { matterId, reviewId: run.id },
-      )
-    : await extractClause(
-        gatewayModelClient, doc, clause, run.templateSnapshot, settings, undefined,
-        { matterId, reviewId: run.id },
-      );
-  current = withFinding(current, key, finding);
-  onUpdate(current);
-  return current;
 }

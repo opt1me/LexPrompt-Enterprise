@@ -92,22 +92,6 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
   },
 }));
 
-// The real `./lib/documents` module is used everywhere else in the App
-// test suite (it isn't mocked in App.authRedirect.test.tsx either), so
-// this only wraps `evictPageImages` to observe the call App.tsx makes —
-// the underlying cache eviction still runs for real.
-const evictPageImagesMock = vi.fn();
-vi.mock('./lib/documents', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./lib/documents')>();
-  return {
-    ...actual,
-    evictPageImages: (documentId: string) => {
-      evictPageImagesMock(documentId);
-      return actual.evictPageImages(documentId);
-    },
-  };
-});
-
 import App from './App';
 
 async function flush(times = 6) {
@@ -156,7 +140,6 @@ describe('App — removing a matter document evicts its cached page images (Task
     deleteDocumentMock.mockReset().mockResolvedValue(undefined);
     getDocumentBlobMock.mockReset().mockResolvedValue(null);
     getProfileMock.mockReset().mockResolvedValue({ id: 'u1', name: 'Test User', initials: 'TU' });
-    evictPageImagesMock.mockReset();
     // MatterHome confirms destructive removal via window.confirm; jsdom
     // doesn't implement it, so it must be stubbed to proceed.
     confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
@@ -173,7 +156,12 @@ describe('App — removing a matter document evicts its cached page images (Task
     confirmSpy.mockRestore();
   });
 
-  it('calls evictPageImages(documentId) once a document is removed from its matter', async () => {
+  it('deletes the document, and names it in the confirmation it asked for', async () => {
+    // Was "calls evictPageImages(documentId) once a document is removed".
+    // TASK 20: there is no in-memory page-image cache in the browser any
+    // more — `documentFileForReview` went with the last caller that handed
+    // a document to an extractor, and the cache existed only to serve it.
+    // What remains is the delete itself and the sentence that asks for it.
     window.history.pushState(null, '', '/matters/m1');
     act(() => { root.render(<App />); });
     await flush();
@@ -184,8 +172,6 @@ describe('App — removing a matter document evicts its cached page images (Task
     await flush();
 
     expect(deleteDocumentMock).toHaveBeenCalledWith('d1');
-    expect(evictPageImagesMock).toHaveBeenCalledWith('d1');
-    expect(evictPageImagesMock).toHaveBeenCalledTimes(1);
     // The document is gone from the reloaded list, and the confirm prompt
     // named it correctly.
     expect(confirmSpy).toHaveBeenCalledWith('Remove "nda.txt" from this matter? This cannot be undone.');

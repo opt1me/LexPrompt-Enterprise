@@ -245,101 +245,7 @@ export function toDocumentRecord(
  *  review whose document blob has since gone missing. */
 export const BLOB_UNAVAILABLE_MESSAGE = 'The original file for this document is no longer available.';
 
-/**
- * Whether a persisted document needs its page images regenerated before a
- * review can use them: a PDF with at least one page whose extracted text
- * falls below `SCAN_TEXT_THRESHOLD`.
- *
- * Applied PER PAGE, not to the document's combined text length — the same
- * granularity `parsePdf` itself uses when deciding which pages to render
- * (and that `modelContext.ts`'s `usableText` uses for the identical reason
- * on the chat/review-context side). A document-wide character count would
- * let a single readable page carry an entire scanned document over the
- * threshold: a typed cover page followed by fifteen scanned signature pages
- * has plenty of text *in total*, but the body still needs page images for a
- * vision-capable model to read it. Checking per page is what catches that
- * mixed case; a whole-document check would silently skip regenerating
- * images for it.
- *
- * Non-PDF documents (docx, txt) never have page images to regenerate.
- */
-function documentNeedsPageImages(record: DocumentRecord): boolean {
-  if (record.kind !== 'pdf') return false;
-  return pageSegments(record.text).some(page => page.trim().length < SCAN_TEXT_THRESHOLD);
-}
 
-type PageImages = NonNullable<DocumentFile['pageImages']>;
-
-/**
- * Session-only cache of regenerated page images, keyed by document id, so a
- * second review of the same document in the same tab doesn't re-render a
- * multi-page scan it already rendered once. Deliberately never persisted —
- * that would reintroduce exactly the storage cost R2 (page images are
- * derived data, not stored) exists to avoid. A plain module-level `Map` is
- * enough: it lives only as long as this module instance (i.e. this page
- * load), and a reload starts over with a fresh, empty one automatically.
- *
- * An empty array is a valid cached value — it means "this document needed
- * images, regeneration ran, and every qualifying page's canvas render
- * failed" (see `renderPageToJpeg`'s per-page tolerance) — and must still
- * short-circuit a later review rather than retrying a render already known
- * to fail.
- *
- * Bounded, not unbounded: page images are the largest objects this app
- * holds in memory (a base64 JPEG per page, roughly a third larger than the
- * bytes it was rendered from), so a session that reviews many scanned
- * documents back to back must not grow this map forever — that would
- * reproduce, in memory instead of on disk, exactly the storage-cost problem
- * that motivated never persisting page images in the first place. Evicted
- * least-recently-used via `pageImageCache`'s own iteration order (a `Map`
- * iterates in insertion order, so `cacheGet` re-inserts on a hit to move an
- * entry to the "most recent" end, and `cacheSet` evicts from the "oldest"
- * end — `.keys().next().value` — once the cap is exceeded).
- *
- * Capped at `PAGE_IMAGE_CACHE_MAX_DOCUMENTS` documents (not bytes): a
- * reviewer works through one matter's documents at a time, and a matter
- * rarely has more than a handful of scans in flight in a single sitting —
- * ten is generous headroom for that real usage pattern while still bounding
- * the worst case (many separate matters' scans reviewed back to back in one
- * long session) to a fixed, small number of documents' worth of images
- * rather than letting it climb indefinitely.
- */
-export const PAGE_IMAGE_CACHE_MAX_DOCUMENTS = 10;
-const pageImageCache = new Map<string, PageImages>();
-
-function cachedPageImages(documentId: string): PageImages | undefined {
-  const hit = pageImageCache.get(documentId);
-  if (hit) {
-    // Move to the most-recently-used end so eviction below takes the
-    // actual least-recently-used entry, not just the least-recently-added.
-    pageImageCache.delete(documentId);
-    pageImageCache.set(documentId, hit);
-  }
-  return hit;
-}
-
-function setCachedPageImages(documentId: string, images: PageImages): void {
-  pageImageCache.delete(documentId);
-  pageImageCache.set(documentId, images);
-  if (pageImageCache.size > PAGE_IMAGE_CACHE_MAX_DOCUMENTS) {
-    const oldest = pageImageCache.keys().next().value;
-    if (oldest !== undefined) pageImageCache.delete(oldest);
-  }
-}
-
-/**
- * Removes one document's regenerated page images from the session cache —
- * for a caller to invoke once a document is deleted from its matter
- * (`deleteDocument`), so a removed document's images don't linger in memory
- * for the rest of the session with nothing left that can ever request them
- * again. Exported rather than wired in here: the call site is
- * `handleRemoveMatterDocument` in `App.tsx`, which another change is
- * currently editing — safe to call any time, including for a document id
- * that was never cached (a no-op `Map.delete` on a missing key).
- */
-export function evictPageImages(documentId: string): void {
-  pageImageCache.delete(documentId);
-}
 
 /**
  * The stored provenance caveat, spread onto every `DocumentFile` rebuilt
@@ -361,7 +267,7 @@ function carriedMarkupNotice(record: DocumentRecord): { markupNotice?: string } 
  *  ingest time, without re-parsing. No re-parse is needed here because the
  *  viewer (`DocumentViewer`/`PdfCanvas`) renders straight from `file` and
  *  never touches `pageImages` — that field only matters when *running* a
- *  new review over the document (see `documentFileForReview` below).
+ *  new review over the document — the server hydrates for review now.
  *
  *  `blob === null` (the document's bytes could not be found — see
  *  `getDocumentBlob`) degrades to a viewer-less placeholder rather than
@@ -392,106 +298,30 @@ export function documentFileForViewing(record: DocumentRecord, blob: Blob | null
   };
 }
 
-/** Rebuilds a `DocumentFile` for RUNNING a new review over a persisted
- *  document. Unlike `documentFileForViewing`, this re-derives `pageImages`
- *  from the restored file through `parseFile` — but ONLY when the document
- *  actually needs them (`documentNeedsPageImages`: a PDF with at least one
- *  page below `SCAN_TEXT_THRESHOLD`) and doesn't already have a
- *  session-cached copy (`pageImageCache`). A document with a healthy text
- *  layer throughout is returned with its persisted text untouched — no
- *  re-parse at all — exactly like `documentFileForViewing`, since
- *  re-running pdfjs over the whole file to regenerate images nothing needs
- *  would be the very cost this design (page images are never persisted,
- *  only regenerated on demand "by the same code that produced them at
- *  ingest") exists to cut.
+/**
+ * TASK 20: `documentFileForReview`, THE PAGE-IMAGE CACHE AND
+ * `evictPageImages` ARE GONE — with the last browser caller that needed
+ * them.
  *
- *  A document already marked `parseError` at ingest is not re-parsed —
- *  re-running a parse that failed once is unlikely to succeed differently
- *  and would discard the original error message — its record is carried
- *  through as-is instead. A missing blob (`blob === null`) degrades the
- *  same way `documentFileForViewing` does, rather than throwing: the
- *  document simply cannot be reviewed until its file is re-added, but the
- *  rest of the run is not blocked by it.
+ * They existed because the browser handed documents to the extractor: a
+ * scan's page images are derived data, never persisted, and had to be
+ * regenerated on demand before a review could read one. Nothing in `src/`
+ * runs an extractor any more. A run is a POST and a retry is a POST, and
+ * the server hydrates for review itself.
  *
- *  If regeneration *is* attempted and fails (`parseFile` catches internally
- *  and reports it as `parseError`), that failure is returned as-is rather
- *  than silently falling back to "no images needed" — a caller checking
- *  `pageImages` alone cannot tell an unreadable scan from a document that
- *  never needed images, so it must check `parseError` too. */
-export async function documentFileForReview(record: DocumentRecord, blob: Blob | null): Promise<DocumentFile> {
-  // FIRST, before the blob and before the stored `parseError`. A document
-  // the server has not finished reading has `text: ''` and no `parseError`
-  // at all, so every check below it would pass it through as a document
-  // that says nothing — the founding defect, arriving through the upload's
-  // own write path rather than through a scan.
-  if (isNotYetRead(record)) {
-    return {
-      id: record.id,
-      name: record.name,
-      text: record.text,
-      file: blob ? new File([blob], record.name, { type: blob.type }) : new File([], record.name),
-      kind: record.kind,
-      parseError: notYetReadMessage(record.name),
-      ...carriedMarkupNotice(record),
-    };
-  }
-  if (!blob) {
-    return {
-      id: record.id,
-      name: record.name,
-      text: record.text,
-      file: new File([], record.name),
-      kind: record.kind,
-      parseError: record.parseError ?? BLOB_UNAVAILABLE_MESSAGE,
-      ...carriedMarkupNotice(record),
-    };
-  }
-  const file = new File([blob], record.name, { type: blob.type });
-  if (record.parseError) {
-    return {
-      id: record.id, name: record.name, text: record.text, file, kind: record.kind,
-      parseError: record.parseError, ...carriedMarkupNotice(record),
-    };
-  }
-
-  if (!documentNeedsPageImages(record)) {
-    return { id: record.id, name: record.name, text: record.text, file, kind: record.kind, ...carriedMarkupNotice(record) };
-  }
-
-  const cached = cachedPageImages(record.id);
-  if (cached) {
-    return {
-      id: record.id,
-      name: record.name,
-      text: record.text,
-      file,
-      kind: record.kind,
-      pageImages: cached.length ? cached : undefined,
-      ...carriedMarkupNotice(record),
-    };
-  }
-
-  const reparsed = await parseFile(file);
-  // Cache only a successful regeneration. A failed one (parseError set)
-  // is left uncached deliberately: it's surfaced to the caller below like
-  // any other unreadable document rather than remembered as a permanent
-  // "this document has no images" verdict, in case the failure was
-  // transient (e.g. a corrupt-looking read that succeeds on a retry).
-  if (!reparsed.parseError) {
-    setCachedPageImages(record.id, reparsed.pageImages ?? []);
-  }
-  // parseFile mints its own fresh id (it has no notion of a persisted
-  // document); overridden here so the returned DocumentFile keeps the
-  // DocumentRecord's real id — the id a review's `documentIds` and
-  // `findings` map must key against for this document.
-  // The re-parse's own notice wins over the record's: it was derived from
-  // the same bytes, just now, by the same detector. In practice this branch
-  // is PDF-only (`documentNeedsPageImages` is false for every docx), so
-  // neither has one — spelled out rather than assumed, so that if a future
-  // re-parse path ever covers docx it discloses what it actually found
-  // instead of a stale caveat.
-  return { ...carriedMarkupNotice(record), ...reparsed, id: record.id, name: record.name };
-}
+ * The RULE they carried has not gone anywhere — it moved to where the
+ * extraction now happens, which is the only place it can be true:
+ * `apps/api/src/parse/hydrate.ts`'s own `documentFileForReview`, with the
+ * per-page `SCAN_TEXT_THRESHOLD` check, the byte-bounded cache, the
+ * still-being-read refusal and the missing-bytes refusal, all proved
+ * against a real Postgres in `hydrate.pg.test.ts`. Keeping a second copy
+ * here — reachable from nothing — is the sibling drift this project has six
+ * findings about, in the form where one copy is dead and nobody notices it
+ * has stopped agreeing with the live one.
+ *
+ * `documentFileForViewing` stays. It is the hydration the VIEWER wants and
+ * it carries no page images by design: `PdfCanvas` renders the PDF itself.
+ */
 
 /** Builds the per-page text-item index the citation matcher needs. */
 export async function extractPageText(pdf: {

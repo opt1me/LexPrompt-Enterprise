@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  parseFile, parseFiles, toDocumentRecord, documentFileForReview, documentFileForViewing,
-  evictPageImages, BLOB_UNAVAILABLE_MESSAGE, PAGE_IMAGE_CACHE_MAX_DOCUMENTS,
+  parseFile, parseFiles, toDocumentRecord, documentFileForViewing, BLOB_UNAVAILABLE_MESSAGE,
 } from './documents';
 import { TRACKED_CHANGES_NOTICE, COMMENTS_NOTICE, MARKUP_UNCHECKED_NOTICE } from './docxMarkup';
 import { buildDocx, CLEAN_BODY, TRACKED_BODY, COMMENTED_BODY, TABLE_BODY } from '../test/docxFixture';
@@ -262,251 +261,20 @@ describe('toDocumentRecord', () => {
   });
 });
 
-describe('documentFileForReview', () => {
-  function makeRecord(overrides: Partial<DocumentRecord> = {}): DocumentRecord {
-    return {
-      id: 'doc-1',
-      matterId: 'matter-1',
-      name: 'lease.pdf',
-      kind: 'pdf',
-      text: '',
-      byteSize: 100,
-      addedAt: Date.now(),
-      addedByUserId: 'user-1',
-      role: 'standalone',
-      ...overrides,
-    };
-  }
-
-  function makeBlob(): Blob {
-    return new Blob(['%PDF-1.4 fake bytes'], { type: 'application/pdf' });
-  }
-
-  /** Stubs the canvas so `renderPageToJpeg` succeeds in jsdom; returns a
-   *  restore function to call at the end of the test. */
-  function mockScanCanvas(): () => void {
-    const fakeCanvas = {
-      width: 0,
-      height: 0,
-      getContext: vi.fn(() => ({})),
-      toDataURL: vi.fn(() => 'data:image/jpeg;base64,eA=='),
-    };
-    const originalCreateElement = document.createElement.bind(document);
-    const spy = vi
-      .spyOn(document, 'createElement')
-      .mockImplementation((tag: string) =>
-        tag === 'canvas' ? (fakeCanvas as unknown as HTMLCanvasElement) : originalCreateElement(tag),
-      );
-    return () => spy.mockRestore();
-  }
-
-  /** A one-page, below-threshold "scan" pdfjs document, freshly built each
-   *  call so a `mockImplementation` (as opposed to `mockReturnValueOnce`)
-   *  can serve an unbounded number of `getDocument()` calls in the cache
-   *  bound test below. */
-  function scanPdfDocument() {
-    return {
-      promise: Promise.resolve({
-        numPages: 1,
-        getPage: async () => ({
-          getTextContent: async () => ({ items: [{ str: 'x' }] }),
-          getViewport: () => ({ width: 10, height: 10 }),
-          render: vi.fn(() => ({ promise: Promise.resolve() })),
-        }),
-      }),
-    };
-  }
-
-  it('does not re-parse a document whose text layer is healthy on every page', async () => {
-    const record = makeRecord({
-      text: '[Page 1]\nThis page has plenty of real, readable text content.\n\n'
-        + '[Page 2]\nAnother page with plenty of readable text content too.\n\n',
-    });
-
-    const doc = await documentFileForReview(record, makeBlob());
-
-    const pdfjs = await import('pdfjs-dist');
-    expect(pdfjs.getDocument).not.toHaveBeenCalled();
-    expect(doc.text).toBe(record.text);
-    expect(doc.pageImages).toBeUndefined();
-    expect(doc.parseError).toBeUndefined();
-  });
-
-  it('regenerates page images, per page, for a document with at least one below-threshold page', async () => {
-    // Mixed document: page 1 is healthy text, page 2 is a scan -- a
-    // document-wide character count would let page 1 carry the whole
-    // document over SCAN_TEXT_THRESHOLD and skip page 2 entirely.
-    const record = makeRecord({
-      id: 'doc-mixed',
-      text: '[Page 1]\nThis page has plenty of real, readable text content.\n\n'
-        + '[Page 2]\nx\n\n',
-    });
-
-    const fakeCanvas = {
-      width: 0,
-      height: 0,
-      getContext: vi.fn(() => ({})),
-      toDataURL: vi.fn(() => 'data:image/jpeg;base64,cGFnZTI='),
-    };
-    const originalCreateElement = document.createElement.bind(document);
-    const createElementSpy = vi
-      .spyOn(document, 'createElement')
-      .mockImplementation((tag: string) =>
-        tag === 'canvas' ? (fakeCanvas as unknown as HTMLCanvasElement) : originalCreateElement(tag),
-      );
-
-    const pdfjs = await import('pdfjs-dist');
-    vi.mocked(pdfjs.getDocument).mockReturnValueOnce({
-      promise: Promise.resolve({
-        numPages: 2,
-        getPage: async (n: number) => ({
-          getTextContent: async () => ({
-            items: [{ str: n === 1 ? 'This page has plenty of real, readable text content.' : 'x' }],
-          }),
-          getViewport: () => ({ width: 10, height: 10 }),
-          render: vi.fn(() => ({ promise: Promise.resolve() })),
-        }),
-      }),
-    } as unknown as ReturnType<typeof pdfjs.getDocument>);
-
-    const doc = await documentFileForReview(record, makeBlob());
-
-    expect(pdfjs.getDocument).toHaveBeenCalledTimes(1);
-    expect(doc.pageImages?.length).toBe(1);
-    expect(doc.pageImages?.[0].data).toBe('cGFnZTI=');
-    expect(doc.parseError).toBeUndefined();
-
-    createElementSpy.mockRestore();
-  });
-
-  it('caches regenerated page images within the session, so a second review does not re-render', async () => {
-    const record = makeRecord({ id: 'doc-cache', text: '[Page 1]\nx\n\n' });
-    const fakeCanvas = {
-      width: 0,
-      height: 0,
-      getContext: vi.fn(() => ({})),
-      toDataURL: vi.fn(() => 'data:image/jpeg;base64,Y2FjaGVk'),
-    };
-    const originalCreateElement = document.createElement.bind(document);
-    const createElementSpy = vi
-      .spyOn(document, 'createElement')
-      .mockImplementation((tag: string) =>
-        tag === 'canvas' ? (fakeCanvas as unknown as HTMLCanvasElement) : originalCreateElement(tag),
-      );
-
-    const pdfjs = await import('pdfjs-dist');
-    vi.mocked(pdfjs.getDocument).mockReturnValueOnce({
-      promise: Promise.resolve({
-        numPages: 1,
-        getPage: async () => ({
-          getTextContent: async () => ({ items: [{ str: 'x' }] }),
-          getViewport: () => ({ width: 10, height: 10 }),
-          render: vi.fn(() => ({ promise: Promise.resolve() })),
-        }),
-      }),
-    } as unknown as ReturnType<typeof pdfjs.getDocument>);
-
-    const first = await documentFileForReview(record, makeBlob());
-    expect(first.pageImages?.length).toBe(1);
-    expect(pdfjs.getDocument).toHaveBeenCalledTimes(1);
-
-    // Second review of the same document, same session: no further
-    // getDocument() call (no re-render), and the persisted text is
-    // untouched rather than replaced by whatever the (unused) reparse
-    // would have produced.
-    const second = await documentFileForReview(record, makeBlob());
-    expect(pdfjs.getDocument).toHaveBeenCalledTimes(1);
-    expect(second.pageImages).toEqual(first.pageImages);
-    expect(second.text).toBe(record.text);
-
-    createElementSpy.mockRestore();
-  });
-
-  it('surfaces a failed regeneration as parseError, distinct from "no images needed"', async () => {
-    const record = makeRecord({ id: 'doc-broken', text: '[Page 1]\nx\n\n' });
-
-    const pdfjs = await import('pdfjs-dist');
-    vi.mocked(pdfjs.getDocument).mockImplementationOnce(() => {
-      throw new Error('stored bytes are not a valid PDF');
-    });
-
-    const doc = await documentFileForReview(record, makeBlob());
-
-    expect(doc.parseError).toMatch(/stored bytes are not a valid PDF/);
-    // A document that legitimately needed no images also comes back with
-    // pageImages undefined -- parseError is what tells the two apart, so a
-    // caller must not treat an empty pageImages array as "reviewable".
-    expect(doc.pageImages).toBeUndefined();
-  });
-
-  it('degrades to an explanatory parseError, never a throw, when the blob is missing', async () => {
-    const record = makeRecord({ id: 'doc-missing-blob', text: '[Page 1]\nx\n\n' });
-    const doc = await documentFileForReview(record, null);
-    expect(doc.parseError).toBe(BLOB_UNAVAILABLE_MESSAGE);
-    expect(doc.pageImages).toBeUndefined();
-  });
-
-  it('evictPageImages removes a cached entry, so the next review regenerates instead of reusing it', async () => {
-    const record = makeRecord({ id: 'doc-evict', text: '[Page 1]\nx\n\n' });
-    const restoreCanvas = mockScanCanvas();
-    const pdfjs = await import('pdfjs-dist');
-    vi.mocked(pdfjs.getDocument).mockReturnValueOnce(
-      scanPdfDocument() as unknown as ReturnType<typeof pdfjs.getDocument>,
-    );
-
-    const first = await documentFileForReview(record, makeBlob());
-    expect(first.pageImages?.length).toBe(1);
-    expect(pdfjs.getDocument).toHaveBeenCalledTimes(1);
-
-    evictPageImages('doc-evict');
-
-    vi.mocked(pdfjs.getDocument).mockReturnValueOnce(
-      scanPdfDocument() as unknown as ReturnType<typeof pdfjs.getDocument>,
-    );
-    const second = await documentFileForReview(record, makeBlob());
-    expect(pdfjs.getDocument).toHaveBeenCalledTimes(2); // re-rendered, not served from a stale cache entry
-    expect(second.pageImages?.length).toBe(1);
-
-    restoreCanvas();
-  });
-
-  it('bounds the session cache to PAGE_IMAGE_CACHE_MAX_DOCUMENTS documents, evicting least-recently-used', async () => {
-    const restoreCanvas = mockScanCanvas();
-    const pdfjs = await import('pdfjs-dist');
-    vi.mocked(pdfjs.getDocument).mockImplementation(
-      () => scanPdfDocument() as unknown as ReturnType<typeof pdfjs.getDocument>,
-    );
-
-    // Fill the cache past its cap with one more document than it holds.
-    const overflow = PAGE_IMAGE_CACHE_MAX_DOCUMENTS + 1;
-    for (let i = 0; i < overflow; i++) {
-      const record = makeRecord({ id: `doc-bound-${i}`, text: '[Page 1]\nx\n\n' });
-      await documentFileForReview(record, makeBlob());
-    }
-    const callsAfterFill = vi.mocked(pdfjs.getDocument).mock.calls.length;
-    expect(callsAfterFill).toBe(overflow);
-
-    // The first document inserted was evicted to make room for the last —
-    // reviewing it again must re-render, not hit a stale cache entry.
-    const evicted = makeRecord({ id: 'doc-bound-0', text: '[Page 1]\nx\n\n' });
-    await documentFileForReview(evicted, makeBlob());
-    expect(vi.mocked(pdfjs.getDocument).mock.calls.length).toBe(callsAfterFill + 1);
-
-    // The most recently inserted document is still cached (no re-render).
-    const recent = makeRecord({ id: `doc-bound-${overflow - 1}`, text: '[Page 1]\nx\n\n' });
-    await documentFileForReview(recent, makeBlob());
-    expect(vi.mocked(pdfjs.getDocument).mock.calls.length).toBe(callsAfterFill + 1);
-
-    restoreCanvas();
-  });
-});
-
-// Placed last and using its own fresh module instance (via vi.resetModules +
-// a dynamic re-import) rather than the file's top-level `parseFile`/`parseFiles`
-// bindings: this test needs the *dynamic import of pdfjs-dist itself* to fail
-// once, not just `getDocument()`, which the other tests' shared mock can't
-// express without disturbing them. Kept last so its vi.doMock overrides can't
-// leak into earlier tests' `await import('pdfjs-dist')` calls.
+/*
+ * `documentFileForReview`'s SUITE IS GONE WITH THE FUNCTION (Task 20).
+ *
+ * It proved the per-page `SCAN_TEXT_THRESHOLD` check, the session cache and
+ * its LRU bound, the failed-regeneration `parseError`, and the missing-blob
+ * degradation. Every one of those claims is still made, against a real
+ * Postgres, in `apps/api/test/hydrate.pg.test.ts` — because that is where
+ * the extraction happens now, and a rule about what an extractor may be
+ * handed can only be true where the extractor is.
+ *
+ * The browser regenerates no page images any more: a run is a POST and a
+ * retry is a POST. Keeping this suite would have meant keeping a second
+ * implementation, reachable from nothing, for it to test.
+ */
 describe('loadPdfjs retry after a failed import', () => {
   it('recovers on the next parseFile instead of staying broken forever', async () => {
     vi.resetModules();
@@ -649,16 +417,10 @@ describe('hydration carries the markup notice', () => {
     expect(documentFileForViewing(noticed, new Blob(['x'])).markupNotice).toBe(TRACKED_CHANGES_NOTICE);
   });
 
-  it('reaches a run over a persisted document', async () => {
-    const doc = await documentFileForReview(noticed, new Blob(['x']));
-    expect(doc.markupNotice).toBe(TRACKED_CHANGES_NOTICE);
-  });
-
   it('is absent, not undefined, on a document that carries no notice', async () => {
     const clean: DocumentRecord = { ...noticed };
     delete clean.markupNotice;
     expect('markupNotice' in documentFileForViewing(clean, new Blob(['x']))).toBe(false);
-    expect('markupNotice' in (await documentFileForReview(clean, new Blob(['x'])))).toBe(false);
   });
 });
 
@@ -673,15 +435,19 @@ describe('hydration carries the markup notice', () => {
  * browser's only copy of a document's text is the row the upload just
  * blanked.
  *
- * What that produced: `documentFileForReview` handed the extractor a
- * document with `text: ''` and no `parseError`, `assessDocument` answered
+ * What that produced: the review hydration handed the extractor a document
+ * with `text: ''` and no `parseError`, `assessDocument` answered
  * `unreadable`, and every clause came back *"X has no readable text or
  * images to review. It may have failed to parse, or be a scan with no
  * extractable content."* — false in BOTH branches, for a document nothing
  * had tried to read yet. `parseState` was on the wire with zero readers in
  * `src/`.
  *
- * These are the readers.
+ * TASK 20: the REVIEW half of these cases moved to the server with the
+ * hydration it was about (`apps/api/test/hydrate.pg.test.ts`), which is
+ * where an extractor can now be handed a document at all. What stays here
+ * is the half the browser still owns — the VIEWER, which must not present
+ * a document that has not been read yet as one that says nothing.
  */
 describe('a document that has not finished being read is loudly not-yet-read', () => {
   const pending: DocumentRecord = {
@@ -697,43 +463,39 @@ describe('a document that has not finished being read is loudly not-yet-read', (
     role: 'standalone',
   };
 
-  it('says so on the review hydration, rather than handing over an empty document', async () => {
-    const doc = await documentFileForReview(pending, new Blob(['%PDF-1.4']));
+  it('says so on the viewer hydration, and wins over the missing-blob message', () => {
+    const doc = documentFileForViewing(pending, null);
     expect(doc.parseError).toBeTruthy();
     expect(doc.parseError).toContain('lease.pdf');
     expect(doc.parseError).toMatch(/has not finished being read/);
     // …and it does NOT read as a parse failure or as a scan, which is the
     // whole distinction.
     expect(doc.parseError).not.toMatch(/failed to parse|scan/i);
-  });
-
-  it('says so on the viewer hydration too, and wins over the missing-blob message', () => {
-    const doc = documentFileForViewing(pending, null);
-    expect(doc.parseError).toMatch(/has not finished being read/);
     expect(doc.parseError).not.toBe(BLOB_UNAVAILABLE_MESSAGE);
   });
 
-  it('leaves a parsed document exactly as it was — absent parseState is not pending', async () => {
+  it('leaves a parsed document exactly as it was — absent parseState is not pending', () => {
     // A record the browser built for itself has never been anywhere that
     // could answer the question, and treating "we do not know" as "still
-    // reading" would refuse a review of a document sitting parsed in memory.
+    // reading" would put a "not read yet" banner over a document sitting
+    // parsed in memory.
     const unknown: DocumentRecord = { ...pending, text: 'The term is ten years.' };
     delete unknown.parseState;
-    const doc = await documentFileForReview(unknown, new Blob(['%PDF-1.4']));
+    const doc = documentFileForViewing(unknown, new Blob(['%PDF-1.4']));
     expect(doc.parseError).toBeUndefined();
     expect(doc.text).toBe('The term is ten years.');
 
-    const parsed = await documentFileForReview(
+    const parsed = documentFileForViewing(
       { ...pending, parseState: 'parsed', text: 'The term is ten years.' },
       new Blob(['%PDF-1.4']));
     expect(parsed.parseError).toBeUndefined();
   });
 
-  it('carries a real parse failure through unchanged — the two are different facts', async () => {
+  it('carries a real parse failure through unchanged — the two are different facts', () => {
     const failed: DocumentRecord = {
       ...pending, parseState: 'failed', parseError: 'This PDF is encrypted and could not be read.',
     };
-    const doc = await documentFileForReview(failed, new Blob(['%PDF-1.4']));
-    expect(doc.parseError).toBe('This PDF is encrypted and could not be read.');
+    expect(documentFileForViewing(failed, new Blob(['%PDF-1.4'])).parseError)
+      .toBe('This PDF is encrypted and could not be read.');
   });
 });
