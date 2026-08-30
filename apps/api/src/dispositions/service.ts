@@ -130,6 +130,39 @@ export async function ensureDisposition(
 }
 
 /**
+ * The same `unchecked` row, for EVERY cell of a run, in one statement.
+ *
+ * Here rather than in `run/queue.ts` because this module is the only writer
+ * of `finding_disposition` anywhere in this codebase, and `stage3aDoD`'s
+ * scanner enforces that by name — correctly. A third writer appearing there
+ * is exactly the thing that scanner exists to catch, whatever the writer's
+ * intentions, because "a lawyer's judgement written from somewhere that is
+ * neither a person's request nor the one-time migration" is not a claim a
+ * reader should have to check file by file.
+ *
+ * `createRun` needs it because a run started through
+ * `POST /v1/reviews/:id/runs` over a review with no findings blob seeded no
+ * disposition at all, and the first verification a reviewer made on it
+ * answered 404. `ensureDisposition` above does this one key at a time, which
+ * is forty round trips inside the transaction a caller is holding open.
+ *
+ * `on conflict do nothing`: a re-run's findings already have theirs, and
+ * whatever they say is a judgement `resetDispositions` is about to deal with
+ * properly. Creating a row is not recording a judgement — `changed_count`
+ * is 0, the actor and the instant are NULL, and no event is written.
+ */
+export async function ensureDispositions(
+  t: Tx, reviewId: string, workspaceId: string, findingsKeys: string[], clauseIds: string[],
+): Promise<void> {
+  await t.query(
+    `insert into finding_disposition
+       (review_id, findings_key, clause_id, workspace_id, state, changed_count)
+     select $1, k, c, $2, 'unchecked', 0 from unnest($3::text[], $4::text[]) as a(k, c)
+     on conflict (review_id, findings_key, clause_id) do nothing`,
+    [reviewId, workspaceId, findingsKeys, clauseIds]);
+}
+
+/**
  * Moves a finding's disposition, and records that it moved.
  *
  * `expectedVersion` is the version the caller was looking at. If the row has

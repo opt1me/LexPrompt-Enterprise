@@ -434,3 +434,43 @@ describe('the snapshot is what a retry re-runs against', () => {
     expect(SNAPSHOT(['c1']).clauses.map(c => c.id)).toEqual(['c1']);
   });
 });
+
+describe('a run seeds the unchecked disposition every finding starts with', () => {
+  /*
+   * FOUND BY DRIVING THE FLIP END TO END, and it could not have shown
+   * anywhere else. For the whole of Part 3A a `finding_disposition` was
+   * created by the blob's shadow write, so a review a browser had ever
+   * saved already had one. A run started through
+   * `POST /v1/reviews/:id/runs` over a review whose findings map was empty
+   * — which is exactly what Task 18's `handleStartRun` writes — seeded
+   * `finding` rows and no dispositions, and the FIRST verification a
+   * reviewer made on it answered "There is no finding … to record a
+   * judgement about". A person clicking Verify on a finding plainly in
+   * front of them, told it does not exist.
+   */
+  it('lets the first verification on a server-started run actually land', async () => {
+    await withPg(async t => {
+      const actor = await aUser(t, 'A Gray');
+      await aMatter(t, 'm1');
+      await aDocument(t, 'd1', 'm1');
+      await aModelChoice(t);
+      // A review with NO findings at all — the state `handleStartRun`
+      // leaves behind.
+      await aReview(t, 'r1', 'm1', { kind: 'documents', documentIds: ['d1'] }, ['c1']);
+
+      const h = harness(t, actor);
+      await h.ok('POST', '/v1/reviews/r1/runs');
+
+      const seeded = await dispositionFor(t);
+      expect(seeded, 'a server-started run seeded no disposition to judge').toBeDefined();
+      // Nobody has touched it: no actor, no instant, and NO event.
+      expect(seeded).toMatchObject({ state: 'unchecked', changed_count: 0, by_user_id: null });
+      expect(await eventCount(t)).toBe(0);
+
+      // …and the write a reviewer would make next is accepted.
+      const written = await h.ok('PUT', DISPOSITION, { state: 'verified', version: 1 });
+      expect(written.disposition.state).toBe('verified');
+      await h.app.close();
+    });
+  });
+});

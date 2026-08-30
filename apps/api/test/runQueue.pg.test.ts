@@ -441,9 +441,18 @@ describe('a re-run clears the judgement it is about to invalidate', () => {
       const h = harness(t, actorId);
       await h.post('/v1/reviews/rq-rr/runs');
 
+      // BOTH clauses have a disposition row now: `createRun` seeds the
+      // `unchecked` one every finding starts with, so the first
+      // verification on a server-started run has something to move. (Before
+      // that seed existed, only the clause somebody had already judged had
+      // a row at all — and this assertion read `1`.)
       const after = await dispositions(t);
-      expect(after).toHaveLength(1);
-      expect(after[0].state).toBe('unchecked');
+      expect(after.map(d => `${d.clause_id}=${d.state}`))
+        .toEqual(['c1=unchecked', 'c2=unchecked']);
+      // c1's is the one that MOVED: it was verified, and the re-run cleared
+      // it. c2's was created untouched and names nobody.
+      expect(after[0].changed_count).toBe(2);
+      expect(after[1]).toMatchObject({ changed_count: 0, by_user_id: null });
       // The finding it described is `pending` with nothing in it, which is
       // the whole reason the judgement had to go.
       const finding = await t.query<{ status: string; summary: string | null }>(

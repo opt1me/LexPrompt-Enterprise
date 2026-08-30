@@ -4,7 +4,7 @@ import {
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 import { appendEvent } from './events.ts';
-import { setDisposition } from '../dispositions/service.ts';
+import { ensureDispositions, setDisposition } from '../dispositions/service.ts';
 
 /**
  * The queue: a run is a row, its work is one `run_cell` per unit, and
@@ -263,6 +263,31 @@ export async function createRun(
            version = finding.version + 1, updated_at = now()
      where finding.workspace_id = $2`,
     [review.reviewId, ws, keys, clauseIds]);
+
+  // THE `unchecked` ROW EVERY FINDING STARTS WITH (§6.3), seeded with the
+  // finding itself.
+  //
+  // Found by driving the flip end to end against the live database, which
+  // is the only place it could show: for the whole of Part 3A a
+  // `finding_disposition` was created by the blob's shadow write
+  // (`ensureDisposition`, inside `writeFindingRows`), so a review that had
+  // ever been saved by a browser already had one. A run started through
+  // `POST /v1/reviews/:id/runs` over a review whose findings map was empty
+  // — which is exactly what Task 18's `handleStartRun` writes — seeded
+  // `finding` rows and no dispositions at all, and the FIRST verification a
+  // reviewer made on it answered *"There is no finding … to record a
+  // judgement about."* A person clicking Verify on a finding plainly in
+  // front of them, told it does not exist.
+  //
+  // `changed_count = 0`, actor NULL, instant NULL and NO event: nobody has
+  // touched it, so there is nothing to attribute, and such a finding renders
+  // as "Not checked" and names nobody. This creates the row a judgement can
+  // later be recorded ON; it records no judgement.
+  //
+  // BEFORE `resetDispositions`, so a row created here is already `unchecked`
+  // and is not swept by it — a reset event for a judgement nobody made would
+  // be noise in the table 006 calls evidence.
+  await ensureDispositions(t, review.reviewId, ws, keys, clauseIds);
 
   await resetDispositions(t, review.reviewId, ws, keys, clauseIds, actor);
 
