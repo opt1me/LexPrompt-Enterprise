@@ -2637,3 +2637,199 @@ before that container is trusted again.
 
 *Cost if wrong: the part of this rebuild whose correctness matters most has the least
 real evidence behind it, and no test can change that — only a person with a browser.*
+
+---
+
+# Stage 4 (the live-change stage), Tasks 22–26
+
+Every ruling below was taken without owner review, in the four tasks that close Stage 4:
+presence (22, 23), assignment (24, 25) and the definition of done (26). P29–P44 as
+executed are recorded in `.superpowers/sdd/2026-08-30-lexprompt-server-stage-4-live-change/`;
+what is here is the decisions the implementer made inside those tasks, each with its cost
+if wrong.
+
+## R-S4E1 — `PresenceMember` carries no name, no initials and no timestamp
+
+The plan's interface was `{ userId, initials, screen, clauseId?, at }`. What ships is
+`{ userId, screen, clauseId? }`, and the two removals are separate decisions.
+
+**No name or initials**, because P32 says an id becomes a name in exactly one place
+(`src/lib/api/users.ts`) and an event payload never carries a display name — a name on
+the wire is a second copy of a mutable field, refreshed at a different moment from the
+first. The plan's own Task 23 test *"names an unknown user id as unknown, never as a raw
+id"* only makes sense if the client is resolving, so the brief disagreed with itself; the
+shipped rule wins.
+
+**No timestamp.** The server holds one — the sweep needs it — and it stops at the server.
+A `PresenceMember.at` on the wire is the field a *"last seen 3 minutes ago"* would be
+built out of, and the roster expires at fifteen seconds, so no such claim can ever be
+true. Removing it also makes "broadcast on change only" mean something: with `at` in the
+comparison, every heartbeat is a change and the rule silently does nothing.
+
+*Cost if wrong: a roster that renders a stale name, which is the one lie this feature can
+tell — a reviewer deferring to a colleague who left ten minutes ago.*
+
+## R-S4E2 — the presence beat carries no identity, and the server refuses one on an unjoined subscription
+
+The brief's heartbeat was `{ userId, initials, screen, clauseId? }` from the client. A
+frame that names a user is a frame that can put a colleague's face on a clause. `userId`
+comes from the token the socket was upgraded with, and from nowhere else.
+
+A beat on a subscription this socket has not joined is **refused with a sentence** rather
+than dropped: `subscribe` is where a subscription is checked for existence and for
+workspace, so presence on an unchecked ref would let a signed-in caller appear on any
+review id they can guess — and a silently dropped beat looks exactly like a review nobody
+else is in.
+
+*Cost if wrong: presence becomes a way to assert where somebody was, on a surface whose
+whole claim is that it asserts nothing.*
+
+## R-S4E3 — `hello` carries the heartbeat interval the server asks for
+
+`API_PRESENCE_HEARTBEAT_MS` reaches the browser on the `hello` frame, and the client beats
+at what it is told (falling back to 10s until the first `hello`). The alternative — a
+constant compiled into the bundle — makes the TTL and the beat two numbers that can be
+changed independently, and the failure mode is a roster expiring between beats: every
+colleague flickering on and off, which reads as people opening and closing the review and
+which nobody reports as a fault. `loadConfig` also refuses a TTL below 1.5 heartbeats
+(`assertPresenceOutlivesBeat`).
+
+*Cost if wrong: the feature is lost while the app looks like it is working.*
+
+## R-S4E4 — presence rides its own `pg_notify` channel, and the payload IS the delivery
+
+P39 says the notification is a doorbell and never a delivery. Presence is the sole
+exception, and it is the exception *because* it is never persisted: there is no outbox to
+read a beat forward from and there must not be one (S6). It uses a **separate channel**
+(`lexprompt_presence`) rather than a discriminated payload on `lexprompt_event`, because
+that channel's handler reads nothing from its payload by design and giving it a payload
+to parse is precisely how a doorbell becomes a delivery.
+
+A replica that misses a beat loses that person for at most one TTL and gets them back on
+the next beat — the correct failure for an advisory signal.
+
+*Cost if wrong: the one durable-delivery rule in the system acquires an exception nobody
+can see the boundary of.*
+
+## R-S4E5 — the migration is `013_assignment.sql`, not the plan's `012`
+
+`011_close_unused_finding_grants.sql` landed in Stage 3's fix round and `012` is Task 11's
+`audit_event`. An applied migration is immutable, so the number moves and the file does
+not. `stage4aDoD.test.ts` checks this **by pattern** rather than by number, for the reason
+its own comment already gave about the pre-Task-24 guard: a check pinned to a number
+passes for the wrong reason forever.
+
+## R-S4E6 — one open assignment per finding PER ASSIGNEE, and resolution is a pair or neither
+
+Not one per finding: two people can each be asked to look at the same clause — a second
+opinion is a normal thing to want — and a unique constraint on the finding alone would
+refuse the second request with a constraint name. What is forbidden is asking the *same*
+person twice while the first request is open, which would put the same row in front of
+them twice.
+
+`check ((resolved_at is null) = (resolved_by_user_id is null))`: an assignment that closed
+itself is a thing nothing does, and every close is a person — the assignee having looked,
+or the assigner withdrawing.
+
+## R-S4E7 — `resolve` is authorised INSIDE the handler, not by a role
+
+`ROUTE_POLICY` puts all three assignment routes at `reviewer`, which is the owner's own
+case rather than a convenience: it is the *trainee* who assigns, when they are not sure,
+so a partner-only gate would take the escape hatch away from the person it exists for.
+Closing a request is then narrowed in the handler to the two people party to it. A role is
+the wrong instrument for *"is this yours"* — every reviewer holds the same one and only
+two of them are party to any request — and a third person closing it would make *"this was
+dealt with"* a claim neither of them made.
+
+*Cost if wrong: a request marked handled by somebody who did not handle it.*
+
+## R-S4E8 — the panel is `AskedOfYou`, not the plan's `AssignedToMe`
+
+`stage2DoD.test.ts` and `stage3DoD.test.ts` both forbid the phrase *assigned to me*
+anywhere in `src/`, so Stage 5's cross-matter counter cannot arrive quietly. A component
+wearing the reserved name would have forced both guards to be relaxed for a thing that is
+not what they forbid — and the relaxation, not the component, is what would have cost
+something. The heading it renders is *"Asked of you"*, which is what it is.
+
+The same guard also gained **word boundaries** in this stage: its `usePresence` pattern
+matched the substring inside `ClausePresence` and reported the shipped presence marker as
+a forbidden hook. A scanner that fires on a substring of an unrelated identifier is one
+that gets relaxed until it stops biting.
+
+## R-S4E9 — `appendAudit` resolves `matter_id` from the review, in the insert
+
+**A real defect, found by Task 26's own definition-of-done test rather than by review.**
+The activity feed's audit arm reads `where a.matter_id = $1`, and Task 24 wrote its
+`assignment.created` rows with a `review_id` and no matter. The row existed, the query
+could not reach it, and nothing anywhere went red: an audited act no reader could ever
+see.
+
+Fixed at the ONE WRITER rather than at the call site, exactly as `appendEvent` already
+resolves it — `coalesce($6, (select matter_id from review where id = $7 …))` — because
+adding `matterId:` to each caller is one more place to forget it a sixth time.
+
+*Cost if wrong: the audit log is complete and the feed built on it is not, which is the
+worse half of an incomplete log: it looks complete.*
+
+## R-S4E10 — the comparison grid shows a state without an actor, and that is named rather than fixed
+
+§6.3 requires every disposition to be shown with its actor. `TabularReview` — the
+comparison grid — renders a `StateChip` per cell and no actor line: many documents × many
+clauses, one small cell each, and a name per cell would be unreadable and would be the
+only place in the app rendering a person at that density. The attribution is one click
+away, in the cell detail panel, which mounts the ordinary `FindingCard` with the ordinary
+disposition.
+
+`stage4DoD.test.ts` names that one surface and asserts its counterpart (the detail panel
+really does carry the disposition), rather than exempting the file — a file-level
+exemption hides everything in the file, not the part you meant to protect.
+
+**This is a real limit of §18 item 5 on that surface** and the report says so: on the
+grid, a disposition is shown without its actor until a reader opens the cell.
+
+## R-S4E11 — the assignments read fails onto its own panel, not into a toast
+
+`getOpenAssignments` rejects rather than resolving to an empty list, and `App` renders the
+failure on the panel it is about with a retry. A toast was tried first and was wrong twice
+over: it competes with whatever else the screen is trying to say (an expired sign-in, a
+refused jurisdiction — `App.authRedirect.test.tsx` caught exactly that), and it disappears
+on a timer, which is not somewhere to put a fact a person has to act on.
+
+Its role is `alert` and not `status`: it renders above the cards, and the review screen's
+own state-chip assertion is a positional `[role="status"]` query that found it first.
+
+## The spec-versus-plan disagreements from these tasks, recorded rather than smoothed
+
+1. **The plan's `PresenceMember` disagreed with the plan's own Task 23 test.** R-S4E1.
+2. **The plan's presence heartbeat carried a client-supplied identity.** R-S4E2.
+3. **The plan's migration number was already taken.** R-S4E5.
+4. **The plan's `AssignedToMe` filename is a string two shipped guards forbid.** R-S4E8.
+5. **The plan's task pathspecs omitted files the task had to change** — `feed.pg.test.ts`
+   and `gatewayCallerAuth.test.ts` (Task 22), `stage2DoD.test.ts` and `contrast.test.ts`
+   (Task 23), `stage2DoD.test.ts`, `stage3aDoD.test.ts` and `oidc.test.ts` (Task 24),
+   `ResultsView.tsx` and two `vi.mock` factories (Task 25). Committed with the task that
+   required them.
+6. **§13 puts "assignee chips" in Stage 5 while §18 item 5 requires an assignment to reach
+   its assignee in Stage 4.** Ruled as the plan ruled it: the action, the record and the
+   delivery are Stage 4; the chip and the counter are Stage 5, and `stage4DoD.test.ts`
+   asserts their continued absence.
+
+## What Tasks 22–26 could not verify
+
+**No browser was driven, for the fourth consecutive stage.** The Chrome extension reports
+no connected browsers and the Playwright MCP times out. Everything these tasks put on
+screen is untested by anything that has looked at a screen: a presence face, a marker on a
+clause, whether either reads as "looking" rather than "checked", the assign panel, the
+"asked of you" panel, and two people using the app at once. The API halves are proved
+live with two real tokens; the screen halves are proved as rendered strings in jsdom,
+which is a weaker claim.
+
+**Spike 3's Azure half is still unanswered.** Cross-replica fan-out — and now
+cross-replica presence, which travels a different way — is proved locally at two replicas
+through nginx. Whether a Container Apps *internal* ingress at `transport: 'http'` passes a
+WebSocket upgrade is not settled by the documentation and no reachable environment can be
+asked.
+
+*Cost if wrong: the same as it has been for three stages — two of this project's worst
+defects were invisible to thousands of passing tests and appeared only when somebody drove
+the real app.*

@@ -245,16 +245,21 @@ describe('an assignment is a request, not a disposition (§6.3)', () => {
       await seed(t);
       const res = await as(t, TRAINEE).send('POST', ASSIGN, { assigneeUserId: PARTNER });
       const rows = await t.query<{ action: string; actor_user_id: string; subject_id: string }>(
+        // SCOPED TO THIS REVIEW. `test:pg` and `test:compose` share one
+        // database, and a count over the whole workspace picks up rows the
+        // compose suites committed -- a test that passes or fails depending
+        // on what else has run is not a test.
         `select action, actor_user_id, subject_id from audit_event
-          where workspace_id = $1 and action = 'assignment.created'`, [WS]);
+          where workspace_id = $1 and action = 'assignment.created'
+            and review_id = 'ar1'`, [WS]);
       expect(rows).toHaveLength(1);
       expect(rows[0].actor_user_id).toBe(TRAINEE);
       expect(rows[0].subject_id).toBe(res.json().id);
       // …and STILL no disposition action in the audit log (S22). The
       // asymmetry is the rule being applied, not an exception to it.
       const dispositions = await t.query<{ action: string }>(
-        `select action from audit_event where workspace_id = $1 and action like 'finding.%'`,
-        [WS]);
+        `select action from audit_event
+          where workspace_id = $1 and action like 'finding.%' and review_id = 'ar1'`, [WS]);
       expect(dispositions).toEqual([]);
     });
   });
@@ -266,7 +271,7 @@ describe('an assignment is a request, not a disposition (§6.3)', () => {
         { assigneeUserId: PARTNER, message: 'Not sure the cap survives 14.2.' });
       const events = await t.query<{ type: string; payload: any; review_id: string }>(
         `select type, payload, review_id from event
-          where workspace_id = $1 and type = 'assignment.created'`, [WS]);
+          where workspace_id = $1 and type = 'assignment.created' and review_id = 'ar1'`, [WS]);
       expect(events).toHaveLength(1);
       // The WHOLE row travels, so the assignee's screen renders "A. Trainee
       // asked you to look at this" and the message from one frame with no
@@ -358,12 +363,13 @@ describe('closing a request', () => {
       await as(t, PARTNER).send('POST', `/v1/assignments/${mine.id}/resolve`);
       const audit = await t.query<{ actor_user_id: string }>(
         `select actor_user_id from audit_event
-          where workspace_id = $1 and action = 'assignment.resolved'`, [WS]);
+          where workspace_id = $1 and action = 'assignment.resolved'
+            and review_id = 'ar1'`, [WS]);
       expect(audit).toHaveLength(1);
       expect(audit[0].actor_user_id).toBe(PARTNER);
       const events = await t.query<{ payload: any }>(
-        `select payload from event where workspace_id = $1 and type = 'assignment.resolved'`,
-        [WS]);
+        `select payload from event
+          where workspace_id = $1 and type = 'assignment.resolved' and review_id = 'ar1'`, [WS]);
       expect(events).toHaveLength(1);
       expect(events[0].payload.assignment.resolvedByUserId).toBe(PARTNER);
     });

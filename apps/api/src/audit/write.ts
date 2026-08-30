@@ -52,11 +52,29 @@ export interface AuditEntry {
 }
 
 export async function appendAudit(t: Tx, e: AuditEntry): Promise<void> {
+  /*
+   * THE MATTER IS RESOLVED IN THE INSERT, not by the caller — the same shape
+   * `appendEvent` uses, and here for the same reason it needed it there.
+   *
+   * The activity feed's audit arm reads `where a.matter_id = $1`
+   * (`routes/activity.ts`), so an audited act that names only its REVIEW is
+   * an act no reader can ever see: the row is in the table, the query cannot
+   * reach it, and nothing anywhere goes red. Task 26's own DoD test found
+   * exactly that — an `assignment.created` row that existed and never
+   * appeared in the feed.
+   *
+   * Fixing it by adding `matterId:` at each call site would be one more
+   * place to forget it; the subselect makes it a property of the one writer.
+   * `coalesce` so a caller that DOES know (a matter route, which has it in
+   * hand) pays for no lookup.
+   */
   await t.query(
     `insert into audit_event
        (workspace_id, actor_user_id, action, subject_type, subject_id, matter_id, review_id,
         detail)
-     values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)`,
+     select $1, $2, $3, $4, $5,
+            coalesce($6, (select matter_id from review where id = $7 and workspace_id = $1)),
+            $7, $8::jsonb`,
     [e.workspaceId, e.actorUserId, e.action, e.subjectType, e.subjectId,
       e.matterId ?? null, e.reviewId ?? null, JSON.stringify(e.detail ?? {})]);
 }
