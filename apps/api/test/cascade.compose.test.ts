@@ -58,6 +58,17 @@ const withStack = (blobWrap: string, body: string): { code: number; out: string 
   `const store = ${blobWrap};`,
   'const pool = makePool(process.env.API_DATABASE_URL, 4);',
   'const db = makeDb(pool);',
+  // THE STUBBED ACTOR NEEDS A ROW, because `resolveActor` -- the thing this
+  // harness stubs -- is what creates one in production, and Stage 4's
+  // `appendAudit` writes `actor_user_id references app_user(id)` inside the
+  // delete's own transaction. Without this the whole matter delete is
+  // refused with a foreign-key violation, which reads as a broken cascade.
+  // Stubbing a resolver means taking on what the resolver did.
+  'const ACTOR = "00000000-0000-0000-0000-00000000dead";',
+  'await db.query(`insert into app_user'
+  + ' (id, workspace_id, issuer, subject, display_name, initials, role, status)'
+  + " values ($1, $2, 'i', 's-cascade-test', 'Cascade Test', 'CT', 'reviewer', 'active')"
+  + ' on conflict (id) do nothing`, [ACTOR, WS]);',
   'const app = buildServer({',
   '  verify: async () => ({ issuer: "i", subject: "s", groups: ["g"] }),',
   '  gateway: { infer: async () => ({ status: 200, json: {} }), models: async () => ({ status: 200, json: {} }), stream: async () => ({}) },',

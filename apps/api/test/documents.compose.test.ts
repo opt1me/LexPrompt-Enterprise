@@ -82,6 +82,13 @@ const withStack = (body: string): { code: number; out: string } => inApi([
   '  const keys = (await store.list(workspacePrefix(WS))).filter(k => k.includes(MATTER));',
   '  for (const k of keys) await store.delete(k);',
   '  await db.query("delete from matter where id = $1 and workspace_id = $2", [MATTER, WS]);',
+  // THE AUDIT ROWS FIRST, and this is a fact about the schema rather than
+  // about the test: `audit_event.actor_user_id` references `app_user` with
+  // no cascade, so a person with audited acts CANNOT be deleted. That is
+  // deliberate -- an audit row whose actor was erased records an act nobody
+  // performed -- and the product's own removal mechanism is
+  // `status = 'disabled'`, never a delete.
+  '  await admin.query("delete from audit_event where actor_user_id = $1", [ACTOR]);',
   '  await admin.query("delete from app_user where id = $1", [ACTOR]);',
   '  await pool.end();',
   '  await adminPool.end();',
