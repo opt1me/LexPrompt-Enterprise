@@ -61,6 +61,10 @@ const PAIRS: Pair[] = [
   ['net-unconfirmed', 'card', 'body'], ['net-confirmed', 'card', 'body'],
   // Draft / suggested.
   ['draft', 'card', 'body'], ['draft', 'draft-tint', 'chip'],
+  // Presence (Task 23): a colleague's initials, on the card the rail sits
+  // on and on their own tint. Held to the chip floor on the tint because
+  // that is what the marker is — two characters of mono at `text-pin`.
+  ['presence', 'card', 'body'], ['presence', 'presence-tint', 'chip'],
   // Primary button: white text on the accent fill.
   ['page', 'accent', 'body'],
 ];
@@ -85,7 +89,7 @@ describe('token contrast', () => {
       'rule-soft', 'rule', 'rule-strong', 'chip-fill',
       'accent-tint', 'accent-edge',
       'risk-high-tint', 'risk-high-edge', 'risk-med-tint', 'risk-med-edge', 'risk-low-tint',
-      'draft-tint', 'highlight-fill', 'highlight-edge',
+      'draft-tint', 'presence-tint', 'highlight-fill', 'highlight-edge',
       'redline-ins', 'redline-del', 'net-amended',
     ]);
     const exercised = new Set(PAIRS.map(([fg]) => fg));

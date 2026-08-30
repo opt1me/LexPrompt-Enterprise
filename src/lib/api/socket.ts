@@ -1,7 +1,8 @@
 import {
   subscriptionKey,
   WS_BEARER_PREFIX, WS_PATH, WS_SUBPROTOCOL,
-  type AppEvent, type ClientFrame, type ServerFrame, type SubscriptionRef,
+  type AppEvent, type ClientFrame, type PresenceMember, type PresenceScreen,
+  type ServerFrame, type SubscriptionRef,
 } from '@lexprompt/core';
 import { getAccessToken } from '../auth/oidc';
 import { config } from '../config';
@@ -71,6 +72,19 @@ export const WS_STALE_AFTER_MS = 55_000;
 const BACKOFF_MS = [500, 1_000, 2_000, 5_000, 10_000, 15_000];
 const JITTER = 0.3;
 
+/**
+ * How often to say *"I am still here"*, until the server says otherwise.
+ *
+ * A FALLBACK, not the number. The server states the interval it wants on the
+ * `hello` frame (`API_PRESENCE_HEARTBEAT_MS`) and this client beats at that;
+ * this constant covers the window before the first `hello` arrives. Two
+ * independent numbers — one in a deployment's environment, one compiled into
+ * this bundle — is how a raised TTL silently becomes a roster that expires
+ * between beats, and a colleague flickering in and out reads as somebody
+ * repeatedly opening and closing the review.
+ */
+const PRESENCE_BEAT_FALLBACK_MS = 10_000;
+
 /** How many applied event ids to remember. A run of forty cells emits eighty
  *  events; this is generous and bounded, which is the only property it needs
  *  — the version guard is what actually protects a judgement. */
@@ -84,9 +98,31 @@ interface Entry {
   cursor: number;
 }
 
+/**
+ * WHERE THIS TAB SAYS IT IS, and who it has been told is here with it.
+ *
+ * `report` is what the heartbeat sends: one place, one screen, one selected
+ * clause. Null when this tab is on no screen presence covers — and then
+ * nothing is sent at all, because *"I am somewhere"* with no somewhere is
+ * a claim with no content.
+ */
+interface PresenceReport {
+  sub: SubscriptionRef;
+  screen: PresenceScreen;
+  /** The clause the reader SELECTED. Never the one nearest the top of the
+   *  viewport: a scroll-derived presence broadcasts a stream of clause
+   *  changes and tells a colleague something the reader never chose to say. */
+  clauseId?: string;
+}
+
 /** Everything one tab's socket holds. Module-level because there is one. */
 const entries = new Map<string, Entry>();
 const stateListeners = new Set<(s: ConnectionState) => void>();
+/** subscription key -> whoever wants that subscription's roster. */
+const presenceListeners = new Map<string, Set<(members: PresenceMember[]) => void>>();
+let presenceReport: PresenceReport | null = null;
+let presenceTimer: ReturnType<typeof setInterval> | null = null;
+let presenceBeatMs = PRESENCE_BEAT_FALLBACK_MS;
 const appliedIds: number[] = [];
 const appliedIdSet = new Set<number>();
 const versions = new Map<string, number>();
@@ -221,6 +257,11 @@ function subscribeAll(): void {
   for (const entry of entries.values()) {
     send({ t: 'subscribe', sub: entry.sub, lastEventId: entry.cursor });
   }
+  // AFTER the subscribes, and it has to be: the server refuses a beat on a
+  // subscription this socket has not joined, so a beat sent first would be
+  // refused and the reader would be invisible to their colleagues until the
+  // next interval.
+  sendBeat();
 }
 
 function onFrame(raw: string): void {
@@ -237,7 +278,22 @@ function onFrame(raw: string): void {
       send({ t: 'pong' });
       return;
     case 'hello':
+      // THE SERVER'S INTERVAL, adopted before the first beat goes out. See
+      // `PRESENCE_BEAT_FALLBACK_MS`.
+      if (typeof frame.presenceHeartbeatMs === 'number' && frame.presenceHeartbeatMs > 0) {
+        presenceBeatMs = frame.presenceHeartbeatMs;
+        if (presenceTimer) {
+          clearInterval(presenceTimer);
+          presenceTimer = setInterval(sendBeat, presenceBeatMs);
+        }
+      }
       setState('live');
+      return;
+    case 'presence':
+      // THE SERVER'S ROSTER, rendered as given. No merge with what this
+      // client last held: the merge is what would keep somebody on a clause
+      // after they left it.
+      emitPresence(frame.sub, frame.members);
       return;
     case 'caught_up': {
       const entry = entries.get(subscriptionKey(frame.sub));
@@ -307,6 +363,13 @@ async function ensureSocket(): Promise<void> {
     ws.onerror = () => { debug('socket: transport error'); };
     ws.onclose = () => {
       socket = null;
+      // NOBODY IS HERE THAT THIS TAB CAN VOUCH FOR. The roster it last held
+      // was a claim about a few seconds ago on a connection that is now
+      // gone; keeping it on screen is exactly the stale indicator S6 exists
+      // to prevent. The findings stay — *"never show disconnected data as
+      // though it were current"* is not "show nothing" — but a claim about
+      // who is here cannot outlive the connection that carried it.
+      clearPresence();
       // NOT `stale` here. A socket that closes and reconnects inside 300 ms
       // must not flash a banner; `armStale`'s timer is what decides, and it
       // is still running.
@@ -322,6 +385,85 @@ async function ensureSocket(): Promise<void> {
   } finally {
     opening = false;
   }
+}
+
+/**
+ * WHO ELSE IS HERE, for one subscription (§8, Task 23).
+ *
+ * The listener is called with the SERVER'S roster and never with this
+ * client's own accumulated view — that is the whole rule. A client that
+ * remembered its last known roster would keep a colleague's face on a clause
+ * after the frame that removed them, and *"a stale presence indicator that
+ * claims someone is there is worse than no indicator"*: a reviewer might
+ * defer to somebody who left. So there is no merge here, no cache, and the
+ * empty roster on a disconnect below is the same rule at the other end.
+ *
+ * Called immediately with an EMPTY roster, for the reason
+ * `onConnectionState` calls immediately with the current state: a component
+ * that mounts before any frame has arrived must render "nobody else that I
+ * know of" rather than wait, and empty is the honest starting claim — an
+ * absent name never meant nobody is there.
+ */
+export function onPresence(
+  sub: SubscriptionRef, fn: (members: PresenceMember[]) => void,
+): () => void {
+  const key = subscriptionKey(sub);
+  let listeners = presenceListeners.get(key);
+  if (!listeners) {
+    listeners = new Set();
+    presenceListeners.set(key, listeners);
+  }
+  listeners.add(fn);
+  fn([]);
+  return () => {
+    listeners.delete(fn);
+    if (listeners.size === 0) presenceListeners.delete(key);
+  };
+}
+
+function emitPresence(sub: SubscriptionRef, members: PresenceMember[]): void {
+  for (const fn of presenceListeners.get(subscriptionKey(sub)) ?? []) fn(members);
+}
+
+/** Everybody this tab has been told about, told nothing. Used when the
+ *  socket goes: see `onPresence`. */
+function clearPresence(): void {
+  for (const listeners of presenceListeners.values()) {
+    for (const fn of listeners) fn([]);
+  }
+}
+
+function sendBeat(): void {
+  if (!presenceReport) return;
+  send({
+    t: 'presence',
+    sub: presenceReport.sub,
+    screen: presenceReport.screen,
+    ...(presenceReport.clauseId === undefined ? {} : { clauseId: presenceReport.clauseId }),
+  });
+}
+
+/**
+ * Says where this tab is, from now on. `null` stops saying anything.
+ *
+ * Sent IMMEDIATELY on every change and then repeated on the server's own
+ * interval. Immediately, because the change is the information — a colleague
+ * moving to clause 14 is worth knowing now rather than in ten seconds; on an
+ * interval, because the server expires a roster entry that stops arriving,
+ * which is what stops a crashed tab claiming a person is still reading.
+ *
+ * Nothing is sent while the socket is closed. The next `subscribeAll` sends
+ * the report again, so a reconnection restores a reader's place without
+ * anything here remembering that it has to.
+ */
+export function reportPresence(report: PresenceReport | null): void {
+  const changed = JSON.stringify(presenceReport) !== JSON.stringify(report);
+  presenceReport = report;
+  if (presenceTimer) clearInterval(presenceTimer);
+  presenceTimer = null;
+  if (!report) return;
+  if (changed) sendBeat();
+  presenceTimer = setInterval(sendBeat, presenceBeatMs);
 }
 
 /**
@@ -359,6 +501,12 @@ export function subscribe(sub: SubscriptionRef, handlers: SubscriptionHandlers):
  */
 export function closeSocket(): void {
   closedByUs = true;
+  clearPresence();
+  presenceListeners.clear();
+  presenceReport = null;
+  if (presenceTimer) clearInterval(presenceTimer);
+  presenceTimer = null;
+  presenceBeatMs = PRESENCE_BEAT_FALLBACK_MS;
   entries.clear();
   versions.clear();
   appliedIds.length = 0;

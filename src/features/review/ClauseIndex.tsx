@@ -1,6 +1,9 @@
 import React from 'react';
 import { CheckCircle2, Flag, XCircle, Circle, CircleDashed, Loader, AlertTriangle, CircleSlash } from 'lucide-react';
 import type { Finding, PlaybookClause } from '../../types';
+import type { PresenceMember } from '@lexprompt/core';
+import { ClausePresence } from '../../components/PresenceRoster';
+import type { DispositionAudience } from '../../lib/findingOutcome';
 
 export interface ClauseIndexProps {
   clauses: PlaybookClause[];
@@ -9,6 +12,22 @@ export interface ClauseIndexProps {
   findings: Record<string, Finding>;
   activeClauseId: string | null;
   onSelect: (clauseId: string) => void;
+  /**
+   * WHO ELSE HAS SELECTED WHICH CLAUSE (§8, Task 23) — clause id to the
+   * colleagues on it, EXCLUDING you, resolved by the caller.
+   *
+   * A SECOND MARK beside the status icon, never a change to it. The status
+   * icon says what the machine produced and what a reviewer made of it; this
+   * says who is reading it. One mark carrying both would be a face that
+   * reads as a judgement, which is the one thing presence must never do.
+   *
+   * Optional: a rail rendered with none shows no markers, which is the same
+   * as a review nobody else is in — and that is honest, because an absent
+   * name never meant nobody is there.
+   */
+  presenceByClause?: Record<string, PresenceMember[]>;
+  /** How a user id becomes a name, for the marker's own sentence. */
+  audience?: DispositionAudience;
 }
 
 /** The first clause a human has not disposed of. A clause with NO finding
@@ -64,7 +83,9 @@ export function firstUncheckedClauseId(
  * different-but-correct counts on one screen no longer look like a
  * disagreement.
  */
-export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: ClauseIndexProps) {
+export function ClauseIndex({
+  clauses, findings, activeClauseId, onSelect, presenceByClause, audience,
+}: ClauseIndexProps) {
   let high = 0, flagged = 0, unchecked = 0, failed = 0, cancelled = 0;
   for (const clause of clauses) {
     const f = findings[clause.id];
@@ -118,7 +139,7 @@ export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: Cla
                 className={`w-full text-left px-3.5 py-2 border-l-2 flex items-start gap-2 ${active ? 'border-l-ink-1 bg-chip-fill' : 'border-l-transparent hover:bg-chip-fill'}`}
               >
                 <StatusIcon finding={f} />
-                <span className="min-w-0">
+                <span className="min-w-0 flex-1">
                   <span className={`block font-ui text-ui-sm truncate ${active ? 'font-semibold text-ink-1' : 'text-ink-2'}`}>
                     {clause.title}
                   </span>
@@ -135,6 +156,14 @@ export function ClauseIndex({ clauses, findings, activeClauseId, onSelect }: Cla
                           : `Clause ${i + 1} of ${clauses.length}`}
                   </span>
                 </span>
+                {/* AFTER the clause's own text and status, deliberately: it
+                    is the least of the three facts on this row, and putting
+                    a face where the status icon sits would be the swap this
+                    component's `presenceByClause` doc comment forbids. */}
+                <ClausePresence
+                  members={presenceByClause?.[clause.id] ?? []}
+                  audience={audience}
+                />
               </button>
             </li>
           );

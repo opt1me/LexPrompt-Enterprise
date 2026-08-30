@@ -25,7 +25,7 @@ import {
 } from '@lexprompt/core';
 import type {
   AppEvent, DispositionChangedPayload, DispositionWithHistory, NoteAddedPayload,
-  RetryResult, RunView, VerificationChange, WorkspaceSettings,
+  PresenceMember, RetryResult, RunView, VerificationChange, WorkspaceSettings,
 } from '@lexprompt/core';
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
 import { apiKeyWasPurgedThisSession, loadSettings } from './lib/storage';
@@ -55,7 +55,7 @@ import { getProfile } from './lib/db/profile';
 import { describeLoadError, describeRunEnding } from './lib/loadError';
 import { StalePanel } from './components/StalePanel';
 import { subscribe } from './lib/api/socket';
-import { onConnectionState, type ConnectionState } from './lib/api/socket';
+import { onConnectionState, onPresence, type ConnectionState } from './lib/api/socket';
 // Task 17/18: the browser asks about a run instead of performing one.
 import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
@@ -594,6 +594,22 @@ function AppShell({ signIn }: { signIn: () => void }) {
    */
   const [liveState, setLiveState] = useState<ConnectionState>('connecting');
   useEffect(() => onConnectionState(setLiveState), []);
+  /**
+   * WHO ELSE IS ON THE OPEN REVIEW (§8, S6, Task 23).
+   *
+   * The SERVER'S roster, replaced whole on every frame and never merged
+   * with what was held before. A client that accumulated its own view would
+   * keep a colleague's face on a clause after the frame that removed them,
+   * and *"a stale presence indicator that claims someone is there is worse
+   * than no indicator"*: a reviewer might defer to somebody who left ten
+   * minutes ago. `onPresence` also clears this to empty when the socket
+   * goes, for the same reason.
+   *
+   * It gates nothing. Presence locks nothing, blocks nothing and gates no
+   * write (S6) — `stale` is what disables a control, and no control reads
+   * this list.
+   */
+  const [presence, setPresence] = useState<PresenceMember[]>([]);
   /**
    * A resync is in progress: the events between this client's cursor and
    * now are gone, so the screen is being RE-READ rather than merely waited
@@ -2989,6 +3005,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
   const reviewId = run?.id;
   useEffect(() => {
     if (!reviewId) return undefined;
+    // The ROSTER for the same subscription, alongside the events. One
+    // subscription, two things it carries; a second `subscribe` for presence
+    // would be a second cursor over the same review.
+    const offPresence = onPresence({ review: reviewId }, setPresence);
     const subscription = subscribe({ review: reviewId }, {
       onEvent: applyPush,
       onResync: () => {
@@ -3002,7 +3022,13 @@ function AppShell({ signIn }: { signIn: () => void }) {
           'resyncing the findings after a push gap');
       },
     });
-    return () => subscription.close();
+    return () => {
+      offPresence();
+      // A closed review claims nobody. The roster it held was about a screen
+      // this tab is no longer on.
+      setPresence([]);
+      subscription.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewId]);
 
@@ -4780,6 +4806,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     documentDates={documentDates}
                     playbookVersion={runPlaybookVersion}
                     onShowVersionHistory={handleShowVersionHistoryForRun}
+                    presence={presence}
                   />
                 ) : (
                   <TabularReview

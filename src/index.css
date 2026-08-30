@@ -106,6 +106,17 @@
   --color-draft:      var(--lex-blue);
   --color-draft-tint: rgb(var(--lex-blue-rgb) / 0.11);
 
+  /* Presence (Stage 4 Task 22/23): somebody else is HERE, right now.
+
+     Deliberately --lex-blue, the informational hue, and deliberately NOT any
+     of the state or outcome colours above. A face on a clause is not a
+     judgement about it, and the fastest way to make one read as a judgement
+     is to draw it in the ink a verification is drawn in. The tint is what
+     the marker actually fills with; the solid is for its edge and its
+     initials, so a presence dot can never be mistaken for a state chip. */
+  --color-presence:      var(--lex-blue);
+  --color-presence-tint: rgb(var(--lex-blue-rgb) / 0.14);
+
   /* Document */
   --color-highlight-fill: rgb(var(--lex-highlight-rgb) / 0.34);
   --color-highlight-edge: rgb(var(--lex-highlight-edge-rgb) / 0.75);

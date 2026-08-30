@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import type { AppEvent, SubscriptionRef } from '@lexprompt/core';
+import type { AppEvent, PresenceMember, SubscriptionRef } from '@lexprompt/core';
 import { WS_SUBPROTOCOL } from '@lexprompt/core';
 import {
-  closeSocket, connectionState, onConnectionState, subscribe, WS_STALE_AFTER_MS,
+  closeSocket, connectionState, onConnectionState, onPresence, reportPresence, subscribe,
+  WS_STALE_AFTER_MS,
 } from './socket';
 import {
   flushMicrotasks, installFakeSockets, type FakeSocket, type SocketHarness,
@@ -286,5 +287,135 @@ describe('the subscription reference', () => {
     expect(r.onEvent).toHaveBeenCalledTimes(1);
     expect(m.onEvent).toHaveBeenCalledTimes(0);
     expect(noop).toBeTruthy();
+  });
+});
+
+describe('presence: what this tab says, and what it is told', () => {
+  it('beats immediately on a change, and then on the server s own interval', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    const ws = await opened();
+    ws.deliver({ t: 'hello', instanceId: 'api-1', userId: 'u1', presenceHeartbeatMs: 10_000 });
+
+    reportPresence({ sub: { review: 'r1' }, screen: 'review', clauseId: 'c1' });
+    const beats = () => ws.sent.filter(f => f.t === 'presence');
+    // IMMEDIATELY, because the change IS the information: a colleague moving
+    // to clause 14 is worth knowing now rather than in ten seconds.
+    expect(beats()).toHaveLength(1);
+    expect(beats()[0]).toEqual({
+      t: 'presence', sub: { review: 'r1' }, screen: 'review', clauseId: 'c1',
+    });
+
+    // …and then repeated, because the server expires a roster entry whose
+    // beats stop. Without the repeat a reader still on the clause vanishes
+    // from their colleague's screen after the TTL.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(beats()).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(beats()).toHaveLength(3);
+  });
+
+  it('adopts the interval the SERVER asked for, rather than a compiled-in one', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    const ws = await opened();
+    // A deployment that raised the TTL and the heartbeat together. A browser
+    // beating on its own constant would expire between beats, and a
+    // colleague flickering in and out reads as somebody repeatedly opening
+    // and closing the review.
+    ws.deliver({ t: 'hello', instanceId: 'api-1', userId: 'u1', presenceHeartbeatMs: 2_000 });
+    reportPresence({ sub: { review: 'r1' }, screen: 'review' });
+    const beats = () => ws.sent.filter(f => f.t === 'presence');
+    expect(beats()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(beats()).toHaveLength(2);
+  });
+
+  it('sends nothing at all once the report is cleared', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    const ws = await opened();
+    reportPresence({ sub: { review: 'r1' }, screen: 'review' });
+    reportPresence(null);
+    const before = ws.sent.filter(f => f.t === 'presence').length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    // A tab that has left the review must stop claiming to be on it, and
+    // must not wait out a TTL to do so.
+    expect(ws.sent.filter(f => f.t === 'presence')).toHaveLength(before);
+  });
+
+  it('re-sends the beat AFTER the subscribes, on a reconnection', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    const ws = await opened();
+    reportPresence({ sub: { review: 'r1' }, screen: 'review', clauseId: 'c1' });
+
+    ws.drop();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const ws2 = await opened(1);
+    const kinds = ws2.sent.map(f => f.t);
+    // The ORDER is load-bearing: the server refuses a beat on a subscription
+    // this socket has not joined, so a beat sent first is refused and the
+    // reader is invisible to their colleagues until the next interval.
+    expect(kinds.indexOf('subscribe')).toBeGreaterThanOrEqual(0);
+    expect(kinds.indexOf('presence')).toBeGreaterThan(kinds.indexOf('subscribe'));
+  });
+
+  it('hands a listener the server s roster, for its own subscription only', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    const seen: PresenceMember[][] = [];
+    const other: PresenceMember[][] = [];
+    onPresence({ review: 'r1' }, m => seen.push(m));
+    onPresence({ review: 'r2' }, m => other.push(m));
+    const ws = await opened();
+    // Called immediately with an empty roster, the way `onConnectionState`
+    // is called immediately with the current state.
+    expect(seen).toEqual([[]]);
+
+    ws.deliver({
+      t: 'presence',
+      sub: { review: 'r1' },
+      members: [{ userId: 'u2', screen: 'review', clauseId: 'c14' }],
+    });
+    expect(seen.at(-1)).toEqual([{ userId: 'u2', screen: 'review', clauseId: 'c14' }]);
+    expect(other).toEqual([[]]);
+  });
+
+  it('stops claiming somebody is here once the roster says they are not', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    const seen: PresenceMember[][] = [];
+    onPresence({ review: 'r1' }, m => seen.push(m));
+    const ws = await opened();
+    ws.deliver({
+      t: 'presence', sub: { review: 'r1' }, members: [{ userId: 'u2', screen: 'review' }],
+    });
+    expect(seen.at(-1)).toHaveLength(1);
+
+    ws.deliver({ t: 'presence', sub: { review: 'r1' }, members: [] });
+    // The client renders the SERVER's roster and never its own last known
+    // one. A merge here is what would keep a colleague's face on a clause
+    // after the frame that removed them.
+    expect(seen.at(-1)).toEqual([]);
+  });
+
+  it('claims nobody the moment the socket goes', async () => {
+    subscribe({ review: 'r1' }, handlers());
+    const seen: PresenceMember[][] = [];
+    onPresence({ review: 'r1' }, m => seen.push(m));
+    const ws = await opened();
+    ws.deliver({
+      t: 'presence', sub: { review: 'r1' }, members: [{ userId: 'u2', screen: 'review' }],
+    });
+    expect(seen.at(-1)).toHaveLength(1);
+
+    ws.drop();
+    /*
+     * THE MUTATION THIS TEST EXISTS FOR: delete `clearPresence()` from
+     * `ws.onclose` and this goes red.
+     *
+     * The roster this tab held was a claim about a few seconds ago on a
+     * connection that no longer exists. Leaving it on screen is exactly the
+     * stale indicator S6 forbids — *"a stale presence indicator that claims
+     * someone is there is worse than no indicator"* — and a reviewer might
+     * defer to a colleague who is not there. The findings stay; a claim
+     * about who is here does not outlive the connection that carried it.
+     */
+    expect(seen.at(-1)).toEqual([]);
   });
 });

@@ -665,13 +665,29 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
 
   // ---- R-G1 binds until the mechanism is real ----
 
-  it('no collaborative affordance shipped (R-G1 binds until Stage 4)', () => {
+  it('no collaborative affordance shipped AHEAD OF ITS MECHANISM (R-G1)', () => {
     /*
+     * R-G1's rule was never "no collaboration"; it was that an affordance
+     * lands only where the mechanism behind it is real. Stage 4 made two of
+     * them real and this guard moved with them rather than being deleted:
+     *
+     *  - **PRESENCE is real as of Task 22/23.** A roster is broadcast over
+     *    the socket, expires on a TTL, and is rendered on the review screen
+     *    and on the clause a colleague has selected. So `presence` is no
+     *    longer a forbidden word in `src/`, and the words that WERE
+     *    forbidden as its stand-ins go with it.
+     *  - **ASSIGNMENT's mechanism is Task 24's and its Stage 4 surface is
+     *    Task 25's**, but the CHIP and the "assigned to me" COUNTER are
+     *    Stage 5 (S18) — cross-matter aggregations over a mechanism that now
+     *    exists. Those two strings stay forbidden here, and that is now the
+     *    whole of what this test forbids.
+     *
+     * The other half is unchanged and is the one that was always doing the
+     * work: no `.tsx` may name `assigneeId`. A field carried through a data
+     * structure is invisible; a field a component renders is an affordance.
+     *
      * Stage 2 introduced real accounts, and the temptation that arrives with
-     * them is an assignee chip. The behaviour is still single-user: nothing
-     * broadcasts, nothing notifies, nothing shows a second person's
-     * presence, and an affordance implying otherwise is a promise the app
-     * cannot keep.
+     * them is an assignee chip.
      *
      * `assigneeId` WAS the awkward case, and S17's promise has been kept:
      * **Stage 3 Task 22 retired the field.** `Verification` no longer
@@ -707,9 +723,20 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
       'src/lib/upload/attribution.ts',
     ];
     const ASSIGNEE = /\bassigneeId\b|\bassignedTo\b/;
-    const AFFORDANCE = /assign(ed)?[- ]?to[- ]?me|whoIsHere|presenceOf|usePresence|onlineNow/i;
+    // STAGE 5'S TWO SURFACES, and no longer presence's stand-ins.
+    //
+    // The word boundaries are not decoration: without the leading `\b` this
+    // pattern matched `ClausePresence` — the Task 23 component — through the
+    // `usePresence` inside `ClaUSEPRESENCE`, and reported the shipped
+    // presence marker as a forbidden hook. A scanner that fires on a
+    // substring of an unrelated identifier is one that gets relaxed until it
+    // stops biting.
+    const AFFORDANCE = /assign(ed)?[- ]?to[- ]?me|\bassignedToMe\b|\bassigneeChip\b/i;
     expect(ASSIGNEE.test('const x = f.assigneeId')).toBe(true);
     expect(AFFORDANCE.test('const n = assignedToMe.length')).toBe(true);
+    // …and it does NOT fire on the presence component's own name, which is
+    // the false positive the boundaries above exist for.
+    expect(AFFORDANCE.test('export function ClausePresence() {}')).toBe(false);
 
     const offenders: string[] = [];
     for (const file of [...WEB_SOURCES, ...CORE_SOURCES]) {

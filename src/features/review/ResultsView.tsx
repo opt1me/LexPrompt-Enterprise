@@ -10,7 +10,11 @@ import {
   findingsKeyFor,
   isCollectionTarget,
 } from '@lexprompt/core';
-import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
+import type {
+  DispositionWithHistory, PresenceMember, VerificationChange,
+} from '@lexprompt/core';
+import { reportPresence } from '../../lib/api/socket';
+import { PresenceRoster } from '../../components/PresenceRoster';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import {
   isVerifiable, NO_EXPORT_CONTEXT, type DispositionAudience, type ExportContext,
@@ -186,6 +190,20 @@ export interface ResultsViewProps {
    *  "which matter did this call serve". Absent for a run started outside a
    *  matter, which is a genuine fact (Task 21) — never invented. */
   matterId?: string;
+  /**
+   * WHO ELSE IS ON THIS REVIEW, as the server last stated it (§8, Task 23).
+   *
+   * Passed down rather than subscribed to here, because `App` already holds
+   * the review's subscription and a second one would be a second answer to
+   * "who is here" on one screen. Optional: absent, nothing is drawn, which
+   * is what a review nobody else is in looks like.
+   *
+   * ADVISORY. It gates nothing on this screen: every control a stale client
+   * must not offer is governed by `stale`, and no control anywhere reads
+   * this list. The day a "somebody else is on this clause" warning becomes a
+   * refusal is the day presence stops being advisory (S6).
+   */
+  presence?: PresenceMember[];
 }
 
 type Tab = 'findings' | 'chat';
@@ -224,7 +242,7 @@ export function ResultsView({
   onVerify, onAddNote, verifyBusyKey, stale = false, authorInitials, localUserId,
   dispositionOf, audience, exportContext, verifyConflict, onReapplyConflict, onDismissConflict,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
-  playbookVersion, onShowVersionHistory, matterId,
+  playbookVersion, onShowVersionHistory, matterId, presence,
 }: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
@@ -539,6 +557,40 @@ export function ResultsView({
     cardRefs.current[focusIndex]?.scrollIntoView({ block: 'nearest' });
   }, [focusIndex]);
 
+  /*
+   * *"I AM HERE, ON THIS REVIEW, LOOKING AT THIS CLAUSE"* (§8, Task 23).
+   *
+   * The SELECTED clause — `activeClauseId` is the same cursor `j`/`k` and
+   * the rail both move — and never the clause nearest the top of the
+   * viewport. A scroll-derived presence would broadcast a stream of clause
+   * changes and would tell a colleague something the reader never chose to
+   * say.
+   *
+   * Reported here rather than in `App` because this is where the selection
+   * lives; the report is a fire-and-forget frame on the socket the tab
+   * already holds, and `reportPresence(null)` on unmount is what stops this
+   * screen claiming a reader who has navigated away.
+   */
+  useEffect(() => {
+    reportPresence({
+      sub: { review: run.id },
+      screen: 'review',
+      ...(activeClauseId ? { clauseId: activeClauseId } : {}),
+    });
+    return () => { reportPresence(null); };
+  }, [run.id, activeClauseId]);
+
+  /** Clause id -> the colleagues who have selected it. Derived from the one
+   *  roster this screen was handed, never accumulated across frames. */
+  const presenceByClause = useMemo(() => {
+    const out: Record<string, PresenceMember[]> = {};
+    for (const member of presence ?? []) {
+      if (!member.clauseId || member.userId === localUserId) continue;
+      (out[member.clauseId] ??= []).push(member);
+    }
+    return out;
+  }, [presence, localUserId]);
+
   return (
     <div className="h-full flex flex-col md:flex-row bg-paper min-h-0">
       {/* The clause index rail, `md` and up. */}
@@ -548,6 +600,8 @@ export function ResultsView({
           findings={findings}
           activeClauseId={activeClauseId}
           onSelect={handleSelectClause}
+          presenceByClause={presenceByClause}
+          audience={audience}
         />
       </div>
       {/* Flexible, not `shrink-0`. Fixing 258px of rail + 470px of finding
@@ -579,6 +633,11 @@ export function ResultsView({
           ) : (
             <span className="font-ui text-ui font-medium text-ink-1 truncate">{activeDoc?.name ?? 'Document'}</span>
           )}
+
+          {/* WHO ELSE IS HERE, beside how much of the review is done — two
+             facts about the same screen, and deliberately not merged: one
+             is what has been decided and the other is who is reading. */}
+          <PresenceRoster members={presence ?? []} meId={localUserId} audience={audience} />
 
           <span
             className="shrink-0 font-mono text-pin text-ink-4"
