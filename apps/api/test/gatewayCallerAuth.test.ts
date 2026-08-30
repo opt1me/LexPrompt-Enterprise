@@ -68,6 +68,10 @@ const BASE: ApiConfig = {
   parseStuckReportMs: 300_000,
   eventRetentionDays: 7,
   eventPageMax: 500,
+  wsPingMs: 25_000,
+  wsMaxConnections: 500,
+  wsMaxSubscriptions: 20,
+  wsMaxFrameBytes: 16 * 1024,
 };
 
 const MTLS = {

@@ -169,13 +169,54 @@ describe('Part 4A: every piece of wording has exactly one home', () => {
 });
 
 describe('Part 4A: the part boundary, enforced rather than remembered', () => {
-  it('still polls — the socket is Task 16, not this part', () => {
-    expect(codeOf(at('src/lib/api/runs.ts'))).toContain('setTimeout');
-    expect(grepRepo('new WebSocket')).toEqual([]);
+  it('has the socket, registered like every other route — INVERTED by Task 16 (P30)', () => {
+    /*
+     * This read *"still polls — the socket is Task 16, not this part"*, and
+     * it was the boundary Part 4A enforced rather than remembered. Task 16
+     * landed the socket, so the assertion is INVERTED rather than deleted:
+     * the record of what was missing survives beside the proof that it no
+     * longer is.
+     *
+     * What is asserted now is the structure the socket's own suites cannot
+     * check about themselves — that it exists, that it is a route the
+     * authorisation table covers, and that it did NOT arrive as a plugin
+     * whose upgrade ordering nobody here can read (S29).
+     */
+    expect(existsSync(at('apps/api/src/realtime/socket.ts'))).toBe(true);
+    expect(existsSync(at('apps/api/src/realtime/hub.ts'))).toBe(true);
+    expect(existsSync(at('packages/core/src/api/socket.ts'))).toBe(true);
+    // The frame union has exactly one home. A second copy in `src/lib/` is a
+    // client that silently drops whichever frame the two disagree about.
+    expect(declares(/export type ServerFrame/)).toEqual(['packages/core/src/api/socket.ts']);
+    expect(declares(/export type ClientFrame/)).toEqual(['packages/core/src/api/socket.ts']);
+    // In the authorisation table, so the authz sweep and the 401 sweep both
+    // see it. A socket registered outside the router would be silently
+    // absent from both.
+    expect(codeOf(at('apps/api/src/auth/routeTable.ts'))).toContain("'GET /v1/ws'");
+    // NOT `@fastify/websocket`: it performs the upgrade inside Fastify's own
+    // lifecycle, so whether the 101 is written before or after this
+    // application's authentication is a property of that plugin rather than
+    // of anything readable here. The ruling is in `realtime/socket.ts`.
     expect(grepRepo('@fastify/websocket')).toEqual([]);
-    // The sanity check for those two `toEqual([])`s: the scanner CAN find a
-    // name that is genuinely present in the same sources.
+    // The sanity check for that `toEqual([])`: the scanner CAN find a name
+    // that is genuinely present in the same sources.
     expect(grepRepo('setTimeout').length).toBeGreaterThan(1);
+  });
+
+  it('authenticates the socket BEFORE the upgrade, and offers no way round it (S29)', () => {
+    const socket = codeOf(at('apps/api/src/realtime/socket.ts'));
+    // The mutation this exists for: add an `if (process.env.WS_ALLOW_ANON)`
+    // branch to `realtime/socket.ts` and confirm THIS goes red.
+    expect(socket).not.toMatch(/SKIP|ANON|allowAnonymous|process\.env/);
+    // …and the sanity check, so the absence above is a fact about the file
+    // rather than about a scan that read nothing.
+    expect(socket).toMatch(/deps\.verify\(token\)/);
+    expect(socket).toMatch(/resolveActor/);
+    // The ORDER, over the source: `handleUpgrade` must not appear before the
+    // verification does. A socket upgraded first and authenticated on its
+    // first frame is an unauthenticated connection that exists.
+    expect(socket.indexOf('deps.verify(token)')).toBeLessThan(socket.indexOf('handleUpgrade'));
+    expect(socket.indexOf('handleUpgrade')).toBeGreaterThan(-1);
   });
 
   it('has no presence surface yet — Task 22, not before', () => {

@@ -145,12 +145,28 @@ async function main(): Promise<void> {
       t, principal, await roleFor(t, principal.issuer, principal.groups), config.workspaceId,
     ));
 
+  // THE HOSTNAME, not the pid — see the worker id below, which is now this
+  // same string rather than a second copy of the same expression. On a
+  // socket it is what makes "which replica am I connected to" answerable
+  // from the `hello` frame, which is what
+  // `replicaFanout.compose.test.ts` rests on: two connections that report
+  // the same instance id are not the cross-replica condition that test needs
+  // and it fails saying so, rather than passing vacuously.
+  const instanceId = `api-${hostname()}`;
   const app = buildServer({
     verify, gateway, db,
     workspaceId: config.workspaceId,
     maxBodyBytes: config.maxBodyBytes,
     resolveActor: resolveActorForRequest,
     eventPageMax: config.eventPageMax,
+    instanceId,
+    socket: {
+      pingMs: config.wsPingMs,
+      maxConnections: config.wsMaxConnections,
+      maxSubscriptions: config.wsMaxSubscriptions,
+      maxFrameBytes: config.wsMaxFrameBytes,
+      eventPageMax: config.eventPageMax,
+    },
     // The SAME store `ensureContainer` ran against above. One instance for
     // the upload path and the delete cascade both: two stores built from
     // one credential would still be two, and a cascade that reached the
@@ -180,7 +196,7 @@ async function main(): Promise<void> {
   // a process may expire its OWN orphaned lease (whatever held it is gone),
   // and must never expire another host's (that worker may still be running,
   // and stealing its cell would put two writers on one finding).
-  const workerId = `api-${hostname()}`;
+  const workerId = instanceId;
   const parseWorkers = startParseWorkers(
     {
       db: workerDb,

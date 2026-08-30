@@ -48,12 +48,40 @@ describe('every outbound client in apps/api is declared (M3)', () => {
     }
   });
 
+  /**
+   * A TYPE-ONLY IMPORT IS NOT A CLIENT, and this is the one narrowing this
+   * guard has taken.
+   *
+   * `import type { Server } from 'node:http'` erases at compile time: there
+   * is no value, so there is nothing that could open a connection. Stage 4's
+   * socket takes a `Server` and a `Duplex` as parameter types, and without
+   * this the guard reported it as a fourth outbound client — which is the
+   * pressure that gets a scanner relaxed until it stops biting, and the
+   * relaxation somebody would reach for is a file exemption.
+   *
+   * The narrowing is asserted in BOTH directions below: a value import of
+   * `node:http` still trips the scan, and the strip really does remove a
+   * type-only one.
+   */
+  const withoutTypeOnlyImports = (code: string): string =>
+    code.replace(/^\s*import\s+type\s[^;]*;/gm, '');
+
+  it('does not confuse a type-only import with a client', () => {
+    const typeOnly = "import type { Server } from 'node:http';\nconst x = 1;";
+    const value = "import { createServer } from 'node:http';\nconst x = 1;";
+    expect(/from 'node:https?'/.test(withoutTypeOnlyImports(typeOnly))).toBe(false);
+    // The half that matters: the scan still bites on a real one.
+    expect(/from 'node:https?'/.test(withoutTypeOnlyImports(value))).toBe(true);
+    expect(/from 'undici'/.test(withoutTypeOnlyImports(
+      "import { request } from 'undici';"))).toBe(true);
+  });
+
   it('no file outside the declared two makes an outbound call', () => {
     const allowed = new Set(DECLARED_EGRESS.map(e => e.file));
     const offenders: string[] = [];
     for (const file of files) {
       if (allowed.has(rel(file))) continue;
-      const code = codeOf(file);
+      const code = withoutTypeOnlyImports(codeOf(file));
       // Comment-stripped (`codeOf`), so the paragraph in `gatewayClient.ts`
       // explaining what the three clients ARE is not itself a violation —
       // the failure mode `sourceScan.ts`'s docstring describes, and the one

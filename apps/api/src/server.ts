@@ -2,7 +2,7 @@ import multipart from '@fastify/multipart';
 import Fastify, {
   type FastifyError, type FastifyInstance, type FastifyReply, type FastifyRequest,
 } from 'fastify';
-import { ModelError } from '@lexprompt/core';
+import { ModelError, WS_SUBPROTOCOL } from '@lexprompt/core';
 import type { Principal } from './oidc.ts';
 import type { GatewayClient } from './gatewayClient.ts';
 import type { Actor } from './auth/actor.ts';
@@ -26,6 +26,8 @@ import { registerFindings } from './routes/findings.ts';
 import { registerHistory } from './routes/history.ts';
 import { registerActivity } from './routes/activity.ts';
 import { registerRuns } from './routes/runs.ts';
+import { createHub, type Hub } from './realtime/hub.ts';
+import { attachSocket, type SocketCaps } from './realtime/socket.ts';
 import { ConflictError } from './errors.ts';
 
 declare module 'fastify' {
@@ -39,6 +41,14 @@ declare module 'fastify' {
      *  value the hook guarantees; a route that resolved its own would be a
      *  second implementation of provisioning. */
     actor?: Actor;
+  }
+  interface FastifyInstance {
+    /** The process's fan-out hub (§8, Task 16). Decorated rather than
+     *  returned beside the app so `main.ts` can hand the SAME hub to the
+     *  event feed (Task 18) — two hubs would be a socket listening to one
+     *  and the outbox feeding the other, which delivers nothing and looks
+     *  exactly like a quiet review. */
+    lexpromptHub: Hub;
   }
 }
 
@@ -100,6 +110,19 @@ export interface ServerDeps {
    *  route that would hand a client all of them on request is an undeclared
    *  cap by another name. */
   eventPageMax: number;
+  /**
+   * §8's live socket (Stage 4 Task 16), and the `verify` above is what
+   * authenticates it — the SAME function, before the upgrade.
+   *
+   * The caps come in rather than being read here for the reason every other
+   * cap does: `loadConfig` is the one reader of the environment, and a
+   * default invented in this file would be an undeclared cap in the tier
+   * that cannot report it.
+   */
+  socket: SocketCaps;
+  /** This process's identity, echoed on every socket's `hello` frame so
+   *  "which replica served me" is a fact rather than a guess. */
+  instanceId: string;
   /** Where the firm's document BYTES live (Task 10). Injected rather than
    *  constructed here, so a route test needs no Azurite and so there is
    *  exactly one store for the upload path and the delete cascade to share
@@ -322,6 +345,61 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerActivity(app, deps.db);
   registerRuns(app, deps.db, { eventPageMax: deps.eventPageMax });
   registerWorkspaceSettings(app, deps.db, deps.gateway);
+
+  /*
+   * §8'S SOCKET — the route, then the upgrade.
+   *
+   * THE ROUTE exists so the socket's path is a route Fastify knows about:
+   * `ROUTE_POLICY` covers it, `registerRoleGate` refuses a reviewer-less
+   * caller at it, `authz.route.test.ts` sees it in both directions and
+   * `oidc.test.ts`'s sweep proves it answers 401 with no token. A socket
+   * registered outside the router would be silently absent from all three.
+   * It answers 426 to anything that is not an upgrade, which is what a
+   * browser hitting `/api/v1/ws` in an address bar deserves to be told.
+   *
+   * THE UPGRADE is handled on the underlying server's own `upgrade` event
+   * (`realtime/socket.ts`), which Fastify's router never sees — and that is
+   * deliberate: the token is verified and the actor resolved BEFORE
+   * `handleUpgrade` is called, so an unauthenticated socket never comes into
+   * being at all (S29).
+   */
+  //
+  // THE PATH IS A STRING LITERAL HERE, NOT `WS_PATH`, AND THAT IS LOAD-BEARING.
+  //
+  // `oidc.test.ts`'s route-discovery scanner matches
+  // `app.get(  '<url>'` — a QUOTED LITERAL — because that is what every
+  // other route in this file is. Registered as `app.get(WS_PATH, …)` the
+  // socket route was invisible to it: `authz.route.test.ts` still saw it
+  // (that reads Fastify's own table) but the no-token 401 sweep did not, and
+  // it passed at its pinned count of 65 with a new route it had never
+  // touched. That is the shape of a test that cannot fail, on the one route
+  // whose whole design claim is that it is authenticated.
+  //
+  // Found by running the suite and not believing the green. The constant is
+  // still the one source of truth — `socketRoute.test.ts` asserts this
+  // literal equals `WS_PATH`, so the two cannot drift.
+  app.get('/v1/ws', async (_req, reply) => reply.code(426).send({
+    error: {
+      code: 'unknown',
+      message: 'This is LexPrompt\'s live-updates socket. It answers a WebSocket upgrade '
+        + `carrying the ${WS_SUBPROTOCOL} subprotocol and a bearer token, not an ordinary GET.`,
+    },
+  }));
+
+  const hub = createHub();
+  app.decorate('lexpromptHub', hub);
+  const stopSocket = attachSocket(app.server, {
+    verify: deps.verify,
+    resolveActor: deps.resolveActor,
+    db: deps.db,
+    hub,
+    instanceId: deps.instanceId,
+    caps: deps.socket,
+  });
+  // `app.close()` must take the socket down with it, or a test that closes
+  // its server leaves a ping interval and a set of live connections behind —
+  // and a suite whose processes do not exit is a suite people stop running.
+  app.addHook('onClose', async () => { await stopSocket(); });
 
   return app;
 }

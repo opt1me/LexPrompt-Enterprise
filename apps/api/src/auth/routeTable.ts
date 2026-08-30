@@ -66,6 +66,21 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'GET /v1/me': 'reviewer',
   'PUT /v1/me': 'reviewer',
 
+  // §8's live socket (Stage 4 Task 16). `reviewer`: it delivers events about
+  // reviews the caller can already read one at a time over HTTP, and every
+  // subscription is scoped to the caller's workspace before it is joined.
+  //
+  // IT IS A REAL FASTIFY ROUTE, and that is the point of the entry. The
+  // upgrade itself is handled on the server's own `upgrade` event
+  // (`realtime/socket.ts` — authenticated BEFORE the upgrade, S29), which
+  // Fastify's router never sees; registering the path as an ordinary GET
+  // that answers 426 to a non-upgrade request is what puts the socket inside
+  // `authz.route.test.ts`'s bidirectional coverage and `oidc.test.ts`'s
+  // no-token 401 sweep. A socket registered any other way would be silently
+  // absent from both, which is the shape of a test that cannot fail. The
+  // upgrade path reads THIS entry rather than deciding a role of its own.
+  'GET /v1/ws': 'reviewer',
+
   // §6.3's attribution requirement needs a NAME for an id, and `GET /v1/me`
   // answers only for the caller — so before this route a card could show
   // that a finding had been rejected and could not say by whom.

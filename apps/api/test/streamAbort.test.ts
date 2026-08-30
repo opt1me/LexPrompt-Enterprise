@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import http from 'node:http';
 import { buildServer } from '../src/server.ts';
-import { DEFAULT_MAX_BODY_BYTES } from '../src/config.ts';
+import { DEFAULT_MAX_BODY_BYTES, WS_CAP_DEFAULTS } from '../src/config.ts';
 import type { GatewayClient } from '../src/gatewayClient.ts';
 import type { Principal } from '../src/oidc.ts';
 import type { Db } from '../src/db/pool.ts';
@@ -81,6 +81,8 @@ async function listen(gateway: GatewayClient): Promise<number> {
     workspaceId: 'ws-configured',
     maxBodyBytes: DEFAULT_MAX_BODY_BYTES,
     eventPageMax: 500,
+    socket: { ...WS_CAP_DEFAULTS, eventPageMax: 500 },
+    instanceId: 'api-test-instance',
     db: UNUSED_DB,
     resolveActor: async () => ACTOR,
     // This suite never touches a document; the store is here because

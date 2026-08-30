@@ -51,6 +51,17 @@ export type {
 // disposition and its event, and what a per-clause retry cleared. One
 // declaration, two programs — the browser reads them and `apps/api` writes
 // them.
+// §8's live transport (Stage 4 Task 16). ONE frame union, both directions,
+// both sides -- the same argument RUN_EVENT_TYPES is here for, one layer
+// out: a second copy in src/lib/ is a client that silently drops whichever
+// frame the two disagree about, and the likeliest casualty is
+// resync_required, the one frame that says a hole exists.
+export {
+  WS_SUBPROTOCOL, WS_BEARER_PREFIX, WS_PATH,
+  WS_CLOSE_UNAUTHENTICATED, WS_CLOSE_UNRESPONSIVE, WS_CLOSE_TOO_MANY,
+  isClientFrame, isSubscriptionRef,
+} from './api/socket.ts';
+export type { ClientFrame, ServerFrame } from './api/socket.ts';
 export type {
   FindingsPage, DispositionView, DispositionCause, DispositionEventView,
   DispositionWithHistory,

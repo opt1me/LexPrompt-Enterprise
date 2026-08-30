@@ -272,6 +272,36 @@ export interface ApiConfig {
    */
   eventRetentionDays: number;
   eventPageMax: number;
+  /**
+   * The live socket's caps (§8, Stage 4). DECLARED, like every other cap in
+   * this module, because an undeclared one is a limit an operator hits with
+   * no key to change and no sentence naming it — three of those have already
+   * shipped in this repository.
+   *
+   * `wsPingMs` — how often the server sends a `ping` FRAME (not a protocol
+   * ping: a browser answers those in the network stack with no JavaScript
+   * involved, which proves the socket is alive and proves nothing about
+   * whether the page still is). Two unanswered pings close the connection,
+   * and the browser renders `stale` on the same threshold — so this number
+   * decides how long a reviewer can be looking at a screen that has quietly
+   * stopped being live, which is §19's named defect.
+   *
+   * IT MUST STAY BELOW EVERY IDLE TIMEOUT IN FRONT OF IT. `infra/nginx/
+   * web.conf`'s socket location sets `proxy_read_timeout 3600s`, and
+   * Container Apps' ingress idle timeout defaults to four minutes. At 25s
+   * this is comfortably inside both; raising it past either would kill every
+   * idle socket and the app would look like a network with a fault.
+   *
+   * `wsMaxConnections` — per replica. `wsMaxSubscriptions` — per socket; §8
+   * says one connection per tab, multiplexed, and a review screen holds two
+   * or three. `wsMaxFrameBytes` — the largest frame a client may send, which
+   * is small because a client only ever sends `subscribe`, `unsubscribe` and
+   * `pong`.
+   */
+  wsPingMs: number;
+  wsMaxConnections: number;
+  wsMaxSubscriptions: number;
+  wsMaxFrameBytes: number;
 }
 
 /**
@@ -283,6 +313,23 @@ export interface ApiConfig {
  * of the firm, and the value is named in the refusal when it is exceeded.
  */
 export const DEFAULT_MAX_BODY_BYTES = 16 * 1024 * 1024;
+
+/**
+ * The socket's caps, as ONE exported object rather than four literals inside
+ * `loadConfig`.
+ *
+ * `DEFAULT_MAX_BODY_BYTES` is the precedent and the reason is the same: three
+ * test harnesses stand a real server up, and each would otherwise invent its
+ * own ping interval and its own ceiling — so a suite would be exercising
+ * numbers no deployment uses, which is the quieter half of an undeclared cap.
+ * One home, read by `loadConfig` and by every harness.
+ */
+export const WS_CAP_DEFAULTS = {
+  pingMs: 25_000,
+  maxConnections: 500,
+  maxSubscriptions: 20,
+  maxFrameBytes: 16 * 1024,
+} as const;
 
 function int(env: NodeJS.ProcessEnv, name: string, fallback: number): number {
   const raw = env[name];
@@ -587,6 +634,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     parseStuckReportMs: int(env, 'API_PARSE_STUCK_REPORT_MS', 300_000),
     eventRetentionDays: int(env, 'API_EVENT_RETENTION_DAYS', 7),
     eventPageMax: int(env, 'API_EVENT_PAGE_MAX', 500),
+    wsPingMs: int(env, 'API_WS_PING_MS', WS_CAP_DEFAULTS.pingMs),
+    wsMaxConnections: int(env, 'API_WS_MAX_CONNECTIONS', WS_CAP_DEFAULTS.maxConnections),
+    wsMaxSubscriptions: int(env, 'API_WS_MAX_SUBSCRIPTIONS', WS_CAP_DEFAULTS.maxSubscriptions),
+    wsMaxFrameBytes: int(env, 'API_WS_MAX_FRAME_BYTES', WS_CAP_DEFAULTS.maxFrameBytes),
   };
   // Every cross-key rule, at load, so the banner below describes a
   // configuration that can actually serve.
@@ -671,6 +722,13 @@ export function describeConfig(cfg: ApiConfig): string {
     `Parse queue: read within ${cfg.parseTimeoutMs}ms, `
       + `report a document still waiting after ${cfg.parseStuckReportMs}ms`,
     `Events: kept ${cfg.eventRetentionDays} day(s), at most ${cfg.eventPageMax} per page`,
+    // The socket's caps on their own line, for the same reason the queue's
+    // are: "why did everyone's live view go quiet" is answered by the ping
+    // interval and the connection ceiling, and an operator must not have to
+    // read the source to find either.
+    `Live socket: ping ${cfg.wsPingMs}ms, at most ${cfg.wsMaxConnections} connection(s) `
+      + `per replica, ${cfg.wsMaxSubscriptions} subscription(s) per socket, `
+      + `frames up to ${cfg.wsMaxFrameBytes} bytes`,
     `Database: ${redactDsn(cfg.databaseUrl)}`,
     // The WORKER's connection, named separately and redacted the same way.
     // Which role the engine holds is the fact that makes "the worker cannot

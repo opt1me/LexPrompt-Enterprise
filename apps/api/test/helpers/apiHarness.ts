@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { ModelError, type ModelErrorCode } from '@lexprompt/core';
 import { buildServer } from '../../src/server.ts';
-import { DEFAULT_MAX_BODY_BYTES } from '../../src/config.ts';
+import { DEFAULT_MAX_BODY_BYTES, WS_CAP_DEFAULTS } from '../../src/config.ts';
 import type { Principal } from '../../src/oidc.ts';
 import type { GatewayClient } from '../../src/gatewayClient.ts';
 import type { Db, Tx } from '../../src/db/pool.ts';
@@ -96,6 +96,15 @@ export interface TestApiOptions {
   /** Overrides `API_EVENT_PAGE_MAX`, so a test can prove the cursor's
    *  `hasMore` without writing five hundred events. */
   eventPageMax?: number;
+  /** The instance id every socket's `hello` frame carries. Overridable so a
+   *  test can stand two servers up and tell their sockets apart -- which is
+   *  the cross-replica condition, in one process. */
+  instanceId?: string;
+  /** Overrides individual socket caps. A test proving the subscription
+   *  ceiling must not have to open twenty of them, and one proving the
+   *  heartbeat must not have to wait twenty-five seconds. */
+  socketCaps?: Partial<{ pingMs: number; maxConnections: number; maxSubscriptions: number;
+    maxFrameBytes: number }>;
 }
 
 export interface CallLog {
@@ -211,6 +220,13 @@ export function buildTestApi(
     // The shipped default, so a route suite reads the same page size the
     // running service uses rather than a number the harness invented.
     eventPageMax: opts.eventPageMax ?? 500,
+    // The SHIPPED defaults (config.ts's WS_CAP_DEFAULTS), never numbers this
+    // harness invented: a suite exercising a ping interval no deployment
+    // uses is the quiet half of an undeclared cap.
+    socket: {
+      ...WS_CAP_DEFAULTS, eventPageMax: opts.eventPageMax ?? 500, ...opts.socketCaps,
+    },
+    instanceId: opts.instanceId ?? 'api-test-instance',
   });
 
   return { app, calls, blobs };
