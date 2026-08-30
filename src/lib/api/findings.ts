@@ -1,8 +1,9 @@
 import {
-  ModelError,
-  type DispositionHistory, type DispositionView, type DispositionWithHistory,
+  ModelError, unchecked,
+  type DispositionEventView, type DispositionHistory, type DispositionView,
+  type DispositionWithHistory,
   type DispositionWriteResult, type FindingsPage, type NetPositionWriteResult, type Note,
-  type VerificationChange, type VerificationState,
+  type Verification, type VerificationChange, type VerificationState,
 } from '@lexprompt/core';
 import { apiGet, apiSend } from './client';
 
@@ -403,3 +404,60 @@ const findingPath = (reviewId: string, findingsKey: string, clauseId: string): s
 
 const dispositionPath = (reviewId: string, findingsKey: string, clauseId: string): string =>
   `${findingPath(reviewId, findingsKey, clauseId)}/disposition`;
+
+/**
+ * A `finding_disposition` row as the DOMAIN's `Verification`.
+ *
+ * ONE MAPPING, because there were about to be three: `App.tsx`'s
+ * `handleVerify` built it inline from a write's answer, `FindingCard` needs
+ * it to render the state it is SHOWING while an update is held (P36), and
+ * Stage 4's push handler needs it from an event payload. Three copies of
+ * "which keys survive when a disposition is `unchecked`" is the sibling
+ * drift this project has six findings about, on the field a reader trusts
+ * most.
+ *
+ * `unchecked` NAMES NOBODY — §6.3 says such a finding renders as "Not
+ * checked" and names nobody, and carrying an actor through would put a name
+ * on the absence of a judgement. Every other key is spread only when the row
+ * has one: `structuredClone` preserves an `undefined`-valued key, so
+ * `byUserId: undefined` would read to an `in` check as a name that is there.
+ */
+export function verificationFromDisposition(d: DispositionView): Verification {
+  if (d.state === 'unchecked') return unchecked();
+  return {
+    state: d.state,
+    ...(d.reason ? { reason: d.reason } : {}),
+    ...(d.byUserId ? { byUserId: d.byUserId } : {}),
+    ...(d.at !== undefined ? { at: d.at } : {}),
+  };
+}
+
+/**
+ * A DISPOSITION THAT ARRIVED FROM SOMEBODY ELSE, recorded exactly as a read
+ * would have recorded it (§8, Task 21).
+ *
+ * The payload carries the whole new row AND the event that produced it, so
+ * this needs no second request — which is the point of §8 putting both on
+ * one frame: *"Rejected by R. Okafor, 16:04 — was Verified"* is renderable
+ * from one push. A handler that re-fetched on every push would turn a
+ * forty-cell run into forty reads, and would be optimised away later taking
+ * the sentence with it.
+ *
+ * It moves BOTH caches, the same two a read moves, for the same reason: the
+ * version this browser must state on its next write is the one the server
+ * last told it about. That is what makes a judgement submitted from a HELD
+ * dialog get refused — the card states the version it was showing
+ * (`atVersion`), the store holds a newer one, and `ConflictNotice` names who
+ * replaced it. Moving only the display would let that submission be
+ * accepted against a state its author never read.
+ */
+export function rememberPushedDisposition(
+  disposition: DispositionView, event: DispositionEventView,
+): void {
+  const { reviewId, findingsKey, clauseId } = disposition;
+  rememberDispositionVersion(reviewId, findingsKey, clauseId, disposition.version);
+  const byCell = lastSeenDisposition.get(reviewId)
+    ?? new Map<string, DispositionWithHistory>();
+  byCell.set(cellKey(findingsKey, clauseId), { disposition, last: event });
+  lastSeenDisposition.set(reviewId, byCell);
+}

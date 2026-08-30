@@ -15,6 +15,7 @@ import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailMod
 import { DispositionHistory } from './DispositionHistory';
 import { ConflictNotice, type VerificationConflict } from './ConflictNotice';
 import { mayApplyNow, sameCell, sameDisposition } from './pendingUpdate';
+import { verificationFromDisposition } from '../../lib/api/findings';
 import {
   dispositionLabel, heldUpdateLine, isVerifiable, type DispositionAudience,
 } from '../../lib/findingOutcome';
@@ -247,6 +248,32 @@ export function FindingCard({
   const heldIncoming = !sameDisposition(disposition, shownDisposition)
     && sameCell(disposition, shownDisposition) ? disposition : undefined;
 
+  /**
+   * THE STATE THIS CARD IS SHOWING — and P36 was only half-implemented
+   * without it.
+   *
+   * `shownDisposition` held the ATTRIBUTION LINE back while a decision was
+   * in progress, and everything else on the card kept rendering from
+   * `finding.verification`: the `StateChip` at the top, and the highlighted
+   * button inside `VerificationControls`. So a change from somebody else
+   * landing while the reject-reason dialog was open left the line saying
+   * one thing and the chip already saying the other — the state swapped in
+   * under the person's hand, which is the exact failure the hold exists to
+   * prevent, on the two elements a reviewer actually looks at.
+   *
+   * It was reachable before the socket: `refreshFindings` replaces the
+   * whole findings map on every poll, so a poll landing mid-dialog did it
+   * too. Stage 4 makes it constant rather than introducing it.
+   *
+   * `verificationFromDisposition` is the ONE mapping (`api/findings.ts`) —
+   * `App.tsx`'s write handler and Stage 4's push handler read the same
+   * one, because "which keys survive when a disposition is unchecked" is
+   * not a question to answer three times.
+   */
+  const shownVerification = heldIncoming && shownDisposition
+    ? verificationFromDisposition(shownDisposition.disposition)
+    : finding?.verification;
+
   if (status === 'pending') {
     return (
       <div className={`${CARD_SHELL} border-rule border-dashed p-4 ${interrupted ? '' : 'opacity-60'} space-y-3`}>
@@ -358,7 +385,7 @@ export function FindingCard({
         <div className="flex items-center gap-2">
           <RiskChip level={finding?.riskLevel} />
           <PositionChip outcome={finding?.positionOutcome} />
-          {finding && <StateChip verification={finding.verification} />}
+          {finding && shownVerification && <StateChip verification={shownVerification} />}
           {/* A `Verification` only ever exists on a `done` finding (it's the
              only status `VerificationControls` renders for), and the spec's
              single most important rule in this sub-project — "re-running a
@@ -535,7 +562,7 @@ export function FindingCard({
 
         {isVerifiable(finding) && onVerify && (
           <VerificationControls
-            verification={finding.verification}
+            verification={shownVerification ?? finding.verification}
             busy={verifyBusy}
             stale={stale}
             // THE VERSION THIS CARD WAS SHOWING, not the one the module

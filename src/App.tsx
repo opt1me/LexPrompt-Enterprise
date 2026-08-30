@@ -24,7 +24,8 @@ import {
   notYetReadMessageFor,
 } from '@lexprompt/core';
 import type {
-  DispositionWithHistory, RetryResult, RunView, VerificationChange, WorkspaceSettings,
+  AppEvent, DispositionChangedPayload, DispositionWithHistory, NoteAddedPayload,
+  RetryResult, RunView, VerificationChange, WorkspaceSettings,
 } from '@lexprompt/core';
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
 import { apiKeyWasPurgedThisSession, loadSettings } from './lib/storage';
@@ -53,14 +54,16 @@ import {
 import { getProfile } from './lib/db/profile';
 import { describeLoadError, describeRunEnding } from './lib/loadError';
 import { StalePanel } from './components/StalePanel';
+import { subscribe } from './lib/api/socket';
 import { onConnectionState, type ConnectionState } from './lib/api/socket';
 // Task 17/18: the browser asks about a run instead of performing one.
 import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
 } from './lib/api/runs';
 import {
-  addNote, conflictingDisposition, dispositionFor, dispositionsReadAt, getFindings,
-  rememberConflict, setDisposition, setNetPosition,
+  addNote, conflictingDisposition, dispositionFor, dispositionVersionFor, dispositionsReadAt,
+  getFindings, rememberConflict, rememberPushedDisposition, setDisposition, setNetPosition,
+  verificationFromDisposition,
 } from './lib/api/findings';
 import { loadDirectory, userName } from './lib/api/users';
 import { formatInstant } from './lib/instant';
@@ -2773,17 +2776,12 @@ function AppShell({ signIn }: { signIn: () => void }) {
       setVerifyConflict(null);
       applyToFinding(docId, clauseId, finding => ({
         ...finding,
-        // The row the store CONFIRMED, rebuilt through the same reading
-        // `findings/read.ts` performs — `unchecked` names nobody, and a
-        // judgement that has one carries it.
-        verification: disposition.state === 'unchecked'
-          ? unchecked()
-          : {
-            state: disposition.state,
-            ...(disposition.reason ? { reason: disposition.reason } : {}),
-            ...(disposition.byUserId ? { byUserId: disposition.byUserId } : {}),
-            ...(disposition.at !== undefined ? { at: disposition.at } : {}),
-          },
+        // The row the store CONFIRMED, through the ONE mapping
+        // (`verificationFromDisposition`) — the same function the card
+        // reads while it holds an update and the same one Stage 4's push
+        // handler reads. It was written out inline here, and a second
+        // copy was about to be written twice more.
+        verification: verificationFromDisposition(disposition),
       }));
     } catch (e) {
       // A REFUSAL THAT NAMES WHOSE WON (§6.3, Stage 4).
@@ -2899,6 +2897,115 @@ function AppShell({ signIn }: { signIn: () => void }) {
   /** A note: a person's remark about the clause, and its own row. The actor
    *  and the instant are the server's — the note that comes back is what was
    *  stored, and it is what goes on screen. */
+
+  /**
+   * SOMEBODY ELSE'S CHANGE, ARRIVING (section 18 item 5, Task 21).
+   *
+   * Five rules, each of which is a defect if dropped:
+   *
+   * 1. **The version guard first.** An event whose version is not newer
+   *    than what this browser holds is DROPPED. It is what makes replay
+   *    safe, makes the echo of your own write a no-op, and makes
+   *    out-of-order delivery survivable. `src/lib/api/socket.ts` applies
+   *    the same comparison one layer down; two independent guards,
+   *    because this is the one place a dropped event leaves a human
+   *    judgement on screen that the database does not hold.
+   * 2. **Apply from the PAYLOAD, never by re-fetching.** Section 8 puts the
+   *    whole new row and the event that produced it on one frame precisely
+   *    so "was Rejected" is on hand without a second query. A handler that
+   *    re-fetched would turn a forty-cell run into forty reads and would
+   *    be optimised away later, taking the sentence with it.
+   * 3. **Never over a decision in progress.** `mayApplyNow` decides that,
+   *    inside `FindingCard`, which is where the open control and the
+   *    in-flight write actually are — the SAME function the poll path
+   *    uses, not a second copy. What this handler does is move the two
+   *    caches a read moves, exactly as a read would; the card then holds
+   *    the DISPLAY back, and a judgement submitted from a held dialog
+   *    states the version it was showing and is REFUSED, which is the
+   *    correct outcome.
+   * 4. **A note arrives as a note.** It APPENDS; it never replaces the
+   *    notes array from a stale local copy.
+   * 5. **A `run.*` event still routes to `refreshFindings`** — through
+   *    `watchRun`, exactly as it does today. The engine's events describe
+   *    the model's output; the disposition events describe a person's
+   *    judgement. They arrive on one socket and are applied by two paths,
+   *    because they are two kinds of fact.
+   */
+  const applyPush = (event: AppEvent): void => {
+    const current = latestRunRef.current ?? run;
+    if (!current) return;
+
+    if (event.type === 'finding.disposition_changed') {
+      const payload = event.payload as DispositionChangedPayload;
+      if (payload.reviewId !== current.id) return;
+      // RULE 1. One comparison, and the load-bearing line in this file.
+      const held = dispositionVersionFor(
+        payload.reviewId, payload.findingsKey, payload.clauseId);
+      if (payload.version <= held) return;
+      // RULE 2. From the payload. No fetch.
+      rememberPushedDisposition(payload.disposition, payload.event);
+      // `findingsKey` IS the key `findingsKeyFor` produces — the document
+      // id for a document review, the COLLECTION id for a collection one —
+      // so handing it back through `findingsKeyFor` returns itself in both
+      // cases. Never a member document chosen from a collection.
+      applyToFinding(payload.findingsKey, payload.clauseId, finding => ({
+        ...finding,
+        verification: verificationFromDisposition(payload.disposition),
+      }));
+      return;
+    }
+
+    if (event.type === 'note.added') {
+      const payload = event.payload as NoteAddedPayload;
+      if (payload.reviewId !== current.id) return;
+      // RULE 4. APPENDED, and by id: the same note arriving twice (a
+      // replay, or a review AND a matter subscription both carrying it)
+      // must not become two remarks on the record.
+      applyToFinding(payload.findingsKey, payload.clauseId, finding => (
+        finding.notes.some(n => n.id === payload.note.id)
+          ? finding
+          : { ...finding, notes: [...finding.notes, payload.note] }
+      ));
+    }
+    // RULE 5: a `run.*` event is not handled here at all. `watchRun` has
+    // it, and routes it to `refreshFindings` exactly as it did over the
+    // poll. Handling it in both places would refresh the findings twice
+    // per cell.
+  };
+
+  /**
+   * ONE SUBSCRIPTION PER OPEN REVIEW, and it is not the run's.
+   *
+   * `watchRun` subscribes to `{ run }` and only while a run is live. A
+   * disposition change belongs to no run — a colleague can reject a finding
+   * on a review that finished last week — so the card needs `{ review }`,
+   * held for as long as the review is open.
+   *
+   * Guarded on the review ID CHANGING rather than on where this effect sits
+   * in the file: React runs effects in declaration order, and the next
+   * person to reorder two of them would otherwise break this with no test
+   * failing near their change.
+   */
+  const reviewId = run?.id;
+  useEffect(() => {
+    if (!reviewId) return undefined;
+    const subscription = subscribe({ review: reviewId }, {
+      onEvent: applyPush,
+      onResync: () => {
+        // The events between this client's cursor and now are gone. The
+        // findings map is the state they described, so it is re-read —
+        // and SAID OUT LOUD, because a silent re-read is indistinguishable
+        // from a screen that has stopped updating.
+        setResyncing(true);
+        detach(
+          refreshFindings(reviewId).finally(() => setResyncing(false)),
+          'resyncing the findings after a push gap');
+      },
+    });
+    return () => subscription.close();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewId]);
+
   const handleAddNote = async (docId: string, clauseId: string, text: string) => {
     const current = latestRunRef.current ?? run;
     if (!current) return;
