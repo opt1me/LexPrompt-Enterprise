@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { draftEmail } from './draftEmail';
 import type { Finding, ReviewRun, PlaybookVersion } from '../../types';
+import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { WorkspaceSettings } from '@lexprompt/core';
-import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
 
 vi.mock('../../lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {

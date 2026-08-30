@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { mount, buttons, buttonNamed, click, textbox, type } from '../../test/mount';
 import { NetPositionPanel } from './NetPositionPanel';
-import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
+import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { TrailStep } from '../../types';
 
 const TRAIL: TrailStep[] = [

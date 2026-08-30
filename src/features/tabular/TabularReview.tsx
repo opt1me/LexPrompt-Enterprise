@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import { AlignLeft, Download, FileText, Info, Loader, LayoutList, RotateCcw, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { DocumentFile, Finding, Review, ReviewRun, RiskLevel } from '../../types';
-import { findingKey } from '../../lib/verification';
-import type { VerificationChange } from '../../lib/verification';
-import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
+import { findingKey, findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
+import type { VerificationChange } from '@lexprompt/core';
 import { verificationCounts, isVerifiable, positionOutcomeCounts, NO_RISK_DATA_LABEL } from '../../lib/findingOutcome';
 import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';

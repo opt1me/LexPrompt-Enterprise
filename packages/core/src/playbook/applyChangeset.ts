@@ -18,18 +18,28 @@
  * client's playbook saying something the other's does not, with nothing on
  * either screen looking wrong.
  *
- * ## Why the types are declared here
+ * ## Where the types come from
  *
- * `packages/core` cannot import `src/types.ts` — `RedlineEdit.kind` is typed
- * `import('./lib/docxRedlines').RedlineEditKind`, an inline type import that
- * pulls a browser module (and `DOMParser`, `Element`, `Document`) into
+ * `StandardPosition` and `PlaybookClause` used to be DECLARED here, because
+ * `packages/core` could not import `src/types.ts` — `RedlineEdit.kind` was
+ * typed `import('./lib/docxRedlines').RedlineEditKind`, an inline type import
+ * that pulls a browser module (and `DOMParser`, `Element`, `Document`) into
  * whatever program reads `types.ts`. `apps/api/src/db/rows.ts` hit exactly
- * this and records it at length. So the shapes below are declared locally
- * and kept structurally IDENTICAL to their same-named counterparts in
- * `src/types.ts`; TypeScript's structural typing then makes a value built
- * there assignable here with no cast. Keep them side by side when either
- * changes.
+ * this and records it at length. The two declarations were kept structurally
+ * identical to their counterparts in `src/types.ts` by review alone, which
+ * is precisely the drift S14 exists to prevent and precisely the drift
+ * TypeScript will never report.
+ *
+ * They now come from `../domain/types.ts`, which is where `src/types.ts`
+ * re-exports them from too. One declaration, three programs.
+ *
+ * `RedlineEdit` and the changeset shapes below stay declared here: nothing
+ * in the review closure reads them, and a type moves to `domain/` when
+ * something on the server needs it, not because it happened to be nearby.
  */
+import type { StandardPosition, PlaybookClause } from '../domain/types.ts';
+
+export type { StandardPosition, PlaybookClause };
 
 /** Mirrors `src/lib/docxRedlines.ts`'s `RedlineEditKind`. `'moved'` is in
  *  the union deliberately (R-F3): without it a relocated clause is
@@ -48,21 +58,6 @@ export interface RedlineEdit {
 }
 
 export type ChangeKind = 'confirm' | 'drift' | 'new_clause';
-
-export interface StandardPosition {
-  text: string;
-  origin: 'authored' | 'ai-drafted' | 'learned';
-  reviewedByHuman: boolean;
-  provenance?: string;
-}
-
-export interface PlaybookClause {
-  id: string;
-  title: string;
-  extractPrompt: string;
-  riskCriteria?: string;
-  standardPosition?: StandardPosition;
-}
 
 export interface ChangesetItem {
   id: string;

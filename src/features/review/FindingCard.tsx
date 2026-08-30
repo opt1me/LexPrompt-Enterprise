@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { PlaybookClause, Finding, RiskLevel } from '../../types';
-import type { VerificationChange } from '../../lib/verification';
+import type { VerificationChange } from '@lexprompt/core';
 import { RiskChip } from '../../components/RiskChip';
 import { StateChip } from '../../components/StateChip';
 import { PositionChip } from '../../components/PositionChip';

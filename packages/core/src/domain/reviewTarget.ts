@@ -1,4 +1,4 @@
-import type { ReviewTarget } from '../types';
+import type { ReviewTarget } from './types.ts';
 
 export function isCollectionTarget(
   target: ReviewTarget,
@@ -26,6 +26,14 @@ export function targetDocumentIds(target: ReviewTarget): string[] {
  * Throws rather than guessing when a document review is asked for a key
  * with no document: there is genuinely no single answer, and returning
  * something plausible would put findings under a key nothing reads.
+ *
+ * Six defects in sub-project C came from code that keyed by document id
+ * directly: an empty findings pane, a verification and a note written under
+ * a key nothing read, a silently empty DOCX export, a silently empty CSV
+ * export, and a retry that overwrote a synthesised net position with a
+ * one-document answer. This function is now the client/server boundary's
+ * copy of that rule as well — the browser, the API and the worker all key
+ * through it. If you are reading a findings key anywhere, come through here.
  */
 export function findingsKeyFor(target: ReviewTarget, documentId?: string): string {
   if (isCollectionTarget(target)) return target.collectionId;

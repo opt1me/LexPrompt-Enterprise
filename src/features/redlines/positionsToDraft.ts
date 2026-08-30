@@ -1,4 +1,4 @@
-import { uid } from '../../lib/uid';
+import { uid } from '@lexprompt/core';
 import type { AuthoringDraft, DraftClause, DraftClauseBasis } from '../../lib/authoringDraft';
 import type { InferredPosition } from '../../lib/inferPositions';
 import type { RedlineEdit } from '../../types';
@@ -47,7 +47,7 @@ export function includedPositions(positions: InferredPosition[]): InferredPositi
  *  rather than publishing a blank house rule (the same guard
  *  `StandardPositionField` and `DraftReview` apply for the same reason:
  *  a position with no text reads as one until something looks at it). */
-export function positionText(position: InferredPosition): string {
+export function inferredPositionText(position: InferredPosition): string {
   const reworded = position.rewordedText?.trim();
   return position.disposition === 'reworded' && reworded ? reworded : position.statement;
 }
@@ -217,7 +217,7 @@ export function positionsToDraft(
       ...(basis.length > 0 ? { basis } : {}),
       extractPrompt: defaultExtractPrompt(position.clauseTitle),
       standardPosition: {
-        text: positionText(position),
+        text: inferredPositionText(position),
         origin: 'learned' as const,
         reviewedByHuman: false,
       },

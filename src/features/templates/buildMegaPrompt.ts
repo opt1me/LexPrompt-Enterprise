@@ -1,5 +1,5 @@
 import type { PlaybookDraft } from '../../types';
-import { resolveRiskCriteria } from '../../lib/riskBlock';
+import { resolveRiskCriteria } from '@lexprompt/core';
 
 export type MegaPromptFormat = 'copilot' | 'json';
 
@@ -63,7 +63,7 @@ function positionLabel(reviewedByHuman: boolean): string {
  * `extractClause` (`src/features/review/extractClause.ts`): its system
  * message is the playbook's `systemPrompt` followed by
  * "OUTPUT RULES: <formatPrompt>"; its risk block is resolved by
- * `riskCriteriaBlock` (`src/lib/riskBlock.ts`) as the clause's own criteria
+ * `riskCriteriaBlock` (`@lexprompt/core`) as the clause's own criteria
  * else the playbook's global tolerance; its position block is present only
  * for a clause carrying a `standardPosition`; and it names its return fields
  * explicitly. The JSON branch used to drop the format prompt and the global

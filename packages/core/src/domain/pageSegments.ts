@@ -5,15 +5,32 @@
  * or anything `parsePdf` never touched) comes back as one segment, so a
  * per-page threshold check still applies to it.
  *
- * A dependency-free leaf module on purpose: both `documents.ts` (which
+ * A dependency-free leaf module on purpose: `src/lib/documents.ts` (which
  * defines the `[Page N]` marker convention and needs this to decide whether
  * a persisted record needs its page images regenerated) and `modelContext.ts`
- * (which needs it for `usableText`) depend on this function, and
- * `modelContext.ts` already imports `SCAN_TEXT_THRESHOLD` from
- * `documents.ts` — so `documents.ts` importing anything back from
- * `modelContext.ts` would cycle. Living here, with no imports of its own,
- * lets both sides share one implementation without that cycle.
+ * (which needs it for `usableText`) both depend on it, and `documents.ts`
+ * imports pdf.js and mammoth — so a module either of them could reach back
+ * into would drag a PDF parser wherever it went. It has no imports of its
+ * own, which is what lets the browser and the server share one
+ * implementation of the page split AND of the threshold below.
  */
+/**
+ * Below this many characters, a page is treated as having no usable text —
+ * a scan, or a page whose OCR produced only noise.
+ *
+ * APPLIED PER PAGE, never to a document's combined length. A document-wide
+ * check lets one typed cover page carry a scanned body over the bar, and
+ * that blind spot has had to be fixed three times (CLAUDE.md). Every reader
+ * of this constant splits with `pageSegments` first.
+ *
+ * It lived in `src/lib/documents.ts` — a browser module that imports pdf.js
+ * and mammoth — which is why it moved: `modelContext.ts` needs it and now
+ * runs on the server too, and importing it from there would have dragged a
+ * PDF parser into the worker. It belongs beside the page split it is always
+ * applied through, which is here.
+ */
+export const SCAN_TEXT_THRESHOLD = 20;
+
 const PAGE_MARKER = /\[Page (\d+)\]\n/g;
 
 /**

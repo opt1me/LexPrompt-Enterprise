@@ -1,5 +1,5 @@
 import type { Finding, Review } from '../types';
-import { positionText, stepEffectText } from './netPosition';
+import { positionText, stepEffectText } from '@lexprompt/core';
 
 /**
  * The one place that decides what text represents a clause's outcome when

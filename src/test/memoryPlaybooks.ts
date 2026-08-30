@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION, type Playbook, type PlaybookDraft, type PlaybookVersion } from '../types';
-import { uid } from '../lib/uid';
+import { uid } from '@lexprompt/core';
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_FORMAT_PROMPT } from '../lib/playbookDefaults';
 
 /**

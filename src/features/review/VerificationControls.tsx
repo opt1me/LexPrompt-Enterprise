@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { CheckCircle2, Flag, XCircle, RotateCcw } from 'lucide-react';
 import type { Verification } from '../../types';
-import type { VerificationChange } from '../../lib/verification';
+import type { VerificationChange } from '@lexprompt/core';
 import { RejectReasonModal } from './RejectReasonModal';
 
 export interface VerificationControlsProps {

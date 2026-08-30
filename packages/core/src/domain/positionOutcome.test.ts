@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { normalisePositionOutcome, NO_RATIONALE_NOTE } from './positionOutcome';
-import type { StandardPosition } from '../types';
+import { normalisePositionOutcome, NO_RATIONALE_NOTE } from './positionOutcome.ts';
+import type { StandardPosition } from './types.ts';
 
 const position: StandardPosition = { text: 'We ask for 6 months', origin: 'authored', reviewedByHuman: true };
 

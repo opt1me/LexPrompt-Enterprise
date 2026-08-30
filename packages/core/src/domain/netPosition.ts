@@ -1,4 +1,4 @@
-import type { NetPosition, TrailStep } from '../types';
+import type { NetPosition, TrailStep } from './types.ts';
 
 /** Thrown when a transition would produce an invalid `NetPosition` — today
  *  that means exactly one thing: an amendment with no text. Thrown rather

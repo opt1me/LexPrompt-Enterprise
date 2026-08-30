@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ModelError } from '@lexprompt/core';
+// `uid` comes from core rather than being redeclared here: the four lines
+// below used to be a seventh byte-identical copy of it, which is the exact
+// history `uid.ts`'s own docstring records.
+import { ModelError, uid } from '@lexprompt/core';
 import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
 import { SCHEMA_VERSION, type Review, type PlaybookVersion } from '../../types';
 
@@ -28,10 +31,6 @@ const {
   listReviews, getReview, saveReview, deleteReview, createDebouncedReviewSaver,
   forgetReviewVersion,
 } = await import('./reviews');
-
-function uid(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
 
 function makePlaybook(): PlaybookVersion {
   return {

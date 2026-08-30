@@ -1,9 +1,12 @@
 import type { DocumentFile, DocumentRecord } from '../types';
-import type { PdfPageText } from './citations';
+import { pageSegments, SCAN_TEXT_THRESHOLD, uid } from '@lexprompt/core';
+import type { PdfPageText } from '@lexprompt/core';
 import { debug } from './debug';
 import { detectDocxMarkup, markupNoticeFor, MARKUP_UNCHECKED_NOTICE } from './docxMarkup';
-import { pageSegments } from './pageSegments';
-import { uid } from './uid';
+// `pageSegments` and `SCAN_TEXT_THRESHOLD` moved to `@lexprompt/core`
+// together: the threshold is a per-page rule this module and the review
+// engine must apply identically, and the engine now runs on the server,
+// where this file's pdf.js and mammoth imports cannot follow.
 
 /**
  * A page with almost no extractable text is a scan; we render it to an
@@ -12,7 +15,6 @@ import { uid } from './uid';
  * apply the exact same "is this page too sparse to be text" judgement
  * `parsePdf` made, rather than a second, separately-tuned number.
  */
-export const SCAN_TEXT_THRESHOLD = 20;
 
 type PdfjsModule = typeof import('pdfjs-dist');
 

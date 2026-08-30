@@ -1,7 +1,6 @@
-import { ModelError } from '@lexprompt/core';
+import { ModelError, uid } from '@lexprompt/core';
 import { apiDelete, apiGet, apiGetOrNull, apiSend } from '../api/client';
 import type { Collection } from '../../types';
-import { uid } from '../uid';
 
 /**
  * The collections repository — an HTTP client over `apps/api` since Stage 2.

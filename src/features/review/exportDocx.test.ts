@@ -11,7 +11,7 @@ import { buildReportRows, buildReportDocument, exportDocx } from './exportDocx';
 // different ways, and it cannot prove that without both of them.
 import { buildTabularCsv } from '../tabular/csv';
 import { collectionExportLabel } from '../../lib/findingOutcome';
-import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
+import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { Finding, ReviewRun, PlaybookVersion, TrailStep } from '../../types';
 
 /** jsdom has no `Blob.prototype.arrayBuffer` — see vitest.setup.ts's

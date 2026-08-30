@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Matter, Review, DocumentRecord, PlaybookVersion, TrailStep, Collection } from './types';
-import { unconfirmedPosition, confirmPosition } from './lib/netPosition';
+import { unconfirmedPosition, confirmPosition } from '@lexprompt/core';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import { saveCollection } from './lib/db/collections';
 import { closeDb } from './lib/db/open';
 import { flushUntil } from './test/mount';
@@ -165,7 +166,6 @@ vi.mock('./lib/documents', async (importOriginal) => {
 
 import App from './App';
 import type { DocumentFile, ReviewRun } from './types';
-import type { WorkspaceSettings } from '@lexprompt/core';
 
 async function flush(times = 8) {
   for (let i = 0; i < times; i++) {

@@ -1,11 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import {
-  ModelError, isDecided, nextVersionContent,
+  ModelError, isDecided, nextVersionContent, uid,
   type ChangesetItem, type ChangesetLike, type PlaybookClause,
 } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
-import { uid } from '../uid.ts';
 import {
   fromChangesetRow, toChangesetRow, fromPlaybookVersionRow, toPlaybookVersionRow,
   type Changeset, type ChangesetRow, type PlaybookRow,

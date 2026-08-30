@@ -1,5 +1,5 @@
-import { normalizeForMatch } from './citations';
-import { pageSegmentsWithNumbers } from './pageSegments';
+import { normalizeForMatch } from './citations.ts';
+import { pageSegmentsWithNumbers } from './pageSegments.ts';
 
 /** Below this many normalized characters a quote matches too much to pin a
  *  page on — the same floor `findQuoteRects` applies before it will try to

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mapWithConcurrency } from './concurrency';
+import { mapWithConcurrency } from './concurrency.ts';
 
 const tick = (ms: number) => new Promise(r => setTimeout(r, ms));
 

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   unconfirmedPosition, confirmPosition, amendPosition, resetPosition,
   positionText, stepEffectText, NetPositionError,
-} from './netPosition';
-import type { TrailStep } from '../types';
+} from './netPosition.ts';
+import type { TrailStep } from './types.ts';
 
 const trail: TrailStep[] = [
   { documentId: 'd1', kind: 'original', effect: 'Break on 12 months notice.', citations: [] },

@@ -1,7 +1,5 @@
-import { repairCitations } from '../citationRepair';
+import { repairCitations, unchecked, OUTCOMES as POSITION_OUTCOMES } from '@lexprompt/core';
 import { migrateVersionRecord } from './playbookMigration';
-import { unchecked } from '../verification';
-import { OUTCOMES as POSITION_OUTCOMES } from '../positionOutcome';
 import type {
   Finding, NetPosition, Note, PositionOutcome, Review, ReviewTarget, TrailStep, Verification,
 } from '../../types';

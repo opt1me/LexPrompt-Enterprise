@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, click, textbox, type } from '../../test/mount';
 import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
-import { unconfirmedPosition } from '../../lib/netPosition';
+import { unconfirmedPosition } from '@lexprompt/core';
 import type { TrailStep } from '../../types';
 
 const TRAIL: TrailStep[] = [

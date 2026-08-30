@@ -1,7 +1,7 @@
-import type { CollectionMember } from './collectionOrder';
-import type { PlaybookClause, PlaybookVersion } from '../types';
-import { riskCriteriaBlock } from './riskBlock';
-import { assessDocument } from './modelContext';
+import type { CollectionMember } from './collectionOrder.ts';
+import type { PlaybookClause, PlaybookVersion } from './types.ts';
+import { riskCriteriaBlock } from './riskBlock.ts';
+import { assessDocument } from './modelContext.ts';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',

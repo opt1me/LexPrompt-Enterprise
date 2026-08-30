@@ -1,15 +1,18 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { isAuthFailure } from '../../lib/model/authFailure';
-import { assessDocument, contextBudgetChars, type DocumentReadability } from '../../lib/modelContext';
-import { buildCollectionPrompt } from '../../lib/collectionPrompt';
-import { repairCitations } from '../../lib/citationRepair';
-import { normalizeForMatch } from '../../lib/citations';
-import { unchecked } from '../../lib/verification';
-import { unconfirmedPosition } from '../../lib/netPosition';
-import { normalisePositionOutcome } from '../../lib/positionOutcome';
-import type { CollectionMember } from '../../lib/collectionOrder';
+import {
+  assessDocument,
+  contextBudgetChars,
+  type DocumentReadability,
+  buildCollectionPrompt,
+  repairCitations,
+  normalizeForMatch,
+  unchecked,
+  unconfirmedPosition,
+  normalisePositionOutcome,
+} from '@lexprompt/core';
+import type { CollectionMember, WorkspaceSettings } from '@lexprompt/core';
 import type { Citation, PlaybookClause, DocumentFile, Finding, PlaybookVersion, TrailStep } from '../../types';
-import type { WorkspaceSettings } from '@lexprompt/core';
 
 interface RawCitation {
   quote?: unknown;

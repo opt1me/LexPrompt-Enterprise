@@ -4,7 +4,7 @@ import type { Finding, Playbook, PlaybookClause, PlaybookVersion, Review, Verifi
 
 // Fixtures. None of these exist anywhere else in the repo — every helper
 // below is defined for this file only. Named `verifiedFinding` /
-// `uncheckedFinding`, never `verified` / `unchecked`: `src/lib/verification.ts`
+// `uncheckedFinding`, never `verified` / `unchecked`: `@lexprompt/core`
 // already exports `unchecked()`, and shadowing it is this codebase's most
 // repeated defect shape.
 

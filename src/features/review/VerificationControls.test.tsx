@@ -1,12 +1,15 @@
 import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, click, textbox, type } from '../../test/mount';
+import { unchecked } from '@lexprompt/core';
 import { VerificationControls } from './VerificationControls';
 
-const unchecked = { state: 'unchecked' as const };
+// The real one, not a hand-rolled twin: `unchecked()` is what every
+// finding actually starts as, and a local copy is free to drift from it.
+const unverified = unchecked();
 
 describe('VerificationControls', () => {
   it('offers verify, flag and reject', () => {
-    const c = mount(<VerificationControls verification={unchecked} onChange={() => {}} />);
+    const c = mount(<VerificationControls verification={unverified} onChange={() => {}} />);
     expect(buttonNamed(c, /verify/i)).toBeTruthy();
     expect(buttonNamed(c, /flag/i)).toBeTruthy();
     expect(buttonNamed(c, /reject/i)).toBeTruthy();
@@ -14,21 +17,21 @@ describe('VerificationControls', () => {
 
   it('reports a verify with no reason', () => {
     const onChange = vi.fn();
-    const c = mount(<VerificationControls verification={unchecked} onChange={onChange} />);
+    const c = mount(<VerificationControls verification={unverified} onChange={onChange} />);
     click(buttonNamed(c, /verify/i));
     expect(onChange).toHaveBeenCalledWith({ state: 'verified' });
   });
 
   it('reports a flag with no reason', () => {
     const onChange = vi.fn();
-    const c = mount(<VerificationControls verification={unchecked} onChange={onChange} />);
+    const c = mount(<VerificationControls verification={unverified} onChange={onChange} />);
     click(buttonNamed(c, /flag/i));
     expect(onChange).toHaveBeenCalledWith({ state: 'flagged' });
   });
 
   it('does not reject immediately — it asks for a reason first', () => {
     const onChange = vi.fn();
-    const c = mount(<VerificationControls verification={unchecked} onChange={onChange} />);
+    const c = mount(<VerificationControls verification={unverified} onChange={onChange} />);
     click(buttonNamed(c, /reject/i));
     expect(onChange).not.toHaveBeenCalled();
     expect(c.querySelector('[role="dialog"]')).toBeTruthy();
@@ -36,7 +39,7 @@ describe('VerificationControls', () => {
 
   it('refuses to confirm a rejection with an empty reason', () => {
     const onChange = vi.fn();
-    const c = mount(<VerificationControls verification={unchecked} onChange={onChange} />);
+    const c = mount(<VerificationControls verification={unverified} onChange={onChange} />);
     click(buttonNamed(c, /reject/i));
     click(buttonNamed(c, /confirm/i));
     expect(onChange).not.toHaveBeenCalled();
@@ -45,7 +48,7 @@ describe('VerificationControls', () => {
 
   it('refuses a whitespace-only reason', () => {
     const onChange = vi.fn();
-    const c = mount(<VerificationControls verification={unchecked} onChange={onChange} />);
+    const c = mount(<VerificationControls verification={unverified} onChange={onChange} />);
     click(buttonNamed(c, /reject/i));
     type(textbox(c), '   ');
     click(buttonNamed(c, /confirm/i));
@@ -54,7 +57,7 @@ describe('VerificationControls', () => {
 
   it('reports the rejection once a reason is given', () => {
     const onChange = vi.fn();
-    const c = mount(<VerificationControls verification={unchecked} onChange={onChange} />);
+    const c = mount(<VerificationControls verification={unverified} onChange={onChange} />);
     click(buttonNamed(c, /reject/i));
     type(textbox(c), 'Cites the wrong clause');
     click(buttonNamed(c, /confirm/i));
@@ -71,7 +74,7 @@ describe('VerificationControls', () => {
   });
 
   it('disables every action while a write is in flight', () => {
-    const c = mount(<VerificationControls verification={unchecked} busy onChange={() => {}} />);
+    const c = mount(<VerificationControls verification={unverified} busy onChange={() => {}} />);
     for (const name of [/verify/i, /flag/i, /reject/i]) {
       expect(buttonNamed(c, name)?.hasAttribute('disabled')).toBe(true);
     }

@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { emptyRun, runReview, retryCell, runProgress, countNoContent } from './runReview';
 import type { DocumentFile, PlaybookVersion, Finding, ReviewTarget, ReviewRun } from '../../types';
-import type { WorkspaceSettings } from '@lexprompt/core';
-import type { CollectionMember } from '../../lib/collectionOrder';
+import type { WorkspaceSettings, CollectionMember } from '@lexprompt/core';
 
 vi.mock('./extractClause', () => ({ extractClause: vi.fn() }));
 const { extractClause } = await import('./extractClause');

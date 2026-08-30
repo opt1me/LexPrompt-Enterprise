@@ -1,5 +1,5 @@
-import { derivePage } from './citationPage';
-import type { Citation } from '../types';
+import { derivePage } from './citationPage.ts';
+import type { Citation } from './types.ts';
 
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v.trim() !== '' ? v : undefined;

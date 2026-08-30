@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { extractCollectionClause, collectionClauseSchema, COLLECTION_CLAUSE_SCHEMA } from './extractCollectionClause';
 import type { PlaybookClause, PlaybookVersion, DocumentFile, StandardPosition } from '../../types';
-import type { WorkspaceSettings } from '@lexprompt/core';
-import type { CollectionMember } from '../../lib/collectionOrder';
-
 import { ModelError } from '@lexprompt/core';
+import type { WorkspaceSettings, CollectionMember } from '@lexprompt/core';
+
 
 vi.mock('../../lib/model/gatewayModelClient', () => ({
   gatewayModelClient: {

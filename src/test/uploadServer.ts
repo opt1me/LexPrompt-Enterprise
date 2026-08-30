@@ -1,5 +1,4 @@
-import { ModelError } from '@lexprompt/core';
-import { uid } from '../lib/uid';
+import { ModelError, uid } from '@lexprompt/core';
 import type {
   Changeset, Collection, DocumentRecord, Matter, Playbook, PlaybookDraft, PlaybookVersion, Review,
 } from '../types';

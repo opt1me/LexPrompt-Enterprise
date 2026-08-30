@@ -29,9 +29,9 @@
  */
 
 import { gatewayModelClient } from './model/gatewayModelClient';
-import { uid } from './uid';
-import type { PlaybookVersion, PlaybookClause, Changeset, ChangesetItem, ChangeKind, RedlineEdit } from '../types';
+import { uid } from '@lexprompt/core';
 import type { WorkspaceSettings } from '@lexprompt/core';
+import type { PlaybookVersion, PlaybookClause, Changeset, ChangesetItem, ChangeKind, RedlineEdit } from '../types';
 import type { ParsedEdit } from './docxRedlines';
 
 export type { ChangeKind };

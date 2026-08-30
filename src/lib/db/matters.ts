@@ -1,7 +1,6 @@
-import { ModelError } from '@lexprompt/core';
+import { ModelError, uid } from '@lexprompt/core';
 import { apiDelete, apiGet, apiGetOrNull, apiSend } from '../api/client';
 import type { Matter } from '../../types';
-import { uid } from '../uid';
 
 /**
  * The matters repository — an HTTP client over `apps/api` since Stage 2.

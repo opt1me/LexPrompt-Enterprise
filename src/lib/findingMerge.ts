@@ -1,5 +1,5 @@
 import type { Finding, ReviewRun } from '../types';
-import { unchecked } from './verification';
+import { unchecked } from '@lexprompt/core';
 
 /**
  * Re-applies the human-authored parts of a run — verification and notes —

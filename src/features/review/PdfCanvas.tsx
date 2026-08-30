@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PageViewport, RenderTask } from 'pdfjs-dist';
 import { ZoomIn, ZoomOut, ScanSearch, SearchX } from 'lucide-react';
 import { extractPageText, loadPdfjs, readArrayBuffer } from '../../lib/documents';
-import { findQuoteRects, hasNoTextLayer, type PdfPageText, type QuoteRect } from '../../lib/citations';
+import { findQuoteRects, hasNoTextLayer, type PdfPageText, type QuoteRect } from '@lexprompt/core';
 import { debug } from '../../lib/debug';
 
 interface PdfCanvasProps {

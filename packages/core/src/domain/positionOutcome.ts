@@ -1,4 +1,4 @@
-import type { PositionOutcome, StandardPosition } from '../types';
+import type { PositionOutcome, StandardPosition } from './types.ts';
 
 export const NO_RATIONALE_NOTE =
   'The model reported a deviation but gave no reason, so this is recorded as unclear.';

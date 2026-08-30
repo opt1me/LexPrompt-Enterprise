@@ -122,15 +122,18 @@ describe('ClauseIndex — a clause that produced no answer is not a clause await
       onSelect={() => {}}
     />);
     const failed = row(c, 'Break right');
-    const unchecked = row(c, 'Rent review');
+    // Named for what it is: an unverified ROW, not a `Verification`. The
+    // S14 boundary guard now watches that name as a core export, and it
+    // reads a local binding of it as a second implementation.
+    const unverified = row(c, 'Rent review');
 
     expect(failed.icon).toContain('text-risk-high');
-    expect(failed.icon).not.toEqual(unchecked.icon);
+    expect(failed.icon).not.toEqual(unverified.icon);
     // Not icon-only: the icons are aria-hidden, so the row's own words have
     // to carry the fact too.
     expect(failed.text).toContain('Failed');
-    expect(unchecked.text).toContain('Clause 2 of 3');
-    expect(unchecked.text).not.toContain('Failed');
+    expect(unverified.text).toContain('Clause 2 of 3');
+    expect(unverified.text).not.toContain('Failed');
   });
 
   it('draws a cancelled clause calmly, and distinctly from both', () => {

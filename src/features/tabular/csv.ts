@@ -5,7 +5,7 @@ import {
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionRationaleLines,
 } from '../../lib/findingOutcome';
-import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
+import { findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
 
 // Characters that Excel/Google Sheets treat as the start of a formula when a
 // cell is opened, regardless of the field being quoted — quoting only

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { derivePage } from './citationPage';
-import { pageSegments, pageSegmentsWithNumbers } from './pageSegments';
+import { derivePage } from './citationPage.ts';
+import { pageSegments, pageSegmentsWithNumbers } from './pageSegments.ts';
 
 const THREE_PAGES =
   '[Page 1]\nThe Supplier shall deliver the Goods.\n\n' +

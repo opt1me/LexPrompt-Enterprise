@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { carryHumanState } from './findingMerge';
-import { unconfirmedPosition, confirmPosition, amendPosition } from './netPosition';
+import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { Finding, ReviewRun, TrailStep } from '../types';
 
 const TRAIL: TrailStep[] = [{ documentId: 'd1', kind: 'original', effect: 'e', citations: [] }];

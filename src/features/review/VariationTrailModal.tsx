@@ -3,7 +3,7 @@ import { FileWarning, Check } from 'lucide-react';
 import type { NetPosition, TrailStep } from '../../types';
 import { Modal } from '../../components/Modal';
 import { NetPositionPanel } from './NetPositionPanel';
-import { stepEffectText } from '../../lib/netPosition';
+import { stepEffectText } from '@lexprompt/core';
 
 /** What the trail needs to know about a contributing document, keyed by its
  *  id — nothing else in this app needs a lookup shaped quite like this, so

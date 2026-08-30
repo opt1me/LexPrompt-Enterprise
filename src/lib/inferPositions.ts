@@ -29,7 +29,7 @@
  */
 
 import { gatewayModelClient } from './model/gatewayModelClient';
-import { uid } from './uid';
+import { uid } from '@lexprompt/core';
 import type { WorkspaceSettings } from '@lexprompt/core';
 import type { ParsedEdit } from './docxRedlines';
 import { computeStrength, isContradicted, type BasisEntry, type PositionStrength } from './strength';

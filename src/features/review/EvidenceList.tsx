@@ -27,7 +27,7 @@ export interface EvidenceListProps {
 
 /** "MSA.pdf - p. 2 - cl. 14.2", with each part omitted when it is not known.
  *  A page is only ever present when it was derived from the document's own
- *  page markers, never guessed (`src/lib/citationPage.ts`). */
+ *  page markers, never guessed (`derivePage`, in `@lexprompt/core`). */
 function pinLabel(citation: Citation, documentNames: Record<string, string>): string {
   const parts = [documentNames[citation.documentId] ?? citation.documentId];
   if (citation.page !== undefined) parts.push(`p. ${citation.page}`);

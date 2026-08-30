@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { escapeCsvField, buildTabularCsv } from './csv';
 import { buildReportRows } from '../review/exportDocx';
 import { positionOutcomeLabel } from '../../lib/findingOutcome';
-import { unconfirmedPosition, confirmPosition, amendPosition } from '../../lib/netPosition';
+import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { DocumentFile, Finding, ReviewRun, PlaybookVersion, TrailStep } from '../../types';
 
 function template(clauses: PlaybookVersion['clauses']): PlaybookVersion {

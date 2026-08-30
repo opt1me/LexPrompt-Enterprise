@@ -1,12 +1,14 @@
-import { mapWithConcurrency } from '../../lib/concurrency';
+import {
+  mapWithConcurrency,
+  unchecked,
+  uid,
+  findingsKeyFor,
+  isCollectionTarget,
+} from '@lexprompt/core';
+import type { WorkspaceSettings, CollectionMember } from '@lexprompt/core';
 import type { DocumentFile, Finding, ReviewRun, ReviewTarget, PlaybookVersion } from '../../types';
-import type { WorkspaceSettings } from '@lexprompt/core';
 import { extractClause } from './extractClause';
 import { extractCollectionClause } from './extractCollectionClause';
-import { unchecked } from '../../lib/verification';
-import { uid } from '../../lib/uid';
-import type { CollectionMember } from '../../lib/collectionOrder';
-import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 
 function pendingFinding(clauseId: string): Finding {
   return { clauseId, status: 'pending', citations: [], verification: unchecked(), notes: [] };

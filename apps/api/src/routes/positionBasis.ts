@@ -1,7 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { ModelError } from '@lexprompt/core';
+import { ModelError, uid } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
-import { uid } from '../uid.ts';
 
 /**
  * `position_basis` — where a house rule came from, still answerable next

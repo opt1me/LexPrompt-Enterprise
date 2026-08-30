@@ -1,4 +1,3 @@
-// src/lib/citations.ts
 export interface PdfTextItem {
   str: string;
   transform: number[];

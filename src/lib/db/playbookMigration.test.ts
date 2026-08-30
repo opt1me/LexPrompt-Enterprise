@@ -7,7 +7,7 @@ import {
   snapshotPlaybookId,
   IMPORTED_SUMMARY,
 } from './playbookMigration';
-import { riskCriteriaBlock } from '../riskBlock';
+import { riskCriteriaBlock } from '@lexprompt/core';
 
 /**
  * Repair-on-read for playbooks, which from Task 23 is the UPLOADER's reader

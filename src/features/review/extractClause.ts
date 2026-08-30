@@ -1,12 +1,15 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
 import { isAuthFailure } from '../../lib/model/authFailure';
-import { assessDocument, contextBudgetChars } from '../../lib/modelContext';
-import { repairCitations } from '../../lib/citationRepair';
-import { unchecked } from '../../lib/verification';
-import { normalisePositionOutcome } from '../../lib/positionOutcome';
-import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, RiskLevel } from '../../types';
+import {
+  assessDocument,
+  contextBudgetChars,
+  repairCitations,
+  unchecked,
+  normalisePositionOutcome,
+  riskCriteriaBlock,
+} from '@lexprompt/core';
 import type { WorkspaceSettings } from '@lexprompt/core';
-import { riskCriteriaBlock } from '../../lib/riskBlock';
+import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, RiskLevel } from '../../types';
 
 const RISK_LEVELS: RiskLevel[] = ['High', 'Medium', 'Low', 'Info'];
 

@@ -21,7 +21,7 @@
  * Pure string logic. No I/O, no AI call, no React.
  */
 
-import { uid } from './uid';
+import { uid } from '@lexprompt/core';
 
 export type PrecedentRole = 'their-draft' | 'our-markup' | 'executed' | 'unknown';
 

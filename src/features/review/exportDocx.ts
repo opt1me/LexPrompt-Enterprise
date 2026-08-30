@@ -5,7 +5,7 @@ import {
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionRationaleLines,
 } from '../../lib/findingOutcome';
-import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
+import { findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
 
 export interface ReportRow {
   title: string;

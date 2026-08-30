@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { buildCollectionPrompt } from './collectionPrompt';
-import type { CollectionMember } from './collectionOrder';
-import type { PlaybookClause, DocumentRecord, PlaybookVersion, StandardPosition } from '../types';
+import { buildCollectionPrompt } from './collectionPrompt.ts';
+import type { CollectionMember } from './collectionOrder.ts';
+import type { PlaybookClause, DocumentRecord, PlaybookVersion, StandardPosition } from './types.ts';
 
 function doc(id: string, name: string, text: string, overrides: Partial<DocumentRecord> = {}): DocumentRecord {
   return {

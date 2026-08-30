@@ -7,8 +7,7 @@ import {
   type PositionOrigin,
   type StandardPosition,
 } from '../../types';
-import { DEFAULT_RISK_TOLERANCE } from '../riskBlock';
-import { uid } from '../uid';
+import { DEFAULT_RISK_TOLERANCE, uid } from '@lexprompt/core';
 
 /** The change summary given to the v1 minted for a playbook that existed
  *  before versioning did. Exported because Task 4 needs to recognise it and

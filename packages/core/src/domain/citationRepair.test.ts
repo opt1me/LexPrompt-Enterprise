@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { repairCitations } from './citationRepair';
+import { repairCitations } from './citationRepair.ts';
 
 const PAGED = '[Page 1]\nThe Supplier shall deliver.\n\n[Page 2]\nLiability is capped at the Charges.\n\n';
 

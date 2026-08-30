@@ -1,6 +1,5 @@
-// src/lib/citations.test.ts
 import { describe, it, expect } from 'vitest';
-import { normalizeForMatch, findQuoteRects, hasNoTextLayer, type PdfPageText } from './citations';
+import { normalizeForMatch, findQuoteRects, hasNoTextLayer, type PdfPageText } from './citations.ts';
 
 // Builds a page where each word is its own text item on one line,
 // mirroring how pdf.js splits a text layer.

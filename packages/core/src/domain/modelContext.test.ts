@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { assessDocument, contextBudgetChars, extractableText, usableText } from './modelContext';
-import type { DocumentFile } from '../types';
+import { assessDocument, contextBudgetChars, extractableText, usableText } from './modelContext.ts';
+import type { DocumentFile } from './types.ts';
 
 function doc(overrides: Partial<DocumentFile> = {}): DocumentFile {
   return {

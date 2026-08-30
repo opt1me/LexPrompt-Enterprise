@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { orderedMembers } from './collectionOrder';
-import type { Collection, DocumentRecord } from '../types';
+import { orderedMembers } from './collectionOrder.ts';
+import type { Collection, DocumentRecord } from './types.ts';
 
 function doc(id: string, name: string): DocumentRecord {
   return { id, matterId: 'm1', name, kind: 'pdf', text: '', byteSize: 1, addedAt: 1, addedByUserId: 'u1', role: 'standalone' };

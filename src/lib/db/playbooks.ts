@@ -1,11 +1,10 @@
-import { ModelError } from '@lexprompt/core';
+import { ModelError, uid } from '@lexprompt/core';
 import { apiDelete, apiGet, apiGetOrNull, apiSend } from '../api/client';
 import { migrateDraft, migratePlaybookRecord, migrateVersionRecord } from './playbookMigration';
 import {
   SCHEMA_VERSION,
   type Playbook, type PlaybookDraft, type PlaybookVersion, type RedlineEdit,
 } from '../../types';
-import { uid } from '../uid';
 import { DEFAULT_SYSTEM_PROMPT, DEFAULT_FORMAT_PROMPT } from '../playbookDefaults';
 
 /**

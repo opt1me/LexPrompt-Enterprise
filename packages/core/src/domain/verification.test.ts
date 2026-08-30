@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   unchecked, applyVerification, requiresReason, resetVerification,
   findingKey, makeNote, VerificationError,
-} from './verification';
+} from './verification.ts';
 
 describe('unchecked', () => {
   it('starts with no attribution and no timestamp', () => {

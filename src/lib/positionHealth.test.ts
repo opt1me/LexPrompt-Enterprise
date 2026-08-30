@@ -3,11 +3,11 @@ import { positionHealth, positionHealthLabel } from './positionHealth';
 import type { Finding, PositionOutcome, Verification } from '../types';
 
 /** Minimal but real `Finding`s. `verification` is built from the actual
- *  `Verification` shape in `src/lib/verification.ts` — `{ state, byUserId?,
+ *  `Verification` shape in `@lexprompt/core` — `{ state, byUserId?,
  *  at?, reason?, assigneeId? }` — not guessed.
  *
  *  Named `verifiedFinding`/`uncheckedFinding`, NOT `verified`/`unchecked`:
- *  `src/lib/verification.ts` already exports a zero-arg `unchecked()`
+ *  `@lexprompt/core` already exports a zero-arg `unchecked()`
  *  returning a bare `Verification`, and a same-named local helper here
  *  returning a `Finding` would shadow it.
  *

@@ -1,6 +1,6 @@
-import type { DocumentFile } from '../types';
-import { SCAN_TEXT_THRESHOLD } from './documents';
-import { pageSegments } from './pageSegments';
+import type { DocumentFile } from './types.ts';
+import { SCAN_TEXT_THRESHOLD } from './pageSegments.ts';
+import { pageSegments } from './pageSegments.ts';
 
 const PAGE_MARKER = /\[Page \d+\]/g;
 

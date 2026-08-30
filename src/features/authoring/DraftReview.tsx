@@ -13,7 +13,7 @@ import {
   type DraftClause,
 } from '../../lib/authoringDraft';
 import type { PlaybookClause } from '../../types';
-import { uid } from '../../lib/uid';
+import { uid } from '@lexprompt/core';
 
 export interface DraftReviewProps {
   draft: AuthoringDraft;

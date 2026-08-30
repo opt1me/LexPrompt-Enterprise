@@ -1,6 +1,5 @@
-import { ModelError } from '@lexprompt/core';
+import { ModelError, uid } from '@lexprompt/core';
 import { apiDelete, apiGet, apiSend, apiSendBlob } from '../api/client';
-import { uid } from '../uid';
 import type { PrecedentDocumentRecord, PrecedentSet } from '../../types';
 
 /**

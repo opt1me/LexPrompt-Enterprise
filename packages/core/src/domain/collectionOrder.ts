@@ -1,4 +1,4 @@
-import type { Collection, DocumentRecord } from '../types';
+import type { Collection, DocumentRecord } from './types.ts';
 
 /**
  * One position in a collection's reading order: either the base document

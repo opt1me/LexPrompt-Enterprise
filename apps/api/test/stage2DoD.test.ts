@@ -61,10 +61,16 @@ function tablesInMigrations(): string[] {
 
 describe('the scanners find something (a guard that matches nothing passes vacuously)', () => {
   it('walks every workspace, and a realistic number of files in each', () => {
-    expect(WEB_SOURCES.length).toBeGreaterThan(150);
+    // The web bound came down and the core bound went up in the same commit:
+    // §13 Stage 0 moved the review closure — fourteen modules and their
+    // tests — out of `src/lib/` and into `packages/core/src/domain/`. These
+    // are sanity bounds on the SCANNERS, not budgets on the workspaces; each
+    // is set low enough that it cannot be met by a walk that silently
+    // returned almost nothing, which is the only failure they exist to catch.
+    expect(WEB_SOURCES.length).toBeGreaterThan(120);
     expect(API_SOURCES.length).toBeGreaterThan(20);
     expect(GATEWAY_SOURCES.length).toBeGreaterThan(10);
-    expect(CORE_SOURCES.length).toBeGreaterThan(3);
+    expect(CORE_SOURCES.length).toBeGreaterThan(15);
     expect(ALL_SOURCES.length).toBeGreaterThan(200);
   });
 
@@ -202,13 +208,65 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
   });
 
   it('nothing server-side stores a page image (S12)', () => {
-    // Page images are derived data, ~a third larger than their source, and
-    // regenerated on demand. Stage 2 gave the system its first place to put
-    // them permanently, which is exactly when this needs checking.
+    /*
+     * Page images are derived data, ~a third larger than their source, and
+     * regenerated on demand. Stage 2 gave the system its first place to put
+     * them permanently, which is exactly when this needs checking.
+     *
+     * This used to be "no server-side file may contain the string at all",
+     * and two things have since made that unsayable — both of them right,
+     * neither of them a weakening:
+     *
+     *  - Stage 3 Task 2 moved `DocumentFile` and `modelContext.ts` into
+     *    `packages/core`, so the field that page images live on is now
+     *    DECLARED on the server's side of the line. Naming a field in a
+     *    shared type is not storing one.
+     *  - Stage 3 Task 1 answered Spike 1 yes, so `apps/api` renders page
+     *    images. In memory, never persisted — which is the claim, and it is
+     *    a claim about writes, not about vocabulary.
+     *
+     * So the guard names each carrier, holds each to the no-persistence rule
+     * INDIVIDUALLY, and still fails for any file that is not on the list.
+     * The regex is case-insensitive now, which it was not before: the old one
+     * would not have matched `renderPageImages` at all, so the one file in
+     * `apps/api/src` whose entire purpose is page images was invisible to the
+     * scan that was supposed to be watching for exactly that.
+     */
+    const PAGE_IMAGE_CARRIERS = [
+      // Declares `DocumentFile.pageImages`. A type, no writer.
+      'packages/core/src/domain/types.ts',
+      // Reads it to decide whether a document is readable by this model.
+      'packages/core/src/domain/modelContext.ts',
+      // Renders them (Spike 1). Bytes in, base64 out, nothing kept.
+      'apps/api/src/parse/pageImages.ts',
+      // Names the render's two operator-facing bounds and nothing else.
+      // Caught by the case-insensitive regex above and not by the old one,
+      // which is the point of having widened it.
+      'apps/api/src/config.ts',
+    ];
+    const PAGE_IMAGE = /pageimages|page_images|pageimage/i;
+    // The scan bites on what it looks for, including the name that the
+    // case-sensitive version silently missed.
+    expect(PAGE_IMAGE.test('const x = doc.pageImages')).toBe(true);
+    expect(PAGE_IMAGE.test('export function renderPageImages()')).toBe(true);
+
     const offenders = [...API_SOURCES, ...CORE_SOURCES]
-      .filter(f => /pageImages|page_images/.test(codeOf(f)))
-      .map(rel);
+      .filter(f => PAGE_IMAGE.test(codeOf(f)))
+      .map(rel)
+      .filter(name => !PAGE_IMAGE_CARRIERS.includes(name));
     expect(offenders).toEqual([]);
+
+    // Every carrier still exists, still names it, and still writes it
+    // nowhere. A stale exemption is worse than none.
+    const PERSISTS = /blobStore|BlobStore|blobKeyFor|insert into|INSERT INTO|withPool|getPool|localStorage|indexedDB/;
+    for (const carrier of PAGE_IMAGE_CARRIERS) {
+      const full = path.join(ROOT, carrier);
+      expect(existsSync(full), carrier).toBe(true);
+      const code = codeOf(full);
+      expect(PAGE_IMAGE.test(code), `${carrier} no longer names it`).toBe(true);
+      expect(PERSISTS.test(code), `${carrier} persists a page image`).toBe(false);
+    }
+
     for (const file of readdirSync(MIGRATIONS).filter(f => f.endsWith('.sql'))) {
       expect(readFileSync(path.join(MIGRATIONS, file), 'utf8'), file)
         .not.toMatch(/page_image/);
@@ -555,8 +613,13 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
      * exists to avoid.
      */
     const ASSIGNEE_CARRIERS = [
-      'src/types.ts',
-      'src/lib/verification.ts',
+      // `Verification.assigneeId` and the function that mints an unchecked
+      // one moved into `packages/core` with the rest of the review closure
+      // (Stage 3 Task 2). The field still reaches nobody; it has simply
+      // stopped being declared only in the browser's half of the codebase,
+      // which is if anything the more important half to keep watching.
+      'packages/core/src/domain/types.ts',
+      'packages/core/src/domain/verification.ts',
       'src/lib/db/reviewMigration.ts',
       'src/lib/upload/attribution.ts',
     ];

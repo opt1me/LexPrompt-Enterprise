@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { X, FileText, BookOpen } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding } from '../../types';
-import type { VerificationChange } from '../../lib/verification';
+import type { VerificationChange } from '@lexprompt/core';
 import { Button } from '../../components/Button';
 import { FindingCard } from '../review/FindingCard';
 import { DocumentViewer } from '../review/DocumentViewer';

@@ -1,4 +1,4 @@
-import type { Note, Verification, VerificationState } from '../types';
+import type { Note, Verification, VerificationState } from './types.ts';
 
 /** Thrown when a transition would produce an invalid `Verification` — today
  *  that means exactly one thing: a rejection with no reason. Thrown rather

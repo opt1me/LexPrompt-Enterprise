@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import type { VerificationChange } from '../../lib/verification';
+import type { VerificationChange } from '@lexprompt/core';
 
 export interface UseVerifyKeysOptions {
   enabled: boolean;

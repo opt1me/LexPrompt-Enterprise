@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   positionsToDraft,
   includedPositions,
-  positionText,
+  inferredPositionText,
   learnedFromNames,
 } from './positionsToDraft';
 import { canSaveDraft, toPlaybookDraft } from '../../lib/authoringDraft';
@@ -41,15 +41,15 @@ describe('includedPositions', () => {
   });
 });
 
-describe('positionText', () => {
+describe('inferredPositionText', () => {
   it('publishes what the person wrote when they reworded it', () => {
-    expect(positionText(position({
+    expect(inferredPositionText(position({
       disposition: 'reworded', rewordedText: 'Five years, not indefinite.',
     }))).toBe('Five years, not indefinite.');
   });
 
   it('publishes the adopted statement when they did not', () => {
-    expect(positionText(position())).toBe(
+    expect(inferredPositionText(position())).toBe(
       'We strike an indefinite confidentiality tail in favour of a fixed term.',
     );
   });
@@ -57,7 +57,7 @@ describe('positionText', () => {
   // A blank house rule reads as a house rule until something looks at it —
   // the same guard `StandardPositionField` and `DraftReview` apply.
   it('falls back to the statement rather than publishing a blank reword', () => {
-    expect(positionText(position({ disposition: 'reworded', rewordedText: '   ' }))).toBe(
+    expect(inferredPositionText(position({ disposition: 'reworded', rewordedText: '   ' }))).toBe(
       'We strike an indefinite confidentiality tail in favour of a fixed term.',
     );
   });

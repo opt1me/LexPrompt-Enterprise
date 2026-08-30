@@ -1,6 +1,6 @@
 import React from 'react';
 import type { DocumentRecord } from '../../types';
-import { assessDocument } from '../../lib/modelContext';
+import { assessDocument } from '@lexprompt/core';
 
 /**
  * A document record carries no page images by design (derived data,

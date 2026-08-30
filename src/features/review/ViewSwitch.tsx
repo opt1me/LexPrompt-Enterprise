@@ -1,6 +1,6 @@
 import React from 'react';
 import type { ReviewTarget } from '../../types';
-import { isCollectionTarget } from '../../lib/reviewTarget';
+import { isCollectionTarget } from '@lexprompt/core';
 
 export type ReviewViewKind = 'review' | 'compare';
 

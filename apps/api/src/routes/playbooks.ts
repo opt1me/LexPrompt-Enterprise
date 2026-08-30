@@ -1,8 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import { ModelError } from '@lexprompt/core';
+import { ModelError, uid } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
-import { uid } from '../uid.ts';
 import {
   fromPlaybookRow, fromPlaybookVersionRow, toPlaybookRow, toPlaybookVersionRow,
   type Playbook, type PlaybookDraft, type PlaybookRow,

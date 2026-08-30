@@ -1,15 +1,29 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Settings as SettingsIcon, ClipboardList, Briefcase, ShieldCheck } from 'lucide-react';
 import type { Playbook, PlaybookClause, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
-import type { WorkspaceSettings } from '@lexprompt/core';
+import {
+  applyVerification,
+  findingKey,
+  makeNote,
+  resetVerification,
+  unchecked,
+  confirmPosition,
+  amendPosition,
+  resetPosition,
+  NetPositionError,
+  uid,
+  orderedMembers,
+  findingsKeyFor,
+  isCollectionTarget,
+  ModelError,
+  isSignInError,
+  isServiceConfigError,
+} from '@lexprompt/core';
+import type { WorkspaceSettings, VerificationChange } from '@lexprompt/core';
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
 import { apiKeyWasPurgedThisSession, loadSettings } from './lib/storage';
 import { API_KEY_PURGED_NOTICE } from './lib/privacyCopy';
-import { applyVerification, findingKey, makeNote, resetVerification, unchecked } from './lib/verification';
-import type { VerificationChange } from './lib/verification';
-import { confirmPosition, amendPosition, resetPosition, NetPositionError } from './lib/netPosition';
 import { carryHumanState } from './lib/findingMerge';
-import { uid } from './lib/uid';
 import {
   listPlaybooks as listTemplates, getPlaybook as getTemplate, deletePlaybook as deleteTemplate,
   newPlaybook as newTemplate, exportPlaybook as exportTemplate, importPlaybook as importTemplate,
@@ -38,13 +52,10 @@ import { buildPositionRows, type PositionRow } from './lib/standardPositions';
 import {
   listCollections, getCollection, saveCollection, deleteCollection, newCollection,
 } from './lib/db/collections';
-import { orderedMembers } from './lib/collectionOrder';
-import { findingsKeyFor, isCollectionTarget } from './lib/reviewTarget';
 import { useRoute, type Route } from './lib/router';
 import { gatewayModelClient } from './lib/model/gatewayModelClient';
 import { isAuthFailure } from './lib/model/authFailure';
 import { MODEL_CHOICE_STALE_MESSAGE, modelProvenanceName } from './lib/model/modelChoice';
-import { ModelError, isSignInError, isServiceConfigError } from '@lexprompt/core';
 import { useToast, Toast } from './components/Toast';
 import { LoadErrorPanel } from './components/LoadErrorPanel';
 import { ServiceConfigError } from './components/ServiceConfigError';

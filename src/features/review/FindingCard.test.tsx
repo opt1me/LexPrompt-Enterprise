@@ -4,7 +4,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { PlaybookClause, Finding, StandardPosition } from '../../types';
 import { FindingCard } from './FindingCard';
-import { unconfirmedPosition } from '../../lib/netPosition';
+import { unconfirmedPosition } from '@lexprompt/core';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

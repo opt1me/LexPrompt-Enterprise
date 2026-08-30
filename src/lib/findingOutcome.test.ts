@@ -5,7 +5,7 @@ import {
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionOutcomeCounts,
 } from './findingOutcome';
-import { unconfirmedPosition, confirmPosition, amendPosition } from './netPosition';
+import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { Finding, TrailStep, Verification } from '../types';
 
 // Minor 3 (final fix round): `isVerifiable` replaces what used to be two

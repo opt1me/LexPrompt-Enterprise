@@ -1,4 +1,4 @@
-import type { PlaybookClause, PlaybookVersion } from '../types';
+import type { PlaybookClause, PlaybookVersion } from './types.ts';
 
 /**
  * The RISK CRITERIA block appended to an extraction prompt, or `''` when the

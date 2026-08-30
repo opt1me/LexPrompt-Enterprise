@@ -1,8 +1,8 @@
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import { uid } from '../../lib/uid';
+import { uid } from '@lexprompt/core';
+import type { WorkspaceSettings } from '@lexprompt/core';
 import type { AuthoringDraft, DraftClause } from '../../lib/authoringDraft';
 import type { StandardPosition } from '../../types';
-import type { WorkspaceSettings } from '@lexprompt/core';
 import { modelProvenanceName } from '../../lib/model/modelChoice';
 import type { FewShotSource } from './fewShot';
 

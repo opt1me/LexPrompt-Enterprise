@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Layers, AlertTriangle, Wrench, Play, Ungroup as UngroupIcon, Loader } from 'lucide-react';
 import type { Collection, DocumentRecord, ReviewTarget } from '../../types';
-import { orderedMembers } from '../../lib/collectionOrder';
+import { orderedMembers } from '@lexprompt/core';
 import { DocumentNotices } from './DocumentNotices';
 import { Button } from '../../components/Button';
 

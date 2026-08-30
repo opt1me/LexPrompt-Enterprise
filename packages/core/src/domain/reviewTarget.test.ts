@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { findingsKeyFor, targetDocumentIds, isCollectionTarget } from './reviewTarget';
+import { findingsKeyFor, targetDocumentIds, isCollectionTarget } from './reviewTarget.ts';
 
 const docs = { kind: 'documents' as const, documentIds: ['d1', 'd2'] };
 const coll = { kind: 'collection' as const, collectionId: 'c1', documentIds: ['d1', 'd2', 'd3'] };

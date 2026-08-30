@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, PencilLine, History, ShieldQuestion } from 'lucide-react';
 import type { NetPosition } from '../../types';
-import { positionText } from '../../lib/netPosition';
+import { positionText } from '@lexprompt/core';
 import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';

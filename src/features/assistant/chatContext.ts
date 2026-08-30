@@ -1,7 +1,7 @@
 import type { DocumentFile } from '../../types';
+import { extractableText, usableText, contextBudgetChars } from '@lexprompt/core';
 import type { WorkspaceSettings } from '@lexprompt/core';
 import { gatewayModelClient } from '../../lib/model/gatewayModelClient';
-import { extractableText, usableText, contextBudgetChars } from '../../lib/modelContext';
 
 export { extractableText, contextBudgetChars };
 

@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Matter, Review, DocumentRecord, PlaybookVersion, TrailStep } from './types';
-import { unconfirmedPosition } from './lib/netPosition';
+import { unconfirmedPosition } from '@lexprompt/core';
 import { flushUntil } from './test/mount';
 import { TEST_ALLOWED_MODEL } from './test/allowedModel';
 

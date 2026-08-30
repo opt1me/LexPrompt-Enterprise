@@ -2,12 +2,17 @@ import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'rea
 import { Table, Mail, FileDown, Loader, FileText, X } from 'lucide-react';
 import type { PlaybookClause, DocumentFile, Finding, PlaybookVersion, ReviewRun } from '../../types';
 import { isAuthFailure } from '../../lib/model/authFailure';
-import { ModelError, SERVICE_CONFIG_HINT, type WorkspaceSettings } from '@lexprompt/core';
-import { findingKey } from '../../lib/verification';
-import type { VerificationChange } from '../../lib/verification';
+import {
+  ModelError,
+  SERVICE_CONFIG_HINT,
+  type WorkspaceSettings,
+  findingKey,
+  findingsKeyFor,
+  isCollectionTarget,
+} from '@lexprompt/core';
+import type { VerificationChange } from '@lexprompt/core';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import { isVerifiable } from '../../lib/findingOutcome';
-import { findingsKeyFor, isCollectionTarget } from '../../lib/reviewTarget';
 import { FindingCard } from './FindingCard';
 import { ServiceConfigError } from '../../components/ServiceConfigError';
 import { ClauseIndex } from './ClauseIndex';
