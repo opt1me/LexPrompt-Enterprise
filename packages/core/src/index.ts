@@ -49,6 +49,7 @@ export type {
 // them.
 export type {
   FindingsPage, DispositionView, DispositionCause, DispositionEventView,
+  DispositionWithHistory,
   DispositionWriteResult, DispositionHistory, RetryCleared, RetryResult,
   NetPositionAction, NetPositionWriteResult,
 } from './api/records.ts';

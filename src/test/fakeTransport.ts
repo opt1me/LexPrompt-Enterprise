@@ -119,10 +119,35 @@ function derivedFindings(t: FakeTransport, path: string): unknown {
   if (!review) return undefined;
   const findings = (review.findings ?? {}) as Record<string, Record<string, unknown>>;
   const dispositionVersions: Record<string, Record<string, number>> = {};
+  const dispositions: Record<string, Record<string, unknown>> = {};
   for (const [key, byClause] of Object.entries(findings)) {
     dispositionVersions[key] = Object.fromEntries(Object.keys(byClause).map(c => [c, 1]));
+    dispositions[key] = {};
+    for (const [clauseId, value] of Object.entries(byClause)) {
+      const v = ((value ?? {}) as { verification?: Record<string, unknown> }).verification ?? {};
+      const state = (v.state as string) ?? 'unchecked';
+      // §8's `dispositions` map, derived from the same one fact a test
+      // states. An ANSWER, not behaviour: `changedCount` is 0 or 1 because
+      // a blob records a current judgement and not how many times it moved,
+      // and there is deliberately NO `last` — an event this stand-in
+      // invented would be a history nothing wrote. `findingsRead.pg.test.ts`
+      // proves the real assembly against a real Postgres.
+      dispositions[key][clauseId] = {
+        disposition: {
+          reviewId: match[1].split('/').pop(),
+          findingsKey: key,
+          clauseId,
+          state,
+          ...(v.reason ? { reason: v.reason } : {}),
+          ...(v.byUserId ? { byUserId: v.byUserId } : {}),
+          ...(v.at ? { at: v.at } : {}),
+          changedCount: state === 'unchecked' ? 0 : 1,
+          version: 1,
+        },
+      };
+    }
   }
-  return { findings, dispositionVersions, version: 1 };
+  return { findings, dispositions, dispositionVersions, version: 1 };
 }
 
 /**

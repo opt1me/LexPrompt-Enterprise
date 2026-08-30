@@ -1,5 +1,6 @@
 import type {
-  DispositionWriteResult, FindingsPage, NetPositionWriteResult, Note, VerificationChange,
+  DispositionWithHistory, DispositionWriteResult, FindingsPage, NetPositionWriteResult, Note,
+  VerificationChange,
 } from '@lexprompt/core';
 import { apiGet, apiSend } from './client';
 
@@ -40,6 +41,19 @@ import { apiGet, apiSend } from './client';
 const lastSeenVersion = new Map<string, Map<string, number>>();
 /** The same, for the `finding` row's own version — see `findingVersionFor`. */
 const lastSeenFindingVersion = new Map<string, Map<string, number>>();
+/**
+ * The same cache, one fact wider: the disposition each cell is under and the
+ * event that produced it (§8, Stage 4).
+ *
+ * THE SAME cache rather than a second one, deliberately. It is keyed the
+ * same way, forgotten by the same call, and filled by the same read — a
+ * parallel structure with its own lifecycle is how one of them comes to hold
+ * a review the other has dropped. What it holds is what the SERVER last
+ * said, never anything this browser composed: a card renders an actor
+ * because a disposition names one, not because a name happened to be
+ * resolvable.
+ */
+const lastSeenDisposition = new Map<string, Map<string, DispositionWithHistory>>();
 
 const cellKey = (findingsKey: string, clauseId: string): string =>
   JSON.stringify([findingsKey, clauseId]);
@@ -51,6 +65,39 @@ function remember(reviewId: string, versions: FindingsPage['dispositionVersions'
       rememberDispositionVersion(reviewId, findingsKey, clauseId, version);
     }
   }
+}
+
+/**
+ * Records the dispositions the server just reported.
+ *
+ * REPLACED wholesale for the review, never merged into what was there: a
+ * disposition this browser still held for a cell the server no longer
+ * reports would be an attribution line for a finding that is gone. The read
+ * is the truth about every cell it covers.
+ */
+function rememberDispositions(reviewId: string, page: FindingsPage['dispositions']): void {
+  const byCell = new Map<string, DispositionWithHistory>();
+  for (const [findingsKey, byClause] of Object.entries(page ?? {})) {
+    for (const [clauseId, entry] of Object.entries(byClause)) {
+      byCell.set(cellKey(findingsKey, clauseId), entry);
+    }
+  }
+  lastSeenDisposition.set(reviewId, byCell);
+}
+
+/**
+ * The disposition and last event the server last reported for one cell, or
+ * `undefined` for a cell this browser has not read.
+ *
+ * `undefined` is NOT "nobody has touched this". A never-touched finding has
+ * a disposition with `changedCount: 0`, which is a fact the server stated;
+ * `undefined` means this browser has not been told. `dispositionLabel`
+ * (`findingOutcome.ts`) is the one place that difference turns into words.
+ */
+export function dispositionFor(
+  reviewId: string, findingsKey: string, clauseId: string,
+): DispositionWithHistory | undefined {
+  return lastSeenDisposition.get(reviewId)?.get(cellKey(findingsKey, clauseId));
 }
 
 /** Records one version — called after a write that returned the row it
@@ -88,6 +135,7 @@ export function dispositionVersionFor(
 export function forgetFindingVersions(reviewId: string): void {
   lastSeenVersion.delete(reviewId);
   lastSeenFindingVersion.delete(reviewId);
+  lastSeenDisposition.delete(reviewId);
 }
 
 /**
@@ -104,6 +152,7 @@ export async function getFindings(reviewId: string): Promise<FindingsPage> {
   const page = await apiGet<FindingsPage>(
     `/v1/reviews/${encodeURIComponent(reviewId)}/findings`);
   remember(reviewId, page.dispositionVersions ?? {});
+  rememberDispositions(reviewId, page.dispositions ?? {});
   for (const [findingsKey, byClause] of Object.entries(page.findingVersions ?? {})) {
     for (const [clauseId, version] of Object.entries(byClause)) {
       rememberFindingVersion(reviewId, findingsKey, clauseId, version);
@@ -155,6 +204,18 @@ export async function setDisposition(
     },
   );
   rememberDispositionVersion(reviewId, findingsKey, clauseId, result.disposition.version);
+  // AWAIT-THEN-APPLY, on the attribution as well as on the version. The
+  // write answers with the row the store actually took AND the event it
+  // produced (`DispositionWriteResult`), which is exactly a
+  // `DispositionWithHistory` — so the card's actor line updates from the
+  // store's answer rather than from what this browser asked for. Without
+  // this, a verification would show its new state with the PREVIOUS actor
+  // beside it until the next read.
+  const byCell = lastSeenDisposition.get(reviewId)
+    ?? new Map<string, DispositionWithHistory>();
+  byCell.set(cellKey(findingsKey, clauseId),
+    { disposition: result.disposition, last: result.event });
+  lastSeenDisposition.set(reviewId, byCell);
   return result;
 }
 

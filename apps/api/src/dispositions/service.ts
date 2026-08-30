@@ -1,6 +1,7 @@
 import {
   ModelError, effectiveReason, requiresReason,
-  type DispositionCause, type VerificationState,
+  type DispositionCause, type DispositionEventView, type DispositionView,
+  type VerificationState,
 } from '@lexprompt/core';
 import type { Tx } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
@@ -95,6 +96,50 @@ export async function readDispositionEvents(
       order by id desc
       limit $5`,
     [key.reviewId, key.findingsKey, key.clauseId, workspaceId, limit]);
+}
+
+/**
+ * A stored row as the WIRE shape, and the only producer of one.
+ *
+ * It lived in `routes/findings.ts` while that file was the only thing
+ * answering with a `DispositionView`. Stage 4's findings read answers with
+ * one too (§8), and two mappers for one shape — one composing it from a
+ * disposition row, one from a join's `d_*` columns — is this project's most
+ * repeated defect in the form where the two are in different directories.
+ * So it moved HERE, beside the row type it reads, and both callers import
+ * it. "When you find yourself writing a second copy, extract it then."
+ *
+ * ABSENT, never `byUserId: undefined`: a finding nobody has touched names
+ * nobody (§6.3), and `structuredClone` preserves an undefined-valued key —
+ * so an `in` check on a round-tripped record would read it as a name that is
+ * there.
+ */
+export function toDispositionView(row: DispositionRow): DispositionView {
+  return {
+    reviewId: row.review_id,
+    findingsKey: row.findings_key,
+    clauseId: row.clause_id,
+    state: row.state,
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.by_user_id ? { byUserId: row.by_user_id } : {}),
+    ...(row.at ? { at: row.at.getTime() } : {}),
+    changedCount: row.changed_count,
+    version: Number(row.version),
+  };
+}
+
+/** One stored event as the wire shape, and the only producer of one — the
+ *  same rule, for the same reason, on the evidence half. */
+export function toEventView(row: DispositionEventRow): DispositionEventView {
+  return {
+    id: Number(row.id),
+    fromState: row.from_state,
+    toState: row.to_state,
+    ...(row.reason ? { reason: row.reason } : {}),
+    cause: row.cause,
+    byUserId: row.by_user_id,
+    at: row.at.getTime(),
+  };
 }
 
 /**

@@ -346,6 +346,26 @@ export interface RunView {
 export interface FindingsPage {
   findings: Record<string, Record<string, Finding>>;
   /**
+   * `findingsKey -> clauseId -> the disposition, and the event that produced
+   * it` (§8, Stage 4).
+   *
+   * §8, verbatim: *"the finding read returns its current disposition AND its
+   * most recent `finding_disposition_event`, and `finding.disposition_changed`
+   * carries both, so `from_state` is on hand at first render and after every
+   * push without a second query and without a duplicated column."*
+   *
+   * BESIDE `findings` rather than inside a `Finding`, for the same reason
+   * `dispositionVersions` is (P34): `Finding` is the domain shape three
+   * programs share, and *who last moved this row, from what, and how many
+   * times* is a fact about two other tables.
+   *
+   * Every finding in `findings` has an entry here — a finding nobody has
+   * touched gets a disposition with `changedCount: 0`, no actor, no instant
+   * and NO `last`, which is what §6.3's "Not checked, naming nobody" reads
+   * from.
+   */
+  dispositions: Record<string, Record<string, DispositionWithHistory>>;
+  /**
    * `findingsKey -> clauseId -> finding_disposition.version`.
    *
    * BESIDE the findings rather than inside them. A disposition write is
@@ -442,6 +462,20 @@ export interface DispositionEventView {
 export interface DispositionWriteResult {
   disposition: DispositionView;
   event: DispositionEventView;
+}
+
+/**
+ * A disposition and the event that produced it — what a card needs to say
+ * "Rejected by R. Okafor, 16:04 - was Verified" with no second request.
+ *
+ * `last` is ABSENT when `changedCount` is 0. A finding nobody has touched
+ * has no event, and an empty object would read to an `in` check as an event
+ * that happened — `structuredClone` preserves an undefined-valued key, so
+ * `last: undefined` would too.
+ */
+export interface DispositionWithHistory {
+  disposition: DispositionView;
+  last?: DispositionEventView;
 }
 
 /** The answer to `GET …/history`. Newest first. */

@@ -5,6 +5,8 @@ import { buildTestApi } from './helpers/apiHarness.ts';
 import type { Tx } from '../src/db/pool.ts';
 import { reconcileFindings, describeDiscrepancies } from '../src/findings/reconcile.ts';
 import { seedFindingRows } from './helpers/seedFindings.ts';
+import { setDisposition } from '../src/dispositions/service.ts';
+import { readFindings } from '../src/findings/read.ts';
 
 /**
  * TASK 14: FINDINGS ARE READ FROM ROWS.
@@ -498,6 +500,288 @@ describe('a stale whole-review save can no longer destroy an authoritative row',
       const h = harness(t);
       const res = await h.raw('PUT', '/v1/reviews/r1', { ...REVIEW(), findings: {} });
       expect(res.statusCode, res.body).toBe(200);
+      await h.app.close();
+    });
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ *  STAGE 4 §8: the read carries the disposition AND the event that     *
+ *  produced it — so "was Rejected" needs no second query.              *
+ * ------------------------------------------------------------------ */
+
+/** A second person, so an override is an override rather than one person
+ *  changing their own mind. Every collaborative claim in Stage 4 needs
+ *  two. */
+const PARTNER = '00000000-0000-0000-0000-0000000000a2';
+
+async function aPartner(t: Tx): Promise<void> {
+  await t.query(
+    `insert into app_user (id, workspace_id, issuer, subject, display_name, initials, role, status)
+     values ($1, $2, 'i', 'the-partner-read', 'R Okafor', 'RO', 'partner', 'active')
+     on conflict (id) do nothing`, [PARTNER, WS]);
+}
+
+/** Moves a disposition through the ONE writer of both tables, so the
+ *  fixture cannot produce a current state whose history does not explain
+ *  it — which is the property these assertions are about. */
+async function move(
+  t: Tx, clauseId: string,
+  change: { state: string; reason?: string },
+  cause: 'human' | 'rerun_reset',
+  actor: string,
+  at: number,
+  expectedVersion: number,
+): Promise<void> {
+  await setDisposition(
+    t, { reviewId: 'r1', findingsKey: 'd1', clauseId },
+    change as never, cause, { id: actor }, new Date(at), expectedVersion);
+}
+
+describe('the findings read carries the disposition and the event that produced it', () => {
+  it('carries the disposition and the event that produced it', async () => {
+    await withPg(async t => {
+      await aMatter(t);
+      await aPartner(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, { d1: { c1: finding() } });
+
+      await move(t, 'c1', { state: 'verified' }, 'human', HUMAN, 1_700_000_010_000, 1);
+      await move(t, 'c1', { state: 'rejected', reason: 'The cap is uncapped in clause 14.2.' },
+        'human', PARTNER, 1_700_000_020_000, 2);
+
+      const d = (await read(h)).dispositions.d1.c1;
+      expect(d.disposition.state).toBe('rejected');
+      expect(d.disposition.changedCount).toBe(2);
+      expect(d.disposition.byUserId).toBe(PARTNER);
+      // "was Verified", with no second request. This is the whole of §8's
+      // sentence about the read.
+      expect(d.last.fromState).toBe('verified');
+      expect(d.last.toState).toBe('rejected');
+      expect(d.last.cause).toBe('human');
+      expect(d.last.byUserId).toBe(PARTNER);
+      expect(d.last.reason).toBe('The cap is uncapped in clause 14.2.');
+      await h.app.close();
+    });
+  });
+
+  it('gives a never-touched finding a disposition with no actor and NO last event', async () => {
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, { d1: { c1: finding() } });
+      const d = (await read(h)).dispositions.d1.c1;
+      expect(d.disposition.state).toBe('unchecked');
+      expect(d.disposition.changedCount).toBe(0);
+      // `in`, not `toEqual`: absence is the assertion, and `structuredClone`
+      // preserves an undefined-valued key.
+      expect('byUserId' in d.disposition).toBe(false);
+      expect('at' in d.disposition).toBe(false);
+      expect('last' in d).toBe(false);
+      await h.app.close();
+    });
+  });
+
+  it('leaves `last` ABSENT on the object itself, not merely absent after JSON', async () => {
+    /*
+     * THE MUTATION THIS EXISTS FOR, and it was found by trying it: setting
+     * `last: undefined` on every entry passes every case above, because they
+     * read through `app.inject` and `JSON.stringify` drops an
+     * undefined-valued key on the way out. `structuredClone` — how a record
+     * crosses every other boundary in this system, and how Part 4B's socket
+     * payloads will be copied — PRESERVES it, so the guard has to be made
+     * against the object this function actually returns.
+     *
+     * CLAUDE.md's rule, applied where it bites: *"`toEqual` does not
+     * distinguish an absent key from an `undefined` one … a guard that looks
+     * decorative in a test is load-bearing against real persisted data."*
+     */
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, { d1: { c1: finding() } });
+      const page = await readFindings(dbOn(t), 'r1', WS);
+      const d = page.dispositions.d1.c1;
+      expect('last' in d).toBe(false);
+      expect(Object.keys(d)).toEqual(['disposition']);
+      // …and the same for the disposition's own absent actor and instant.
+      expect('byUserId' in d.disposition).toBe(false);
+      expect('at' in d.disposition).toBe(false);
+      // The pair: a finding that HAS been moved does carry the key, so the
+      // three assertions above are about absence rather than about the map
+      // never being filled in.
+      await move(t, 'c1', { state: 'verified' }, 'human', HUMAN, 1_700_000_010_000, 1);
+      const moved = (await readFindings(dbOn(t), 'r1', WS)).dispositions.d1.c1;
+      expect('last' in moved).toBe(true);
+      expect(moved.last!.toState).toBe('verified');
+      await h.app.close();
+    });
+  });
+
+  it('keeps changedCount on a disposition cleared BY HAND, which unchecked alone hides', async () => {
+    // "Never touched" and "a person cleared this" are both `unchecked` and
+    // are different facts. `Finding.verification` collapses them —
+    // correctly, because neither is a judgement — so the difference has to
+    // survive somewhere, and this is where.
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, { d1: { c1: finding() } });
+      await move(t, 'c1', { state: 'verified' }, 'human', HUMAN, 1_700_000_010_000, 1);
+      await move(t, 'c1', { state: 'unchecked' }, 'human', HUMAN, 1_700_000_020_000, 2);
+
+      const page = await read(h);
+      // The finding still reads as unchecked — nothing derives a judgement.
+      expect(page.findings.d1.c1.verification).toEqual({ state: 'unchecked' });
+      const d = page.dispositions.d1.c1;
+      expect(d.disposition.state).toBe('unchecked');
+      expect(d.disposition.changedCount).toBe(2);
+      expect(d.last.cause).toBe('human');
+      expect(d.last.fromState).toBe('verified');
+      await h.app.close();
+    });
+  });
+
+  it('marks a disposition cleared by a re-run as a re-run, not as a person un-verifying', async () => {
+    // §6.3: the two are different acts and the card must not flatten them.
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, { d1: { c1: finding() } });
+      await move(t, 'c1', { state: 'verified' }, 'human', HUMAN, 1_700_000_010_000, 1);
+      await move(t, 'c1', { state: 'unchecked' }, 'rerun_reset', HUMAN, 1_700_000_030_000, 2);
+
+      const d = (await read(h)).dispositions.d1.c1;
+      expect(d.disposition.state).toBe('unchecked');
+      expect(d.disposition.changedCount).toBeGreaterThan(0);
+      expect(d.last.cause).toBe('rerun_reset');
+      expect(d.last.fromState).toBe('verified');
+      await h.app.close();
+    });
+  });
+
+  it('gives each finding ITS OWN latest event, never another clause s', async () => {
+    // What `distinct on (review_id, findings_key, clause_id)` is for. A
+    // grouping that lost the clause would put one clause's history on
+    // another's card, with this application's full authority.
+    await withPg(async t => {
+      await aMatter(t);
+      await aPartner(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, {
+        d1: { c1: finding(), c2: finding({ clauseId: 'c2' }), c3: finding({ clauseId: 'c3' }) },
+      });
+      await move(t, 'c1', { state: 'verified' }, 'human', HUMAN, 1_700_000_010_000, 1);
+      await move(t, 'c2', { state: 'flagged' }, 'human', PARTNER, 1_700_000_020_000, 1);
+      // c3 is left alone, so the sweep has to produce two events and not
+      // three — and must not hand c3 either of the other two.
+
+      const d = (await read(h)).dispositions.d1;
+      expect(d.c1.last.toState).toBe('verified');
+      expect(d.c1.last.byUserId).toBe(HUMAN);
+      expect(d.c2.last.toState).toBe('flagged');
+      expect(d.c2.last.byUserId).toBe(PARTNER);
+      expect('last' in d.c3).toBe(false);
+      await h.app.close();
+    });
+  });
+
+  it('keys a collection review s dispositions by the COLLECTION, not by a document', async () => {
+    // R-C1 at the client/server boundary, on the map Stage 4 adds. Six
+    // defects in sub-project C came from keying by document id directly.
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      await aDocument(t, 'd2');
+      await aCollection(t, 'col-1', 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, { 'col-1': { c1: finding() } }, {
+        documentIds: ['d1', 'd2'],
+        target: { kind: 'collection', collectionId: 'col-1', documentIds: ['d1', 'd2'] },
+      });
+      const page = await read(h);
+      expect(Object.keys(page.dispositions)).toEqual(['col-1']);
+      expect(page.dispositions['col-1'].c1.disposition.clauseId).toBe('c1');
+      await h.app.close();
+    });
+  });
+
+  it('reads one statement per review, not one per finding', async () => {
+    // The mutation this exists for: rewrite the events lookup as a
+    // per-finding query and watch this fail. Sixty clauses is sixty round
+    // trips, and it is the shape that gets deleted later along with the
+    // sentence it fed.
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, {
+        d1: {
+          c1: finding(), c2: finding({ clauseId: 'c2' }), c3: finding({ clauseId: 'c3' }),
+          c4: finding({ clauseId: 'c4' }), c5: finding({ clauseId: 'c5' }),
+        },
+      });
+      await move(t, 'c1', { state: 'verified' }, 'human', HUMAN, 1_700_000_010_000, 1);
+      await move(t, 'c2', { state: 'flagged' }, 'human', HUMAN, 1_700_000_011_000, 1);
+
+      const issued: string[] = [];
+      const counting = {
+        query: (text: string, values?: unknown[]) => {
+          issued.push(text);
+          return t.query(text, values);
+        },
+        tx: (run: (tx: Tx) => Promise<unknown>) => t.tx(run),
+      };
+      await readFindings(counting as never, 'r1', WS);
+      // Three: the review's version, the findings join, the latest-events
+      // sweep. Five clauses, three statements.
+      expect(issued).toHaveLength(3);
+      expect(issued.filter(q => /finding_disposition_event/.test(q))).toHaveLength(1);
+      await h.app.close();
+    });
+  });
+
+  it('leaves Finding.verification exactly as it was — attribution rides beside, not inside', async () => {
+    // P34. The natural mistake here is to enrich `Finding`, and `Finding` is
+    // the domain shape three programs share.
+    await withPg(async t => {
+      await aMatter(t);
+      await aPartner(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, { d1: { c1: finding() } });
+      await move(t, 'c1', { state: 'verified' }, 'human', HUMAN, 1_700_000_010_000, 1);
+      await move(t, 'c1', { state: 'rejected', reason: 'Wrong clause.' },
+        'human', PARTNER, 1_700_000_020_000, 2);
+
+      const v = (await read(h)).findings.d1.c1.verification;
+      expect(Object.keys(v).sort()).toEqual(['at', 'byUserId', 'reason', 'state']);
+      expect('changedCount' in v).toBe(false);
+      expect('fromState' in v).toBe(false);
+      expect('last' in v).toBe(false);
+      await h.app.close();
+    });
+  });
+
+  it('never answers an event for a review this workspace cannot see', async () => {
+    // The events sweep is a second statement over a table holding every
+    // firm's judgements, so its own workspace predicate is asserted rather
+    // than left to the repo-wide scanner alone.
+    await withPg(async t => {
+      await aMatter(t);
+      await aDocument(t, 'd1');
+      const h = harness(t);
+      await aReviewWith(t, h, { d1: { c1: finding() } });
+      await move(t, 'c1', { state: 'verified' }, 'human', HUMAN, 1_700_000_010_000, 1);
+      const other = await readFindings(dbOn(t), 'r1', '00000000-0000-0000-0000-0000000000ff')
+        .catch((e: unknown) => e);
+      expect((other as Error).message).toMatch(/no such review/i);
       await h.app.close();
     });
   });

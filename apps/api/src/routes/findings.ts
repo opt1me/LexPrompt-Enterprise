@@ -10,7 +10,7 @@ import { ConflictError } from '../errors.ts';
 import { readFindings, type FindingsRead } from '../findings/read.ts';
 import type { FindingKey } from '../findings/rows.ts';
 import {
-  readDispositionEvents, setDisposition,
+  readDispositionEvents, setDisposition, toDispositionView, toEventView,
   type DispositionEventRow, type DispositionRow,
 } from '../dispositions/service.ts';
 
@@ -80,7 +80,7 @@ export function registerFindings(app: FastifyInstance, db: Db): void {
           // else's name on a rejection.
           { id: req.actor!.id }, new Date(), body.version));
         const events = await readDispositionEvents(t, key, ws, 1);
-        return { disposition, event: toEventView(events[0]) };
+        return { disposition, event: eventWritten(events[0]) };
       });
     });
 
@@ -378,40 +378,26 @@ async function asView(write: () => Promise<DispositionRow>): Promise<Disposition
   }
 }
 
-/** ABSENT, never `byUserId: undefined` — a finding nobody has touched names
- *  nobody (§6.3), and `structuredClone` preserves an undefined-valued key. */
-function toDispositionView(row: DispositionRow): DispositionView {
-  return {
-    reviewId: row.review_id,
-    findingsKey: row.findings_key,
-    clauseId: row.clause_id,
-    state: row.state,
-    ...(row.reason ? { reason: row.reason } : {}),
-    ...(row.by_user_id ? { byUserId: row.by_user_id } : {}),
-    ...(row.at ? { at: row.at.getTime() } : {}),
-    changedCount: row.changed_count,
-    version: Number(row.version),
-  };
-}
-
-function toEventView(row: DispositionEventRow | undefined): DispositionEventView {
+/**
+ * The event `setDisposition` just wrote, insisted upon.
+ *
+ * `toDispositionView`/`toEventView` moved to `dispositions/service.ts` in
+ * Stage 4, because the findings read answers with the same two shapes and
+ * two mappers for one shape is this project's most repeated defect. What
+ * stays here is the REFUSAL, which is about this route rather than about the
+ * mapping: a write that produced no event is the one thing §14 calls a lie,
+ * and it must fail here rather than reach a browser as an absent field.
+ *
+ * Unreachable: `setDisposition` writes the event in the same transaction as
+ * the row, and this reads it back inside that transaction. Named rather than
+ * non-null asserted, because the failure it would replace is
+ * `undefined.from_state` two frames later.
+ */
+function eventWritten(row: DispositionEventRow | undefined): DispositionEventView {
   if (!row) {
-    // Unreachable: `setDisposition` writes the event in the same transaction
-    // as the row, and this reads it back inside that transaction. Named
-    // rather than non-null asserted, because the failure it would replace is
-    // `undefined.from_state` two frames later — and because "the disposition
-    // moved and no event says so" is the exact thing §14 calls a lie.
     throw new Error(
       'A disposition was written with no event beside it. Both rows are written in one '
       + 'transaction by `setDisposition`; if this is reachable, that has stopped being true.');
   }
-  return {
-    id: Number(row.id),
-    fromState: row.from_state,
-    toState: row.to_state,
-    ...(row.reason ? { reason: row.reason } : {}),
-    cause: row.cause,
-    byUserId: row.by_user_id,
-    at: row.at.getTime(),
-  };
+  return toEventView(row);
 }

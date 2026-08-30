@@ -1,8 +1,13 @@
 import {
   ModelError, findingKey, unchecked,
-  type Finding, type FindingsPage, type Note, type Verification, type VerificationState,
+  type DispositionWithHistory, type Finding, type FindingsPage, type Note,
+  type Verification, type VerificationState,
 } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
+import {
+  toDispositionView, toEventView,
+  type DispositionEventRow, type DispositionRow,
+} from '../dispositions/service.ts';
 import { fromFindingRow, type FindingRow } from './rows.ts';
 
 /**
@@ -114,6 +119,45 @@ const SELECT_FINDINGS = `
    where f.review_id = any($1::text[]) and f.workspace_id = $2
    order by f.findings_key, f.clause_id`;
 
+/**
+ * THE LATEST EVENT PER FINDING, IN ONE STATEMENT.
+ *
+ * §8 requires the finding read to carry the disposition AND the event that
+ * produced it, so `fromState` — the *"was Rejected"* half of a card's
+ * attribution line — is on hand at first render with no second query. The
+ * alternative is a request per clause, and a card that fires sixty requests
+ * to render sixty rows has that loop removed by whoever profiles it next,
+ * taking the sentence it fed with it.
+ *
+ * `distinct on` is Postgres's own answer to "the newest row per group" and
+ * is index-friendly against the primary key ordering. **The `order by`
+ * prefix must match the `distinct on` tuple exactly, in that order, before
+ * `e.id desc`** — Postgres refuses otherwise, and it refuses with a parse
+ * error rather than a wrong answer, which is the good case.
+ *
+ * `e.id desc` and not `e.at desc`: `at` is a PARAMETER of `setDisposition`
+ * (a whole-review save stamps the moment a person decided, not the moment
+ * their browser got round to sending it), so two events can share an
+ * instant. The sequence cannot.
+ *
+ * ONE literal, not two concatenated — `workspaceScope.test.ts` reads string
+ * literals out of the source and checks each one's predicate region.
+ */
+const SELECT_LATEST_EVENTS = `
+  select distinct on (e.review_id, e.findings_key, e.clause_id)
+         e.review_id, e.findings_key, e.clause_id, e.id, e.from_state, e.to_state,
+         e.reason, e.cause, e.by_user_id::text as by_user_id, e.at
+    from finding_disposition_event e
+   where e.review_id = any($1::text[]) and e.workspace_id = $2
+   order by e.review_id, e.findings_key, e.clause_id, e.id desc`;
+
+/** A `SELECT_LATEST_EVENTS` row: an event, plus the key it belongs to. */
+interface LatestEventRow extends DispositionEventRow {
+  review_id: string;
+  findings_key: string;
+  clause_id: string;
+}
+
 interface RawNote { id: string; text: string; byUserId: string; at: number }
 
 function notesOf(findingsKey: string, clauseId: string, raw: unknown): Note[] {
@@ -155,6 +199,49 @@ function verificationOf(row: AssembledRow): Verification {
 }
 
 /**
+ * The DISPOSITION as the wire shape — what the row actually says, which is
+ * NOT what `verificationOf` says.
+ *
+ * The two disagree deliberately and the disagreement is the feature. A
+ * disposition a person cleared by hand, and one a re-run cleared, and one
+ * nobody ever touched are all `state: 'unchecked'`: `Finding.verification`
+ * collapses them, because a `Verification` is a judgement and none of the
+ * three is one. `changedCount` is what tells them apart, and Stage 4's card
+ * needs that difference — "Not checked" and "Unverified - cleared by A.
+ * Trainee, 16:04, was Verified" are different sentences about different
+ * facts.
+ *
+ * Built from the row the findings join ALREADY carries, not from a second
+ * read, so the version here and the version in `dispositionVersions` are the
+ * same number by construction. Two reads could disagree, and this is the
+ * number a stale-change refusal turns on — §8: *"they must not be allowed to
+ * become two numbers."*
+ *
+ * `toDispositionView` is the one producer of the shape (`dispositions/
+ * service.ts`), reached by rebuilding the row it reads rather than by a
+ * second field-by-field copy here.
+ */
+function dispositionOf(row: AssembledRow): DispositionWithHistory['disposition'] {
+  const asRow: DispositionRow = {
+    review_id: row.review_id,
+    findings_key: row.findings_key,
+    clause_id: row.clause_id,
+    workspace_id: row.workspace_id,
+    // The schema's foreign key makes a finding with no disposition row
+    // impossible; the fallbacks are what `ensureDisposition` creates, so a
+    // row that somehow went missing reads as untouched rather than as a
+    // judgement nobody made.
+    state: row.d_state ?? 'unchecked',
+    reason: row.d_reason,
+    by_user_id: row.d_by_user_id,
+    at: row.d_at,
+    changed_count: Number(row.d_changed_count ?? 0),
+    version: row.d_version ?? 1,
+  };
+  return toDispositionView(asRow);
+}
+
+/**
  * Every finding of one review, assembled.
  *
  * REFUSES rather than answering an empty map when the review is not there:
@@ -170,13 +257,42 @@ export async function readFindings(
   if (!reviews[0]) throw new ModelError('There is no such review.', 'not_found', 404);
 
   const rows = await db.query<AssembledRow>(SELECT_FINDINGS, [[reviewId], workspaceId]);
-  const { findings, dispositionVersions, findingVersions } = assemble(rows);
+  // ONE statement for every latest event, not one per finding. See
+  // `SELECT_LATEST_EVENTS`.
+  const events = await db.query<LatestEventRow>(SELECT_LATEST_EVENTS, [[reviewId], workspaceId]);
+  const { findings, dispositions, dispositionVersions, findingVersions } = assemble(rows);
   return {
     findings: findings[reviewId] ?? {},
+    dispositions: withLatestEvents(dispositions[reviewId] ?? {}, events),
     dispositionVersions: dispositionVersions[reviewId] ?? {},
     findingVersions: findingVersions[reviewId] ?? {},
     version: Number(reviews[0].version),
   };
+}
+
+/**
+ * Puts each finding's most recent event beside its disposition.
+ *
+ * `last` is only ever ADDED — a finding with no event keeps no key at all,
+ * rather than `last: undefined`, because `structuredClone` preserves an
+ * undefined-valued key and an `in` check would then read it as an event that
+ * happened. A finding whose `changedCount` is 0 has no event by
+ * construction: `ensureDisposition` writes the row and no event, and
+ * `setDisposition` writes both or neither.
+ */
+function withLatestEvents(
+  dispositions: Record<string, Record<string, DispositionWithHistory>>,
+  events: LatestEventRow[],
+): Record<string, Record<string, DispositionWithHistory>> {
+  for (const row of events) {
+    const entry = dispositions[row.findings_key]?.[row.clause_id];
+    // An event for a finding this read did not return is not an error and is
+    // not silently dropped into a new key: the event table outlives nothing
+    // here, but a `dispositions` entry with no `findings` entry beside it
+    // would be a disposition about a finding the caller was never given.
+    if (entry) entry.last = toEventView(row);
+  }
+  return dispositions;
 }
 
 /**
@@ -209,10 +325,12 @@ export async function readFindingsForReviews(
 
 function assemble(rows: AssembledRow[]): {
   findings: Record<string, Record<string, Record<string, Finding>>>;
+  dispositions: Record<string, Record<string, Record<string, DispositionWithHistory>>>;
   dispositionVersions: Record<string, Record<string, Record<string, number>>>;
   findingVersions: Record<string, Record<string, Record<string, number>>>;
 } {
   const findings: Record<string, Record<string, Record<string, Finding>>> = {};
+  const dispositions: Record<string, Record<string, Record<string, DispositionWithHistory>>> = {};
   const dispositionVersions: Record<string, Record<string, Record<string, number>>> = {};
   const findingVersions: Record<string, Record<string, Record<string, number>>> = {};
   for (const row of rows) {
@@ -227,6 +345,13 @@ function assemble(rows: AssembledRow[]): {
       verification: verificationOf(row),
       notes: notesOf(row.findings_key, row.clause_id, row.notes),
     };
+    // NO `last` here: this function sees the findings join alone, and the
+    // events arrive from their own statement (`withLatestEvents`). A key
+    // spread in as `undefined` would survive `structuredClone` and read as
+    // an event that happened.
+    const dispositionsByKey = (dispositions[row.review_id] ??= {});
+    const dispositionsByClause = (dispositionsByKey[row.findings_key] ??= {});
+    dispositionsByClause[row.clause_id] = { disposition: dispositionOf(row) };
     const versionsByKey = (dispositionVersions[row.review_id] ??= {});
     const versionsByClause = (versionsByKey[row.findings_key] ??= {});
     versionsByClause[row.clause_id] = Number(row.d_version ?? 1);
@@ -234,5 +359,5 @@ function assemble(rows: AssembledRow[]): {
     const findingByClause = (findingByKey[row.findings_key] ??= {});
     findingByClause[row.clause_id] = Number(row.version ?? 1);
   }
-  return { findings, dispositionVersions, findingVersions };
+  return { findings, dispositions, dispositionVersions, findingVersions };
 }
