@@ -2380,9 +2380,24 @@ function AppShell({ signIn }: { signIn: () => void }) {
         );
       },
       // The cursor fell outside the retention window, so the events between
-      // it and now are gone. The findings map IS the state those events
-      // described, so re-reading it is the whole recovery.
-      { onResync: () => detach(refreshFindings(view.reviewId), 'resyncing the findings') },
+      // it and now are gone. The findings map is most of the state those
+      // events described — but not all of it: a `run.finished` among the
+      // pruned ones is an ENDING nothing else on this screen would ever
+      // learn about, and the banner would say the review is still running
+      // for the life of the page. So the run's own state is re-read too,
+      // and a run that has ended since is finished here exactly as the
+      // event would have finished it.
+      {
+        onResync: () => {
+          detach(refreshFindings(view.reviewId), 'resyncing the findings');
+          detach(
+            getRun(view.id).then(fresh => (isRunOver(fresh.state)
+              ? finishRun(view.id, view.reviewId, matterId)
+              : undefined)),
+            'resyncing the run',
+          );
+        },
+      },
     );
   };
 
@@ -2881,17 +2896,31 @@ function AppShell({ signIn }: { signIn: () => void }) {
         return addDocument(record, bytes);
       }));
       await loadMatterDocuments(matterId);
-      const unreadable = parsed.filter(d => d.parseError).length;
-      if (unreadable > 0) {
-        notify(
-          unreadable === parsed.length
-            ? 'Added, but could not be read — see the error next to each file.'
-            : `Added. ${unreadable} of ${parsed.length} could not be read — see the error next to each file.`,
-          'error',
-        );
-      } else {
-        notify(parsed.length === 1 ? 'Document added.' : `${parsed.length} documents added.`);
-      }
+      /*
+       * THE TOAST REPORTS WHAT WAS STORED, NOT WHAT THIS BROWSER PARSED.
+       *
+       * It used to count `parsed.filter(d => d.parseError)` and say *"Added,
+       * but could not be read — see the error next to each file."* Since
+       * Task 9 the upload route DISCARDS the body's `text`, `parse_state`
+       * and `parse_error` outright and writes the row `pending`
+       * (`routes/documents.ts`); a parse worker reads the bytes and is the
+       * only writer of that state. So the toast could call a document
+       * unreadable while the list beside it correctly said *"Still being
+       * read"* — and while the server then read it perfectly well. Task 24
+       * reconciled `DocumentNotices` and the row icon with "still being read
+       * is not unreadable"; this was the one place in the add path left
+       * saying the opposite.
+       *
+       * A browser-side parse failure is not thrown away, it is just not this
+       * sentence's to report: the server reaches its own verdict on the same
+       * bytes, and `DocumentNotices` says so per document, by name, once it
+       * has. What the toast can honestly say is that the files are stored
+       * and are being read.
+       */
+      notify(parsed.length === 1
+        ? 'Document added. Its text is being read — the list says when it is ready.'
+        : `${parsed.length} documents added. Their text is being read — the list says when they `
+          + 'are ready.');
     } catch (e) {
       notify(e instanceof Error ? e.message : 'Could not add the document(s).', 'error');
     }

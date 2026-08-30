@@ -164,6 +164,34 @@ describe('bytes are read only for a document that needs images', () => {
     expect(hydrated.parseError).toBe('the file is encrypted');
     expect(reads).toBe(0);
   });
+
+  it('refuses a FAILED document whose parse_error is empty, rather than reviewing no text', async () => {
+    /*
+     * FINAL REVIEW m3. This branched on the MESSAGE alone, so a row with
+     * `parse_state = 'failed'` and no `parse_error` fell through the whole
+     * function — the sparse-pages check is skipped for anything that is not
+     * a PDF — and came back with `text: ''` and NO `parseError` at all.
+     * `extractClause` then answers *"the agreement is silent on this point"*
+     * for every clause of a document nothing could read, which is this
+     * project's founding defect.
+     *
+     * Not reachable through today's callers (`parseWorker.fail` always
+     * writes a message, `refuseUnparsedDocuments` blocks a `failed` document
+     * at run creation), which is exactly why the guard belongs in the module
+     * that presents itself as the last line rather than in the two callers
+     * that happen to make it unnecessary.
+     */
+    let reads = 0;
+    const hydrated = await documentFileForReview(
+      record({ kind: 'txt', name: 'notes.txt', text: '', parseState: 'failed' }),
+      async () => { reads += 1; return Buffer.from(SCAN); },
+      'text/plain', { ...CACHE_DEPS, cache: makePageImageCache(50_000_000) });
+    expect(hydrated.parseError, 'a failed document came back as one that says nothing')
+      .toBeTruthy();
+    expect(hydrated.parseError).toMatch(/could not be read/i);
+    expect(hydrated.parseError).toContain('notes.txt');
+    expect(reads).toBe(0);
+  });
 });
 
 describe('the page-image cache, and the promise it keeps', () => {

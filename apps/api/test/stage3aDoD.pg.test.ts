@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { appDb, migratorDb, workerDb, withPg } from './helpers/pgHarness.ts';
 import type { Db, Tx } from '../src/db/pool.ts';
-import { importFindings } from '../src/findings/import.ts';
+import { seedFindingRows } from './helpers/seedFindings.ts';
 import { describeDiscrepancies, reconcileFindings } from '../src/findings/reconcile.ts';
 
 /**
@@ -189,7 +189,14 @@ async function withACommittedReview(
       // to move an exported review — and it is the honest fixture for a
       // review that carries a blob AND rows, which is the pre-freeze shape
       // this sweep is about.
-      await importFindings(t, REVIEW, WS, TARGET as never, bodyFor(me, other));
+      //
+      // TWO PEOPLE, THEREFORE TWO IMPORTS. `importFindings` records the
+      // signed-in person's own judgements and nobody else's, so a review
+      // carrying a partner's verification AND a trainee's is a thing the
+      // product can only produce as two signed-in imports.
+      // `seedFindingRows` does that partition; it THROWS on a cell that
+      // names two people, which no request could ever produce.
+      await seedFindingRows(t, REVIEW, WS, TARGET, bodyFor(me, other), me);
     });
     await body({ me, other });
   } finally {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { withPg } from './helpers/pgHarness.ts';
+import { migratorDb, withPg } from './helpers/pgHarness.ts';
 import {
   WS, MODEL, aDocument, aMatter, aModelChoice, aReview, aRun, aUser, assertStatesAgree,
   fakeGateway, workerDeps,
@@ -135,6 +135,10 @@ describe('the lease', () => {
      * transaction, so a missing row means something upstream is already
      * wrong - which is the case for refusing rather than proceeding.
      */
+    // ON THE MIGRATOR CONNECTION. Migration 011 took `delete on finding` away
+    // from `lexprompt_app`, and this fixture has to CONSTRUCT the missing
+    // row — the state `createRun` cannot produce and the lease has to refuse.
+    // The refusal under test is the worker's own, not a grant's.
     await withPg(async t => {
       await seedOneCell(t, 'nofinding');
       await t.query(
@@ -157,7 +161,7 @@ describe('the lease', () => {
       // heartbeat and no claimable cell.
       expect((await run(t, 'w-run-nofinding')).state).toBe('succeeded');
       await assertStatesAgree(t);
-    });
+    }, migratorDb());
   });
 });
 

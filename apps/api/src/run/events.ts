@@ -135,7 +135,45 @@ export async function readEvents(db: Db, opts: ReadEventsOptions): Promise<RunEv
   // nothing it could be missing. Anything else has to be provably
   // continuous with what survives.
   if (opts.after > 0 && (oldest === null || opts.after < oldest - 1)) {
-    return { events: [], nextCursor: opts.after, hasMore: false, resyncRequired: true };
+    /*
+     * THE CURSOR MOVES TO THE WATERMARK, AND THAT IS THE WHOLE FIX.
+     *
+     * It used to come back as `opts.after`, unchanged, on the argument that
+     * a client whose cursor fell off the back of the buffer should not be
+     * handed a position it never reached. That argument produced a watch
+     * with NO EXIT. `oldest` is `min(id)` over `event` and only ever
+     * increases; the client's own loop advances its cursor from the events
+     * it applied and from `nextCursor`, and this branch returns neither —
+     * so a watch that entered this state re-entered it on every poll, for
+     * the life of the page. A `GET …/events` every second, `run.finished`
+     * NEVER DELIVERED, `finishRun` never called, the banner saying the
+     * review is still running for ever, and `completedAt` never written —
+     * so reopening the review showed `RunInterruptedBanner` for a run that
+     * had succeeded. A job that finished looking like a job still working,
+     * which is the inversion of this module's own rule.
+     *
+     * `oldest - 1` is the honest answer, and it is the same continuity test
+     * this branch is written from, one step later: everything at or above
+     * `oldest` survives, so a cursor of `oldest - 1` is provably continuous
+     * with the whole of what is left. The client is told `resyncRequired`
+     * in the same breath, so it re-reads the state the lost events
+     * described rather than pretending it saw them.
+     *
+     * `oldest === null` — the `event` table is empty, everything ever
+     * written has been pruned — cannot advance to anything, so the cursor
+     * stays put. That is not a loop with no exit for the same reason: the
+     * next event written anywhere gets an id above the cursor, this branch
+     * fires once more, and the cursor moves to it. What that client has
+     * genuinely lost is a `run.finished` that was pruned before it read it,
+     * which no cursor can recover — `onResync` is why the browser re-reads
+     * the RUN as well as its findings.
+     */
+    return {
+      events: [],
+      nextCursor: oldest === null ? opts.after : oldest - 1,
+      hasMore: false,
+      resyncRequired: true,
+    };
   }
 
   // limit + 1, so `hasMore` is a fact rather than a guess. A page that

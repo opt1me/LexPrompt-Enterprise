@@ -179,16 +179,73 @@ describe('a polling error does not silently stop the poll', () => {
     stop();
   });
 
-  it('tells the caller to resync when the cursor fell outside the window', async () => {
-    // Nothing is fabricated to fill the gap: the caller re-reads the
-    // findings map, which is the state those events described.
+  it('tells the caller to resync, ADVANCES PAST THE GAP, and still ends on run.finished', async () => {
+    /*
+     * THIS TEST COULD NOT FAIL, and the thing it could not see had shipped
+     * (Stage 3 final review, M2).
+     *
+     * Its fixture was `page([event(9, 'finding.done')], { resyncRequired:
+     * true })` — a resync page CARRYING AN EVENT, which the server never
+     * produces: that branch returns `events: []` always. The fixture's
+     * `nextCursor` was therefore 9, from the event, and the loop terminated
+     * for a reason no real response would have supplied. The only thing
+     * asserted was `resynced === 1`, so the two mutations that mattered —
+     * returning the resync branch on EVERY poll, and deleting the cursor
+     * advance from `watchRun` — were both invisible to it. Meanwhile the
+     * real pair had no exit at all: the server returned the cursor
+     * unchanged, the client advanced from nothing, and the watch re-entered
+     * the same state every second for the life of the page, never
+     * delivering `run.finished`.
+     *
+     * The fixture is now the shape the server really sends: NO events, and
+     * a `nextCursor` at the watermark. So the only thing that can move this
+     * loop on is the cursor the server handed back, which is the property
+     * under test.
+     */
+    let resynced = 0;
+    const seen: number[] = [];
+    const errors: unknown[] = [];
+    transport.responses.set('/v1/runs/run-1/events?after=0',
+      page([], { nextCursor: 8, resyncRequired: true }));
+    transport.responses.set('/v1/runs/run-1/events?after=8',
+      page([event(9, 'run.finished')]));
+    const stop = watchRun('run-1', e => seen.push(e.id), e => errors.push(e),
+      { onResync: () => { resynced += 1; } });
+
+    await tick(0);
+    expect(resynced).toBe(1);
+    // Nothing is fabricated to fill the gap — the caller re-reads the state
+    // those events described — and no event is invented from the empty page.
+    expect(seen).toEqual([]);
+
+    await tick();
+    // THE EXIT. The watch polled from the cursor the resync page gave it,
+    // received the run's ending, and stopped.
+    expect(seen, 'the watch never advanced past the resync').toEqual([9]);
+    expect(resynced, 'the watch resynced again instead of moving on').toBe(1);
+
+    // …and it really did stop: a further poll would ask `?after=9`, which is
+    // not registered and rejects, and three rejections call `onError`.
+    await tick(5_000);
+    expect(errors).toHaveLength(0);
+    expect(seen).toEqual([9]);
+    stop();
+  });
+
+  it('does not spin when the whole event table is gone and the cursor cannot move', async () => {
+    // The one case the server cannot hand a usable cursor for: `min(id)` is
+    // null because everything ever written has been pruned, so `nextCursor`
+    // comes back unchanged. The client must not INVENT progress — it stays
+    // where it is and keeps saying so, which is what sends the caller to
+    // re-read the run rather than wait for an event that no longer exists.
     let resynced = 0;
     transport.responses.set('/v1/runs/run-1/events?after=0',
-      page([event(9, 'finding.done')], { resyncRequired: true }));
-    transport.responses.set('/v1/runs/run-1/events?after=9', page([]));
+      page([], { nextCursor: 0, resyncRequired: true }));
     const stop = watchRun('run-1', () => {}, () => {}, { onResync: () => { resynced += 1; } });
     await tick(0);
     expect(resynced).toBe(1);
+    await tick();
+    expect(resynced, 'the watch went quiet while still stuck outside the window').toBe(2);
     stop();
   });
 });
@@ -206,6 +263,31 @@ describe('a run has a terminal state that is neither an error nor a success', ()
     // A partial run must never read as a complete one.
     expect(cancelled.message).toContain('12 of 40');
     expect(failed.message).toContain('the worker stopped answering');
+  });
+
+  it('does NOT tell the reader a REAPED run reviewed every clause', () => {
+    /*
+     * FINAL REVIEW M3, and it is this project's founding defect in one
+     * sentence: a partial run reading as a complete one.
+     *
+     * The reaper's `failRunCells` moves every remaining `queued` and
+     * `leased` cell to `error`, so a reaped run's counts always satisfy
+     * `done + error === total`. The count was `done + error`, so a run that
+     * died after three of forty clauses said *"40 of 40 clauses were
+     * reviewed"* — with thirty-seven never attempted.
+     *
+     * The shape below is a REAPED run's, which is what the old test's
+     * hand-built `{ done: 12, error: 0, cancelled: 28 }` could never be:
+     * a reaped run has no cancelled cells at all.
+     */
+    const reaped = { total: 40, queued: 0, leased: 0, done: 3, error: 37, cancelled: 0 };
+    const message = describeRunEnding({
+      state: 'failed',
+      error: 'This run stopped without finishing. No worker has reported on it since 09:12.',
+      cells: reaped,
+    })!.message;
+    expect(message, 'a reaped run reported every clause as reviewed').toContain('3 of 40');
+    expect(message).not.toContain('40 of 40');
   });
 
   it('says nothing about the ending of a run that succeeded', () => {

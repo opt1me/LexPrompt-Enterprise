@@ -1,0 +1,76 @@
+-- 011: the two grants on `finding` that nothing uses are TAKEN AWAY.
+--
+-- Stage 3 final review M4. Both were granted for a caller that no longer
+-- exists, both were verified against the running database, and both were
+-- verified by exhaustive grep to be reachable from no code path at all.
+--
+--
+-- ## `delete on finding` from `lexprompt_app` — the one that matters
+--
+-- 005 granted it and scheduled its own removal in the same breath:
+--
+--   DELETE on `finding` for the app role, which the reference for this file
+--   did not grant: Task 7's shadow writer must delete the rows for a key the
+--   re-saved review no longer carries … It cascades to that finding's
+--   disposition and its history, which is acceptable only because the BLOB
+--   is authoritative for the whole of Part 3A … **Revisit when Task 14 flips
+--   the reader.**
+--
+-- Task 14 flipped the reader inside Stage 3 and Task 22 deleted
+-- `writeFindingRows`, the only caller the grant existed for. The blob is no
+-- longer authoritative — 010 froze it as a backup — so the sentence that
+-- made the cascade acceptable is no longer true, and the revisit is this
+-- file.
+--
+-- `finding_disposition` and `finding_disposition_event` are both `on delete
+-- cascade` from `finding` (006), so a single `delete from finding …` would
+-- destroy a lawyer's judgement AND the append-only evidence 006 goes to
+-- considerable trouble to make unwritable — no UPDATE for anybody, no
+-- DELETE for anybody, one writer, both rows or neither. 006 makes the
+-- argument for why an absent grant is not enough in the first place:
+--
+--   a future `grant all on all tables` is exactly the kind of convenience
+--   that would silently undo it
+--
+-- That argument applies here word for word and had not been acted on.
+--
+--
+-- ## What this does NOT break: `DELETE /v1/reviews/:id`
+--
+-- Deleting a review still removes its findings, dispositions, history and
+-- notes. Postgres runs a referential action with the privileges of the
+-- CONSTRAINT's owner, not of the current user, so `on delete cascade` needs
+-- no DELETE grant on the referencing table. That is asserted rather than
+-- believed: `workerGrants.pg.test.ts` deletes a review as the APP ROLE and
+-- checks the finding, the disposition, its events and the note are all gone,
+-- in the same file that checks the direct statement is refused. Two
+-- assertions, because a revoke that broke review deletion would be a worse
+-- defect than the one it closed.
+--
+--
+-- ## `insert on finding` from `lexprompt_worker` — the mirror case
+--
+-- 005 granted it alongside the SELECT and UPDATE the worker really uses.
+-- The worker never inserts: `leaseCell` REFUSES a cell whose finding row is
+-- missing (`worker.ts`), closes the cell with a sentence and settles the
+-- run, because a missing row is a symptom of something already wrong
+-- upstream. The three places that insert a `finding` are `run/queue.ts`
+-- (createRun, app role), `findings/import.ts` (app role) and
+-- `findings/backfill.ts` (migrator). So this grant is reachable by nothing
+-- and its only effect is to widen what a compromised worker could write:
+-- rows in a table whose whole point is that a person's judgement hangs off
+-- them. A grant nothing uses is not free — it is the surface the next
+-- mistake lands on.
+--
+--
+-- ## What is deliberately LEFT
+--
+-- `delete on note` for the app role. 005 states it as design — *"a remark is
+-- not edited in place, it is added or withdrawn"* — and a withdrawal is a
+-- DELETE. Nothing calls it today either, but unlike the two above it is a
+-- verb the model has a name for and no cascade hangs off it: deleting a note
+-- destroys the note and nothing else. It is left, and named here, so that a
+-- later reader can see it was considered rather than missed.
+
+revoke delete on finding from lexprompt_app;
+revoke insert on finding from lexprompt_worker;

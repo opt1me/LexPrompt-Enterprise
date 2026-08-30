@@ -231,9 +231,36 @@ describe('retention, and the honest answer past it', () => {
       });
       expect(page.resyncRequired).toBe(true);
       expect(page.events).toEqual([]);
-      // …and the cursor is UNCHANGED, so a client that ignores the flag does
-      // not silently advance past the gap.
-      expect(page.nextCursor).toBe(Number(oldest) - 5);
+      /*
+       * THIS ASSERTION CHANGED DIRECTION (Stage 3 final review, M2).
+       *
+       * It used to require the cursor to come back UNCHANGED, *"so a client
+       * that ignores the flag does not silently advance past the gap"*. The
+       * client does not ignore the flag — and with the cursor standing
+       * still, and `oldest` only ever increasing, a watch that entered this
+       * state re-entered it on every poll for ever: a poll a second,
+       * `run.finished` never delivered, the banner saying the review is
+       * still running for the life of the page, and `completedAt` never
+       * written.
+       *
+       * The cursor moves to the WATERMARK — one below the oldest surviving
+       * event — which is the same continuity test this branch is written
+       * from: everything at or above `oldest` survives, so `oldest - 1` is
+       * provably continuous with the whole of what is left. The gap is not
+       * skipped silently; it is skipped with `resyncRequired` set in the
+       * same page, which is what sends the client to re-read the state
+       * those events described.
+       */
+      expect(page.nextCursor).toBe(Number(oldest) - 1);
+
+      // …and the NEXT poll, from that cursor, is an ordinary page: it
+      // delivers the surviving events and does not ask for a resync again.
+      const next = await readEvents(dbOn(t), {
+        workspaceId: WS, runId: 'ev-retain', after: page.nextCursor, limit: 10,
+      });
+      expect('resyncRequired' in next).toBe(false);
+      expect(next.events).toHaveLength(1);
+      expect(next.nextCursor).toBeGreaterThan(page.nextCursor);
     });
 
     async function seed(t: Tx): Promise<void> {

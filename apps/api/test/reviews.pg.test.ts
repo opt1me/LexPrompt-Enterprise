@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { migratorDb, withPg, dbOn } from './helpers/pgHarness.ts';
-import { importFindings as seedFindingRows } from '../src/findings/import.ts';
+import { seedFindingRows } from './helpers/seedFindings.ts';
 import { buildTestApi } from './helpers/apiHarness.ts';
 import type { Tx } from '../src/db/pool.ts';
 import type { Review } from '../src/db/rows.ts';
@@ -218,7 +218,7 @@ describe('a review round-trips through Postgres unchanged', () => {
       const first = await h.put('/v1/reviews/r1', REVIEW());
       await seedFindingRows(t, 'r1', WS, DOCS_TARGET, { d1: { c1: finding({
         verification: { state: 'verified', byUserId: HUMAN, at: 1_700_000_030_000 },
-      }) } });
+      }) } }, HUMAN);
 
       const res = await h.raw('PUT', '/v1/reviews/r1',
         { ...REVIEW(), version: first.version, findings: { d1: { c1: finding() } } });
@@ -254,12 +254,22 @@ describe('a review round-trips through Postgres unchanged', () => {
      * ignoring them would drop the judgements without saying so, which is the
      * failure this project's own list opens with. So they are WRITTEN, as
      * rows, and the frozen column stays empty.
+     *
+     * THIS TEST CHANGED DIRECTION (Stage 3 final review, C1). It used to
+     * sign in as a freshly-minted random user and assert that the imported
+     * verification came back attributed to HUMAN — a DIFFERENT real
+     * `app_user`, named only by the request body. That is the forgery: it
+     * enshrined a signed-in user's ability to write a colleague's name onto
+     * a judgement. The import now records the actor's own judgements and
+     * nobody else's, so the actor here IS the human whose judgements these
+     * are, and the case that used to pass is the refusal below.
      */
     await withPg(async t => {
       await aMatter(t);
       await aVersion(t);
       await aDocument(t, 'd1');
-      const h = harness(t, await aUser(t));
+      // Signed in AS the person whose judgements are being moved.
+      const h = harness(t, HUMAN);
       const res = await h.raw('PUT', '/v1/reviews/r1', {
         ...REVIEW(),
         findings: { d1: { c1: finding({
@@ -272,7 +282,9 @@ describe('a review round-trips through Postgres unchanged', () => {
       expect(res.statusCode, res.body).toBe(200);
 
       // Read back from the ROWS, which is where a judgement lives — and with
-      // the human's OWN instant, not the moment of the upload.
+      // the human's OWN instant, not the moment of the upload. The INSTANT is
+      // still the body's and the NAME is the token's: a person may restate
+      // when they themselves decided, and may not state who decided.
       const back = (await h.get('/v1/reviews/r1/findings')).findings as
         Record<string, Record<string, {
           verification: { state: string; reason: string; byUserId: string; at: number };
@@ -296,6 +308,119 @@ describe('a review round-trips through Postgres unchanged', () => {
       const blob = await t.query<{ f: string }>(
         "select findings::text f from review where id = 'r1'");
       expect(blob[0].f).toBe('{}');
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES an import that attributes a verification to anybody but the actor', async () => {
+    /*
+     * THE WORST DEFECT THIS APPLICATION CAN HAVE, and it shipped: a signed-in
+     * user could forge a colleague's verification.
+     *
+     * `GET /v1/reviews/:id/findings` returns each verification's `byUserId`,
+     * so any reviewer can learn a colleague's `app_user` uuid from any review
+     * they can see. `PUT /v1/reviews/<a fresh id>` with a findings map whose
+     * verifications carry that uuid then wrote `finding_disposition` with
+     * `by_user_id = <colleague>`, `at = <whatever they chose>` and a
+     * `finding_disposition_event` with `cause = 'human'`. Every screen, every
+     * DOCX and CSV export, and `positionHealth` treat that as the colleague's
+     * genuine judgement — a document asserting a named lawyer checked
+     * wording they never saw. The whole event history exists to make
+     * attribution evidence; it is worth nothing if the current row can be
+     * written with an arbitrary name.
+     *
+     * `byUserId` is exactly the field `parseDisposition` refuses by name on
+     * the sibling route. This is the same rule on the only other path that
+     * can write a disposition from a request.
+     */
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      // The attacker: an ordinary signed-in reviewer, not the person named.
+      const attacker = await aUser(t);
+      const h = harness(t, attacker);
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'rejected', reason: 'The cap is in the sixth schedule.',
+            byUserId: HUMAN, at: 1_700_000_040_000 },
+          notes: [],
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error.message).toMatch(/is not the person signed in/i);
+      expect(res.json().error.message).toContain(HUMAN);
+      expect(res.json().error.message).toMatch(/Nothing has been saved/i);
+
+      // NOTHING WAS WRITTEN — not the disposition, not its history, and not
+      // the review either. The check runs before the first insert and the
+      // route's transaction rolls back around it.
+      expect(await t.query("select 1 from finding_disposition where review_id = 'r1'"))
+        .toHaveLength(0);
+      expect(await t.query("select 1 from finding_disposition_event where review_id = 'r1'"))
+        .toHaveLength(0);
+      expect(await t.query("select 1 from finding where review_id = 'r1'")).toHaveLength(0);
+      expect(await t.query("select 1 from review where id = 'r1'")).toHaveLength(0);
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES an imported NOTE attributed to anybody but the actor', async () => {
+    // A note is a person's remark and carries a name into the same export.
+    // Checked separately because it is a second write with a second
+    // `by_user_id`, and one guard covering only the verification would leave
+    // a colleague's name on a remark they never wrote.
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      const attacker = await aUser(t);
+      const h = harness(t, attacker);
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'unchecked' },
+          notes: [{ id: 'n1', findingId: 'd1::c1', text: 'Agreed with the partner.',
+            byUserId: HUMAN, at: 1_700_000_041_000 }],
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error.message).toMatch(/the note "n1" at d1\/c1/i);
+      expect(res.json().error.message).toMatch(/is not the person signed in/i);
+      expect(await t.query("select 1 from note where review_id = 'r1'")).toHaveLength(0);
+      expect(await t.query("select 1 from review where id = 'r1'")).toHaveLength(0);
+      await h.app.close();
+    });
+  });
+
+  it('refuses a byUserId that is not a uuid BY NAME, not with a Postgres error', async () => {
+    /*
+     * Final review m4. `upload/attribution.ts` rule 3 deliberately leaves a
+     * browser-local `uid()` in place when it cannot map it, so this is the
+     * shape a real upload produces. It used to reach `setDisposition`'s
+     * `uuid` cast and fail with *"invalid input syntax for type uuid"* — a
+     * Postgres error in front of a lawyer, from a module whose whole posture
+     * is refusing by name.
+     *
+     * It is now refused by the same check as any other foreign author, which
+     * is the honest reading: a local id is not the person signed in.
+     */
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      const h = harness(t, await aUser(t));
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'verified', byUserId: 'k3f9x2', at: 1_700_000_040_000 },
+          notes: [],
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error.message).toMatch(/is not the person signed in/i);
+      expect(res.json().error.message).not.toMatch(/invalid input syntax/i);
       await h.app.close();
     });
   });
@@ -457,7 +582,7 @@ describe('a save that would lose somebody else s work is refused', () => {
         d1: { c1: finding({
           verification: { state: 'verified', byUserId: HUMAN, at: 1_700_000_009_000 },
         }) },
-      });
+      }, HUMAN);
 
       // Somebody else writes the record — another tab recording that the
       // run finished. The version moves.
@@ -649,7 +774,7 @@ describe('a review may only name documents in its own matter', () => {
         d1: { c1: finding({ verification: {
           state: 'flagged', byUserId: HUMAN, at: 1_700_000_099_000,
         } }) },
-      });
+      }, HUMAN);
 
       // The delete the reviewer actually performs — the row goes, the review
       // is not touched.

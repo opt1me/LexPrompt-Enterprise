@@ -274,11 +274,15 @@ describe('a note belongs to a finding and names a real person', () => {
   });
 
   it('deletes a note with the finding it is about', async () => {
+    // ON THE MIGRATOR CONNECTION. Migration 011 took `delete on finding` away
+    // from `lexprompt_app`, so no application role can produce this state any
+    // more. What is under test is the CASCADE the schema declares, which is
+    // unchanged; only who may trigger it is.
     await withPg(async t => {
       await aFinding(t);
       await insertNote(t, { by: await aUser(t) });
       await t.query("delete from finding where review_id = 'fr1'");
       expect(await t.query("select 1 from note where id = 'n1'")).toEqual([]);
-    });
+    }, migratorDb());
   });
 });

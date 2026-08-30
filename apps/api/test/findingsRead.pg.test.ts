@@ -4,7 +4,7 @@ import { withPg, dbOn } from './helpers/pgHarness.ts';
 import { buildTestApi } from './helpers/apiHarness.ts';
 import type { Tx } from '../src/db/pool.ts';
 import { reconcileFindings, describeDiscrepancies } from '../src/findings/reconcile.ts';
-import { importFindings as seedFindingRows } from '../src/findings/import.ts';
+import { seedFindingRows } from './helpers/seedFindings.ts';
 
 /**
  * TASK 14: FINDINGS ARE READ FROM ROWS.
@@ -104,7 +104,7 @@ async function aReviewWith(
 ): Promise<any> {
   const review = REVIEW(over);
   const saved = await h.put('/v1/reviews/r1', review);
-  await seedFindingRows(t, 'r1', WS, review.target as never, blob);
+  await seedFindingRows(t, 'r1', WS, review.target, blob, HUMAN);
   return saved;
 }
 
@@ -386,7 +386,7 @@ describe('the review record itself no longer carries the blob to a reader', () =
          values ('r1', $1, 'm1', $2::jsonb, '["d1"]'::jsonb, $3::jsonb, $4::jsonb,
                  'test/model', now())`,
         [WS, JSON.stringify(SNAPSHOT), JSON.stringify(DOCS_TARGET), JSON.stringify(blob)]);
-      await seedFindingRows(t, 'r1', WS, DOCS_TARGET, blob);
+      await seedFindingRows(t, 'r1', WS, DOCS_TARGET, blob, HUMAN);
 
       const stored = (await t.query<{ findings: unknown }>(
         "select findings from review where id = 'r1'"))[0].findings as
@@ -429,7 +429,7 @@ describe('a stale whole-review save can no longer destroy an authoritative row',
         d1: { c1: finding() },
         d2: { c1: finding({ verification: { state: 'verified', byUserId: HUMAN,
           at: 1_700_000_030_000 } }) },
-      });
+      }, HUMAN);
       expect(await t.query('select 1 from finding')).toHaveLength(2);
 
       // The stale save: the same review again, saying nothing about findings
@@ -467,7 +467,7 @@ describe('a stale whole-review save can no longer destroy an authoritative row',
       const first = await h.put('/v1/reviews/r1', REVIEW());
       await seedFindingRows(t, 'r1', WS, DOCS_TARGET, { d1: { c1: finding({
         verification: { state: 'verified', byUserId: HUMAN, at: 1_700_000_030_000 },
-      }) } });
+      }) } }, HUMAN);
 
       const res = await h.raw('PUT', '/v1/reviews/r1', {
         ...REVIEW(),

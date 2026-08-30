@@ -901,6 +901,29 @@ export async function releaseOwnOrphanedLeases(deps: RunWorkerDeps): Promise<num
   return rows.length;
 }
 
+/**
+ * Every run this pool is honestly working on, for the heartbeat above.
+ *
+ * EXPORTED SO IT CAN BE TESTED. The ticker that calls it lives inside
+ * `startWorkerPool` behind a `setInterval` and an `unref`, which is not a
+ * thing a suite can hold still; the mistake this function exists to correct
+ * was invisible for exactly that reason. `runLifecycle.pg.test.ts` drives it
+ * directly, and runs the same two statements the ticker runs.
+ */
+export async function runsThisPoolIsWorkingOn(
+  deps: Pick<RunWorkerDeps, 'db' | 'caps' | 'workerId'>,
+): Promise<string[]> {
+  const rows = await deps.db.query<{ run_id: string }>(
+    `select distinct c.run_id
+       from run_cell c join run r on r.id = c.run_id
+      where (c.state = 'leased' and c.leased_by like $1 and c.lease_expires_at > now())
+         or (r.state = 'running' and c.attempts < $2
+             and (c.state = 'queued'
+                  or (c.state = 'leased' and c.lease_expires_at < now())))`,
+    [`${deps.workerId}#%`, deps.caps.runAttemptsMax]);
+  return rows.map(r => r.run_id);
+}
+
 export function startWorkerPool(deps: RunWorkerDeps): WorkerHandle {
   let running = true;
   const active = new Set<string>();
@@ -934,17 +957,70 @@ export function startWorkerPool(deps: RunWorkerDeps): WorkerHandle {
     }
   };
 
-  // The active-run set, kept by a cheap query rather than by the loops
-  // themselves — a loop that threw between claiming and releasing would
-  // otherwise leave a run in the set forever, and a heartbeat that outlives
-  // its worker is exactly the lie the reaper exists to catch.
+  /*
+   * The active-run set, kept by a cheap query rather than by the loops
+   * themselves — a loop that threw between claiming and releasing would
+   * otherwise leave a run in the set forever, and a heartbeat that outlives
+   * its worker is exactly the lie the reaper exists to catch.
+   *
+   * ## WHY IT IS NOT ONLY "CELLS THIS PROCESS HAS LEASED"
+   *
+   * It was, and that reaped healthy runs. `heartbeat_at` advances in exactly
+   * two places — `leaseCell` and this ticker — so a run in state `running`
+   * with NO cell leased by this process stopped beating altogether, and
+   * `reapDeadRuns` marks such a run `failed` after three missed intervals
+   * with no check that anybody was ever supposed to be working on it.
+   *
+   * A run reaches that state without anything being wrong. CLAIM orders
+   * `by c.run_id, c.findings_key, c.clause_id … limit 1`, so with two live
+   * runs in one workspace every slot deterministically takes from the
+   * lexicographically-lower `run_id`. The other run — already promoted to
+   * `running` by an earlier claim — holds only `queued` cells, leases
+   * nothing, and is `failed` 45 s later (defaults: 15 000 ms × 3), with
+   * `failRunCells` writing every unstarted clause as `error` carrying *"This
+   * run stopped without finishing"*. Nothing stopped. The reviewer is told
+   * their review died, thirty-seven clauses carry a false cause, and
+   * restarting costs every model call again.
+   *
+   * `config.ts`'s `assertBackoffOutlivedByHeartbeat` already diagnoses this
+   * exact mechanism — *"the run's `heartbeat_at` FREEZES"* when it has no
+   * cell leased by this process — for the retry-backoff case, and bounds it
+   * with a config check. Starvation has the same root cause, is unbounded in
+   * duration, and no config bound can reach it.
+   *
+   * ## What a live pool may honestly assert
+   *
+   * CLAIM is global: it is not scoped to a workspace, a provider or a run,
+   * so ANY live worker process eventually reaches ANY claimable cell in the
+   * database. A pool beating for a run it has a claimable cell in therefore
+   * says something true — *a worker is alive and this run is in its queue* —
+   * which is exactly what `heartbeat_at` means and exactly what the reaper
+   * is asking. Kill the process and both halves stop together, so a
+   * genuinely dead run is still reaped on the same schedule.
+   *
+   * The second half mirrors CLAIM's claimability predicate rather than
+   * approximating it: `attempts < max`, because a spent cell belongs to
+   * `exhaustSpentCells` and not to this pool, and an expired lease counts
+   * because this pool will re-claim it.
+   *
+   * ## The two states deliberately NOT in it
+   *
+   *  - **`queued`.** A run nobody has started has no heartbeat, is not
+   *    reaped (see `reaper.ts`: a busy queue is not a broken one), and is
+   *    REPORTED by `stalledQueuedRuns` — whose predicate is `heartbeat_at is
+   *    null`. Beating for a queued run would silence that report, which is
+   *    the only thing that names a run stuck behind `run_one_live_per_review`.
+   *  - **`cancelling`.** `POST /v1/runs/:id/cancel` cancels every pending
+   *    cell in the same transaction that sets the state, so a cancelling
+   *    run's only outstanding cells are LEASED ones — covered by the first
+   *    half — and CLAIM refuses it anyway (`cancel_requested_at is null`).
+   *    Beating for a run this pool will never claim from would be the same
+   *    lie in the other direction.
+   */
   const track = setInterval(() => {
-    void deps.db.query<{ run_id: string }>(
-      "select distinct run_id from run_cell where state = 'leased' and leased_by like $1 "
-      + 'and lease_expires_at > now()', [`${deps.workerId}#%`],
-    ).then(rows => {
+    void runsThisPoolIsWorkingOn(deps).then(ids => {
       active.clear();
-      for (const row of rows) active.add(row.run_id);
+      for (const id of ids) active.add(id);
     }).catch(() => { /* the heartbeat's own failure is already reported */ });
   }, Math.max(1000, Math.floor(deps.caps.runHeartbeatMs / 2)));
   track.unref?.();

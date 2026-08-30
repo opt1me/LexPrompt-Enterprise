@@ -80,11 +80,32 @@ export function describeLoadError(e: unknown, fallback: string): string {
  * The COUNTS travel with it because a partial run must never read as a
  * complete one — "12 of 40" is a fact the reader is entitled to, and a
  * `state` alone cannot carry it.
+ *
+ * ## WHY THE COUNT IS `done` ALONE
+ *
+ * It was `done + error`, and that made the sentence say the opposite of what
+ * the paragraph above promises. The reaper's `failRunCells` moves EVERY
+ * remaining `queued` and `leased` cell to `error`, so for any reaped run
+ * `done + error === total` — and a run that died after three of forty
+ * clauses told the reader *"40 of 40 clauses were reviewed"*, in the one
+ * branch the count was written for. Thirty-seven of those were never
+ * attempted, and their own cards say so.
+ *
+ * `done` is the number of clauses that produced an answer. A cell in `error`
+ * was not reviewed: either it was never started (the reaper wrote the state
+ * and the cause) or it was tried and produced no finding a reader can act on
+ * beyond the error itself. Counting it as reviewed is the same collapse in
+ * miniature that this whole function exists to prevent.
+ *
+ * The `cancelled` branch takes the same count for the same reason, though it
+ * was already honest by accident: a cancel moves pending cells to
+ * `cancelled`, not `error`, so `error` there is only ever a cell that really
+ * failed mid-run — which is still not a clause that was reviewed.
  */
 export function describeRunEnding(
   run: Pick<RunView, 'state' | 'error' | 'cells'>,
 ): { message: string; tone: 'error' | 'info' } | null {
-  const done = run.cells.done + run.cells.error;
+  const done = run.cells.done;
   const of = `${done} of ${run.cells.total} ${run.cells.total === 1 ? 'clause' : 'clauses'}`;
   if (run.state === 'cancelled') {
     return {

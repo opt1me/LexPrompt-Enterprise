@@ -79,13 +79,15 @@ describe('the run worker can write what a model produced', () => {
     });
   });
 
-  it('lets the worker role insert a finding', async () => {
-    await withSeed('ins', async () => {
-      await expect(workerDb().query(
-        `insert into finding (review_id, findings_key, clause_id, workspace_id, status)
-         values ('wg-r-ins', 'd1', 'c2', $1, 'running')`, [WS])).resolves.toBeDefined();
-    });
-  });
+  /*
+   * `lets the worker role insert a finding` STOOD HERE, and it changed
+   * direction (Stage 3 final review M4, migration 011). The worker never
+   * inserts one — `leaseCell` refuses a cell whose finding row is missing
+   * rather than creating it — so the grant was reachable from nowhere and
+   * this test pinned it in place. The refusal that replaced it is
+   * `refuses the worker role an INSERT of a finding, which nothing ever
+   * issued`, below, paired with the app role still succeeding.
+   */
 
   it('lets the worker role read the review and the document it is working on', async () => {
     await withSeed('read', async () => {
@@ -220,10 +222,102 @@ describe('the run worker cannot write a person s remark', () => {
     });
   });
 
-  it('refuses the worker role a DELETE of a finding, which only the app role has', async () => {
+  it('refuses a DELETE of a finding to EVERY application role, not only the worker', async () => {
+    /*
+     * THIS TEST CHANGED DIRECTION (Stage 3 final review, M4, migration 011).
+     *
+     * It was *"refuses the worker role a DELETE of a finding, which only the
+     * app role has"*, and that closing clause pinned the hole in place as
+     * intended behaviour. `finding_disposition` and
+     * `finding_disposition_event` are both `on delete cascade` from
+     * `finding` (006), so `delete from finding …` destroys a lawyer's
+     * judgement AND the append-only history 006 goes to considerable trouble
+     * to make unwritable — and 005's own comment scheduled the grant's
+     * removal for *"when Task 14 flips the reader"*, which happened inside
+     * this stage. Nothing in the codebase ever issued the statement.
+     *
+     * Now NOBODY but the migrator may issue it, which is what makes the
+     * cascade unreachable rather than merely unused.
+     */
     await withSeed('finddel', async () => {
       await expect(workerDb().query("delete from finding where review_id = 'wg-r-finddel'"))
         .rejects.toThrow(/permission denied/i);
+      await withPg(async (t: Tx) => {
+        await expect(t.query("delete from finding where review_id = 'wg-r-finddel'"))
+          .rejects.toThrow(/permission denied/i);
+      }, appDb());
+      // …and the schema owner still can, so the refusals above are about the
+      // ROLE and not about a table or a column that is not there.
+      await expect(migratorDb().query(
+        "delete from finding where review_id = 'wg-r-finddel' and clause_id = 'nope'"))
+        .resolves.toBeDefined();
+    });
+  });
+
+  it('refuses the worker role an INSERT of a finding, which nothing ever issued', async () => {
+    // The mirror case, closed by the same migration. `leaseCell` REFUSES a
+    // cell whose finding row is missing rather than creating one, so this
+    // grant was reachable from nowhere; its only effect was to widen what a
+    // compromised worker could write into the table a person's judgement
+    // hangs off.
+    await withSeed('findins', async () => {
+      await expect(workerDb().query(
+        `insert into finding (review_id, findings_key, clause_id, workspace_id, status)
+         values ('wg-r-findins', 'd1', 'c2', $1, 'done')`, [WS]))
+        .rejects.toThrow(/permission denied/i);
+      // The app role still may: `createRun` and the import both do.
+      await withPg(async (t: Tx) => {
+        await expect(t.query(
+          `insert into finding (review_id, findings_key, clause_id, workspace_id, status)
+           values ('wg-r-findins', 'd1', 'c2', $1, 'done')`, [WS])).resolves.toBeDefined();
+      }, appDb());
+    });
+  });
+
+  it('STILL cascades a review delete to its finding, disposition, history and note', async () => {
+    /*
+     * THE HALF THAT WOULD BE WORSE THAN THE DEFECT. Revoking `delete on
+     * finding` must not break `DELETE /v1/reviews/:id`.
+     *
+     * It does not, and the reason is a property of Postgres rather than of
+     * this schema: a referential action runs with the privileges of the
+     * CONSTRAINT's owner, not of the current user, so `on delete cascade`
+     * needs no DELETE grant on the referencing table. That is asserted here
+     * rather than believed, as the APP ROLE, against real rows.
+     */
+    await withSeed('cascade', async ({ userId }) => {
+      const mig = migratorDb();
+      await mig.query(
+        `insert into finding_disposition
+           (review_id, findings_key, clause_id, workspace_id, state, reason, by_user_id, at,
+            changed_count)
+         values ('wg-r-cascade', 'd1', 'c1', $1, 'rejected', 'Wrong schedule.', $2, now(), 1)`,
+        [WS, userId]);
+      await mig.query(
+        `insert into finding_disposition_event
+           (review_id, findings_key, clause_id, workspace_id, from_state, to_state, reason,
+            cause, by_user_id, at)
+         values ('wg-r-cascade', 'd1', 'c1', $1, 'unchecked', 'rejected', 'Wrong schedule.',
+                 'human', $2, now())`, [WS, userId]);
+      await mig.query(
+        `insert into note (id, review_id, findings_key, clause_id, workspace_id, text,
+                           by_user_id, at)
+         values ('wg-n-cascade', 'wg-r-cascade', 'd1', 'c1', $1, 'A remark.', $2, now())`,
+        [WS, userId]);
+
+      // The delete a reviewer actually performs, as the role a request runs
+      // as — and it is NOT rolled back, because the cascade is the thing
+      // under test and `withSeed` cleans up after it either way.
+      await appDb().query("delete from review where id = 'wg-r-cascade'");
+
+      const gone = async (sql: string): Promise<number> =>
+        (await mig.query(sql)).length;
+      expect(await gone("select 1 from finding where review_id = 'wg-r-cascade'")).toBe(0);
+      expect(await gone(
+        "select 1 from finding_disposition where review_id = 'wg-r-cascade'")).toBe(0);
+      expect(await gone(
+        "select 1 from finding_disposition_event where review_id = 'wg-r-cascade'")).toBe(0);
+      expect(await gone("select 1 from note where review_id = 'wg-r-cascade'")).toBe(0);
     });
   });
 });

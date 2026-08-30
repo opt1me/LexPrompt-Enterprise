@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { appDb, workerDb, withPg } from './helpers/pgHarness.ts';
+import { appDb, migratorDb, workerDb, withPg } from './helpers/pgHarness.ts';
 import type { Db, Tx } from '../src/db/pool.ts';
 import {
   dispositionFor, ensureDisposition, setDisposition, type DispositionRow,
@@ -365,6 +365,11 @@ describe('the current state and its history cannot disagree', () => {
 
 describe('a disposition belongs to the finding it is about', () => {
   it('goes when the finding goes, rather than counting toward a clause nobody has', async () => {
+    // ON THE MIGRATOR CONNECTION. Migration 011 took `delete on finding` away
+    // from `lexprompt_app`, so no application role can produce this state any
+    // more — which is the point of the revoke, and makes the fixture the
+    // schema owner's to build. The CASCADE it exercises is unchanged; only
+    // who may trigger it is.
     await withPg(async t => {
       await aReviewWithFindings(t, ['c1']);
       const actor = { id: await aUser(t) };
@@ -375,13 +380,15 @@ describe('a disposition belongs to the finding it is about', () => {
       // THE HISTORY DOES NOT (migration 009). This assertion used to read
       // `.toEqual([])` for the event table too, and that was the defect: 006
       // calls this table evidence BECAUSE no application role may delete
-      // from it, and a cascade through `delete on finding` — which the app
-      // role holds — is a delete. The current disposition is the blob's
-      // mirror and goes with the finding; the record of who changed what,
-      // when, has no copy anywhere else and is not the shadow writer's to
-      // remove.
+      // from it, and a cascade through `delete on finding` is a delete. The
+      // current disposition is the blob's mirror and goes with the finding;
+      // the record of who changed what, when, has no copy anywhere else.
+      //
+      // Since migration 011 no application role holds `delete on finding`
+      // either, so the cascade is reachable only from the schema owner —
+      // which is why this test runs on the migrator connection.
       expect(await t.query('select 1 from finding_disposition_event')).toHaveLength(1);
-    });
+    }, migratorDb());
   });
 
   it('and goes when the REVIEW goes, so the evidence is retained rather than immortal', async () => {

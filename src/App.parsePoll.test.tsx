@@ -1,4 +1,6 @@
 import React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -247,5 +249,49 @@ describe('App — a document being read is followed until it is', () => {
     const afterClick = listDocumentsMock.mock.calls.length;
     await tick(1_100);
     expect(listDocumentsMock.mock.calls.length).toBeGreaterThan(afterClick);
+  });
+});
+
+/**
+ * THE ADD PATH SAYS NOTHING ABOUT READABILITY (final review m2).
+ *
+ * Task 24 reconciled `DocumentNotices` and the document row with "still
+ * being read is not unreadable"; `handleAddMatterDocuments` was the one
+ * place left saying the opposite. It counted `parsed.filter(d =>
+ * d.parseError)` — this BROWSER's parse of the bytes — and toasted *"Added,
+ * but could not be read"*. Since Task 9 the upload route DISCARDS the body's
+ * `text`, `parse_state` and `parse_error` and writes the row `pending`, so
+ * that toast could call a document unreadable while the list beside it
+ * correctly said "Still being read" and the server then read it fine.
+ *
+ * ASSERTED OVER THE SOURCE, and that is a deliberate second best. Reaching
+ * the toast needs a real `parseFiles` failure inside jsdom — a corrupt PDF
+ * through pdf.js — which is a heavier fixture than the claim is worth. What
+ * can be checked exactly is that the handler no longer derives any claim
+ * from the local parse's `parseError`, which is the whole of the defect.
+ * Named as a source check rather than dressed up as a behavioural one.
+ */
+describe('adding documents makes no claim about whether they could be read', () => {
+  it('derives nothing in handleAddMatterDocuments from the browser s own parseError', () => {
+    const source = readFileSync(path.resolve(__dirname, 'App.tsx'), 'utf8');
+    const start = source.indexOf('const handleAddMatterDocuments');
+    expect(start, 'handleAddMatterDocuments has been renamed or moved').toBeGreaterThan(0);
+    const end = source.indexOf('const handleRemoveMatterDocument', start);
+    expect(end, 'the handler after handleAddMatterDocuments has been renamed').toBeGreaterThan(start);
+    // COMMENTS STRIPPED FIRST. The handler's own note explains at length
+    // why it no longer reads `parseError`, and a text search that cannot
+    // tell a violation from a note saying it must not happen is the shape
+    // this repository's other scanners exist to avoid.
+    const handler = source.slice(start, end)
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/.*/g, '$1');
+    expect(handler, 'the comment stripper ate the code').toContain('notify(');
+
+    // Not vacuous: this really is the handler that uploads.
+    expect(handler).toContain('addDocument');
+    expect(handler, 'the add path claims a document could not be read from its own parse')
+      .not.toMatch(/parseError/);
+    expect(handler, 'the add path still says a stored document could not be read')
+      .not.toMatch(/could not be read/i);
   });
 });

@@ -1,4 +1,6 @@
-import { isNotYetRead, notYetReadMessage, type DocumentFile } from '@lexprompt/core';
+import {
+  couldNotBeReadMessageFor, failedToRead, isNotYetRead, notYetReadMessage, type DocumentFile,
+} from '@lexprompt/core';
 import type { DocumentRecord } from '../db/rows.ts';
 import { sparsePagesOf } from './parseDocument.ts';
 import {
@@ -210,10 +212,37 @@ export async function documentFileForReview(
   // with no extractable content" for a document nothing had read yet.
   if (isNotYetRead(record)) return { ...base, parseError: notYetReadMessage(record.name) };
 
-  // A document already marked failed is not re-parsed: re-running a parse
-  // that failed once is unlikely to succeed differently and would discard
-  // the original message, which is the one thing the reviewer can act on.
-  if (record.parseError) return { ...base, parseError: record.parseError };
+  /*
+   * A document already marked failed is not re-parsed: re-running a parse
+   * that failed once is unlikely to succeed differently and would discard
+   * the original message, which is the one thing the reviewer can act on.
+   *
+   * `failedToRead` AS WELL AS `parseError`, and the second half is the point
+   * (final review m3). This branched on the MESSAGE alone, so a row with
+   * `parse_state = 'failed'` and an empty `parse_error` fell through — past
+   * the sparse-pages check, which is skipped for anything that is not a PDF
+   * — and came back with `text: ''` and NO `parseError` at all. That is this
+   * project's founding defect exactly: a document the extractor then reports
+   * as *"the agreement is silent on this point"* for every clause, when what
+   * actually happened is that nothing could read it.
+   *
+   * Not reachable today — `parseWorker.fail` always writes a message, and
+   * `refuseUnparsedDocuments` blocks a `failed` document at run creation —
+   * and that is why it is minor rather than live. But this module presents
+   * itself as the last line before the engine, `failedToRead` exists in
+   * `@lexprompt/core` for precisely this state and had no server-side reader
+   * at all, and "not reachable today" is a property of two callers rather
+   * than of this function.
+   *
+   * The message falls back to `couldNotBeReadMessageFor`, the same sentence
+   * the run route's refusal uses, rather than to a new one written here.
+   */
+  if (record.parseError || failedToRead(record)) {
+    return {
+      ...base,
+      parseError: record.parseError || couldNotBeReadMessageFor([record.name]),
+    };
+  }
 
   // PER PAGE. A document-wide text check lets one typed cover page carry a
   // scanned body over the bar; that blind spot has had to be fixed three

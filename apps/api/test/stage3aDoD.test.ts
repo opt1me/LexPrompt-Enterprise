@@ -863,10 +863,20 @@ describe('the engine s statements name a workspace, which workspaceScope.test.ts
            where state = 'leased' and leased_by like $1 and lease_expires_at > now()
            returning run_id`),
       'releases leases stamped with THIS PROCESS\'s own identity, in any workspace'],
-    // Truncated where the source string is: the statement is built by
-    // concatenation, and `statementsIn` sees one literal at a time.
-    [norm("select distinct run_id from run_cell where state = 'leased' and leased_by like $1"),
-      'the active-run set is this process\'s own leases, in any workspace'],
+    // The active-run set, WIDENED by the Stage 3 final review (M1): it is no
+    // longer only this process's own live leases but also the claimable
+    // cells of any `running` run, because a run starved of slots by another
+    // run used to stop heartbeating and be reaped as failed while nothing
+    // was wrong. It is a whole template literal now rather than a
+    // concatenation, so the exemption is the whole statement.
+    [norm(`select distinct c.run_id from run_cell c join run r on r.id = c.run_id
+           where (c.state = 'leased' and c.leased_by like $1 and c.lease_expires_at > now())
+              or (r.state = 'running' and c.attempts < $2
+                  and (c.state = 'queued'
+                       or (c.state = 'leased' and c.lease_expires_at < now())))`),
+      'the active-run set is this process\'s own leases plus every run it could claim from '
+      + 'next, in any workspace: CLAIM is global, so a live pool beating for a claimable run '
+      + 'is telling the truth about it'],
     // --- one template literal that is split by an interpolation ---
     [norm("update finding set ${FINDING_COLUMNS.slice(4).map((c, i) =>"
       + " (c === 'citations' || c === 'net_position' ?"),

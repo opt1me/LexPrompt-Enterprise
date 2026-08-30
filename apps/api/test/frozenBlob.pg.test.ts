@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { withPg, dbOn, migratorDb } from './helpers/pgHarness.ts';
 import { buildTestApi } from './helpers/apiHarness.ts';
-import { importFindings as seedFindingRows } from '../src/findings/import.ts';
+import { seedFindingRows } from './helpers/seedFindings.ts';
 import type { Tx } from '../src/db/pool.ts';
 import type { Review } from '../src/db/rows.ts';
 import {
@@ -124,7 +124,7 @@ async function aPreFreezeReview(
      values ('sr1', $1, 'sm1', $2::jsonb, '["d1","d2"]'::jsonb, $3::jsonb, $4::jsonb,
              'test/model', now())`,
     [WS, JSON.stringify(SNAPSHOT), JSON.stringify(target), JSON.stringify(blob)]);
-  await seedFindingRows(t, 'sr1', WS, target as never, blob);
+  await seedFindingRows(t, 'sr1', WS, target, blob, PARTNER);
 }
 
 interface Harness {
@@ -299,7 +299,12 @@ describe('the reconciliation can still find something, over a pre-freeze blob', 
 
       // …and after all that rolling back, they still agree.
       expect(await reconcileFindings(t, 'sr1')).toEqual([]);
-    });
+      // ON THE MIGRATOR CONNECTION, for one of the six corruptions: migration
+      // 011 took `delete on finding` away from `lexprompt_app`, and a
+      // corruption no application role can produce is still a corruption the
+      // reconciler has to be able to name. The reconciler itself reads the
+      // same rows whichever role asks.
+    }, migratorDb());
   });
 
   it('finds a verification that landed on the WRONG KEY, which a count check cannot see', async () => {
@@ -353,7 +358,7 @@ describe('the reconciliation can still find something, over a pre-freeze blob', 
                              target, model_id, started_at)
          values ('sr1', $1, 'sm1', $2::jsonb, '["d1","d2"]'::jsonb, $3::jsonb, 'm', now())`,
         [WS, JSON.stringify(SNAPSHOT), JSON.stringify(TARGET)]);
-      await seedFindingRows(t, 'sr1', WS, TARGET, { d1: { c1: finding() } });
+      await seedFindingRows(t, 'sr1', WS, TARGET, { d1: { c1: finding() } }, PARTNER);
 
       const found = await reconcileFindings(t, 'sr1');
       expect(describeDiscrepancies(found)).toMatch(/d1\/c1: finding/);

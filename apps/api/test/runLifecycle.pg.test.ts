@@ -5,7 +5,7 @@ import {
   WS, MODEL, aDocument, aMatter, aModelChoice, aReview, aRun, aUser, assertStatesAgree,
   fakeGateway, workerDeps,
 } from './helpers/runHarness.ts';
-import { leaseCell, runOneStep } from '../src/run/worker.ts';
+import { leaseCell, runOneStep, runsThisPoolIsWorkingOn } from '../src/run/worker.ts';
 import { MISSED_HEARTBEATS_BEFORE_DEAD, reapOnce, stalledQueuedRuns } from '../src/run/reaper.ts';
 import type { Tx } from '../src/db/pool.ts';
 import type { RunView } from '@lexprompt/core';
@@ -294,6 +294,95 @@ describe('the reaper', () => {
       expect(result.reaped).toEqual([]);
       expect((await runRow(t, 'l-run-waiting')).state).toBe('queued');
       expect((await cellStates(t, 'l-run-waiting')).queued).toBe(1);
+      await assertStatesAgree(t);
+    });
+  });
+
+  it('does NOT reap a run that is only WAITING FOR A SLOT behind another run', async () => {
+    /*
+     * FINAL REVIEW M1. A healthy run was reaped for being starved.
+     *
+     * `run.heartbeat_at` advances in exactly two places — `leaseCell` and
+     * the pool's ticker — and the ticker used to update only runs with a
+     * cell leased BY THIS PROCESS. CLAIM orders `by c.run_id, …  limit 1`,
+     * so with two live runs in one workspace every slot deterministically
+     * takes from the lexicographically-lower `run_id`; the other run sits at
+     * `running` with only `queued` cells, beats nothing, and is `failed`
+     * 45 s later with every unstarted clause written `error` carrying *"This
+     * run stopped without finishing"*. Nothing had stopped.
+     *
+     * The two statements below are exactly the two the ticker issues —
+     * `runsThisPoolIsWorkingOn`, then the heartbeat update over what it
+     * returned — because the ticker itself is a `setInterval` inside
+     * `startWorkerPool` that no suite can hold still, which is why this went
+     * unnoticed.
+     */
+    await withPg(async t => {
+      await seed(t, 'busy', ['c1']);
+      await seed(t, 'starved', ['c1', 'c2']);
+      const { gateway } = fakeGateway();
+      const deps = workerDeps(t, gateway);
+
+      // The pool's one slot is on `l-run-busy`; `l-run-starved` is `running`
+      // with both cells still queued and a heartbeat three intervals old.
+      await leaseCell(deps.db, deps, 'worker-a#1');
+      await t.query(
+        "update run set state = 'running', heartbeat_at = now() - interval '5 minutes' "
+        + "where id = 'l-run-starved'");
+
+      const active = await runsThisPoolIsWorkingOn(
+        { db: deps.db, caps: deps.caps, workerId: 'worker-a' });
+      expect(active, 'a live pool did not count the run it is about to work on')
+        .toContain('l-run-starved');
+      expect(active).toContain('l-run-busy');
+
+      await t.query('update run set heartbeat_at = now() where id = any($1::text[])', [active]);
+      const result = await reapOnce(reaper(t));
+      expect(result.reaped, 'a run that was only waiting for a slot was reaped').toEqual([]);
+      expect((await runRow(t, 'l-run-starved')).state).toBe('running');
+      expect((await cellStates(t, 'l-run-starved')).queued).toBe(2);
+      await assertStatesAgree(t);
+    });
+  });
+
+  it('does NOT beat for a QUEUED run, which would silence the stalled-queue report', async () => {
+    // The other half of the rule, and it is not decoration:
+    // `stalledQueuedRuns` finds a run stuck behind
+    // `run_one_live_per_review` by `heartbeat_at is null`. A ticker that
+    // beat for every claimable cell would give a queued run a heartbeat and
+    // take the one report that names it off the log for ever.
+    await withPg(async t => {
+      await seed(t, 'notstarted', ['c1']);
+      const { gateway } = fakeGateway();
+      const deps = workerDeps(t, gateway);
+      // `now()` is the TRANSACTION's timestamp, so a run seeded in this
+      // transaction is never older than it — the same backdating the
+      // stalled-queue tests below use.
+      await t.query("update run set created_at = now() - interval '1 hour' where id = $1",
+        ['l-run-notstarted']);
+      expect(await runsThisPoolIsWorkingOn(
+        { db: deps.db, caps: deps.caps, workerId: 'worker-a' })).toEqual([]);
+      expect((await runRow(t, 'l-run-notstarted')).heartbeat_at).toBeNull();
+      expect(await stalledQueuedRuns(reaper(t))).toContain('l-run-notstarted');
+      await assertStatesAgree(t);
+    });
+  });
+
+  it('does NOT beat for a run whose every cell has SPENT its attempts', async () => {
+    // `exhaustSpentCells` owns those, not this pool: CLAIM requires
+    // `attempts < max`, so nothing here will ever lease one again, and
+    // beating for it would keep a genuinely unfinishable run alive.
+    await withPg(async t => {
+      await seed(t, 'spent', ['c1']);
+      const { gateway } = fakeGateway();
+      const deps = workerDeps(t, gateway);
+      await t.query(
+        "update run set state = 'running' where id = 'l-run-spent'");
+      await t.query(
+        'update run_cell set attempts = $1 where run_id = $2',
+        [deps.caps.runAttemptsMax, 'l-run-spent']);
+      expect(await runsThisPoolIsWorkingOn(
+        { db: deps.db, caps: deps.caps, workerId: 'worker-a' })).toEqual([]);
       await assertStatesAgree(t);
     });
   });

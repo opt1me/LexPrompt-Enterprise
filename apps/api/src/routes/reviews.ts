@@ -291,8 +291,15 @@ export function registerReviews(app: FastifyInstance, db: Db): void {
       // a findings key this review's own target does not explain — with a
       // 400 naming the cell, rather than letting Postgres answer with a
       // constraint name.
+      //
+      // THE ACTOR TRAVELS WITH IT, and is the only author it may record. A
+      // findings map naming anybody else is refused: see `import.ts`'s
+      // attribution section for why a body's `byUserId` is not evidence of
+      // anything and what capability preserving a foreign attribution would
+      // actually need.
       if (importing) {
-        await importFindings(t, row.id, ws, input.target as never, input.findings);
+        await importFindings(t, row.id, ws, input.target as never, input.findings,
+          { id: req.actor!.id });
       }
 
       // TASK 22: THE SHADOW WRITER IS GONE, WITH THE BLOB WRITE IT SHADOWED.

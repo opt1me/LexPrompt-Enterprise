@@ -142,7 +142,11 @@ describe('a parse that fails is a real answer with a real message', () => {
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'broken.docx');
     expect(parsed.parseError).toBeTruthy();
     expect(parsed.text).toBe('');
-  });
+    // 20s, like the sibling below and for the same reason: this parse loads
+    // `jszip` and `mammoth` on first use, and under full-suite parallel load
+    // that has outgrown Vitest's 5s default — a timeout that reads as a
+    // broken parser when the parser is fine.
+  }, 20_000);
 
   it('never rejects — a bad document is a value, not an exception', async () => {
     // The same posture `extractClause` has. A worker that had to catch this

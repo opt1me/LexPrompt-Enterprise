@@ -282,33 +282,114 @@ describe('the scanner finds something (a guard that matches nothing passes vacuo
      * comment-stripped source, which needs no quote pairing at all. A
      * scanner that loses a statement is now a failure rather than a smaller
      * number nobody was counting.
+     *
+     * WIDENED BY THE STAGE 3 FINAL REVIEW (m1). It walked `ROUTES_DIR` while
+     * the guard it protects had been widened to all of `apps/api/src` in
+     * Task 25 — the desync check covering one half of the codebase and the
+     * check it exists to defend covering the other. `run/queue.ts`,
+     * `findings/read.ts`, `findings/import.ts` and `dispositions/service.ts`
+     * were all scoped-checked and none of them was covered here, so one
+     * apostrophe in any of them would have taken its statements out of view
+     * with nothing failing anywhere. That is the exact defect this check was
+     * added to catch, one directory over.
+     *
+     * It walks the SCANNED set minus `UNSCOPED_BY_DESIGN`, which is exactly
+     * the set of files the main guard enforces on. The excluded six are not
+     * a convenience: five clauses in them (`findings/backfill.ts` ×2,
+     * `findings/reconcile.ts`, `run/events.ts`, `run/worker.ts`) are
+     * genuinely invisible to `statementsIn` because their SQL is built by
+     * template interpolation, and the two that matter are covered instead by
+     * `TRUNCATED_BY_INTERPOLATION`'s raw-source assertion — a different
+     * assertion, not a silence. Requiring a desync check over a file whose
+     * statements nothing checks would be asking this test to defend a guard
+     * that is not looking.
      */
-    const clause = () => new RegExp(
-      `\\b(?:from|into|update|join)\\s+(?:only\\s+)?"?(?:${SCOPED_TABLES.join('|')})"?\\b`, 'gi');
-    const occurrences = (text: string): string[] => {
-      const out: string[] = [];
-      for (const m of text.matchAll(clause())) {
-        // The clause plus what follows it, so two reads of the same table in
-        // one file are distinguishable.
-        out.push(text.slice(m.index, m.index + m[0].length + 24).replace(/\s+/g, ' '));
-      }
-      return out;
-    };
-    const invisible: string[] = [];
-    for (const file of walk(ROUTES_DIR)) {
-      const code = codeOf(file);
-      const seen = new Set(occurrences(statementsIn(code).join('\n')));
-      for (const found of occurrences(code)) {
-        if (!seen.has(found)) invisible.push(`${rel(file)}: ${found}`);
-      }
-    }
+    const covered = walk(SCANNED).filter(f => !UNSCOPED_BY_DESIGN.includes(rel(f)));
+    const invisible = covered.flatMap(file =>
+      lostClauses(codeOf(file), statementsIn).map(found => `${rel(file)}: ${found}`));
     expect(invisible).toEqual([]);
     // …and the comparison is not vacuous: the source really does contain
     // clauses against scoped tables.
-    const all = walk(ROUTES_DIR).flatMap(f => occurrences(codeOf(f)));
+    const all = covered.flatMap(f => clausesIn(codeOf(f)));
     expect(all.length).toBeGreaterThan(40);
+    // …and it really did reach past `routes/`, which is the whole of m1.
+    // Named files rather than a count: a count is met by whatever happens to
+    // be there, and this check has already been pointed at the wrong half of
+    // the codebase once.
+    const reached = covered.map(rel);
+    for (const file of [
+      'apps/api/src/run/queue.ts', 'apps/api/src/findings/read.ts',
+      'apps/api/src/findings/import.ts', 'apps/api/src/dispositions/service.ts',
+    ]) {
+      expect(reached, file).toContain(file);
+    }
+  });
+
+  it('REPORTS a lost statement in a file outside routes/, so the widening is not decorative', () => {
+    /*
+     * THE SANITY CHECK FOR THE WIDENING ABOVE. A check that has just been
+     * pointed at more files is worth exactly what it can report in the newly
+     * covered ones, and this stage has found eight guards that were not
+     * scanning what they claimed to.
+     *
+     * It runs the same comparison over the REAL `findings/read.ts` — one of
+     * the four files m1 named as scoped-checked but not desync-checked —
+     * with an extractor deliberately made to lose exactly the statements
+     * that matter. If the comparison cannot say so, it would not say so for
+     * a real extractor bug either.
+     *
+     * WHY NOT THE MUTATION THE FINAL REVIEW SUGGESTED. It proposed adding
+     * `'a document\'s clause'` to a string in `findings/read.ts` and
+     * expected the literals after it to desynchronise. That was the Task 13
+     * defect, and Task 13 FIXED it: `statementsIn` is escape-aware now
+     * (`sourceScan.ts`), and splicing that line in leaves every statement
+     * still visible — verified before this test was written. The blind spot
+     * that genuinely remains is the one its own docstring names, a nested
+     * template expression containing a backtick, and the pairing re-syncs
+     * on the very next backtick, so a targeted fixture for it would be
+     * asserting about an accident of that particular string. Losing the
+     * statements outright is the honest stand-in: it asks the only question
+     * this check exists to answer.
+     */
+    const code = codeOf(path.join(SCANNED, 'findings/read.ts'));
+    const lossy = (text: string): string[] =>
+      statementsIn(text).filter(st => !/\bfrom\s+finding\b/i.test(st));
+    expect(lostClauses(code, statementsIn),
+      'findings/read.ts already has statements the extractor cannot see').toEqual([]);
+    expect(lostClauses(code, lossy).length,
+      'the desync check cannot report a statement lost outside routes/').toBeGreaterThan(0);
   });
 });
+
+/**
+ * Every scoped-table clause in `code` that `extract` does NOT see.
+ *
+ * The comparison the desync check is: clauses found in the RAW
+ * comment-stripped source, which needs no quote pairing at all, against the
+ * same clauses found in what the extractor returns. A statement the
+ * extractor loses is a statement the scoping guard above is not looking at,
+ * and its failure mode is silence — a smaller number nobody was counting.
+ *
+ * `extract` is a parameter so the sanity check can hand it an extractor that
+ * loses on purpose. A comparison that has never been seen to report anything
+ * is not evidence.
+ */
+function clausesIn(text: string): string[] {
+  const clause = new RegExp(
+    `\\b(?:from|into|update|join)\\s+(?:only\\s+)?"?(?:${SCOPED_TABLES.join('|')})"?\\b`, 'gi');
+  const out: string[] = [];
+  for (const m of text.matchAll(clause)) {
+    // The clause plus what follows it, so two reads of the same table in one
+    // file are distinguishable.
+    out.push(text.slice(m.index, m.index + m[0].length + 24).replace(/\s+/g, ' '));
+  }
+  return out;
+}
+
+function lostClauses(code: string, extract: (text: string) => string[]): string[] {
+  const seen = new Set(clausesIn(extract(code).join('\n')));
+  return clausesIn(code).filter(found => !seen.has(found));
+}
 
 /**
  * The part of a statement where a workspace predicate has to APPEAR.
