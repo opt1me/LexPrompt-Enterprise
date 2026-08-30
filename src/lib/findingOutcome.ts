@@ -1,5 +1,9 @@
 import type { Finding, Review } from '../types';
-import { positionText, stepEffectText } from '@lexprompt/core';
+import {
+  positionText, stepEffectText,
+  type DispositionCause, type DispositionEventView, type DispositionWithHistory,
+  type VerificationState,
+} from '@lexprompt/core';
 
 /**
  * The one place that decides what text represents a clause's outcome when
@@ -515,4 +519,232 @@ export function truncationLabel(finding: Finding | undefined): string | null {
   const each = names.length === 1 ? 'it' : 'each';
   return `INCOMPLETE SOURCE TEXT: ${subject} the model's context budget, so only part of ${each} ` +
     `was read for this clause: ${names.join(', ')}`;
+}
+
+/* ------------------------------------------------------------------ *
+ *  STAGE 4 §6.3: WHO SET THE STATE THIS CARD IS SHOWING, AND WHEN.     *
+ * ------------------------------------------------------------------ */
+
+/**
+ * What a caller lends these functions so they can stay pure.
+ *
+ * Both fields are INJECTED rather than imported, and for two different
+ * reasons that both matter:
+ *
+ *  - `nameOf` would otherwise pull a network cache (`src/lib/api/users.ts`)
+ *    into a module the DOCX and CSV exporters import. This file is the one
+ *    home of export wording; it must not acquire a transport.
+ *  - `timeOf` would otherwise bake a locale and a timezone into an
+ *    assertion, so a test that passed in London would fail in Sydney and
+ *    the failure would name the string rather than the clock.
+ */
+export interface DispositionAudience {
+  /**
+   * Resolves a user id to a name, or `undefined` for one it cannot.
+   *
+   * `undefined` covers two facts — the directory does not hold this id, and
+   * the directory is not loaded — because a caller cannot act on the
+   * difference: either way it does not know the name and must say so rather
+   * than print a uuid, which says nothing to a reader while looking like it
+   * should. The WORDING below is chosen to be true under both, which is why
+   * it does not say the person has left the firm.
+   */
+  nameOf: (id: string | undefined) => string | undefined;
+  /** Epoch milliseconds to a human instant. */
+  timeOf: (at: number) => string;
+}
+
+/**
+ * The word for a state, and it is `StateChip`'s word rather than the
+ * database's.
+ *
+ * `unchecked` reads as **Unverified**, because that is what the chip beside
+ * this line says and what `verificationLabel` puts in an export — *"the chip
+ * is read by someone deciding whether to rely on the finding … the two must
+ * say the same thing"*. Three surfaces, one vocabulary.
+ */
+const STATE_WORD: Record<VerificationState, string> = {
+  unchecked: 'Unverified',
+  verified: 'Verified',
+  flagged: 'Flagged',
+  rejected: 'Rejected',
+};
+
+/**
+ * How this line names a person, and it NEVER prints an id.
+ *
+ * Three cases, and collapsing any two of them would make a false claim:
+ *
+ *  - a name the audience resolved;
+ *  - an id the audience could not resolve — *"someone this workspace does
+ *    not name"*, which is true whether the person has left the firm or the
+ *    directory simply has not loaded. Saying "no longer in this workspace"
+ *    would be a claim about a person, made on the strength of a failed
+ *    fetch;
+ *  - NO id at all, which the store does not produce for a moved disposition
+ *    (`setDisposition` always writes one) but which a record repaired by a
+ *    migration could carry — *"someone this record does not name"*, a
+ *    statement about the record rather than about the directory.
+ *
+ * `matterActivity`'s R-GP5 ruled the same thing one layer down for the local
+ * profile: *"an entry whose author matches nothing known is rendered with NO
+ * actor rather than an invented one"*.
+ */
+function actorPhrase(id: string | undefined, audience: DispositionAudience): string {
+  if (!id) return 'someone this record does not name';
+  return audience.nameOf(id) ?? 'someone this workspace does not name';
+}
+
+/**
+ * One movement of a disposition, in words — shared by the card's line and by
+ * every row of the history panel, so the two cannot describe the same event
+ * differently.
+ *
+ * DELIBERATELY ASCII-ONLY. `exportSummaryLine`'s own docstring gives the
+ * reason and it applies unchanged here: these strings go into the CSV, which
+ * is written with no byte-order mark, and Excel's default import on Windows
+ * reads a BOM-less file as ANSI — so an em-dash would arrive as mojibake in
+ * a line about who checked a contract. `-` and not an em-dash, `'` and not a
+ * typographic apostrophe. There is no version of this worth a garbled
+ * export.
+ */
+function describeChange(
+  change: {
+    toState: VerificationState;
+    fromState?: VerificationState;
+    cause: DispositionCause;
+    byUserId: string | undefined;
+    at: number | undefined;
+  },
+  audience: DispositionAudience,
+): string {
+  const who = actorPhrase(change.byUserId, audience);
+  const when = change.at === undefined ? undefined : audience.timeOf(change.at);
+  // "WAS UNVERIFIED" IS NOT SAID, AND THE OMISSION IS THE RULE.
+  //
+  // The "was X" clause exists to say that a judgement REPLACED another
+  // judgement — which is the difference between a settled clause and a
+  // contested one, and the whole reason the previous state travels with the
+  // read. `unchecked` is not a judgement: every finding starts there, so
+  // "Verified by A. Trainee, 16:04 - was Unverified" adds a clause that is
+  // true of every first verification ever made and distinguishes nothing.
+  //
+  // Applied to the HISTORY panel as well as to the card, deliberately. The
+  // two render one event through this one function precisely so they cannot
+  // describe it differently, and a rule that held in one of them would be
+  // the beginning of a second wording site.
+  const previous = change.fromState === 'unchecked' ? undefined : change.fromState;
+  const was = previous === undefined ? '' : `, was ${STATE_WORD[previous]}`;
+
+  // A RE-RUN IS NOT A PERSON UN-VERIFYING (§6.3: the card must not flatten
+  // them). It says what actually happened — the clause was run again, so the
+  // answer the judgement described no longer exists — and it names whoever
+  // asked for the re-run rather than implying they withdrew a judgement.
+  if (change.cause === 'rerun_reset') {
+    return `${STATE_WORD.unchecked} - this clause was re-run by ${who}`
+      + `${when ? ` at ${when}` : ''}${was}`;
+  }
+  // A PERSON CLEARING a judgement is its own sentence, because "Unverified"
+  // alone is what a finding nobody has touched says, and these two must
+  // never read the same.
+  if (change.toState === 'unchecked') {
+    return `${STATE_WORD.unchecked} - cleared by ${who}${when ? `, ${when}` : ''}${was}`;
+  }
+  const head = `${STATE_WORD[change.toState]} by ${who}${when ? `, ${when}` : ''}`;
+  return previous === undefined ? head : `${head} - was ${STATE_WORD[previous]}`;
+}
+
+/**
+ * How a card, a history header and an export name the state a finding is in
+ * — WHO put it there, WHEN, and what it was before.
+ *
+ * §6.3, and the one place that wording lives. `verificationLabel` above is
+ * this module's precedent and its warning: the DOCX report and the CSV
+ * export drifted apart on exactly this kind of string once before (a CSV
+ * wrote unreviewed clauses as blank cells while the DOCX said "could not be
+ * reviewed"), and the CSV is the one that opens straight into Excel. Five
+ * surfaces render a disposition in Stage 4 — the card, the history panel,
+ * the refusal notice, the DOCX and the CSV. Five callers is four more than
+ * it takes for a second copy to appear.
+ *
+ * NEVER returns an empty string, for any input. An empty label in a cell
+ * reads as "checked, nothing found", which is the founding defect of this
+ * project and precisely what `verificationLabel` exists to prevent;
+ * reintroducing it beside that function would be a joke at its expense.
+ *
+ * ## The three inputs that are NOT the same
+ *
+ *  - `undefined` — this caller has not READ a disposition for the clause.
+ *    Not "nobody has checked it": nobody has told this browser either way,
+ *    and the label says so and says what to do about it.
+ *  - `changedCount === 0` — a disposition the store DID state, which nobody
+ *    has ever moved. "Not checked", naming nobody, which is §6.3's own
+ *    sentence.
+ *  - `changedCount > 0` — somebody, or a re-run, moved it. It is named.
+ */
+export function dispositionLabel(
+  d: DispositionWithHistory | undefined,
+  audience: DispositionAudience,
+): string {
+  if (!d) {
+    // A fact about this browser, stated as one. "Not checked" here would be
+    // a claim about a lawyer's work made on the strength of a missing
+    // fetch.
+    return 'Checked state not read - reload the review';
+  }
+  const { disposition, last } = d;
+  if (disposition.changedCount === 0) {
+    // §6.3: a finding nobody has touched renders as "Not checked" and names
+    // nobody. Deliberately NOT `StateChip`'s "Unverified": the chip states
+    // the state, and this line states who put it there — and here the
+    // honest answer is that nobody did.
+    return 'Not checked';
+  }
+
+  const line = describeChange({
+    toState: disposition.state,
+    // `last` is what carries the previous state. Absent only if the store
+    // moved a disposition without recording that it moved, which
+    // `setDisposition` writes in one transaction to make impossible — so
+    // the "was X" clause is simply omitted rather than guessed at.
+    ...(last ? { fromState: last.fromState } : {}),
+    cause: last?.cause ?? 'human',
+    byUserId: disposition.byUserId,
+    at: disposition.at ?? last?.at,
+  }, audience);
+
+  // "was Rejected" already tells a reader there was one previous state, so
+  // the count adds nothing at two and understates at three. Above two, the
+  // number is the information: a clause that has moved four times is
+  // contested, and a line that only named the last move would hide that.
+  return disposition.changedCount > 2
+    ? `${line} - changed ${disposition.changedCount} times`
+    : line;
+}
+
+/**
+ * One row of the history panel: what changed, who changed it, when, from
+ * what — and, on a rejection, why.
+ *
+ * The same `describeChange` the card's label uses, so the panel and the card
+ * cannot describe one event two ways. What it adds is the REASON, in quotes,
+ * because a rejection's reason is the only part of a judgement that is not
+ * recoverable from the states either side of it — and `verificationLabel`
+ * already establishes that a rejection is exported WITH its reason, since
+ * dropping it would hide a human judgement from whoever reads the report.
+ */
+export function dispositionHistoryLine(
+  event: DispositionEventView,
+  audience: DispositionAudience,
+): string {
+  const line = describeChange({
+    toState: event.toState,
+    fromState: event.fromState,
+    cause: event.cause,
+    byUserId: event.byUserId,
+    at: event.at,
+  }, audience);
+  const reason = event.reason?.trim();
+  // Straight quotes, for the ASCII reason `describeChange` gives above.
+  return reason ? `${line}. "${reason}"` : line;
 }

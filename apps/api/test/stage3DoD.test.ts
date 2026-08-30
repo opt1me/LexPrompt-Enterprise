@@ -310,20 +310,64 @@ describe('§18 item 4.5 — carryHumanState is deleted and nothing regressed', (
  *  What Stage 3 promised NOT to build                                 *
  * ------------------------------------------------------------------ */
 
-describe('no attribution surface ships in this stage (P28, §13)', () => {
-  it('has no dispositionLabel, no "as at" stamp and no "was X" line', () => {
+describe('the attribution surface Stage 3 promised NOT to build (P28, §13), now built', () => {
+  it('has dispositionLabel, and it lives beside verificationLabel and nowhere else', () => {
     /*
-     * Stage 4's, not this stage's, and half of it would be worse than none.
-     * Those surfaces are only TRUE once a disposition can be changed by
-     * somebody else, which it cannot in a single-browser stage — an "as at"
-     * stamp on a document whose dispositions nobody else can change is a
-     * claim about a risk that does not exist yet.
+     * STAGE 3 ASSERTED THIS WAS ABSENT, AND STAGE 4 INVERTS IT RATHER THAN
+     * DELETING IT (P30).
+     *
+     * The original reason for the absence still stands and is kept on the
+     * record: a LABEL with no mechanism behind it was half of Stage 4's most
+     * important feature, and half an attribution surface is worse than none
+     * — an "as at" stamp on a document whose dispositions nobody else can
+     * change is a claim about a risk that does not exist yet.
+     *
+     * Stage 4 built the mechanism (two real accounts, a directory resolving
+     * an id to a name, a read carrying the event that produced a
+     * disposition), so the assertion INVERTS: the wording exists, and it
+     * exists in exactly ONE place. A file that loses its guard the moment
+     * the guarded thing happens has stopped guarding.
      */
-    expect(grepRepo('dispositionLabel')).toEqual([]);
-    expect(grepRepo('dispositionHistoryLine')).toEqual([]);
+    const declares = (re: RegExp): string[] =>
+      ALL_SOURCES.filter(f => re.test(codeOf(f))).map(rel);
+    expect(declares(/export function dispositionLabel/)).toEqual(['src/lib/findingOutcome.ts']);
+    expect(declares(/export function dispositionHistoryLine/))
+      .toEqual(['src/lib/findingOutcome.ts']);
+    // The sanity check. Both assertions above are satisfied by a scanner
+    // that read one file, and Stage 3 found nine guards in that state.
+    expect(ALL_SOURCES.length).toBeGreaterThan(180);
+    // …and `grepRepo` really can return more than one file, so a
+    // single-element answer above is a fact about the codebase rather than
+    // about the scanner. `dispositionLabel`'s own callers arrive in Task 5;
+    // `verificationLabel`, the function this one sits beside, already has
+    // four, and the case below asserts that list exactly.
+    expect(grepRepo('verificationLabel').length).toBeGreaterThan(1);
+    expect(grepRepo('dispositionLabel')).toContain('src/lib/findingOutcome.ts');
+  });
+
+  it('states a previous state in ONE module, so no second surface composes its own', () => {
+    // The "was X" absence, inverted the same way. `STATE_WORD` and the two
+    // templates that read it are what compose that clause, and all of them
+    // live in `findingOutcome.ts`. A component building "was Rejected" out
+    // of its own state name is exactly the drift `verificationLabel` was
+    // extracted to end — the DOCX and the CSV disagreed once already.
+    expect(grepRepo('STATE_WORD')).toEqual(['src/lib/findingOutcome.ts']);
+    // …and nothing anywhere hard-codes one, which is what a component
+    // written in a hurry would do.
+    const HARD_CODED = /['"`]was (?:Rejected|Verified|Flagged|Unverified)/;
+    expect(grepRepo(HARD_CODED)).toEqual([]);
+    // The sanity check for that `toEqual([])`: the pattern bites on the
+    // thing it forbids and not on the interpolation that replaces it.
+    expect(HARD_CODED.test("const s = 'was Rejected';")).toBe(true);
+    expect(HARD_CODED.test('const s = `, was ${STATE_WORD[previous]}`;')).toBe(false);
+  });
+
+  it('still ships no "dispositions as at" stamp, which is Part 4B s and not this batch s', () => {
+    // NOT every absence inverts. The document-level stamp belongs with the
+    // live transport that makes it true; naming it here keeps the
+    // distinction between "built" and "still deferred" visible rather than
+    // letting the whole describe block read as done.
     expect(grepRepo(/dispositions as at/i)).toEqual([]);
-    expect(grepRepo(/\bwas Rejected\b/)).toEqual([]);
-    expect(grepRepo(/changed (?:twice|\$\{|N) times?/)).toEqual([]);
   });
 
   it('and the export wording still lives in exactly one module', () => {

@@ -4,7 +4,11 @@ import {
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionOutcomeCounts,
+  dispositionLabel, dispositionHistoryLine,
 } from './findingOutcome';
+import {
+  DISPOSITION_SHAPES, BY_A_STRANGER, HISTORY_EVENTS, RERUN_EVENT, TEST_AUDIENCE,
+} from '../test/dispositionShapes';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { Finding, TrailStep, Verification } from '../types';
 
@@ -524,5 +528,181 @@ describe('positionOutcomeLabel', () => {
 
   it('returns null for a missing finding, rather than throwing', () => {
     expect(positionOutcomeLabel(undefined)).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ *  STAGE 4 §6.3: dispositionLabel and dispositionHistoryLine           *
+ * ------------------------------------------------------------------ */
+
+describe('dispositionLabel', () => {
+  it.each([
+    ['never touched', 'Not checked'],
+    ['verified once', 'Verified by A. Trainee, 16:04'],
+    ['verified after a rejection', 'Verified by R. Okafor, 16:04 - was Rejected'],
+    ['rejected with a reason', 'Rejected by R. Okafor, 16:04 - was Verified'],
+    // NOT "- was Unverified". The task brief's own table asked for that
+    // here and for its ABSENCE on `verified once` one row up — two rows
+    // describing the identical transition (`unchecked` -> a judgement) two
+    // different ways. The clause is dropped in both: every finding starts
+    // unverified, so it distinguishes nothing, and `describeChange` says so
+    // at length.
+    ['flagged', 'Flagged by A. Trainee, 16:04'],
+    ['cleared by hand', 'Unverified - cleared by A. Trainee, 16:04, was Verified'],
+    ['cleared by a re-run',
+      'Unverified - this clause was re-run by A. Trainee at 16:04, was Verified'],
+    ['changed three times', 'Verified by R. Okafor, 16:04 - was Rejected - changed 3 times'],
+  ])('labels a disposition that was %s', (what, expected) => {
+    expect(dispositionLabel(DISPOSITION_SHAPES[what], TEST_AUDIENCE)).toBe(expected);
+  });
+
+  it('does not flatten a re-run into a person un-verifying', () => {
+    // §6.3 names these as different acts. The one line in this feature a
+    // reader could act on wrongly: "A. Trainee un-verified this" is a
+    // decision somebody made; a re-run is the system removing a judgement
+    // about output that no longer exists.
+    const rerun = dispositionLabel(DISPOSITION_SHAPES['cleared by a re-run'], TEST_AUDIENCE);
+    const byHand = dispositionLabel(DISPOSITION_SHAPES['cleared by hand'], TEST_AUDIENCE);
+    expect(rerun).not.toBe(byHand);
+    expect(rerun).toContain('re-run');
+    expect(byHand).not.toContain('re-run');
+    expect(byHand).toContain('cleared by');
+  });
+
+  it('does not flatten a never-touched finding into one somebody cleared', () => {
+    // Both are `unchecked`, and they are different facts: nobody has ever
+    // looked, versus a person withdrew a judgement.
+    expect(dispositionLabel(DISPOSITION_SHAPES['never touched'], TEST_AUDIENCE))
+      .not.toBe(dispositionLabel(DISPOSITION_SHAPES['cleared by hand'], TEST_AUDIENCE));
+  });
+
+  it('names nobody for a never-touched finding, rather than whoever ran the review', () => {
+    expect(dispositionLabel(DISPOSITION_SHAPES['never touched'], TEST_AUDIENCE))
+      .not.toContain(' by ');
+  });
+
+  it('names nobody for an actor the directory does not hold, and does not print an id', () => {
+    const label = dispositionLabel(BY_A_STRANGER, TEST_AUDIENCE);
+    expect(label).toContain('someone this workspace does not name');
+    // NEVER a raw uuid: it says nothing to a reader while looking like it
+    // should — the defect `trailLines` and `noteLines` both carry a comment
+    // about, found in a real client-facing report.
+    expect(label).not.toContain(BY_A_STRANGER.disposition.byUserId!);
+    // …and it still says the state and the time, so the actor being
+    // unresolvable does not turn the line into a shrug.
+    expect(label).toContain('Verified');
+    expect(label).toContain('16:04');
+  });
+
+  it('does not claim an unresolvable person has LEFT, because a failed load looks the same', () => {
+    // `userName` answers `undefined` both for an id the directory does not
+    // hold and for a directory that never loaded. A sentence saying the
+    // person is no longer in this workspace would be a claim about a
+    // colleague made on the strength of a failed fetch.
+    const label = dispositionLabel(BY_A_STRANGER, TEST_AUDIENCE);
+    expect(label).not.toMatch(/no longer|left|former/i);
+  });
+
+  it('says a disposition it has NOT READ is unread, never "Not checked"', () => {
+    // The blank-CSV-cell defect at a new surface: "Not checked" here would
+    // be a claim about a lawyer's work made because a fetch had not
+    // happened.
+    const label = dispositionLabel(undefined, TEST_AUDIENCE);
+    expect(label).not.toBe('Not checked');
+    expect(label).not.toBe('');
+    expect(label).toMatch(/not read/i);
+    // …and it says what to do about it.
+    expect(label).toMatch(/reload/i);
+  });
+
+  it('never returns an empty string, for any shape', () => {
+    // The founding defect, one layer up: an empty label in a cell reads as
+    // "checked, nothing found".
+    for (const [what, shape] of Object.entries(DISPOSITION_SHAPES)) {
+      expect(dispositionLabel(shape, TEST_AUDIENCE), what).not.toBe('');
+    }
+    expect(dispositionLabel(BY_A_STRANGER, TEST_AUDIENCE)).not.toBe('');
+    expect(dispositionLabel(undefined, TEST_AUDIENCE)).not.toBe('');
+  });
+
+  it('is ASCII only, because these strings go into a BOM-less CSV', () => {
+    // `exportSummaryLine`'s rule, applied to its new neighbours. Excel on
+    // Windows reads a BOM-less file as ANSI, so an em-dash arrives as
+    // mojibake in a line about who checked a contract.
+    const all = [
+      ...Object.values(DISPOSITION_SHAPES).map(s => dispositionLabel(s, TEST_AUDIENCE)),
+      dispositionLabel(BY_A_STRANGER, TEST_AUDIENCE),
+      dispositionLabel(undefined, TEST_AUDIENCE),
+      ...HISTORY_EVENTS.map(e => dispositionHistoryLine(e, TEST_AUDIENCE)),
+      dispositionHistoryLine(RERUN_EVENT, TEST_AUDIENCE),
+    ];
+    for (const line of all) {
+      // eslint-disable-next-line no-control-regex
+      expect(line, line).toMatch(/^[\x20-\x7e]*$/);
+    }
+    // The sanity check: the assertion above passes over an empty array, and
+    // it would pass over a pattern that matched anything.
+    expect(all.length).toBeGreaterThan(10);
+    expect(/^[\x20-\x7e]*$/.test('was Rejected — changed')).toBe(false);
+  });
+
+  it('uses the same word for a state that StateChip and the export use', () => {
+    // Three surfaces, one vocabulary. `unchecked` is "Unverified" on the
+    // chip and "UNVERIFIED AI OUTPUT" in an export; a line beside the chip
+    // reading "Unchecked" would be a fourth word for one fact.
+    expect(dispositionLabel(DISPOSITION_SHAPES['cleared by hand'], TEST_AUDIENCE))
+      .toContain('Unverified');
+    expect(dispositionLabel(DISPOSITION_SHAPES['cleared by hand'], TEST_AUDIENCE))
+      .not.toContain('Unchecked');
+  });
+
+  it('does not throw when the audience can name nobody at all', () => {
+    // A card rendered before the directory has loaded. It must degrade to a
+    // true sentence, not to a crash and not to silence.
+    const blind = { nameOf: () => undefined, timeOf: (at: number) => String(at) };
+    for (const shape of Object.values(DISPOSITION_SHAPES)) {
+      expect(dispositionLabel(shape, blind)).not.toBe('');
+    }
+  });
+});
+
+describe('dispositionHistoryLine', () => {
+  it('renders each change with its actor, its time, its previous state and its reason', () => {
+    expect(HISTORY_EVENTS.map(e => dispositionHistoryLine(e, TEST_AUDIENCE))).toEqual([
+      'Rejected by R. Okafor, 16:04 - was Verified. "The cap is uncapped in clause 14.2."',
+      // No "- was Unverified" here either, for the reason above: the panel
+      // and the card render one event through one function, and a rule that
+      // held in only one of them is where a second wording site starts.
+      'Verified by A. Trainee, 15:12',
+    ]);
+  });
+
+  it('renders a re-run reset as a re-run, not as a person un-verifying', () => {
+    const line = dispositionHistoryLine(RERUN_EVENT, TEST_AUDIENCE);
+    expect(line).toBe('Unverified - this clause was re-run by A. Trainee at 11:07, was Verified');
+    expect(line).not.toContain('un-verified');
+    expect(line).not.toContain('cleared by');
+  });
+
+  it('describes one event exactly as the card describes it', () => {
+    // The panel and the card must not say two things about one event. The
+    // shared `describeChange` is what makes that structural rather than a
+    // convention, and this is the assertion that would notice it being
+    // undone.
+    const shape = DISPOSITION_SHAPES['rejected with a reason'];
+    const card = dispositionLabel(shape, TEST_AUDIENCE);
+    const row = dispositionHistoryLine(shape.last!, TEST_AUDIENCE);
+    expect(row.startsWith(card)).toBe(true);
+  });
+
+  it('names nobody it cannot name, and never prints an id', () => {
+    const line = dispositionHistoryLine(
+      { ...HISTORY_EVENTS[0], byUserId: 'u-nobody-knows' }, TEST_AUDIENCE);
+    expect(line).toContain('someone this workspace does not name');
+    expect(line).not.toContain('u-nobody-knows');
+  });
+
+  it('never returns an empty string, even for an event with no reason', () => {
+    expect(dispositionHistoryLine(HISTORY_EVENTS[1], TEST_AUDIENCE)).not.toBe('');
   });
 });
