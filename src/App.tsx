@@ -24,7 +24,8 @@ import {
   notYetReadMessageFor,
 } from '@lexprompt/core';
 import type {
-  AppEvent, DispositionChangedPayload, DispositionWithHistory, NoteAddedPayload,
+  AppEvent, AssignmentEventPayload, AssignmentView,
+  DispositionChangedPayload, DispositionWithHistory, NoteAddedPayload,
   PresenceMember, RetryResult, RunView, VerificationChange, WorkspaceSettings,
 } from '@lexprompt/core';
 import { getWorkspaceSettings } from './lib/db/workspaceSettings';
@@ -56,6 +57,9 @@ import { describeLoadError, describeRunEnding } from './lib/loadError';
 import { StalePanel } from './components/StalePanel';
 import { subscribe } from './lib/api/socket';
 import { onConnectionState, onPresence, type ConnectionState } from './lib/api/socket';
+import {
+  getOpenAssignments, resolveAssignment as resolveAssignmentRequest,
+} from './lib/api/assignments';
 // Task 17/18: the browser asks about a run instead of performing one.
 import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
@@ -610,6 +614,49 @@ function AppShell({ signIn }: { signIn: () => void }) {
    * this list.
    */
   const [presence, setPresence] = useState<PresenceMember[]>([]);
+  /**
+   * EVERY OPEN REQUEST ON THE REVIEW THAT IS OPEN (§6.3, S17, Task 25).
+   *
+   * Both directions — what has been asked of you, and what you have asked of
+   * others — in one list, filtered per card by the cell it names. Read once
+   * when the review opens and kept current by `assignment.created` /
+   * `assignment.resolved` over the socket, which is what makes §18 item 5's
+   * *"an assignment reaches the assignee"* true without a reload.
+   *
+   * The read carries what the SERVER holds, and it is deliberately not
+   * merged with a local guess: a request this browser composed but the store
+   * refused must not sit on a card looking like one somebody made.
+   */
+  const [assignments, setAssignments] = useState<AssignmentView[]>([]);
+  /** The read failed. A dedicated error state rather than an empty list, and
+   *  rendered on the panel it is about rather than as a toast — the rule
+   *  every other load path in this codebase follows. */
+  const [assignmentsError, setAssignmentsError] = useState<string | null>(null);
+  /**
+   * WHAT IS ALREADY OPEN on a review, read once when it opens.
+   *
+   * The socket carries what happens NEXT; a request made while this browser
+   * was closed has no event it will ever receive, and a person signing in to
+   * find nothing waiting is exactly the "a mechanism that reaches nobody"
+   * failure §18 item 5 is about.
+   *
+   * A FAILURE IS SAID AND THE LIST IS EMPTIED. `getOpenAssignments` rejects
+   * rather than resolving to an empty list, and this keeps the two apart:
+   * the panel renders the error branch INSTEAD of a list, which is the load
+   * rule this codebase applies everywhere else.
+   */
+  const readAssignments = useCallback(async (reviewId: string) => {
+    try {
+      const open = await getOpenAssignments(reviewId);
+      setAssignments(open);
+      setAssignmentsError(null);
+    } catch (e) {
+      setAssignments([]);
+      setAssignmentsError(e instanceof Error
+        ? `LexPrompt could not read what has been asked of you on this review: ${e.message}`
+        : 'LexPrompt could not read what has been asked of you on this review.');
+    }
+  }, []);
   /**
    * A resync is in progress: the events between this client's cursor and
    * now are gone, so the screen is being RE-READ rather than merely waited
@@ -2983,6 +3030,27 @@ function AppShell({ signIn }: { signIn: () => void }) {
           : { ...finding, notes: [...finding.notes, payload.note] }
       ));
     }
+    if (event.type === 'assignment.created' || event.type === 'assignment.resolved') {
+      const payload = event.payload as AssignmentEventPayload;
+      if (payload.reviewId !== current.id) return;
+      /*
+       * A REQUEST ARRIVES, OR CLOSES, WITHOUT A RELOAD (§18 item 5).
+       *
+       * BY ID, and replacing rather than appending: the same event arriving
+       * twice — a replay, or a review and a matter subscription both
+       * carrying it — must not put one request on a card twice, and a
+       * `resolved` must remove the row it names rather than sit beside it.
+       * The socket's own guards drop a duplicate before this runs; this is
+       * the second one, for the reason the note handler has a second one.
+       */
+      setAssignments(held => {
+        const without = held.filter(a => a.id !== payload.assignment.id);
+        return payload.assignment.resolvedAt === undefined
+          ? [...without, payload.assignment]
+          : without;
+      });
+      return;
+    }
     // RULE 5: a `run.*` event is not handled here at all. `watchRun` has
     // it, and routes it to `refreshFindings` exactly as it did over the
     // poll. Handling it in both places would refresh the findings twice
@@ -3009,6 +3077,21 @@ function AppShell({ signIn }: { signIn: () => void }) {
     // subscription, two things it carries; a second `subscribe` for presence
     // would be a second cursor over the same review.
     const offPresence = onPresence({ review: reviewId }, setPresence);
+    /*
+     * WHAT IS ALREADY OPEN, once, when the review opens.
+     *
+     * The socket carries what happens NEXT; a request made while this
+     * browser was closed has no event it will ever receive, and a person
+     * signing in to find nothing waiting is exactly the "a mechanism that
+     * reaches nobody" failure §18 item 5 is about.
+     *
+     * A FAILURE IS SAID. `getOpenAssignments` rejects rather than resolving
+     * to an empty list, and a silent empty list here would read as "nobody
+     * has asked you anything" — which is the load-path rule this codebase
+     * has under `describeLoadError`, at a surface where the cost is a
+     * colleague waiting on an answer nobody knows was requested.
+     */
+    detach(readAssignments(reviewId), 'reading this review s open assignments');
     const subscription = subscribe({ review: reviewId }, {
       onEvent: applyPush,
       onResync: () => {
@@ -3025,8 +3108,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
     return () => {
       offPresence();
       // A closed review claims nobody. The roster it held was about a screen
-      // this tab is no longer on.
+      // this tab is no longer on, and so was every request on it.
       setPresence([]);
+      setAssignments([]);
+      setAssignmentsError(null);
       subscription.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3062,6 +3147,31 @@ function AppShell({ signIn }: { signIn: () => void }) {
    * synthesised text no document contains"* is the one output where that
    * matters most.
    */
+  /**
+   * A REQUEST THE STORE ACTUALLY TOOK.
+   *
+   * Await-then-apply: `AssignPanel` hands this the row the server returned,
+   * never the one it composed. The push will carry the same row to every
+   * other reader; applying it here by id means this browser does not wait
+   * for its own echo.
+   */
+  const handleAssigned = (assignment: AssignmentView) => {
+    setAssignments(held => [...held.filter(a => a.id !== assignment.id), assignment]);
+  };
+
+  /** Closes one. The server refuses anybody but the assignee and the
+   *  assigner, and the row is removed only after it confirms. */
+  const handleResolveAssignment = async (id: string) => {
+    try {
+      await resolveAssignmentRequest(id);
+      setAssignments(held => held.filter(a => a.id !== id));
+    } catch (e) {
+      notify(e instanceof Error
+        ? `That request was not closed: ${e.message}`
+        : 'That request was not closed.', 'error');
+    }
+  };
+
   const handleConfirmNetPosition = async (docId: string, clauseId: string) => {
     await writeNetPosition(docId, clauseId, { action: 'confirm' }, 'This confirmation');
   };
@@ -4807,6 +4917,13 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     playbookVersion={runPlaybookVersion}
                     onShowVersionHistory={handleShowVersionHistoryForRun}
                     presence={presence}
+                    assignments={assignments}
+                    assignmentsError={assignmentsError ?? undefined}
+                    onRetryAssignments={() => {
+                      if (run?.id) detach(readAssignments(run.id), 're-reading open assignments');
+                    }}
+                    onAssigned={handleAssigned}
+                    onResolveAssignment={(id) => { void handleResolveAssignment(id); }}
                   />
                 ) : (
                   <TabularReview

@@ -95,6 +95,16 @@ vi.mock('./lib/model/gatewayModelClient', () => ({
 vi.mock('./lib/api/users', () => ({
   loadDirectory: vi.fn().mockResolvedValue(undefined),
   userName: (id: string) => (id === 'u2' ? 'R. Okafor' : id === 'u1' ? 'A. Trainee' : undefined),
+  // Task 25's assign panel resolves both of these through the one directory
+  // module (P32). A factory mock replaces the WHOLE module, so an export it
+  // omits is a hard failure inside a component the moment it renders --
+  // which is what these two lines are, rather than test scaffolding.
+  userInitials: (id: string) => (id === 'u2' ? 'RO' : id === 'u1' ? 'AT' : undefined),
+  directoryLoaded: () => true,
+  workspaceUsers: () => [
+    { id: 'u1', displayName: 'A. Trainee', initials: 'AT', role: 'reviewer', status: 'active' },
+    { id: 'u2', displayName: 'R. Okafor', initials: 'RO', role: 'partner', status: 'active' },
+  ],
 }));
 
 const getFindingsMock = vi.fn();

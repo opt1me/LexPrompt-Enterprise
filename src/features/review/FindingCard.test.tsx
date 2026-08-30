@@ -729,3 +729,122 @@ describe('FindingCard — a change arriving mid-decision is held and announced (
     expect(container.querySelector('[data-held-update]')).toBeTruthy();
   });
 });
+
+describe('a request one person made of another (§6.3, Task 25)', () => {
+  const ASK = {
+    id: 'as1', reviewId: 'r1', findingsKey: 'd1', clauseId: 'c1',
+    assigneeUserId: 'me', assignedByUserId: 'u1',
+    message: 'Not sure the cap survives 14.2.', createdAt: 1,
+  };
+
+  it('shows the assigner and the message to the assignee, not just a badge', () => {
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        localUserId="me"
+        audience={TEST_AUDIENCE}
+        assignments={[ASK]}
+      />,
+    );
+    // A bare marker makes the assignee open every clause to find out what
+    // was wanted.
+    expect(container.textContent).toContain('asked you to look at this');
+    expect(container.textContent).toContain('Not sure the cap survives 14.2.');
+  });
+
+  it('reads the other way round for the person who asked', () => {
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        localUserId="u1"
+        audience={TEST_AUDIENCE}
+        assignments={[{ ...ASK, assigneeUserId: 'u2', assignedByUserId: 'u1' }]}
+      />,
+    );
+    expect(container.textContent).toContain('You asked');
+    expect(container.textContent).not.toContain('asked you to look at this');
+  });
+
+  it('offers the assign action only where there is somewhere to persist it', () => {
+    const without = mount(
+      <FindingCard {...baseProps} finding={doneFinding()} audience={TEST_AUDIENCE} />);
+    expect(without.textContent).not.toContain('Ask a colleague');
+    cleanup?.();
+    cleanup = null;
+
+    const withTarget = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        audience={TEST_AUDIENCE}
+        assignTarget={{ reviewId: 'r1', findingsKey: 'd1' }}
+        onAssigned={() => { /* … */ }}
+      />);
+    // A control that goes nowhere is worse than no control — the rule
+    // `onVerify` already follows on this card.
+    expect(withTarget.textContent).toContain('Ask a colleague to look at this');
+  });
+
+  it('keeps flagging and asking as TWO acts, reachable from one place', () => {
+    const onVerify = vi.fn();
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        audience={TEST_AUDIENCE}
+        onVerify={onVerify}
+        assignTarget={{ reviewId: 'r1', findingsKey: 'd1' }}
+        onAssigned={() => { /* … */ }}
+      />);
+    const ask = Array.from(container.querySelectorAll('button'))
+      .find(b => /Ask a colleague/i.test(b.textContent ?? ''))!;
+    act(() => { ask.click(); });
+    /*
+     * Opening the panel writes NO disposition. Flagging records a judgement
+     * about the answer; assigning asks a person to look. Doing both in one
+     * click would write a disposition the person may not have meant (§6.3),
+     * and this is the assertion a later "flag and assign in one click" would
+     * have to break deliberately.
+     */
+    expect(onVerify).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Ask a colleague to look at this');
+  });
+
+  it('goes dead while the client is stale, like every other human-authored write', () => {
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        audience={TEST_AUDIENCE}
+        stale
+        assignments={[ASK]}
+        localUserId="me"
+        assignTarget={{ reviewId: 'r1', findingsKey: 'd1' }}
+        onAssigned={() => { /* … */ }}
+        onResolveAssignment={() => { /* … */ }}
+      />);
+    const named = (re: RegExp) => Array.from(container.querySelectorAll('button'))
+      .find(b => re.test(b.textContent ?? ''))!;
+    // §3's list names an assignment explicitly. The findings stay on screen;
+    // the controls that compose a write do not work.
+    expect(named(/Ask a colleague/).disabled).toBe(true);
+    expect(named(/I have looked at this/).disabled).toBe(true);
+  });
+
+  it('an assignment moves no state chip and names no judgement', () => {
+    const container = mount(
+      <FindingCard
+        {...baseProps}
+        finding={doneFinding()}
+        localUserId="me"
+        audience={TEST_AUDIENCE}
+        assignments={[ASK]}
+      />);
+    // A request is not a disposition. The chip still says what the human
+    // record says, and the request sentence carries no verdict of its own.
+    const requestBlock = container.querySelector('[data-assignments]')!;
+    expect(requestBlock.textContent).not.toMatch(/verified|rejected|flagged/i);
+  });
+});

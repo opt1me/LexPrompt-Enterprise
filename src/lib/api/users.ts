@@ -98,3 +98,19 @@ export function forgetDirectory(): void {
   byId = null;
   inFlight = null;
 }
+
+/**
+ * EVERYBODY THIS WORKSPACE HOLDS, for a control that has to offer a choice
+ * of people (Task 25's assign panel).
+ *
+ * From the directory this module already loaded, never a second request: a
+ * picker that fetched its own list would be a second copy of a mutable field
+ * on screen beside the first, refreshed at a different moment.
+ *
+ * EMPTY when the directory is not loaded, which a caller must not read as
+ * "this firm has one person" — `directoryLoaded()` is how the two are told
+ * apart, and the panel says which it is rather than rendering an empty menu.
+ */
+export function workspaceUsers(): WorkspaceUser[] {
+  return byId === null ? [] : [...byId.values()];
+}

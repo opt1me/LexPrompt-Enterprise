@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Loader, ShieldAlert, AlertTriangle, RotateCcw, Wand2, CircleSlash, TriangleAlert } from 'lucide-react';
 import type { PlaybookClause, Finding, RiskLevel } from '../../types';
-import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
+import type { AssignmentView, DispositionWithHistory, VerificationChange } from '@lexprompt/core';
 import { RiskChip } from '../../components/RiskChip';
 import { StateChip } from '../../components/StateChip';
 import { PositionChip } from '../../components/PositionChip';
@@ -13,6 +13,7 @@ import { NetPositionPanel } from './NetPositionPanel';
 import { PositionComparison } from './PositionComparison';
 import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
 import { DispositionHistory } from './DispositionHistory';
+import { AssignPanel } from '../assignments/AssignPanel';
 import { ConflictNotice, type VerificationConflict } from './ConflictNotice';
 import { mayApplyNow, sameCell, sameDisposition } from './pendingUpdate';
 import { verificationFromDisposition } from '../../lib/api/findings';
@@ -150,6 +151,31 @@ export interface FindingCardProps {
    * nothing".
    */
   stale?: boolean;
+  /**
+   * WHAT HAS BEEN ASKED ABOUT THIS CLAUSE, open (§6.3, S17, Task 25).
+   *
+   * Both directions: a request addressed to you reads *"A. Trainee asked you
+   * to look at this"* with what they said; one you made reads *"You asked R.
+   * Okafor to look at this"*. A bare marker would make the assignee open
+   * every clause to find out what was wanted.
+   *
+   * NOT A DISPOSITION, and nothing here renders as one. An assignment
+   * changes no state on this card: the chip above says what somebody
+   * DECIDED, and this says what somebody ASKED.
+   */
+  assignments?: AssignmentView[];
+  /**
+   * Where an assignment this card creates belongs. Optional, and its absence
+   * is what removes the assign action — the same rule `onVerify` follows: a
+   * card with no way to persist offers no control that goes nowhere.
+   */
+  assignTarget?: { reviewId: string; findingsKey: string };
+  /** The request the store actually took. Await-then-apply, like every other
+   *  human-authored write. */
+  onAssigned?: (assignment: AssignmentView) => void;
+  /** Closes one — the assignee having looked, or the assigner withdrawing.
+   *  The server refuses anybody else. */
+  onResolveAssignment?: (id: string) => void;
 }
 
 /**
@@ -202,11 +228,13 @@ export function FindingCard({
   onConfirmNetPosition, onAmendNetPosition, netPositionBusy, documentInfo,
   disposition, audience = NO_DIRECTORY, conflict, onReapplyConflict, onDismissConflict,
   rejectModalOpen = false, stale = false,
+  assignments, assignTarget, onAssigned, onResolveAssignment,
 }: FindingCardProps) {
   const status = finding?.status ?? 'pending';
   const [trailOpen, setTrailOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [ownRejectOpen, setOwnRejectOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
 
   /**
    * THE DISPOSITION THIS CARD IS SHOWING, which is not always the one it was
@@ -576,6 +604,61 @@ export function FindingCard({
           />
         )}
 
+        {/* WHAT HAS BEEN ASKED, and by whom. Above the notes and below the
+           controls, because it is neither: a note is a remark on the record
+           and a disposition is a judgement, and this is a request one person
+           made of another (§6.3). */}
+        {isVerifiable(finding) && (assignments ?? []).length > 0 && (
+          <div data-assignments className="space-y-2 border-l-2 border-l-draft pl-3">
+            {(assignments ?? []).map(a => {
+              const mine = a.assigneeUserId === localUserId;
+              const asker = audience.nameOf(a.assignedByUserId)
+                ?? 'Someone this workspace does not name';
+              const asked = audience.nameOf(a.assigneeUserId)
+                ?? 'someone this workspace does not name';
+              return (
+                <div key={a.id} className="space-y-1">
+                  <p data-assignment={a.id} className="font-ui text-ui-sm text-ink-2">
+                    {mine ? `${asker} asked you to look at this` : `You asked ${asked} to look at this`}
+                  </p>
+                  {/* THE MESSAGE, not just a badge. Without it the assignee
+                      opens the clause to work out what was wanted. */}
+                  {a.message && (
+                    <p className="font-prose text-field text-ink-prose">{a.message}</p>
+                  )}
+                  {onResolveAssignment && (
+                    <button
+                      type="button"
+                      onClick={() => onResolveAssignment(a.id)}
+                      disabled={stale}
+                      className="font-ui text-ui-sm text-accent underline underline-offset-2 hover:text-accent-strong disabled:opacity-50 disabled:no-underline transition-colors"
+                    >
+                      {mine ? 'I have looked at this' : 'Withdraw the request'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* TWO ACTS, TWO CLICKS, one place. Flagging records a judgement
+           about the answer; assigning asks a person to look. Doing both in
+           one click would write a disposition the person may not have meant
+           (§6.3), so they sit beside each other and stay separate. */}
+        {isVerifiable(finding) && assignTarget && onAssigned && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setAssignOpen(true)}
+              disabled={stale}
+              className="font-ui text-ui-sm text-ink-3 underline underline-offset-2 hover:text-ink-1 disabled:opacity-50 disabled:no-underline transition-colors"
+            >
+              Ask a colleague to look at this
+            </button>
+          </div>
+        )}
+
         {finding && onAddNote && (
           <NotesPanel
             notes={finding.notes}
@@ -587,6 +670,20 @@ export function FindingCard({
           />
         )}
       </div>
+
+      {assignTarget && onAssigned && (
+        <AssignPanel
+          open={assignOpen}
+          reviewId={assignTarget.reviewId}
+          findingsKey={assignTarget.findingsKey}
+          clauseId={clause.id}
+          clauseTitle={clause.title}
+          meId={localUserId}
+          stale={stale}
+          onClose={() => setAssignOpen(false)}
+          onAssigned={onAssigned}
+        />
+      )}
 
       {historyOpen && shownDisposition && (
         <DispositionHistory

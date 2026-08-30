@@ -11,10 +11,11 @@ import {
   isCollectionTarget,
 } from '@lexprompt/core';
 import type {
-  DispositionWithHistory, PresenceMember, VerificationChange,
+  AssignmentView, DispositionWithHistory, PresenceMember, VerificationChange,
 } from '@lexprompt/core';
 import { reportPresence } from '../../lib/api/socket';
 import { PresenceRoster } from '../../components/PresenceRoster';
+import { AskedOfYou } from '../assignments/AskedOfYou';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
 import {
   isVerifiable, NO_EXPORT_CONTEXT, type DispositionAudience, type ExportContext,
@@ -204,6 +205,29 @@ export interface ResultsViewProps {
    * refusal is the day presence stops being advisory (S6).
    */
   presence?: PresenceMember[];
+  /**
+   * EVERY OPEN REQUEST ON THIS REVIEW (§6.3, S17, Task 25) — in both
+   * directions: what has been asked of you, and what you have asked of
+   * others.
+   *
+   * One list, filtered per card by the cell it names, for the reason the
+   * findings map is one map read by two renderers: a second list per card
+   * would be a second answer to "what has been asked here".
+   *
+   * Optional: absent, the assign action does not render — the same rule
+   * `onVerify` follows, since a control that goes nowhere is worse than no
+   * control.
+   */
+  assignments?: AssignmentView[];
+  /** The request the store actually took, after an assign. */
+  onAssigned?: (assignment: AssignmentView) => void;
+  /** Closes one, by the assignee or the assigner. */
+  onResolveAssignment?: (id: string) => void;
+  /** The open-requests read failed. Said on the panel, never swallowed into
+   *  an empty list — "nobody asked you anything" and "the read failed" are
+   *  the same pixels once one is flattened into the other. */
+  assignmentsError?: string;
+  onRetryAssignments?: () => void;
 }
 
 type Tab = 'findings' | 'chat';
@@ -243,6 +267,7 @@ export function ResultsView({
   dispositionOf, audience, exportContext, verifyConflict, onReapplyConflict, onDismissConflict,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
   playbookVersion, onShowVersionHistory, matterId, presence,
+  assignments, onAssigned, onResolveAssignment, assignmentsError, onRetryAssignments,
 }: ResultsViewProps) {
   const [activeDocId, setActiveDocId] = useState(run.documentIds[0] ?? '');
   const [highlights, setHighlights] = useState<string[]>([]);
@@ -591,6 +616,25 @@ export function ResultsView({
     return out;
   }, [presence, localUserId]);
 
+  /** Clause id -> the open requests about it, from the one list. */
+  const assignmentsByClause = useMemo(() => {
+    const out: Record<string, AssignmentView[]> = {};
+    for (const a of assignments ?? []) {
+      if (findingsKey && a.findingsKey !== findingsKey) continue;
+      (out[a.clauseId] ??= []).push(a);
+    }
+    return out;
+  }, [assignments, findingsKey]);
+
+  /** Only the ones addressed to YOU, for the panel that says so. */
+  const askedOfMe = useMemo(
+    () => (assignments ?? []).filter(a => a.assigneeUserId === localUserId),
+    [assignments, localUserId]);
+
+  const clauseTitles = useMemo(
+    () => Object.fromEntries(clauses.map(c => [c.id, c.title])),
+    [clauses]);
+
   return (
     <div className="h-full flex flex-col md:flex-row bg-paper min-h-0">
       {/* The clause index rail, `md` and up. */}
@@ -616,6 +660,17 @@ export function ResultsView({
         data-pane="findings"
         className="w-full md:flex-1 md:min-w-0 lg:flex-none lg:w-[380px] xl:w-[470px] border-r border-rule flex flex-col bg-card min-h-0"
       >
+        {/* WHAT HAS BEEN ASKED OF YOU, at the top of the column the cards
+           are in — §18 item 5's "an assignment reaches the assignee". A
+           mechanism nobody can see reaches nobody. */}
+        <AskedOfYou
+          assignments={askedOfMe}
+          audience={audience}
+          clauseTitles={clauseTitles}
+          onOpenClause={(_key, clauseId) => handleSelectClause(clauseId)}
+          error={assignmentsError}
+          onRetry={onRetryAssignments}
+        />
         <div className="p-4 border-b border-rule flex items-center justify-between gap-3">
           {run.documentIds.length > 1 ? (
             <select
@@ -872,6 +927,15 @@ export function ResultsView({
                       }
                       onReapplyConflict={onReapplyConflict}
                       onDismissConflict={onDismissConflict}
+                      // Keyed by `findingsKey` for the reason the
+                      // disposition above is: a collection review produces
+                      // one set of requests per clause however many
+                      // documents fed it.
+                      assignments={assignmentsByClause[clause.id]}
+                      assignTarget={findingsKey && onAssigned
+                        ? { reviewId: run.id, findingsKey } : undefined}
+                      onAssigned={onAssigned}
+                      onResolveAssignment={onResolveAssignment}
                       // The KEYBOARD path's reject dialog (`r`), which this
                       // view owns and the card cannot see. The card's own
                       // dialog reports itself; both feed one gate, so an

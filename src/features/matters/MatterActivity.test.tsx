@@ -10,6 +10,9 @@ const activityFetch = vi.hoisted(() => vi.fn());
 vi.mock('../../lib/api/activity', () => ({ getMatterActivity: activityFetch }));
 vi.mock('../../lib/api/users', () => ({
   userName: (id?: string) => ({ me: 'A. Trainee', partner: 'R. Okafor' } as Record<string, string>)[id ?? ''],
+  userInitials: (id?: string) => ({ me: 'AT', partner: 'RO' } as Record<string, string>)[id ?? ''],
+  directoryLoaded: () => true,
+  workspaceUsers: () => [],
 }));
 
 function finding(over: Partial<Finding> = {}): Finding {
