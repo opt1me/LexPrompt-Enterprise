@@ -192,11 +192,42 @@ describe('Stage 1 definition of done (§18.2)', () => {
     }
   });
 
+  /**
+   * THE APP'S OWN LIVE SOCKET, AND WHY IT IS NAMED RATHER THAN PATTERN-MATCHED.
+   *
+   * `src/lib/api/socket.ts` (Stage 4 Task 19) constructs the one `WebSocket`
+   * this browser opens. It is not egress in the sense this suite is about:
+   * the URL is derived from `config.apiBaseUrl`, which the SPA is built with
+   * as `/api`, so the socket reaches the app's own origin and the same nginx
+   * hop every other request takes — exactly as `client.ts` is allowed its
+   * `fetch` because the base URL is configuration rather than a literal host.
+   *
+   * NAMED FOR ONE PATTERN, not exempted as a file. Every other pattern still
+   * applies to it, and the assertion below is what stops the allowance
+   * becoming a hole: this file must contain no external URL literal at all.
+   * A file-level exemption hides everything in the file, not the part it was
+   * meant to protect — `PdfCanvas.tsx` shipped three unrestyled states behind
+   * one, and `SCAN_EXEMPT` is empty in the palette guard for that reason.
+   */
+  const OWN_SOCKET = 'src/lib/api/socket.ts';
+  const OWN_SOCKET_PATTERN = 'EventSource / WebSocket';
+
+  it('the app s own socket names no external host, which is what its allowance rests on', () => {
+    const code = codeOf(path.join(ROOT, OWN_SOCKET));
+    // The sanity check: the file really is the one that opens a socket.
+    expect(code).toMatch(/new\s+WebSocket\s*\(/);
+    // …and it builds its URL from configuration, never from a literal.
+    expect(code).toContain('config.apiBaseUrl');
+    expect(code).not.toMatch(/['"`]wss?:\/\/[^'"`]+/);
+    expect(code).not.toMatch(/['"`]https?:\/\/[^'"`]+/);
+  });
+
   it('every model call in the browser goes through the gateway client', () => {
     const offenders: string[] = [];
     for (const file of CLIENT_FILES) {
       const code = codeOf(file);
       for (const { name, re } of EGRESS_PATTERNS) {
+        if (rel(file) === OWN_SOCKET && name === OWN_SOCKET_PATTERN) continue;
         re.lastIndex = 0;
         const m = code.match(re);
         if (m) offenders.push(`${rel(file)}: ${name} — ${m.join(', ')}`);

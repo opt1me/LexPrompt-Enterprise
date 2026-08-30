@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { ModelError, type AppEvent, type EventPage, type RunView } from '@lexprompt/core';
+import { ModelError, type AppEvent, type RunView } from '@lexprompt/core';
 import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
+import { installFakeSockets, type FakeSocket, type SocketHarness } from '../../test/fakeSocket';
 
 /**
  * The browser's run client — Task 17.
@@ -14,10 +15,14 @@ import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
 
 const transport = makeFakeTransport();
 vi.mock('./client', () => transportModule(transport));
+// The socket authenticates with the access token at connect time; this suite
+// is about `watchRun`'s contract, not about the sign-in.
+vi.mock('../auth/oidc', () => ({ getAccessToken: async () => 'a-test-token' }));
 
 const { startRun, getRun, cancelRun, retryCell, liveRunFor, watchRun, isRunOver } =
   await import('./runs');
 const { describeRunEnding } = await import('../loadError');
+const { closeSocket, WS_STALE_AFTER_MS } = await import('./socket');
 
 const RUN: RunView = {
   id: 'run-1', reviewId: 'rev-1', state: 'queued', requestedByUserId: 'u1',
@@ -32,27 +37,20 @@ const event = (id: number, type: AppEvent['type']): AppEvent => ({
   payload: { runId: 'run-1', reviewId: 'rev-1', findingsKey: 'd1', clauseId: `c${id}`, version: id },
 });
 
-const page = (events: AppEvent[], over: Partial<EventPage> = {}): EventPage => ({
-  events,
-  nextCursor: events.length > 0 ? events[events.length - 1].id : 0,
-  hasMore: false,
-  ...over,
-});
+let harness: SocketHarness;
 
 beforeEach(() => {
   transport.reset();
   vi.useFakeTimers();
+  harness = installFakeSockets();
 });
 afterEach(() => {
+  closeSocket();
+  harness.restore();
   vi.useRealTimers();
 });
 
-/** Lets every already-resolved promise settle, then advances the poll timer
- *  and lets the next poll settle. Fake timers alone do not drain the
- *  microtask queue an `await` sits in. */
-async function tick(ms = 1_000): Promise<void> {
-  await vi.advanceTimersByTimeAsync(ms);
-}
+const openedSocket = (index = 0): Promise<FakeSocket> => harness.opened(index);
 
 describe('the requests each export makes', () => {
   it('starts a run with POST /v1/reviews/:id/runs', async () => {
@@ -84,172 +82,132 @@ describe('the requests each export makes', () => {
   });
 });
 
-describe('watchRun keeps a cursor, in id order, and applies nothing twice', () => {
-  it('asks from the highest id it has applied', async () => {
-    const seen: number[] = [];
-    transport.responses.set('/v1/runs/run-1/events?after=0',
-      page([event(1, 'finding.running'), event(2, 'finding.done')]));
-    transport.responses.set('/v1/runs/run-1/events?after=2', page([]));
+/**
+ * `watchRun` OVER THE SOCKET — Stage 4 Task 19.
+ *
+ * ## Why these assertions changed and the signature did not
+ *
+ * Stage 3's cases here drove the POLL: capped pages, three consecutive
+ * failed `GET`s, a cursor advanced across a retention gap. That transport is
+ * gone — Stage 3's own docstring in `runs.ts` promised it would be
+ * ("Stage 4 replaces the transport INSIDE this function and changes no
+ * caller") — so the cases that described the poll's mechanics describe
+ * nothing now, and keeping them would be asserting about a `setTimeout` this
+ * module no longer contains.
+ *
+ * What is asserted instead is the CONTRACT, which is unchanged: four
+ * parameters, `onEvent` per event in id order, `onResync` when the cursor
+ * falls outside the window, `onError` when this client can no longer vouch
+ * for what it is showing, and a `stop` that stops it. `App.tsx`'s
+ * `attachRun` is not touched by this change, and that is the property the
+ * whole interface note was about.
+ */
+describe('watchRun keeps its signature over the socket', () => {
+  it('reports the run s events through the existing callback shape', async () => {
+    const onEvent = vi.fn();
+    const onError = vi.fn();
+    const stop = watchRun('run-1', onEvent, onError);
+    const ws = await openedSocket();
 
-    const stop = watchRun('run-1', e => seen.push(e.id), () => {});
-    await tick(0);
-    expect(seen).toEqual([1, 2]);
-    await tick();
-    // The second poll asked from 2 and got nothing; nothing was re-applied.
-    expect(seen).toEqual([1, 2]);
+    ws.deliver({ t: 'event', sub: { run: 'run-1' }, event: event(1, 'finding.done') });
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    expect((onEvent.mock.calls[0][0] as AppEvent).id).toBe(1);
+    expect(onError).not.toHaveBeenCalled();
     stop();
   });
 
-  it('stops on run.finished, and issues no further poll', async () => {
-    transport.responses.set('/v1/runs/run-1/events?after=0',
-      page([event(1, 'finding.done'), event(2, 'run.finished')]));
-    const stop = watchRun('run-1', () => {}, () => {});
-    await tick(0);
-    const after = transport.sent.length;
-    await tick(5_000);
-    // Nothing more was fetched. (`apiGet` is not recorded in `sent`, so the
-    // absence is asserted through the unregistered path instead: a third
-    // poll would ask `?after=2`, which is not registered and would reject —
-    // and a rejection three times over would call `onError`.)
-    expect(transport.sent.length).toBe(after);
+  it('subscribes to the RUN, not to the review it belongs to', async () => {
+    const stop = watchRun('run-1', vi.fn(), vi.fn());
+    const ws = await openedSocket();
+    expect(ws.sent).toContainEqual({ t: 'subscribe', sub: { run: 'run-1' }, lastEventId: 0 });
     stop();
   });
 
-  it('drains a capped page immediately rather than one page per interval', async () => {
-    const seen: number[] = [];
-    transport.responses.set('/v1/runs/run-1/events?after=0',
-      page([event(1, 'finding.done')], { hasMore: true }));
-    transport.responses.set('/v1/runs/run-1/events?after=1',
-      page([event(2, 'run.finished')]));
-    const stop = watchRun('run-1', e => seen.push(e.id), () => {});
-    await tick(0);
-    expect(seen, 'a capped page waited out the poll interval').toEqual([1, 2]);
+  it('stops on run.finished, and applies nothing after it', async () => {
+    const onEvent = vi.fn();
+    const stop = watchRun('run-1', onEvent, vi.fn());
+    const ws = await openedSocket();
+
+    ws.deliver({ t: 'event', sub: { run: 'run-1' }, event: event(1, 'finding.done') });
+    ws.deliver({ t: 'event', sub: { run: 'run-1' }, event: event(2, 'run.finished') });
+    // The ending IS delivered — the caller's `finishRun` runs off it — and
+    // the watch ends after it.
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    ws.deliver({ t: 'event', sub: { run: 'run-1' }, event: event(3, 'finding.done') });
+    expect(onEvent).toHaveBeenCalledTimes(2);
     stop();
   });
 
   it('unsubscribes: after stop(), nothing more is applied', async () => {
-    const seen: number[] = [];
-    transport.responses.set('/v1/runs/run-1/events?after=0', page([event(1, 'finding.done')]));
-    transport.responses.set('/v1/runs/run-1/events?after=1', page([event(2, 'finding.done')]));
-    const stop = watchRun('run-1', e => seen.push(e.id), () => {});
-    await tick(0);
+    const onEvent = vi.fn();
+    const stop = watchRun('run-1', onEvent, vi.fn());
+    const ws = await openedSocket();
+    ws.deliver({ t: 'event', sub: { run: 'run-1' }, event: event(1, 'finding.done') });
     stop();
-    await tick(5_000);
-    expect(seen).toEqual([1]);
+    ws.deliver({ t: 'event', sub: { run: 'run-1' }, event: event(2, 'finding.done') });
+    expect(onEvent).toHaveBeenCalledTimes(1);
   });
-});
 
-describe('a polling error does not silently stop the poll', () => {
-  it('calls onError after three consecutive failures, not after one', async () => {
-    /*
-     * A poll loop that dies quietly leaves a run apparently frozen at
-     * whatever it last saw — a job that died looking like a job still
-     * working. Three rather than one because a single failed poll over a
-     * network is ordinary and self-correcting.
-     */
-    const errors: unknown[] = [];
-    transport.failures.set('/v1/runs/run-1/events?after=0',
-      new ModelError('the network is down', 'network', 0));
-    const stop = watchRun('run-1', () => {}, e => errors.push(e));
-
-    await tick(0);
-    expect(errors).toHaveLength(0);
-    await tick();
-    expect(errors, 'onError fired before three failures').toHaveLength(0);
-    await tick();
-    expect(errors).toHaveLength(1);
+  it('passes onResync straight through, and fabricates no event to fill the gap', async () => {
+    const onResync = vi.fn();
+    const stop = watchRun('run-1', vi.fn(), vi.fn(), { onResync });
+    const ws = await openedSocket();
+    ws.deliver({ t: 'resync_required', sub: { run: 'run-1' } });
+    expect(onResync).toHaveBeenCalledTimes(1);
     stop();
   });
 
-  it('keeps polling after a failure, and a later success clears the count', async () => {
-    // A watch that gave up on the first failure would leave a live run
-    // unwatched with nothing said.
-    const seen: number[] = [];
-    const errors: unknown[] = [];
-    transport.failures.set('/v1/runs/run-1/events?after=0',
-      new ModelError('the network is down', 'network', 0));
-    const stop = watchRun('run-1', e => seen.push(e.id), e => errors.push(e));
-    await tick(0);
-
-    transport.failures.clear();
-    transport.responses.set('/v1/runs/run-1/events?after=0', page([event(1, 'finding.done')]));
-    transport.responses.set('/v1/runs/run-1/events?after=1', page([]));
-    await tick();
-    expect(seen).toEqual([1]);
-    expect(errors).toHaveLength(0);
-    stop();
-  });
-
-  it('tells the caller to resync, ADVANCES PAST THE GAP, and still ends on run.finished', async () => {
-    /*
-     * THIS TEST COULD NOT FAIL, and the thing it could not see had shipped
-     * (Stage 3 final review, M2).
-     *
-     * Its fixture was `page([event(9, 'finding.done')], { resyncRequired:
-     * true })` — a resync page CARRYING AN EVENT, which the server never
-     * produces: that branch returns `events: []` always. The fixture's
-     * `nextCursor` was therefore 9, from the event, and the loop terminated
-     * for a reason no real response would have supplied. The only thing
-     * asserted was `resynced === 1`, so the two mutations that mattered —
-     * returning the resync branch on EVERY poll, and deleting the cursor
-     * advance from `watchRun` — were both invisible to it. Meanwhile the
-     * real pair had no exit at all: the server returned the cursor
-     * unchanged, the client advanced from nothing, and the watch re-entered
-     * the same state every second for the life of the page, never
-     * delivering `run.finished`.
-     *
-     * The fixture is now the shape the server really sends: NO events, and
-     * a `nextCursor` at the watermark. So the only thing that can move this
-     * loop on is the cursor the server handed back, which is the property
-     * under test.
-     */
-    let resynced = 0;
-    const seen: number[] = [];
-    const errors: unknown[] = [];
-    transport.responses.set('/v1/runs/run-1/events?after=0',
-      page([], { nextCursor: 8, resyncRequired: true }));
-    transport.responses.set('/v1/runs/run-1/events?after=8',
-      page([event(9, 'run.finished')]));
-    const stop = watchRun('run-1', e => seen.push(e.id), e => errors.push(e),
-      { onResync: () => { resynced += 1; } });
-
-    await tick(0);
-    expect(resynced).toBe(1);
-    // Nothing is fabricated to fill the gap — the caller re-reads the state
-    // those events described — and no event is invented from the empty page.
-    expect(seen).toEqual([]);
-
-    await tick();
-    // THE EXIT. The watch polled from the cursor the resync page gave it,
-    // received the run's ending, and stopped.
-    expect(seen, 'the watch never advanced past the resync').toEqual([9]);
-    expect(resynced, 'the watch resynced again instead of moving on').toBe(1);
-
-    // …and it really did stop: a further poll would ask `?after=9`, which is
-    // not registered and rejects, and three rejections call `onError`.
-    await tick(5_000);
-    expect(errors).toHaveLength(0);
-    expect(seen).toEqual([9]);
-    stop();
-  });
-
-  it('does not spin when the whole event table is gone and the cursor cannot move', async () => {
-    // The one case the server cannot hand a usable cursor for: `min(id)` is
-    // null because everything ever written has been pruned, so `nextCursor`
-    // comes back unchanged. The client must not INVENT progress — it stays
-    // where it is and keeps saying so, which is what sends the caller to
-    // re-read the run rather than wait for an event that no longer exists.
-    let resynced = 0;
-    transport.responses.set('/v1/runs/run-1/events?after=0',
-      page([], { nextCursor: 0, resyncRequired: true }));
-    const stop = watchRun('run-1', () => {}, () => {}, { onResync: () => { resynced += 1; } });
-    await tick(0);
-    expect(resynced).toBe(1);
-    await tick();
-    expect(resynced, 'the watch went quiet while still stuck outside the window').toBe(2);
+  it('accepts intervalMs and ignores it, so no caller breaks', async () => {
+    // The poll's knob. Removing it from `WatchOptions` would be a signature
+    // change, which is the one thing this function promised not to make.
+    const stop = watchRun('run-1', vi.fn(), vi.fn(), { intervalMs: 250 });
+    const ws = await openedSocket();
+    expect(ws.sent).toHaveLength(1);
     stop();
   });
 });
+
+describe('a watch that has stopped being live says so', () => {
+  it('calls onError when the connection goes stale, ONCE', async () => {
+    /*
+     * The poll called `onError` after three consecutive failures because that
+     * was the only thing it could know. A socket knows directly, and `stale`
+     * is the same fact at the same moment: a run whose updates have stopped
+     * looks exactly like a run that has stopped producing them.
+     *
+     * ONCE per stale period, not once per frame of it — a notice repeated
+     * every second is a notice nobody reads, which was the whole argument for
+     * three strikes.
+     */
+    const onError = vi.fn();
+    const stop = watchRun('run-1', vi.fn(), onError);
+    const ws = await openedSocket();
+    ws.deliver({ t: 'hello', instanceId: 'api-1', userId: 'u1' });
+
+    ws.drop();
+    await vi.advanceTimersByTimeAsync(300);
+    // NOT on the drop. A socket that closes and reconnects inside 300 ms
+    // must not put a notice in front of a reviewer.
+    expect(onError).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(WS_STALE_AFTER_MS + 1_000);
+    expect(onError).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(WS_STALE_AFTER_MS + 1_000);
+    expect(onError).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
+  it('says nothing to a watch that has already been stopped', async () => {
+    const onError = vi.fn();
+    const stop = watchRun('run-1', vi.fn(), onError);
+    const ws = await openedSocket();
+    stop();
+    ws.drop();
+    await vi.advanceTimersByTimeAsync(WS_STALE_AFTER_MS + 5_000);
+    expect(onError).not.toHaveBeenCalled();
+  });
+});
+
 
 describe('a run has a terminal state that is neither an error nor a success', () => {
   it('renders cancelled calmly and failed as a failure — different strings', () => {

@@ -355,12 +355,26 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
       /import \{[^}]*watchRun[^}]*\} from '\.\/lib\/api\/runs'/);
     expect(WEB_SOURCES.length).toBeGreaterThan(120);        // the sanity check
 
-    // …and the poll it holds is a poll, with a cursor, which is the shape
-    // Stage 4's socket inherits rather than replaces.
+    // …and the transport it holds is now the SOCKET — INVERTED BY STAGE 4
+    // TASK 19 (P30), because the promise this assertion was making has been
+    // kept rather than broken.
+    //
+    // It read: "the poll it holds is a poll, with a cursor, which is the
+    // shape Stage 4's socket inherits rather than replaces", and pinned
+    // `after=${cursor}` and `resyncRequired`. Stage 4 replaced the transport
+    // INSIDE `watchRun` exactly as `runs.ts`'s own docstring said it would,
+    // so those two strings describe nothing here any more. What survives —
+    // and what this file can check and the socket's own suites cannot — is
+    // that ONE module still holds it and that App.tsx still calls the
+    // client rather than a route, both asserted above.
     const client = codeOf(at('src/lib/api/runs.ts'));
     expect(client).toContain('watchRun');
-    expect(client).toMatch(/after=\$\{cursor\}/);
-    expect(client).toContain('resyncRequired');
+    expect(client).toContain("subscribe({ run: runId }");
+    // The cursor did not go away; it moved into the transport, where a
+    // per-subscription cursor is a stronger property than the one shared
+    // cursor the poll could have.
+    expect(codeOf(at('src/lib/api/socket.ts'))).toContain('lastEventId');
+    expect(client).not.toMatch(/after=\$\{cursor\}/);
   });
 
   it('READS a finding out of a row, and the blob reaches no reader — Task 14 has landed', () => {

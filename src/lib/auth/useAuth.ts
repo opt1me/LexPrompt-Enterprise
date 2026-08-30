@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { User } from 'oidc-client-ts';
 import { userManager } from './oidc';
+import { closeSocket } from '../api/socket';
 
 export interface AuthAccount {
   oid: string;
@@ -157,7 +158,18 @@ export function useAuth(): UseAuthResult {
     // header avatar is not a menu. The redirect-based sign-out is written
     // and tested so that the day a control for it exists, the control is the
     // only new thing.
-    signOut: () => { void userManager.signoutRedirect(); },
+    //
+    // STAGE 4: THE SOCKET GOES WITH IT. A tab that signs out and back in as
+    // somebody else would otherwise inherit the previous person's
+    // subscriptions — and, worse, the previous person's cached row versions,
+    // which would silently suppress the first change the new reader was
+    // shown. Here rather than in `App.tsx` because this is the one place
+    // sign-out is expressed, and a second caller is how one of them comes to
+    // be forgotten.
+    signOut: () => {
+      closeSocket();
+      void userManager.signoutRedirect();
+    },
     retry: load,
   };
 }

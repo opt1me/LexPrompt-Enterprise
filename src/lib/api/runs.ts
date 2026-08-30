@@ -1,6 +1,6 @@
-import type { AppEvent, EventPage, RetryResult, RunView } from '@lexprompt/core';
+import type { AppEvent, RetryResult, RunView } from '@lexprompt/core';
 import { apiGet, apiGetOrNull, apiSend } from './client';
-import { debug } from '../debug';
+import { onConnectionState, subscribe } from './socket';
 
 /**
  * The browser's run client — Task 17. **The browser asks about a run instead
@@ -77,41 +77,44 @@ export interface WatchOptions {
   intervalMs?: number;
 }
 
-/** How many consecutive failed polls before the caller is told. */
-const FAILURES_BEFORE_REPORTING = 3;
-
-const DEFAULT_INTERVAL_MS = 1_000;
-
 /**
- * Polls `GET /v1/runs/:id/events?after=<cursor>` and calls `onEvent` for
- * each, in order, keeping the highest id it has applied. Returns an
- * unsubscribe.
+ * Watches a run's events and calls `onEvent` for each, in order, keeping the
+ * highest id it has applied. Returns an unsubscribe.
  *
- * This is deliberately the SAME contract a WebSocket subscription will have
- * in Stage 4 (§8): subscribe, receive events in id order, keep a cursor, and
- * be told `resync_required` when the cursor falls outside the retention
- * window. Stage 4 replaces the transport INSIDE this function and changes no
- * caller — which is why the poll lives here rather than in `App.tsx` (P22).
+ * ## THE SIGNATURE IS UNCHANGED, AND THAT IS THE WHOLE OF STAGE 3'S
+ * ## INTERFACE NOTE 3
  *
- * ## What it is NOT: the fourth load state
+ * Stage 3 said, in this file: *"Stage 4 replaces the transport INSIDE this
+ * function and changes no caller — which is why the poll lives here rather
+ * than in `App.tsx`."* This is that. `App.tsx`'s `attachRun` is not touched:
+ * same four parameters, same `onEvent(event)`, same `onError(error)`, same
+ * `options.onResync`, same returned `stop`.
  *
- * `stale` is realtime's and arrives in Stage 4 (§3). A polling client that
- * misses a beat is not stale, it is one interval behind, and inventing a
- * stale indicator here would ship half of Stage 4's most easily-skipped
- * feature.
+ * What has gone is `setTimeout` and `GET /v1/runs/:id/events`. What has
+ * arrived is `subscribe({ run: runId }, …)` over the one socket this tab
+ * holds (`src/lib/api/socket.ts`), where the cursor, the replay and the
+ * `resync_required` frame are the same protocol the poll expressed over
+ * HTTP.
  *
- * ## A poll loop that dies quietly is rule 4 inverted
+ * ## `onError` is now connection-state-driven, and it is not the same fact
  *
- * Three consecutive failures call `onError`, and the caller shows it.
- * Without that, a run whose polling has stopped looks exactly like a run
- * that has stopped producing events — a job that died looking like a job
- * still working. THREE rather than one because a single failed poll over a
- * network is ordinary and self-correcting, and a notice on every hiccup is a
- * notice nobody reads.
+ * The poll called `onError` after three consecutive failures, because that
+ * was the only way it could know anything was wrong. A socket knows
+ * directly: `stale` means the client cannot vouch for what is on screen.
+ * `onError` fires when the connection reaches `stale` while this watch is
+ * running, which is the same sentence at the same moment for the same
+ * reason — a run whose updates have stopped looking exactly like a run that
+ * has stopped producing them.
  *
- * The poll stops on `run.finished`, which carries the ending. It does not
- * stop on an error: the next poll may succeed, and a watch that gave up on
- * the first failure would leave a live run unwatched with nothing said.
+ * It fires ONCE per stale period, not on every frame of it: a notice
+ * repeated every second is a notice nobody reads, which was the argument for
+ * three strikes and is the argument for this.
+ *
+ * `options.intervalMs` is accepted and IGNORED, deliberately rather than
+ * removed. It was the poll's knob; callers and tests that pass one should
+ * not break, and a socket has no interval to set. Removing it from the type
+ * would be a signature change, which is the one thing this function promised
+ * not to make.
  */
 export function watchRun(
   runId: string,
@@ -119,87 +122,44 @@ export function watchRun(
   onError: (error: unknown) => void,
   options: WatchOptions = {},
 ): () => void {
-  const intervalMs = options.intervalMs ?? DEFAULT_INTERVAL_MS;
-  let cursor = 0;
-  let failures = 0;
   let stopped = false;
-  let inFlight = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  let reported = false;
 
-  const stop = (): void => {
+  const subscription = subscribe({ run: runId }, {
+    onEvent(event) {
+      if (stopped) return;
+      onEvent(event);
+      // The watch ends when the run does, exactly as the poll's did. The
+      // caller's `onEvent` has already run, so the ending has been
+      // delivered before the subscription goes.
+      if (event.type === 'run.finished') stop();
+    },
+    onResync() {
+      if (stopped) return;
+      // Unchanged in meaning: the events between the cursor and now are
+      // gone, and nothing is fabricated to fill the gap. `App.tsx` re-reads
+      // the findings map AND the run itself.
+      options.onResync?.();
+    },
+  });
+
+  const offState = onConnectionState(next => {
+    if (stopped) return;
+    if (next === 'stale' && !reported) {
+      reported = true;
+      onError(new Error(
+        'LexPrompt has lost touch with this review while it runs.'));
+      return;
+    }
+    if (next === 'live') reported = false;
+  });
+
+  function stop(): void {
+    if (stopped) return;
     stopped = true;
-    if (timer !== null) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  };
-
-  const arm = (): void => {
-    if (stopped || timer !== null) return;
-    timer = setTimeout(() => {
-      timer = null;
-      void poll();
-    }, intervalMs);
-  };
-
-  async function poll(): Promise<void> {
-    // One poll at a time. A slow response must not let a second request
-    // overtake it and apply events out of order — the cursor is what keeps
-    // the stream ordered, and two in flight would both read the same one.
-    if (stopped || inFlight) return;
-    inFlight = true;
-    try {
-      const page = await apiGet<EventPage>(
-        `/v1/runs/${encodeURIComponent(runId)}/events?after=${cursor}`);
-      failures = 0;
-
-      if (page.resyncRequired) {
-        // The events between the cursor and now are gone. Nothing is
-        // fabricated to fill the gap: the caller re-reads the findings map,
-        // which is the state those events described.
-        debug('run event cursor fell outside the retention window; resyncing', runId);
-        options.onResync?.();
-      }
-
-      for (const event of page.events) {
-        if (stopped) return;
-        // The cursor moves as each event is APPLIED, not once for the page:
-        // an `onEvent` that throws must not advance past the event it could
-        // not handle, or a reload would be the only way to see it again.
-        onEvent(event);
-        cursor = Math.max(cursor, event.id);
-        if (event.type === 'run.finished') {
-          stop();
-          return;
-        }
-      }
-      cursor = Math.max(cursor, page.nextCursor);
-      // `hasMore` means the page was capped, not that the run is busy — poll
-      // again immediately rather than waiting out the interval, or a run
-      // that produced five hundred events would take five hundred seconds to
-      // catch up.
-      if (page.hasMore) {
-        inFlight = false;
-        void poll();
-        return;
-      }
-    } catch (error) {
-      failures += 1;
-      debug('run event poll failed', runId, failures, error);
-      if (failures >= FAILURES_BEFORE_REPORTING) {
-        failures = 0;
-        onError(error);
-      }
-    } finally {
-      inFlight = false;
-    }
-    arm();
+    offState();
+    subscription.close();
   }
-
-  // The first poll goes out immediately rather than after an interval: a run
-  // that has already finished (started in another tab, or before a reload)
-  // should reach the screen now, not a second from now.
-  void poll();
 
   return stop;
 }
