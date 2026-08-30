@@ -48,6 +48,9 @@ const withStack = (blobWrap: string, body: string): { code: number; out: string 
   "const { AzureBlobStore, blobKeyFor, workspacePrefix } = await import('/app/apps/api/src/blob/store.ts');",
   "const { makeDb, makePool } = await import('/app/apps/api/src/db/pool.ts');",
   "const { buildServer } = await import('/app/apps/api/src/server.ts');",
+  // The SHIPPED cap defaults, imported rather than retyped: a harness that
+  // invents its own numbers exercises a configuration no deployment has.
+  "const { WS_CAP_DEFAULTS } = await import('/app/apps/api/src/config.ts');",
   'const WS = process.env.API_WORKSPACE_ID;',
   'const real = new AzureBlobStore({',
   '  source: process.env.API_BLOB_CREDENTIAL_SOURCE,',
@@ -75,6 +78,11 @@ const withStack = (blobWrap: string, body: string): { code: number; out: string 
   '  workspaceId: WS, maxBodyBytes: 1048576, db, blobs: store,',
   '  resolveActor: async () => ({ id: "00000000-0000-0000-0000-00000000dead", issuer: "i", subject: "s",',
   '    displayName: "Cascade Test", initials: "CT", role: "reviewer", workspaceId: WS }),',
+  // Stage 4 Task 16: `buildServer` attaches the live socket, so these two
+  // are needed before any route is reached. Omitted, the whole server
+  // failed to build and the failure read as a broken cascade.
+  "  socket: { ...WS_CAP_DEFAULTS, eventPageMax: 500 }, instanceId: 'api-compose-test',",
+  "  eventPageMax: 500,",
   '});',
   'const del = url => app.inject({ method: "DELETE", url, headers: { authorization: "Bearer t" } });',
   'const MATTER = "cascade-" + Date.now().toString(36);',
