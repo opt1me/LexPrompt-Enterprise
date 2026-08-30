@@ -1,4 +1,4 @@
-import type { Finding } from '@lexprompt/core';
+import type { FindingsPage } from '@lexprompt/core';
 import { apiGet } from './client';
 
 /**
@@ -39,14 +39,6 @@ const lastSeenVersion = new Map<string, Map<string, number>>();
 
 const cellKey = (findingsKey: string, clauseId: string): string =>
   JSON.stringify([findingsKey, clauseId]);
-
-/** The wire shape of `GET /v1/reviews/:id/findings`. */
-export interface FindingsPage {
-  findings: Record<string, Record<string, Finding>>;
-  dispositionVersions: Record<string, Record<string, number>>;
-  /** The `review` row's version at the moment these findings were read. */
-  version: number;
-}
 
 /** Records the disposition versions the server just reported. */
 function remember(reviewId: string, versions: FindingsPage['dispositionVersions']): void {

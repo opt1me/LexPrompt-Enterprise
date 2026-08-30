@@ -1,5 +1,6 @@
 import {
-  ModelError, effectiveReason, requiresReason, type VerificationState,
+  ModelError, effectiveReason, requiresReason,
+  type DispositionCause, type VerificationState,
 } from '@lexprompt/core';
 import type { Tx } from '../db/pool.ts';
 import { ConflictError } from '../errors.ts';
@@ -17,7 +18,10 @@ import type { FindingKey } from '../findings/rows.ts';
  * see both writes, and delete one to watch a test fail.
  */
 
-export type DispositionCause = 'human' | 'rerun_reset';
+// One declaration, in `@lexprompt/core` beside the wire shapes that carry
+// it — the browser renders a cause and this module writes one, and two
+// copies of a two-value union is exactly how they come to disagree.
+export type { DispositionCause };
 
 export interface DispositionRow {
   review_id: string;
@@ -53,6 +57,44 @@ export async function dispositionFor(t: Tx, key: FindingKey): Promise<Dispositio
   const rows = await t.query<DispositionRow>(SELECT,
     [key.reviewId, key.findingsKey, key.clauseId]);
   return rows[0];
+}
+
+/** One `finding_disposition_event` row. */
+export interface DispositionEventRow {
+  /** `bigint`, which `pg` hands back as a STRING. */
+  id: string | number;
+  from_state: VerificationState;
+  to_state: VerificationState;
+  reason: string | null;
+  cause: DispositionCause;
+  by_user_id: string;
+  at: Date;
+}
+
+/**
+ * The history of one finding's disposition, NEWEST FIRST.
+ *
+ * In this module rather than in the route, because it reads the table this
+ * module is the only writer of — a second file composing its own query over
+ * `finding_disposition_event` is how the two come to disagree about what an
+ * event is. Two callers: `GET …/history`, and the disposition write, which
+ * hands back the event it just produced so `fromState` is on hand at first
+ * render without a second round trip (§8).
+ *
+ * Scoped by workspace as well as by key: the key alone is a text triple, and
+ * a route that had already checked the finding would still be issuing an
+ * unscoped read of a table holding every firm's judgements.
+ */
+export async function readDispositionEvents(
+  t: Tx, key: FindingKey, workspaceId: string, limit = 200,
+): Promise<DispositionEventRow[]> {
+  return t.query<DispositionEventRow>(
+    `select id, from_state, to_state, reason, cause, by_user_id::text as by_user_id, at
+       from finding_disposition_event
+      where review_id = $1 and findings_key = $2 and clause_id = $3 and workspace_id = $4
+      order by id desc
+      limit $5`,
+    [key.reviewId, key.findingsKey, key.clauseId, workspaceId, limit]);
 }
 
 /**

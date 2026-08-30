@@ -37,6 +37,14 @@ export type {
   RunEventPayload, RunEvent, RunEventPage,
   RunState, RunCellState, RunCellCounts, RunView,
 } from './api/records.ts';
+// Part 3B's wire shapes: a review's findings assembled from rows, a
+// disposition and its event, and what a per-clause retry cleared. One
+// declaration, two programs — the browser reads them and `apps/api` writes
+// them.
+export type {
+  FindingsPage, DispositionView, DispositionCause, DispositionEventView,
+  DispositionWriteResult, DispositionHistory, RetryCleared, RetryResult,
+} from './api/records.ts';
 // The domain logic that decides what a published playbook version SAYS,
 // needed by the browser that reviews a changeset and by the API that
 // publishes it. Moved out of `src/lib/db/changesets.ts` rather than copied:

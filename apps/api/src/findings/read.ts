@@ -1,6 +1,6 @@
 import {
   ModelError, findingKey, unchecked,
-  type Finding, type Note, type Verification, type VerificationState,
+  type Finding, type FindingsPage, type Note, type Verification, type VerificationState,
 } from '@lexprompt/core';
 import type { Db } from '../db/pool.ts';
 import { fromFindingRow, type FindingRow } from './rows.ts';
@@ -70,17 +70,9 @@ interface AssembledRow extends FindingRow {
   notes: unknown;
 }
 
-export interface FindingsRead {
-  /** `findingsKey -> clauseId -> Finding`, the shape `Review.findings` has
-   *  always had. */
-  findings: Record<string, Record<string, Finding>>;
-  /** `findingsKey -> clauseId -> finding_disposition.version`. See above. */
-  dispositionVersions: Record<string, Record<string, number>>;
-  /** The `review` row's version at the moment these findings were read. Not
-   *  a version OF the findings — it is what lets a caller tell that the
-   *  findings it just read belong to the review it just read. */
-  version: number;
-}
+/** The wire shape, declared in `@lexprompt/core` so the browser reads the
+ *  same one. Aliased rather than re-declared. */
+export type FindingsRead = FindingsPage;
 
 /**
  * ONE statement with two left joins, never N+1.

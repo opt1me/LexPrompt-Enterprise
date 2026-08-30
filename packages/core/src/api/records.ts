@@ -1,4 +1,5 @@
 import type { Jurisdiction } from '../model/protocol.ts';
+import type { Finding, VerificationState } from '../domain/types.ts';
 /** The three roles (§7). A closed set, here, because both sides read it. */
 export const ROLES = ['reviewer', 'partner', 'admin'] as const;
 export type Role = (typeof ROLES)[number];
@@ -279,4 +280,115 @@ export interface RunView {
   error?: string;
   cells: RunCellCounts;
   version: number;
+}
+
+// ---------------------------------------------------------------------------
+// §6.2/§6.3, Part 3B: findings, dispositions and notes on the wire.
+//
+// Declared HERE, beside the run's payloads and for the same reason: the
+// browser reads these and `apps/api` writes them, and two declarations of one
+// shape — one in a browser bundle, one in a Node service, nobody able to read
+// them side by side — is this project's most repeated defect. Every field
+// below is a fact one of the three tables holds.
+// ---------------------------------------------------------------------------
+
+/**
+ * The answer to `GET /v1/reviews/:id/findings` (Task 14).
+ *
+ * `findings` is exactly the nested `findingsKey -> clauseId -> Finding` shape
+ * `Review.findings` has always had, assembled from `finding`,
+ * `finding_disposition` and `note` — so the flip from blob to rows changed no
+ * consumer.
+ */
+export interface FindingsPage {
+  findings: Record<string, Record<string, Finding>>;
+  /**
+   * `findingsKey -> clauseId -> finding_disposition.version`.
+   *
+   * BESIDE the findings rather than inside them. A disposition write is
+   * version-guarded — a stale version is refused with a 409 carrying the
+   * current row — so the writer has to state the version it was looking at;
+   * but an optimistic-concurrency token is a fact about one table's row, not
+   * about the answer to a clause, and `Finding` is the domain shape three
+   * programs share.
+   */
+  dispositionVersions: Record<string, Record<string, number>>;
+  /** The `review` row's version at the moment these findings were read. Not
+   *  a version OF the findings: it is what lets a caller tell that the
+   *  findings it just read belong to the review it just read. */
+  version: number;
+}
+
+/**
+ * A `finding_disposition` row — WHO SET THE CURRENT STATE, and when.
+ *
+ * `byUserId`/`at` are ABSENT on a finding nobody has touched, never null:
+ * §6.3 says such a finding renders as "Not checked" and names nobody, and a
+ * `byUserId: undefined` would survive `structuredClone` and read to an `in`
+ * check as a name that is there.
+ */
+export interface DispositionView {
+  reviewId: string;
+  findingsKey: string;
+  clauseId: string;
+  state: VerificationState;
+  reason?: string;
+  byUserId?: string;
+  at?: number;
+  /** 0 on a disposition nobody has ever moved. */
+  changedCount: number;
+  version: number;
+}
+
+/** What caused a disposition to move. `rerun_reset` is the ONE write this
+ *  system performs on its own behalf, and the database refuses it any
+ *  `to_state` but `unchecked`. */
+export type DispositionCause = 'human' | 'rerun_reset';
+
+/** One `finding_disposition_event` — the evidence half, insert-only. */
+export interface DispositionEventView {
+  id: number;
+  fromState: VerificationState;
+  toState: VerificationState;
+  reason?: string;
+  cause: DispositionCause;
+  byUserId: string;
+  at: number;
+}
+
+/**
+ * The answer to a disposition write: the row it produced AND the event that
+ * produced it.
+ *
+ * Both, because §8 says the finding read returns both — so `fromState` is on
+ * hand at first render without a second query, and Stage 4's *"was
+ * Rejected"* needs no new mechanism.
+ */
+export interface DispositionWriteResult {
+  disposition: DispositionView;
+  event: DispositionEventView;
+}
+
+/** The answer to `GET …/history`. Newest first. */
+export interface DispositionHistory {
+  events: DispositionEventView[];
+}
+
+/**
+ * What a per-clause retry cleared, so the browser can say so in the words it
+ * has always used.
+ *
+ * The transaction that resets a finding knows what the finding actually
+ * held; the browser composing that sentence from its own copy would be a
+ * second place deciding it.
+ */
+export interface RetryCleared {
+  verification: boolean;
+  netPosition: boolean;
+}
+
+/** The answer to a per-clause retry: the run it queued, and what it cleared. */
+export interface RetryResult {
+  run: RunView;
+  cleared: RetryCleared;
 }

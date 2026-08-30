@@ -160,6 +160,20 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // caller's workspace inside the handler.
   'GET /v1/reviews/:id/findings': 'reviewer',
 
+  // §7: a reviewer sets dispositions and notes. `reviewer` on all three —
+  // recording a judgement about a finding IS the reviewing, and a bar that
+  // let a reviewer run a review but not say what they made of it would be a
+  // rule this design did not make.
+  //
+  // The history route is `reviewer` for the same reason `GET
+  // /v1/playbooks/:id/clauses/:clauseId/basis` is: reading the evidence
+  // behind a judgement is the same act as reading the judgement. NOTHING
+  // RENDERS IT IN STAGE 3 (P28) — it is here because Stage 4's history panel
+  // should inherit a tested, authorised endpoint rather than write one.
+  'PUT /v1/reviews/:id/findings/:findingsKey/:clauseId/disposition': 'reviewer',
+  'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/notes': 'reviewer',
+  'GET /v1/reviews/:id/findings/:findingsKey/:clauseId/history': 'reviewer',
+
   // §7: a reviewer RUNS reviews. All four at `reviewer`, including cancel —
   // stopping a run you started is part of running one, and a bar that let a
   // reviewer start work nobody but a partner could stop would leave the

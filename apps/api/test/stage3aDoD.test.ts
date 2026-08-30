@@ -290,11 +290,30 @@ describe('Part 3A: nothing a user can see has changed yet', () => {
 
     // No route composes its own findings read: they all come through the
     // one assembler, so a second query cannot drift from it.
+    //
+    // `routes/findings.ts` is the one file that touches the table directly,
+    // and it is NOT exempted as a file — the specific statement is named
+    // instead. A file-level exemption hides everything in that file rather
+    // than the part it meant to protect (`PdfCanvas.tsx`'s lesson), and this
+    // file will grow.
     const READS = /\bfrom\s+finding\b/i;
     expect(READS.test('select * from finding where review_id = $1')).toBe(true);
     expect(READS.test('select * from finding_disposition where review_id = $1')).toBe(false);
-    expect(ROUTE_SOURCES.filter(f => READS.test(codeOf(f))).map(rel)).toEqual([]);
+    const readers = ROUTE_SOURCES.filter(f => READS.test(codeOf(f))).map(rel);
+    expect(readers).toEqual(['apps/api/src/routes/findings.ts']);
     expect(ROUTE_SOURCES.length).toBeGreaterThan(10);       // the sanity check
+
+    // …and what it reads is an EXISTENCE check, not an assembly: a
+    // disposition or a note about a finding that does not exist is a
+    // judgement about nothing, and that has to be answerable before a write.
+    // It reads one identifying column and no content.
+    const findingsRoute = codeOf(at('apps/api/src/routes/findings.ts'));
+    const statements = findingsRoute.match(/\bselect\b[^`]*?\bfrom\s+finding\b[^`]*/gi) ?? [];
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toMatch(/select clause_id\s*\n?\s*from finding\b/i);
+    for (const content of ['summary', 'citations', 'net_position', 'risk_level']) {
+      expect(statements[0], `a route selects a finding's ${content}`).not.toContain(content);
+    }
 
     // …and no route hands the blob back to a reader. The single-review GET
     // drops the key; the listing replaces it with the assembled rows.
