@@ -6,30 +6,37 @@ import {
 /**
  * THE GAP THIS WHOLE STAGE EXISTS TO CLOSE, DEMONSTRATED RATHER THAN ARGUED.
  *
- * Change-by-others is already live and already unattributed. `PUT
- * …/disposition` is `ROUTE_POLICY: 'reviewer'`, scoped by workspace and
- * nothing else, and `setDisposition` compares a version and a state but
- * never actors. So the moment a second seeded account signs in — which, as
- * of this task, it can — one reviewer can overwrite another's verification,
- * and the data a card renders from names neither of them.
+ * Change-by-others was already live and already UNATTRIBUTED when this file
+ * was written. `PUT …/disposition` is `ROUTE_POLICY: 'reviewer'`, scoped by
+ * workspace and nothing else, and `setDisposition` compares a version and a
+ * state but never actors — so the moment a second seeded account signed in,
+ * which as of this task it can, one reviewer could overwrite another's
+ * verification and the data a card rendered from named neither of them.
  *
  * Two real tokens, through the real proxy, against the real stack. Not
  * `app.inject` with a stubbed `resolveActor`: the point is that two DIFFERENT
  * people, each authenticated by the shipped verifier and resolved by the
  * shipped actor resolver, land on the same row.
  *
- * ## The three assertions this stage INVERTS
+ * ## THE THREE ASSERTIONS THIS STAGE INVERTED, AND WHAT THEY SAY NOW
  *
- * Each names the task that inverts it, so a reader of a red test in a later
- * task knows where it goes rather than deleting it:
+ * When this file was written each of these was RED-BY-DESIGN prose about a
+ * gap; they are now assertions that the gap is closed, inverted rather than
+ * deleted (P30) so the record of what was missing survives beside the proof
+ * that it no longer is:
  *
- *  - `changedCount` is absent from the finding's verification  -> Task 3
- *  - the findings page carries no `dispositions` map           -> Task 3
- *  - no route resolves another user's name                     -> Task 2
+ *  - the verification carried no `changedCount`, and the read carried no
+ *    `dispositions` map at all -> Task 3 put the disposition and the event
+ *    that produced it on the read, beside `Finding.verification` and not
+ *    inside it (P34);
+ *  - no route could resolve another user's name -> Task 2's
+ *    `GET /v1/workspace/users`.
  *
- * They are written as assertions rather than as prose because a documented
- * gap is a claim and a red test is a fact — and because, once Tasks 2 and 3
- * land, the failure this file produces is the record that they did.
+ * What has NOT changed, and is still asserted below exactly as it was: the
+ * partner's override SUCCEEDS. Nothing compares actors, because §7 says a
+ * reviewer records judgements and the owner's requirement is *"first person
+ * to verify wins"* with a partner able to override. Part 4A's job was never
+ * to refuse the override — it was to stop it being anonymous.
  */
 
 const now = (): number => Date.now();
@@ -104,7 +111,7 @@ async function routeExists(who: TestAccount, path: string): Promise<boolean> {
   return res.status !== 404;
 }
 
-describe('two real accounts, and the unattributed override they demonstrate', () => {
+describe('two real accounts, and the override that is no longer anonymous', () => {
   afterAll(async () => {
     for (const { who, seeded } of litter.splice(0)) {
       // The review first: a matter delete cascades, but deleting in
@@ -127,7 +134,7 @@ describe('two real accounts, and the unattributed override they demonstrate', ()
     expect(API_BASE).toBe('http://localhost:3005/api');
   });
 
-  it('lets a second person overwrite the first person s verification, and says nothing about who', async () => {
+  it('lets a second person overwrite the first person s verification, and NOW says who', async () => {
     const { trainee, partner } = await twoAccounts();
     const seeded = await seedOneDoneFinding(trainee);
 
@@ -137,20 +144,25 @@ describe('two real accounts, and the unattributed override they demonstrate', ()
 
     const override = await asUser(partner, 'PUT', dispositionPath(seeded),
       { state: 'rejected', reason: 'The cap is uncapped in clause 14.2.', version: 2 });
-    // IT SUCCEEDS TODAY. Nothing compares actors; the route is `reviewer`
-    // and the only guard is the version.
+    // IT SUCCEEDS, and it is meant to: nothing compares actors, the route is
+    // `reviewer`, and the only guard is the version. "First person to verify
+    // wins, and a partner may override" is the requirement.
     expect(override.status, await override.clone().text()).toBe(200);
     const body = await override.json() as { disposition: { byUserId?: string; state: string } };
     expect(body.disposition.byUserId).toBe(partner.userId);
     expect(body.disposition.state).toBe('rejected');
 
-    // AND THE GAP. This is the payload the browser's findings pane actually
-    // renders from.
+    // THE PAYLOAD THE BROWSER'S FINDINGS PANE ACTUALLY RENDERS FROM. When
+    // this file was written it carried the partner's id and nothing that
+    // could become a name, and no field saying anything had changed.
     const page = await asUser(trainee, 'GET', `/v1/reviews/${seeded.reviewId}/findings`);
     expect(page.status).toBe(200);
     const read = await page.json() as {
       findings: Record<string, Record<string, { verification: Record<string, unknown> }>>;
-      dispositions?: unknown;
+      dispositions?: Record<string, Record<string, {
+        disposition: { state: string; byUserId?: string; changedCount: number };
+        last?: { fromState: string; byUserId: string; cause: string };
+      }>>;
     };
     const verification = read.findings[seeded.findingsKey][seeded.clauseId].verification;
 
@@ -160,11 +172,38 @@ describe('two real accounts, and the unattributed override they demonstrate', ()
     expect(verification.byUserId).toBe(partner.userId);
     expect(verification.byUserId).not.toBe(trainee.userId);
 
-    // `in`, not `toEqual`: `toEqual` cannot tell an absent key from an
-    // undefined one, and absence is the thing being asserted.
-    expect('changedCount' in verification).toBe(false);   // -> Task 3
-    expect('dispositions' in read).toBe(false);           // -> Task 3
-    expect(await routeExists(trainee, '/v1/workspace/users')).toBe(false);  // -> Task 2
+    // `Finding.verification` is UNCHANGED (P34): attribution rides beside a
+    // finding, never inside it. `in`, not `toEqual`, because absence is the
+    // thing being asserted and `toEqual` cannot tell an absent key from an
+    // undefined one.
+    expect('changedCount' in verification).toBe(false);
+    expect('fromState' in verification).toBe(false);
+
+    // TASK 3, INVERTED: the read now carries the disposition AND the event
+    // that produced it, so a card can say "Rejected by …, was Verified" with
+    // no second request.
+    const cell = read.dispositions![seeded.findingsKey][seeded.clauseId];
+    expect(cell.disposition.state).toBe('rejected');
+    expect(cell.disposition.byUserId).toBe(partner.userId);
+    expect(cell.disposition.changedCount).toBe(2);
+    expect(cell.last!.fromState).toBe('verified');
+    expect(cell.last!.byUserId).toBe(partner.userId);
+    expect(cell.last!.cause).toBe('human');
+
+    // TASK 2, INVERTED: an id can now become a NAME. This is the whole of
+    // the gap — the override still succeeds, and it is no longer anonymous.
+    expect(await routeExists(trainee, '/v1/workspace/users')).toBe(true);
+    const directory = await asUser(trainee, 'GET', '/v1/workspace/users');
+    expect(directory.status).toBe(200);
+    const { users } = await directory.json() as {
+      users: { id: string; displayName: string }[] };
+    const named = users.find(u => u.id === cell.disposition.byUserId);
+    expect(named, 'the person who overrode a verification is not in the directory')
+      .toBeDefined();
+    expect(named!.displayName).toBe(partner.displayName);
+    // …and the trainee, whose judgement was replaced, is nameable too — a
+    // history panel has to name both sides.
+    expect(users.some(u => u.id === trainee.userId)).toBe(true);
 
     // The one thing that IS on the record today, and the reason Part 4A is
     // an attribution problem rather than a storage one: the history exists,

@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { ModelError, type WorkspaceUsers } from '@lexprompt/core';
 import { makeFakeTransport, transportModule } from '../../test/fakeTransport';
 
@@ -147,6 +149,39 @@ describe('the workspace directory', () => {
     forgetDirectory();
     expect(directoryLoaded()).toBe(false);
     expect(userName('u1')).toBeUndefined();
+  });
+
+  it('holds NO WAY TO WRITE at all, asserted over its own source', () => {
+    /*
+     * THE MUTATION THIS EXISTS FOR, and the behavioural test below does NOT
+     * kill it: adding an `apiSend` to this module leaves `transport.sent`
+     * empty until something calls the new function, so a directory that had
+     * grown a way to assert an attribution would ship green.
+     *
+     * The rule is about the module's CAPABILITY rather than about one run's
+     * behaviour. The fix round that closed `findings/import.ts`'s forged
+     * attribution — where a signed-in user could put a colleague's name on a
+     * verification — is why: a directory that could POST would reopen that
+     * path from a new direction, and the actor on a judgement must keep
+     * coming from the token `apps/api` validated and nothing else.
+     *
+     * The server half is structural and needs no scan: a write route on
+     * `/v1/workspace/users` has no `ROUTE_POLICY` entry, and
+     * `registerRoleGate`'s `onRoute` hook throws at registration, so every
+     * test that builds a server fails.
+     */
+    // `import.meta.url` is a Vite `/@fs/` URL rather than a `file:` one, so
+    // it cannot be handed to `readFileSync`. The path is resolved from this
+    // file's own directory instead, and the two sanity checks below are what
+    // prove the file it read is the right one.
+    const source = readFileSync(path.join(__dirname, 'users.ts'), 'utf8');
+    expect(source).not.toMatch(/\bapiSend\b/);
+    expect(source).not.toMatch(/\bapiSendBlob\b/);
+    expect(source).not.toMatch(/\bapiDelete\b/);
+    // The sanity check: the scan really is reading this module, and the
+    // three assertions above are not passing over an empty string.
+    expect(source).toMatch(/\bapiGet\b/);
+    expect(source).toContain('export function userName');
   });
 
   it('sends no write, ever — this resolves names, it cannot assert one', async () => {

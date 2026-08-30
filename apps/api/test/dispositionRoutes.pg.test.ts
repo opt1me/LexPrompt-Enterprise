@@ -290,7 +290,7 @@ describe('a note is a person s remark about the clause', () => {
   });
 });
 
-describe('the history exists, and nothing renders it yet (P28)', () => {
+describe('the history exists, and Stage 4 s panel is its one reader (P28 -> P30)', () => {
   it('answers every move of one finding s disposition, newest first', async () => {
     await withPg(async t => {
       await aUser(t, HUMAN, 's-human');
@@ -313,10 +313,20 @@ describe('the history exists, and nothing renders it yet (P28)', () => {
     });
   });
 
-  it('is not reachable from the browser in Stage 3 — no caller exists', async () => {
-    // P28, asserted rather than remembered. The route is here so Stage 4's
-    // history panel inherits a tested endpoint; a caller arriving early is
-    // half of an attribution surface.
+  it('is reached from the browser through ONE client function, and no other', async () => {
+    /*
+     * STAGE 3 ASSERTED THIS HAD NO CALLER (P28), AND STAGE 4 INVERTS IT
+     * RATHER THAN DELETING IT (P30).
+     *
+     * The original reason is kept: the route landed early so Stage 4's
+     * history panel could inherit a tested, authorised endpoint, and a
+     * caller arriving before the mechanism would have been half of an
+     * attribution surface. Stage 4 builds the mechanism, so what is guarded
+     * now is the shape of the caller rather than its absence — ONE client
+     * function issuing the request, so a second component cannot compose
+     * its own path and its own idea of what an event is over a table
+     * exactly one module writes.
+     */
     const { readFileSync, readdirSync, statSync } = await import('node:fs');
     const path = await import('node:path');
     const root = path.join(import.meta.dirname, '../../../src');
@@ -331,10 +341,25 @@ describe('the history exists, and nothing renders it yet (P28)', () => {
     walk(root);
     expect(files.length, 'the walk found nothing, so this guard proves nothing')
       .toBeGreaterThan(120);
-    const CALLS_HISTORY = /\/history['"`]|\/history\b/;
-    expect(CALLS_HISTORY.test('apiGet(`/v1/reviews/${id}/findings/${k}/${c}/history`)')).toBe(true);
-    expect(files.filter(f => CALLS_HISTORY.test(readFileSync(f, 'utf8')))
-      .map(f => path.relative(root, f))).toEqual([]);
+    // The URL is BUILT in one place. A component reaching the route itself
+    // would name the path; only the client does.
+    //
+    // `}/history` and not `/history`: the panel's own docstring NAMES the
+    // route it reads (`… /:clauseId/history`), which is prose about the
+    // thing rather than a request for it — and a guard relaxed until it
+    // stops biting is the failure mode this repository keeps finding. What
+    // identifies a real caller is the path being BUILT, which means an
+    // interpolation closing immediately before it.
+    const BUILDS_THE_PATH = /\}\/history`/;
+    expect(BUILDS_THE_PATH.test('apiGet(`${findingPath(a, b, c)}/history`)')).toBe(true);
+    expect(BUILDS_THE_PATH.test('reads `GET /v1/reviews/:id/findings/:k/:c/history`')).toBe(false);
+    expect(BUILDS_THE_PATH.test('const x = 1;')).toBe(false);
+    expect(files.filter(f => BUILDS_THE_PATH.test(readFileSync(f, 'utf8')))
+      .map(f => path.relative(root, f).replace(/\\/g, '/')))
+      .toEqual(['lib/api/findings.ts']);
+    // …and the panel that renders it goes through that function by name.
+    expect(readFileSync(path.join(root, 'features/review/DispositionHistory.tsx'), 'utf8'))
+      .toContain('getDispositionHistory');
   });
 });
 
