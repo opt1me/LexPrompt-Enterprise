@@ -5,12 +5,36 @@ import { describe, it, expect, vi } from 'vitest';
 // bump drops it, this import fails loudly at test collection time — not a
 // silent wrong answer — and the fix is to add it to devDependencies then.
 import JSZip from 'jszip';
-import { buildReportRows, buildReportDocument, exportDocx } from './exportDocx';
+import {
+  buildReportRows, buildReportDocument, exportDocx as exportDocxWith,
+} from './exportDocx';
 // Imported across features on purpose: this file carries the one test whose
 // whole point is that the DOCX and the CSV cannot name a collection two
 // different ways, and it cannot prove that without both of them.
-import { buildTabularCsv } from '../tabular/csv';
-import { collectionExportLabel } from '../../lib/findingOutcome';
+import { buildTabularCsv as buildCsv } from '../tabular/csv';
+import {
+  collectionExportLabel, dispositionLabel, dispositionsAsAtLine, dispositionsMayChangeLine,
+  NO_EXPORT_CONTEXT, type ExportContext,
+} from '../../lib/findingOutcome';
+import { DISPOSITION_SHAPES, TEST_AUDIENCE } from '../../test/dispositionShapes';
+
+/**
+ * The existing cases predate section 6.3.1's stamp and say nothing about it,
+ * so they run through `NO_EXPORT_CONTEXT` — the LOUD fallback, which dates
+ * nothing and names nobody. They are not weakened by it: a fallback that
+ * invented an instant is exactly what the new cases below forbid, and one
+ * that crashed would fail here. The cases that DO assert the stamp pass a
+ * real context.
+ */
+const exportDocx = (
+  run: ReviewRun, docId: string, docName: string, names: Record<string, string>,
+  context: ExportContext = NO_EXPORT_CONTEXT,
+): Promise<void> => exportDocxWith(run, docId, docName, names, context);
+const buildTabularCsv = (
+  run: ReviewRun, docs: Parameters<typeof buildCsv>[1],
+  context: ExportContext = NO_EXPORT_CONTEXT,
+): string => buildCsv(run, docs, context);
+
 import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { Finding, ReviewRun, PlaybookVersion, TrailStep } from '../../types';
 
@@ -636,5 +660,169 @@ describe('exportDocx — a collection report is named after the collection', () 
     // The regression pin: the collection rule must not leak into the ordinary
     // path, which has always been named after the document it reports on.
     expect(await capturedDownloadName(run, 'd1', 'MSA.pdf')).toBe('MSA_Report.docx');
+  });
+});
+
+/**
+ * SECTION 6.3.1: WHEN IT WAS TRUE, WHAT CHANGED, AND THAT IT CAN CHANGE
+ * AGAIN.
+ *
+ * Section 19 calls this the worst-consequence item in the stage, and gives
+ * the reason: *"A card is read next to its history; a DOCX is read on a
+ * train, six weeks later, by a partner who was not in the review. Under the
+ * superseded insert-once model an export was a claim about a row that could
+ * not change ... It no longer does, and the failure is completely silent:
+ * the document looks exactly the same whether or not the disposition it
+ * reports still holds."*
+ *
+ * It is also the one clause of section 18 item 5 with no verification gap. A
+ * DOCX and a CSV are bytes, and these read them.
+ */
+describe('an export says when it was true, and that it can change', () => {
+  /** 2026-08-28 16:41 in Europe/London (BST, so 15:41 UTC). Passed in, never
+   *  taken from a clock: the instant is when the DISPOSITIONS WERE READ, not
+   *  when the file was written, and on a slow export those differ. */
+  const AT = Date.UTC(2026, 7, 28, 15, 41);
+  const CONTESTED = DISPOSITION_SHAPES['changed three times'];
+
+  const context: ExportContext = {
+    readAt: AT,
+    timeZone: 'Europe/London',
+    dispositionOf: (_key, clauseId) => (clauseId === 'c1' ? CONTESTED : undefined),
+    audience: TEST_AUDIENCE,
+  };
+
+  const asAt = 'Dispositions as at 2026-08-28 16:41 (Europe/London)';
+  const mayChange = "LexPrompt's history is authoritative over any printed copy";
+  // `word/document.xml` escapes an apostrophe, so an XML search for the
+  // whole sentence finds nothing even when the sentence is there. The CSV
+  // cross-check below still asserts the complete string, which is what has
+  // to match between the two exporters.
+  const mayChangeInXml = 'history is authoritative over any printed copy';
+  const contested = 'Verified by R. Okafor, 16:04 - was Rejected - changed 3 times';
+
+  const oneClauseRun = (): ReviewRun => ({
+    id: 'r9',
+    templateSnapshot: {
+      id: 't9', name: 'T9', contractType: 'NDA', systemPrompt: '', formatPrompt: '',
+      clauses: [{ id: 'c1', title: 'Liability cap', extractPrompt: '' }],
+      playbookId: 'pb', version: 1, changeSummary: '', publishedAt: 0, publishedByUserId: '',
+      schemaVersion: 6,
+    },
+    documentIds: ['d1'],
+    target: { kind: 'documents', documentIds: ['d1'] },
+    findings: {
+      d1: {
+        c1: {
+          clauseId: 'c1', status: 'done', summary: 'Capped at fees paid.', citations: [],
+          verification: { state: 'verified', byUserId: 'u2', at: 1 }, notes: [],
+        },
+      },
+    },
+    startedAt: 0,
+  });
+
+  async function docxTextOf(run: ReviewRun): Promise<string> {
+    let captured: Blob | undefined;
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: (b: Blob) => { captured = b; return 'blob:stub'; },
+      revokeObjectURL: () => {},
+    });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      await exportDocx(run, 'd1', 'Lease.pdf', { d1: 'Lease.pdf' }, context);
+      const zip = await JSZip.loadAsync(await blobToArrayBuffer(captured!));
+      return await zip.file('word/document.xml')?.async('string') ?? '';
+    } finally {
+      clickSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  }
+
+  it('stamps the instant its dispositions were read, with a timezone', async () => {
+    expect(await docxTextOf(oneClauseRun())).toContain(asAt);
+  });
+
+  it('says that a disposition can change, and that the app is authoritative', async () => {
+    const text = await docxTextOf(oneClauseRun());
+    expect(text).toContain('A disposition can be changed by any reviewer at any time');
+    expect(text).toContain(mayChangeInXml);
+  });
+
+  it('carries the changed-from facts for a contested finding, not just its current state',
+    async () => {
+      // The network-era form of the CSV that wrote unreviewed clauses as
+      // blank cells: technically the current state, read by a partner as the
+      // whole state. `verificationLabel` returns null for a verified finding,
+      // so WITHOUT this line a contested clause carries no attribution at all
+      // — the case a partner most needs named.
+      expect(await docxTextOf(oneClauseRun())).toContain(contested);
+    });
+
+  it('writes the SAME three strings into the CSV', () => {
+    const csv = buildTabularCsv(
+      oneClauseRun(),
+      [{ id: 'd1', name: 'Lease.pdf', kind: 'pdf', text: '', file: new File([''], 'Lease.pdf') }],
+      context,
+    );
+    // The mutation this exists for: change the wording in ONE exporter and
+    // watch this fail. They disagreed once before, and the CSV is the one
+    // that opens straight into Excel.
+    for (const line of [asAt, mayChange, contested]) expect(csv).toContain(line);
+  });
+
+  it('says it CANNOT date the dispositions rather than dating them now', async () => {
+    // The loud fallback. An export that quietly stamped `Date.now()` would
+    // be asserting an instant it has no evidence for, over a findings map
+    // fetched at some other time — the confidently-wrong answer this whole
+    // line exists to prevent.
+    let captured: Blob | undefined;
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: (b: Blob) => { captured = b; return 'blob:stub'; },
+      revokeObjectURL: () => {},
+    });
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    try {
+      await exportDocx(oneClauseRun(), 'd1', 'Lease.pdf', { d1: 'Lease.pdf' },
+        { ...context, readAt: undefined });
+      const zip = await JSZip.loadAsync(await blobToArrayBuffer(captured!));
+      const xml = await zip.file('word/document.xml')?.async('string') ?? '';
+      expect(xml).toContain('Dispositions as at: not recorded');
+      expect(xml).not.toContain('Dispositions as at 20');
+      // The other half still ships: a document that cannot date itself is
+      // exactly the one that must still say the record can change.
+      expect(xml).toContain(mayChangeInXml);
+    } finally {
+      clickSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps every export string ASCII', () => {
+    // `exportSummaryLine`'s reason, unchanged: the CSV carries no
+    // byte-order mark and Excel on Windows reads a BOM-less file as ANSI, so
+    // one em-dash or one NARROW NO-BREAK SPACE arrives as mojibake in the
+    // first thing a reader sees. `toLocaleString` emits U+202F in several
+    // ICU versions, which is why the stamp is assembled from parts.
+    const strings = [
+      dispositionsAsAtLine(AT, 'Europe/London'),
+      dispositionsAsAtLine(undefined, 'Europe/London'),
+      dispositionsMayChangeLine(),
+      dispositionLabel(CONTESTED, TEST_AUDIENCE),
+      dispositionLabel(undefined, TEST_AUDIENCE),
+    ];
+    for (const s of strings) {
+      // eslint-disable-next-line no-control-regex
+      expect(/^[\x20-\x7e\r\n]*$/.test(s), JSON.stringify(s)).toBe(true);
+    }
+  });
+
+  it('reads midnight as 00, not 24', () => {
+    // `hour12: false` still answers "24" for midnight in several ICU
+    // versions, and "2026-08-28 24:05" is a time that does not exist.
+    expect(dispositionsAsAtLine(Date.UTC(2026, 0, 15, 0, 5), 'UTC'))
+      .toBe('Dispositions as at 2026-01-15 00:05 (UTC)');
   });
 });

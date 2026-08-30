@@ -4,6 +4,7 @@ import {
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionRationaleLines,
+  exportDispositionLine, dispositionsAsAtLine, dispositionsMayChangeLine, type ExportContext,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
 
@@ -47,6 +48,23 @@ export interface ReportRow {
    *  never manufactures a caveat where the document simply agreed with the
    *  firm's position, or where no position was ever set. */
   positionOutcomeLabel: string | null;
+  /**
+   * WHO SET THIS CLAUSE'S STATE, WHEN, AND WHAT IT WAS BEFORE (section 6.3.1).
+   *
+   * `verificationLabel` above says what the state IS, in the words an export
+   * has always used. This says who put it there and what it replaced --
+   * "Verified by R. Okafor, 16:04 - was Rejected - changed 3 times" -- which
+   * is the difference between a settled clause and a contested one, and the
+   * whole reason section 6.3.1 asks an export to carry the changed-from
+   * facts rather than only the current state. A partner reading only the
+   * current state is the network-era form of the CSV that wrote unreviewed
+   * clauses as blank cells.
+   *
+   * Through `dispositionLabel`, which is the one place that wording lives.
+   * `undefined` only for a caller with no `ExportContext` -- `draftEmail`,
+   * which composes a client email rather than a record of what was checked.
+   */
+  dispositionLine?: string;
   /** The model's stated reason for `positionOutcomeLabel`, one line when
    *  present. Shared with the CSV exporter via `findingOutcome.ts` so the
    *  two cannot disagree about what a rationale reads as. */
@@ -65,14 +83,28 @@ export function buildReportRows(
   run: ReviewRun,
   docId: string,
   documentNames: Record<string, string> = {},
+  context?: ExportContext,
 ): ReportRow[] {
   // A collection review's findings live under the COLLECTION id, not the
   // document id — `findingsKeyFor` resolves that (and is a no-op for an
   // ordinary document review, where it just returns `docId` back). Keying
   // directly by `docId` here used to make a collection review's export
   // silently empty (Step 0 of this task).
-  const findings = run.findings[findingsKeyFor(run.target, docId)];
+  const findingsKey = findingsKeyFor(run.target, docId);
+  const findings = run.findings[findingsKey];
   if (!findings) return [];
+
+  // Through `dispositionLabel`, never composed here. Five surfaces render a
+  // disposition and the DOCX and the CSV are two of them -- the pair that
+  // drifted apart once before, over a string of exactly this kind. The key
+  // is ABSENT rather than undefined-valued for a caller with no context.
+  const dispositionOf = (clauseId: string): { dispositionLine?: string } => {
+    const line = context ? exportDispositionLine(context, findingsKey, clauseId) : undefined;
+    // ABSENT rather than undefined-valued: `structuredClone` preserves the
+    // key, and a row carrying `dispositionLine: undefined` would read as a
+    // row that has one.
+    return line === undefined ? {} : { dispositionLine: line };
+  };
 
   return run.templateSnapshot.clauses.map(clause => {
     const finding = findings[clause.id];
@@ -99,6 +131,7 @@ export function buildReportRows(
         truncationLabel: truncationLabel(finding),
         positionOutcomeLabel: positionOutcomeLabel(finding),
         positionRationale: positionRationaleLines(finding),
+        ...dispositionOf(clause.id),
       };
     }
 
@@ -116,6 +149,7 @@ export function buildReportRows(
       truncationLabel: truncationLabel(finding),
       positionOutcomeLabel: positionOutcomeLabel(finding),
       positionRationale: positionRationaleLines(finding),
+      ...dispositionOf(clause.id),
     };
   });
 }
@@ -152,7 +186,14 @@ function stripExtension(name: string): string {
  * most sessions never export a report, and the library is large enough that
  * a top-level import would make every user pay for it on first load.
  */
-export async function buildReportDocument(rows: ReportRow[], docName: string, summaryLine: string) {
+export async function buildReportDocument(
+  rows: ReportRow[], docName: string, summaryLine: string,
+  /** The point-in-time stamp (section 6.3.1). Optional so the existing
+   *  document-construction tests still build a document; `exportDocx` always
+   *  passes one, and the DoD scanner is what stops that becoming optional in
+   *  practice. */
+  context?: ExportContext,
+) {
   const {
     Document, Paragraph, TextRun, HeadingLevel, AlignmentType,
     Table, TableRow, TableCell, WidthType, BorderStyle,
@@ -176,6 +217,30 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
       spacing: { after: 400 },
     }),
   ];
+
+  // WHEN THIS WAS TRUE, AND THAT IT CAN CHANGE AGAIN (section 6.3.1).
+  //
+  // Directly under the summary, before the first clause, because a reader
+  // who stops after the first page must still have met it. Section 19 calls
+  // this the worst-consequence item in the stage: a disposition is mutable
+  // by anyone in the workspace at any time, and without these two lines the
+  // document asserts eternally that a named person verified a clause, with
+  // no way for a reader to know it was withdrawn the next morning. The
+  // failure is completely silent -- the file looks identical either way.
+  if (context) {
+    children.push(new Paragraph({
+      children: [new TextRun({
+        text: dispositionsAsAtLine(context.readAt, context.timeZone), bold: true,
+      })],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 100 },
+    }));
+    children.push(new Paragraph({
+      children: [new TextRun({ text: dispositionsMayChangeLine(), italics: true })],
+      alignment: AlignmentType.CENTER,
+      spacing: { after: 400 },
+    }));
+  }
 
   const cellMargins = { top: 100, bottom: 100, left: 100, right: 100 };
 
@@ -204,6 +269,25 @@ export async function buildReportDocument(rows: ReportRow[], docName: string, su
             children: [new Paragraph({ children: [new TextRun({ text: row.verificationLabel, bold: true })] })],
             columnSpan: 2,
             shading: { fill: 'FFF4CC' },
+            margins: cellMargins,
+          }),
+        ],
+      }));
+    }
+
+    // WHO SET THE STATE, WHEN, AND WHAT IT REPLACED (section 6.3.1).
+    //
+    // Beneath `verificationLabel`, which says what the state IS, because the
+    // two answer different questions and a reader meets the caveat first.
+    // Rendered for every clause, including a verified one -- `verificationLabel`
+    // returns null there, so without this a verified clause would carry no
+    // attribution at all, which is the case a partner most needs named.
+    if (row.dispositionLine) {
+      tableRows.push(new TableRow({
+        children: [
+          new TableCell({
+            children: [new Paragraph({ text: row.dispositionLine })],
+            columnSpan: 2,
             margins: cellMargins,
           }),
         ],
@@ -475,8 +559,18 @@ export async function exportDocx(
    *  missing nicety. A default that quietly changes what a report CLAIMS is
    *  not a convenience. */
   documentNames: Record<string, string>,
+  /**
+   * WHEN THESE DISPOSITIONS WERE TRUE, AND HOW TO NAME WHO SET THEM
+   * (section 6.3.1).
+   *
+   * REQUIRED. Optional here would mean a caller could ship a report that
+   * asserts a verification eternally, with no error and no test failing --
+   * section 19's worst-consequence item, whose whole failure mode is that
+   * the file looks exactly the same either way.
+   */
+  context: ExportContext,
 ): Promise<void> {
-  const rows = buildReportRows(run, docId, documentNames);
+  const rows = buildReportRows(run, docId, documentNames, context);
   // A collection is not one of its members. `docName` is whichever document
   // the viewer happened to be showing, and titling a collection's report
   // after it — in the heading, the filename and the no-findings error —
@@ -511,7 +605,7 @@ export async function exportDocx(
   // document, so its whole-run summary is correct as-is; scoping only
   // belongs here, at the one place that reports on a single document.
   const docSummary = exportSummaryLine({ [docId]: run.findings[findingsKeyFor(run.target, docId)] ?? {} });
-  const doc = await buildReportDocument(rows, reportName, docSummary);
+  const doc = await buildReportDocument(rows, reportName, docSummary, context);
 
   const { Packer } = await import('docx');
   const blob = await Packer.toBlob(doc);

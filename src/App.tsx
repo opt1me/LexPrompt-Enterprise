@@ -57,8 +57,8 @@ import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
 } from './lib/api/runs';
 import {
-  addNote, conflictingDisposition, dispositionFor, getFindings, rememberConflict, setDisposition,
-  setNetPosition,
+  addNote, conflictingDisposition, dispositionFor, dispositionsReadAt, getFindings,
+  rememberConflict, setDisposition, setNetPosition,
 } from './lib/api/findings';
 import { loadDirectory, userName } from './lib/api/users';
 import { formatInstant } from './lib/instant';
@@ -845,6 +845,32 @@ function AppShell({ signIn }: { signIn: () => void }) {
    *  renders as "not read" rather than as "not checked". */
   const dispositionOf = (findingsKey: string, clauseId: string) =>
     (run ? dispositionFor(run.id, findingsKey, clauseId) : undefined);
+
+  /**
+   * WHAT AN EXPORT NEEDS IN ORDER TO SAY WHEN IT WAS TRUE (section 6.3.1).
+   *
+   * Assembled here because this is the only place all three facts are in
+   * hand at once, and assembled as ONE object because they are one fact:
+   * what the server said about this review's judgements, and when. A caller
+   * able to supply two of the three would be a caller able to stamp an
+   * instant onto dispositions it did not read.
+   *
+   * `readAt` comes from the module that performed the read, never from
+   * `Date.now()` here: those differ, and the second is a claim the document
+   * cannot support — it would date the moment the file was written rather
+   * than the moment the dispositions were true.
+   *
+   * The time zone is the browser's own, resolved rather than assumed, and
+   * NAMED in the stamp so a report read in another office knows which clock
+   * the instant is on.
+   */
+  const exportContext = useMemo(() => ({
+    readAt: run ? dispositionsReadAt(run.id) : undefined,
+    timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    dispositionOf,
+    audience,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [run, audience]);
 
   // --- Sub-project E: authoring a new playbook ---------------------------
   //
@@ -4586,6 +4612,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     localUserId={profile?.id ?? ''}
                     dispositionOf={dispositionOf}
                     audience={audience}
+                    exportContext={exportContext}
                     verifyConflict={verifyConflict}
                     onReapplyConflict={handleReapplyConflict}
                     onDismissConflict={() => setVerifyConflict(null)}
@@ -4610,6 +4637,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     localUserId={profile?.id ?? ''}
                     dispositionOf={dispositionOf}
                     audience={audience}
+                    exportContext={exportContext}
                     verifyConflict={verifyConflict}
                     onReapplyConflict={handleReapplyConflict}
                     onDismissConflict={() => setVerifyConflict(null)}

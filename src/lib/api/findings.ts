@@ -57,6 +57,37 @@ const lastSeenFindingVersion = new Map<string, Map<string, number>>();
  */
 const lastSeenDisposition = new Map<string, Map<string, DispositionWithHistory>>();
 
+/**
+ * WHEN THIS BROWSER LAST READ A REVIEW'S DISPOSITIONS FROM THE SERVER.
+ *
+ * The instant every export stamps (§6.3.1, `dispositionsAsAtLine`). Here,
+ * beside the cache it describes, because the module that performed the read
+ * is the only one that can say when it happened — a caller passing its own
+ * `Date.now()` would be stamping the moment the file was written onto a
+ * findings map fetched some time earlier, which is a claim the document
+ * cannot support.
+ *
+ * SET BY THE READ ALONE, never by a write. A confirmed write moves one
+ * cell's row forward; moving the stamp with it would over-claim freshness
+ * for every OTHER cell, which were last heard about at the earlier read.
+ * Understating is the safe direction here and over-stating is not: "true as
+ * at 16:41" over a cell whose state was fetched at 16:41 is exact, and over
+ * a cell written at 16:44 is merely conservative.
+ */
+const lastReadAt = new Map<string, number>();
+
+/**
+ * When this browser last read that review's dispositions, or `undefined` for
+ * a review it has not read.
+ *
+ * `undefined` is answered rather than filled in. An export over a review
+ * whose dispositions were never read must SAY it cannot date them — see
+ * `dispositionsAsAtLine`, which does exactly that.
+ */
+export function dispositionsReadAt(reviewId: string): number | undefined {
+  return lastReadAt.get(reviewId);
+}
+
 const cellKey = (findingsKey: string, clauseId: string): string =>
   JSON.stringify([findingsKey, clauseId]);
 
@@ -85,6 +116,7 @@ function rememberDispositions(reviewId: string, page: FindingsPage['dispositions
     }
   }
   lastSeenDisposition.set(reviewId, byCell);
+  lastReadAt.set(reviewId, Date.now());
 }
 
 /**
@@ -138,6 +170,7 @@ export function forgetFindingVersions(reviewId: string): void {
   lastSeenVersion.delete(reviewId);
   lastSeenFindingVersion.delete(reviewId);
   lastSeenDisposition.delete(reviewId);
+  lastReadAt.delete(reviewId);
 }
 
 /**

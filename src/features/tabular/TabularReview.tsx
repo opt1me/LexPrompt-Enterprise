@@ -5,7 +5,7 @@ import { findingKey, findingsKeyFor, isCollectionTarget } from '@lexprompt/core'
 import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
 import {
   verificationCounts, isVerifiable, positionOutcomeCounts, NO_RISK_DATA_LABEL,
-  type DispositionAudience,
+  NO_EXPORT_CONTEXT, type DispositionAudience, type ExportContext,
 } from '../../lib/findingOutcome';
 import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';
@@ -48,6 +48,9 @@ export interface TabularReviewProps {
   /** A refused change and the row that refused it, for the one cell it is
    *  about (§6.3) — the grid's detail panel renders the same notice the card
    *  view does, through the same component. */
+  /** When this review's dispositions were read, and how to name who set
+   *  them (section 6.3.1) — see `ResultsView`'s own prop. */
+  exportContext?: ExportContext;
   verifyConflict?: VerificationConflict | null;
   onReapplyConflict?: () => void;
   onDismissConflict?: () => void;
@@ -85,7 +88,8 @@ const RISK_CELL: Record<RiskLevel, string> = {
 export function TabularReview({
   run, documents, onRetryCell, onOpenCards, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId,
-  dispositionOf, audience, verifyConflict, onReapplyConflict, onDismissConflict, onOpenInReview,
+  dispositionOf, audience, exportContext,
+  verifyConflict, onReapplyConflict, onDismissConflict, onOpenInReview,
 }: TabularReviewProps) {
   const [wrapText, setWrapText] = useState(false);
   const [selected, setSelected] = useState<SelectedCell | null>(null);
@@ -103,7 +107,8 @@ export function TabularReview({
 
   const docName = (docId: string) => documents.find(d => d.id === docId)?.name ?? docId;
 
-  const handleExport = () => downloadTabularCsv(run, documents);
+  const handleExport = () =>
+    downloadTabularCsv(run, documents, exportContext ?? NO_EXPORT_CONTEXT);
 
   const selectedDoc = selected ? documents.find(d => d.id === selected.docId) ?? null : null;
   const selectedClause = selected ? clauses.find(c => c.id === selected.clauseId) ?? null : null;

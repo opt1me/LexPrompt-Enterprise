@@ -362,12 +362,42 @@ describe('the attribution surface Stage 3 promised NOT to build (P28, §13), now
     expect(HARD_CODED.test('const s = `, was ${STATE_WORD[previous]}`;')).toBe(false);
   });
 
-  it('still ships no "dispositions as at" stamp, which is Part 4B s and not this batch s', () => {
-    // NOT every absence inverts. The document-level stamp belongs with the
-    // live transport that makes it true; naming it here keeps the
-    // distinction between "built" and "still deferred" visible rather than
-    // letting the whole describe block read as done.
-    expect(grepRepo(/dispositions as at/i)).toEqual([]);
+  it('has exactly one home for the export s point-in-time wording (P30, inverted)', () => {
+    // Stage 3 asserted that "dispositions as at" appeared NOWHERE, and gave
+    // its reason: an "as at" stamp on a document whose dispositions nobody
+    // else could change would have been a claim about a mechanism that did
+    // not exist.
+    //
+    // It exists now. Stage 4 made a disposition mutable by anyone in the
+    // workspace at any time, so every export became a point-in-time claim
+    // and section 6.3.1 requires it to say so. The absence is INVERTED
+    // rather than deleted (P30), so the record of what was deferred and
+    // when it landed stays readable.
+    const declares = (re: RegExp): string[] =>
+      ALL_SOURCES.filter(f => re.test(codeOf(f))).map(rel);
+    expect(declares(/export function dispositionsAsAtLine/))
+      .toEqual(['src/lib/findingOutcome.ts']);
+    expect(declares(/export function dispositionsMayChangeLine/))
+      .toEqual(['src/lib/findingOutcome.ts']);
+    // The STRING itself lives in exactly one file. Both exporters call the
+    // function; neither spells the sentence.
+    expect(grepRepo(/Dispositions as at/)).toEqual(['src/lib/findingOutcome.ts']);
+    expect(grepRepo(/history is authoritative over any printed copy/))
+      .toEqual(['src/lib/findingOutcome.ts']);
+    // …and both exporters DO carry it, which is the half a scanner reading
+    // one file would miss. A stamp defined once and called nowhere is the
+    // silent failure section 19 names.
+    expect(grepRepo('dispositionsAsAtLine')).toEqual([
+      'src/features/review/exportDocx.ts',
+      'src/features/tabular/csv.ts',
+      'src/lib/findingOutcome.ts',
+    ]);
+    expect(grepRepo('dispositionsMayChangeLine')).toEqual([
+      'src/features/review/exportDocx.ts',
+      'src/features/tabular/csv.ts',
+      'src/lib/findingOutcome.ts',
+    ]);
+    expect(ALL_SOURCES.length).toBeGreaterThan(180);
   });
 
   it('and the export wording still lives in exactly one module', () => {

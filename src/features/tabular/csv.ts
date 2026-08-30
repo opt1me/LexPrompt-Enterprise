@@ -4,6 +4,7 @@ import {
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionRationaleLines,
+  exportDispositionLine, dispositionsAsAtLine, dispositionsMayChangeLine, type ExportContext,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
 
@@ -46,6 +47,10 @@ export function escapeCsvField(value: string): string {
 function cellText(
   finding: Finding | undefined,
   documentNames: Record<string, string>,
+  /** Who set this clause's state, when, and what it replaced -- through
+   *  `dispositionLabel`, the same call the DOCX makes. Section 6.3.1's
+   *  changed-from facts. */
+  dispositionLine: string | undefined,
 ): string {
   const outcome = describeFindingOutcome(finding);
   // Task 9: a net position caveat is a SECOND, independent label from the
@@ -80,6 +85,7 @@ function cellText(
   // all shared with exportDocx.ts via `findingOutcome.ts` so the two
   // exporters cannot disagree about any of them.
   const extras = [
+    ...(dispositionLine ? [dispositionLine] : []),
     ...positionRationaleLines(finding), ...noteLines(finding), ...trailLines(finding, documentNames),
   ];
   return extras.length > 0 ? `${base} | ${extras.join(' | ')}` : base;
@@ -117,7 +123,21 @@ function collectionLabel(run: ReviewRun, documents: DocumentFile[]): string {
  * are joined with CRLF per RFC 4180, which is what most spreadsheet
  * software expects for CSV.
  */
-export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): string {
+export function buildTabularCsv(
+  run: ReviewRun,
+  documents: DocumentFile[],
+  /**
+   * WHEN THESE DISPOSITIONS WERE TRUE, AND HOW TO NAME WHO SET THEM
+   * (section 6.3.1).
+   *
+   * REQUIRED, for the reason `exportDocx`'s own parameter gives: the failure
+   * this closes is completely silent, and an optional stamp is a stamp that
+   * one of the two exporters eventually stops carrying. They have disagreed
+   * once before, over a string of exactly this kind, and the CSV is the one
+   * that opens straight into Excel.
+   */
+  context: ExportContext,
+): string {
   const clauses = run.templateSnapshot.clauses;
   // Trail steps name their document rather than its id — see `trailLines`.
   // The documents are already here for the row labels, so this needs no
@@ -128,10 +148,19 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
   // above the table, and every export — DOCX and CSV alike — has to say how
   // much of it a human actually stood behind.
   const summary = escapeCsvField(exportSummaryLine(run.findings));
+  // The SAME two strings the DOCX carries, from the same two functions, on
+  // their own single-field rows above the header -- section 6.3.1. A
+  // disposition is mutable by anyone in the workspace at any time, so this
+  // sheet is a point-in-time claim; without these it asserts, eternally,
+  // that a named person verified a clause.
+  const asAt = escapeCsvField(dispositionsAsAtLine(context.readAt, context.timeZone));
+  const mayChange = escapeCsvField(dispositionsMayChangeLine());
   const header = ['Document', ...clauses.map(c => c.title)].map(escapeCsvField).join(',');
 
   const clauseCells = (key: string) =>
-    clauses.map(c => cellText(run.findings[key]?.[c.id], documentNames));
+    clauses.map(c => cellText(
+      run.findings[key]?.[c.id], documentNames,
+      exportDispositionLine(context, key, c.id)));
 
   const rows = isCollectionTarget(run.target)
     // ONE row for a collection, whatever its member count. A collection
@@ -167,7 +196,7 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
 
   const body = rows.map(fields => fields.map(escapeCsvField).join(','));
 
-  return [summary, header, ...body].join('\r\n');
+  return [summary, asAt, mayChange, header, ...body].join('\r\n');
 }
 
 /**
@@ -188,8 +217,10 @@ export function buildTabularCsv(run: ReviewRun, documents: DocumentFile[]): stri
  * is also where the two exporters belong relative to each other, given they
  * have silently disagreed once before.
  */
-export function downloadTabularCsv(run: ReviewRun, documents: DocumentFile[]): void {
-  const csv = buildTabularCsv(run, documents);
+export function downloadTabularCsv(
+  run: ReviewRun, documents: DocumentFile[], context: ExportContext,
+): void {
+  const csv = buildTabularCsv(run, documents, context);
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

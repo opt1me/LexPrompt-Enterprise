@@ -1,7 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { escapeCsvField, buildTabularCsv } from './csv';
+import { escapeCsvField, buildTabularCsv as buildCsv } from './csv';
 import { buildReportRows } from '../review/exportDocx';
-import { positionOutcomeLabel } from '../../lib/findingOutcome';
+import {
+  positionOutcomeLabel, dispositionLabel, dispositionsAsAtLine, dispositionsMayChangeLine,
+  NO_EXPORT_CONTEXT, type ExportContext,
+} from '../../lib/findingOutcome';
+import { DISPOSITION_SHAPES, TEST_AUDIENCE } from '../../test/dispositionShapes';
+
+/**
+ * The existing cases predate section 6.3.1's stamp and say nothing about it,
+ * so they run through `NO_EXPORT_CONTEXT` — the LOUD fallback, which dates
+ * nothing and names nobody. They are not weakened by it: a fallback that
+ * invented an instant is exactly what the new cases below forbid, and one
+ * that crashed would fail here. The cases that DO assert the stamp pass a
+ * real context.
+ */
+const buildTabularCsv = (
+  run: ReviewRun, docs: DocumentFile[], context: ExportContext = NO_EXPORT_CONTEXT,
+): string => buildCsv(run, docs, context);
+
 import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { DocumentFile, Finding, ReviewRun, PlaybookVersion, TrailStep } from '../../types';
 
@@ -101,7 +118,7 @@ describe('buildTabularCsv', () => {
     const csv = buildTabularCsv(run(['d1', 'd2'], { d1: {}, d2: {} }), docs);
     // Row 0 is the verification summary line (Ruling R-B4); the header
     // follows at row 1.
-    const [, header] = csv.split('\r\n');
+    const [, , , header] = csv.split('\r\n');
     expect(header).toBe('"Document","Termination","Liability, Cap"');
   });
 
@@ -120,12 +137,12 @@ describe('buildTabularCsv', () => {
       docs,
     );
     const lines = csv.split('\r\n');
-    expect(lines[2]).toBe('"Agreement One.pdf","[UNVERIFIED AI OUTPUT] Auto-renews annually.","[UNVERIFIED AI OUTPUT] Capped at fees paid."');
+    expect(lines[4]).toBe('"Agreement One.pdf","[UNVERIFIED AI OUTPUT] Auto-renews annually.","[UNVERIFIED AI OUTPUT] Capped at fees paid."');
     // Critical 3: pending/error findings must NEVER become an empty field —
     // in a spreadsheet an empty cell reads as "checked, nothing found."
-    expect(lines[3]).not.toBe('"Agreement, Two.pdf","",""');
-    expect(lines[3]).toContain('This clause could not be reviewed: not yet reviewed');
-    expect(lines[3]).toContain('This clause could not be reviewed: boom');
+    expect(lines[5]).not.toBe('"Agreement, Two.pdf","",""');
+    expect(lines[5]).toContain('This clause could not be reviewed: not yet reviewed');
+    expect(lines[5]).toContain('This clause could not be reviewed: boom');
   });
 
   it('never exports a pending, cancelled or errored cell as a blank field (Critical 3)', () => {
@@ -138,7 +155,7 @@ describe('buildTabularCsv', () => {
       }),
       docs,
     );
-    const dataLine = csv.split('\r\n')[2];
+    const dataLine = csv.split('\r\n')[4];
     expect(dataLine).not.toContain('""');
     expect(dataLine).toContain('This clause could not be reviewed: not yet reviewed');
     expect(dataLine).toContain('This clause could not be reviewed: the run was cancelled before this clause was reviewed');
@@ -154,13 +171,13 @@ describe('buildTabularCsv', () => {
       }),
       docs,
     );
-    const dataLine = csv.split('\r\n')[2];
+    const dataLine = csv.split('\r\n')[4];
     expect(dataLine).toContain('This clause could not be reviewed: unknown error');
   });
 
   it('exports a missing finding (no entry at all for that clause) as "not yet reviewed", not blank', () => {
     const csv = buildTabularCsv(run(['d1'], { d1: {} }), docs);
-    const dataLine = csv.split('\r\n')[2];
+    const dataLine = csv.split('\r\n')[4];
     expect(dataLine).not.toContain('""');
     expect(dataLine).toContain('This clause could not be reviewed: not yet reviewed');
   });
@@ -175,7 +192,7 @@ describe('buildTabularCsv', () => {
       }),
       docs,
     );
-    const dataLine = csv.split('\r\n')[2];
+    const dataLine = csv.split('\r\n')[4];
     // Splitting naively on comma would yield more than 3 fields; the quoted
     // field must keep the comma inside a single field.
     expect(dataLine).toBe('"Agreement One.pdf","[UNVERIFIED AI OUTPUT] Terminates on notice, 30 days.","[UNVERIFIED AI OUTPUT] None."');
@@ -191,15 +208,15 @@ describe('buildTabularCsv', () => {
       }),
       docs,
     );
-    const dataLine = csv.split('\r\n')[2];
+    const dataLine = csv.split('\r\n')[4];
     expect(dataLine).toBe('"Agreement One.pdf","[UNVERIFIED AI OUTPUT] The ""Term"" is 5 years.","[UNVERIFIED AI OUTPUT] "');
   });
 
   it('falls back to the document id when the document is not found in the documents array', () => {
     const csv = buildTabularCsv(run(['missing'], { missing: {} }), []);
     const lines = csv.split('\r\n');
-    expect(lines[2]).toContain('"missing"');
-    expect(lines[2]).toContain('This clause could not be reviewed: not yet reviewed');
+    expect(lines[4]).toContain('"missing"');
+    expect(lines[4]).toContain('This clause could not be reviewed: not yet reviewed');
   });
 
   it('joins rows with CRLF', () => {
@@ -430,13 +447,13 @@ describe('buildTabularCsv', () => {
 
     it('emits ONE row, not one per member document', () => {
       const csv = buildTabularCsv(collectionRun, collectionDocs);
-      const [, , ...body] = csv.split('\r\n');
+      const [, , , , ...body] = csv.split('\r\n');
       expect(body).toHaveLength(1);
     });
 
     it("labels that row with the collection, never with a member document's name", () => {
       const csv = buildTabularCsv(collectionRun, collectionDocs);
-      const [, , row] = csv.split('\r\n');
+      const [, , , , row] = csv.split('\r\n');
       // The identity of what was reviewed — both members named, as a
       // collection, so the row cannot be read as one document's answer.
       expect(row.startsWith('"Collection: Lease.pdf + Deed of Variation.pdf"')).toBe(true);
@@ -444,7 +461,7 @@ describe('buildTabularCsv', () => {
 
     it('names an unresolvable member in words rather than printing its raw id', () => {
       const csv = buildTabularCsv(collectionRun, [doc('lease', 'Lease.pdf')]);
-      const [, , row] = csv.split('\r\n');
+      const [, , , , row] = csv.split('\r\n');
       expect(row).toContain('Lease.pdf');
       expect(row).not.toContain('deed"');
       expect(row).toMatch(/unavailable/i);
@@ -469,14 +486,14 @@ describe('buildTabularCsv', () => {
         },
       };
       const csv = buildTabularCsv(truncatedRun, collectionDocs);
-      const [, , row] = csv.split('\r\n');
+      const [, , , , row] = csv.split('\r\n');
       expect(row).toMatch(/incomplete/i);
       expect(row).toContain('Deed of Variation.pdf');
     });
 
     it('agrees with its own summary line about how many findings there are', () => {
       const csv = buildTabularCsv(collectionRun, collectionDocs);
-      const [summary, , ...body] = csv.split('\r\n');
+      const [summary, , , , ...body] = csv.split('\r\n');
       // The summary counts the collection key once per clause (2). The body
       // must contain that many clause cells — one row of 2, not two rows of
       // 2. This is the tell that caught M1: "5 findings" over a 10-cell

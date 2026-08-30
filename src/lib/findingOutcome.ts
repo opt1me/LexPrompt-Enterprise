@@ -843,3 +843,160 @@ export function heldUpdateLine(
   return `${who} changed this while you were writing. `
     + 'Your view will update when you are done.';
 }
+
+/**
+ * WHEN THE DISPOSITIONS THIS EXPORT REPORTS WERE TRUE (§6.3.1).
+ *
+ * *"Dispositions as at 2026-08-28 16:41 (Europe/London)"*.
+ *
+ * ## Why an export needs this and a card does not
+ *
+ * §19: *"A card is read next to its history; a DOCX is read on a train, six
+ * weeks later, by a partner who was not in the review. Under the superseded
+ * insert-once model an export was a claim about a row that could not change
+ * … It no longer does, and the failure is completely silent: the document
+ * looks exactly the same whether or not the disposition it reports still
+ * holds."*
+ *
+ * A disposition is now mutable by anyone in the workspace at any time, so
+ * every export is a POINT-IN-TIME claim and has to say so. Without this
+ * line the document asserts, eternally, that a named person verified a
+ * clause — and the reader has no way to know it was withdrawn the following
+ * morning.
+ *
+ * ## `at` is when the dispositions were READ, not when the file was written
+ *
+ * Those differ on a slow export, and the second is a claim the document
+ * cannot support: the bytes are assembled from a findings map that was
+ * fetched earlier. It is also what makes this testable without mocking a
+ * clock.
+ *
+ * `undefined` is answered honestly rather than filled in with `Date.now()`.
+ * An export that cannot say when it was true must say THAT, not pick an
+ * instant — a stamp naming the moment the file was written would be the
+ * confidently-wrong answer this whole line exists to prevent.
+ *
+ * ## ASCII, and assembled from parts
+ *
+ * `exportSummaryLine`'s docstring gives the reason and it applies unchanged:
+ * the CSV carries no byte-order mark and Excel on Windows reads a BOM-less
+ * file as ANSI. `toLocaleString` is not used because several ICU versions
+ * emit a NARROW NO-BREAK SPACE between the time and the meridiem, which is
+ * U+202F and arrives as mojibake in the first thing a reader sees. The parts
+ * are read individually and joined with plain spaces.
+ */
+export function dispositionsAsAtLine(at: number | undefined, timeZone: string): string {
+  if (at === undefined) {
+    return 'Dispositions as at: not recorded. This export cannot say when these were last '
+      + 'read from LexPrompt.';
+  }
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(new Date(at));
+  const of = (type: string): string => parts.find(p => p.type === type)?.value ?? '';
+  // `hour12: false` still answers "24" for midnight in some ICU versions.
+  const hour = of('hour') === '24' ? '00' : of('hour');
+  return `Dispositions as at ${of('year')}-${of('month')}-${of('day')} `
+    + `${hour}:${of('minute')} (${timeZone})`;
+}
+
+/**
+ * THAT IT CAN CHANGE AGAIN, AND WHAT IS AUTHORITATIVE (§6.3.1).
+ *
+ * The other half of the stamp above, and the half most likely to be trimmed
+ * for looking like boilerplate. It is not boilerplate: it is the sentence
+ * that stops a printed copy being read as the record. A partner holding a
+ * six-week-old DOCX has to know that the answer to "does this still hold"
+ * exists somewhere else and is not in their hands.
+ *
+ * A function rather than a constant so both exporters call the same thing by
+ * the same name as everything else here, and so a future workspace-specific
+ * wording has one place to arrive.
+ */
+export function dispositionsMayChangeLine(): string {
+  return 'A disposition can be changed by any reviewer at any time, including after this file '
+    + "was made. LexPrompt's history is authoritative over any printed copy.";
+}
+
+/**
+ * What an exporter needs in order to say when its dispositions were true and
+ * who set them.
+ *
+ * Passed as one object rather than four parameters because the four are one
+ * fact — *"what the server said about this review's judgements, and when"* —
+ * and a caller that could supply three of them would be a caller that could
+ * stamp an instant onto dispositions it did not read.
+ *
+ * It carries `dispositionOf` and `audience` rather than a ready-made label,
+ * deliberately: the exporters call `dispositionLabel` themselves, so the
+ * DOCX, the CSV, the card, the history panel and the refusal notice are five
+ * callers of ONE function rather than four callers and one caller-shaped
+ * hole where a second wording could be handed in.
+ */
+export interface ExportContext {
+  /** When this browser last READ these dispositions from the server —
+   *  `dispositionsReadAt` in `src/lib/api/findings.ts`. */
+  readAt: number | undefined;
+  /** An IANA zone name, stated rather than assumed: a report read in another
+   *  office has to know which clock the instant is on. */
+  timeZone: string;
+  dispositionOf: (findingsKey: string, clauseId: string) => DispositionWithHistory | undefined;
+  audience: DispositionAudience;
+}
+
+/**
+ * The context an exporter falls back to when its caller has none, and it is
+ * deliberately the LOUD one.
+ *
+ * It dates nothing and names nobody, so an export built without a real
+ * context says *"Dispositions as at: not recorded"* on its first page and
+ * *"Checked state not read - reload the review"* on every clause. That is
+ * unmistakable, which is the whole point: the alternative to a loud fallback
+ * here is a document that looks finished and asserts a verification
+ * eternally, which is section 19's worst-consequence failure and is
+ * completely silent.
+ *
+ * It exists so `ExportContext` can be required at the two functions that
+ * produce a file a lawyer sends, while a preview or a test that has no
+ * directory in hand can still build one.
+ */
+export const NO_EXPORT_CONTEXT: ExportContext = {
+  readAt: undefined,
+  timeZone: 'UTC',
+  dispositionOf: () => undefined,
+  audience: { nameOf: () => undefined, timeOf: (at: number) => new Date(at).toISOString() },
+};
+
+/**
+ * The attribution line one clause carries in an export, or `undefined` for a
+ * clause that should carry none.
+ *
+ * ONE decision, in one place, because the DOCX and the CSV both make it and
+ * they have disagreed once before over a string of exactly this kind.
+ *
+ * ## The one case that is deliberately silent, and why it is not the
+ * blank-cell defect
+ *
+ * When a disposition WAS read, the line is rendered, whatever it says —
+ * including `dispositionLabel`'s "Checked state not read" for a cell the
+ * read did not cover, which is genuinely anomalous and worth sixty
+ * repetitions if that is what it takes to be noticed.
+ *
+ * When NOTHING was read (`readAt === undefined`), the export already says so
+ * once, at the top, in `dispositionsAsAtLine`'s own words: *"Dispositions as
+ * at: not recorded. This export cannot say when these were last read from
+ * LexPrompt."* Repeating "Checked state not read" into every cell of a
+ * sixty-cell sheet adds no fact and buries the one that matters. The
+ * distinction that keeps this honest is that the caveat is still THERE —
+ * stated once at the head of the document a reader meets first — rather than
+ * being dropped, which is what made a blank CSV cell read as "checked,
+ * nothing found".
+ */
+export function exportDispositionLine(
+  context: ExportContext, findingsKey: string, clauseId: string,
+): string | undefined {
+  const d = context.dispositionOf(findingsKey, clauseId);
+  if (d) return dispositionLabel(d, context.audience);
+  return context.readAt === undefined ? undefined : dispositionLabel(d, context.audience);
+}

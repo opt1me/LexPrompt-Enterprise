@@ -12,7 +12,9 @@ import {
 } from '@lexprompt/core';
 import type { DispositionWithHistory, VerificationChange } from '@lexprompt/core';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
-import { isVerifiable, type DispositionAudience } from '../../lib/findingOutcome';
+import {
+  isVerifiable, NO_EXPORT_CONTEXT, type DispositionAudience, type ExportContext,
+} from '../../lib/findingOutcome';
 import { FindingCard } from './FindingCard';
 import type { VerificationConflict } from './ConflictNotice';
 import { ServiceConfigError } from '../../components/ServiceConfigError';
@@ -127,6 +129,16 @@ export interface ResultsViewProps {
   audience?: DispositionAudience;
   /** A refused change and the row that refused it, for the ONE cell it is
    *  about (§6.3). Passed to that card and to no other. */
+  /**
+   * WHEN THIS REVIEW'S DISPOSITIONS WERE READ, AND HOW TO NAME WHO SET THEM
+   * (section 6.3.1).
+   *
+   * Built by `App.tsx`, which is the only place that holds all three facts
+   * at once. Optional so a preview can render; absent, the exports fall back
+   * to `NO_EXPORT_CONTEXT`, which dates nothing and names nobody rather than
+   * inventing either.
+   */
+  exportContext?: ExportContext;
   verifyConflict?: VerificationConflict | null;
   onReapplyConflict?: () => void;
   onDismissConflict?: () => void;
@@ -201,7 +213,7 @@ type Tab = 'findings' | 'chat';
 export function ResultsView({
   run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, authorInitials, localUserId,
-  dispositionOf, audience, verifyConflict, onReapplyConflict, onDismissConflict,
+  dispositionOf, audience, exportContext, verifyConflict, onReapplyConflict, onDismissConflict,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
   playbookVersion, onShowVersionHistory, matterId,
 }: ResultsViewProps) {
@@ -390,7 +402,8 @@ export function ResultsView({
     if (!activeDocId || !activeDoc) return;
     setExportLoading(true);
     try {
-      await exportDocx(run, activeDocId, activeDoc.name, documentNames);
+      await exportDocx(run, activeDocId, activeDoc.name, documentNames,
+        exportContext ?? NO_EXPORT_CONTEXT);
     } catch (error) {
       reportError('Could not export the report.', error);
     } finally {
@@ -664,7 +677,8 @@ export function ResultsView({
                     DoD §10.7). Keeping both exporters in one place is also the
                     reachability half of the rule that stops them drifting. */}
                 <button
-                  onClick={() => downloadTabularCsv(run, documents)}
+                  onClick={() => downloadTabularCsv(run, documents,
+                    exportContext ?? NO_EXPORT_CONTEXT)}
                   title="Export CSV"
                   className="p-2 bg-chip-fill rounded-control hover:bg-paper transition-colors text-ink-2"
                 >
