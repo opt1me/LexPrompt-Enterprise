@@ -144,6 +144,26 @@ describe('asking a colleague to look at a clause', () => {
     expect(container.textContent).toMatch(/cannot reach the server/i);
   });
 
+  it('states how far the request actually reaches, in the exact words', () => {
+    /*
+     * §17 Q2 IS UNANSWERED, AND SAYING SO IS THE ANSWER (P59).
+     *
+     * Whether LexPrompt should notify anybody outside the app is the
+     * owner's decision and has not been made. What ships is the app stating
+     * its own reach where the request is made, because the alternative is an
+     * assigner who believes an email went out and a colleague who is never
+     * asked — a mechanism reaching nobody, which is the failure §18 item 5
+     * is about.
+     *
+     * ASSERTED AS AN EXACT STRING, not a regex: this is declared copy about
+     * what the software does not do, and a paraphrase is a different claim.
+     */
+    const container = mount(panel());
+    expect(container.querySelector('[data-assign-reach]')?.textContent).toBe(
+      'They will see this the next time they open LexPrompt. '
+      + 'Nothing is sent by email or chat.');
+  });
+
   it('says the directory failed to load rather than offering an empty menu', async () => {
     forgetDirectory();
     const container = mount(panel());

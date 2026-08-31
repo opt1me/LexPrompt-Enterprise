@@ -323,14 +323,36 @@ describe('the properties a later stage would break quietly', () => {
 });
 
 describe('what Stage 5 inherits, asserted rather than described', () => {
-  it('still ships no assignee chip and no assigned-to-me counter (S18)', () => {
-    // The MECHANISM is Stage 4's and is real. The cross-matter aggregations
-    // over it are Stage 5's, and this is what stops one arriving quietly.
-    const FORBIDDEN = /assign(ed)?[- ]?to[- ]?me|\bassigneeChip\b/i;
-    expect(FORBIDDEN.test('const n = assignedToMe.length')).toBe(true);
+  it('still ships no assignee chip (S18)', () => {
+    // The MECHANISM is Stage 4's and is real. The chip over it is Stage 5
+    // Task 3's, and this is what stops one arriving quietly. The SANITY
+    // HALF stays here, on the half that still forbids something.
+    const FORBIDDEN = /\bassigneeChip\b/i;
+    expect(FORBIDDEN.test('const c = assigneeChip')).toBe(true);
     expect(grepRepo(FORBIDDEN, WEB_SOURCES)).toEqual([]);
     // …and `assigneeId` is still not a field any component names (P24).
     expect(grepRepo(/\bassigneeId\b/, COMPONENTS)).toEqual([]);
+  });
+
+  it('ships an assigned-to-me counter, and it has THREE states (S18 released)', () => {
+    /*
+     * INVERTED, NOT DELETED (P46). This `it` used to forbid the counter by
+     * absence; a guard that simply lost its case would pass every other
+     * test in the repository, which is why the prohibition is replaced by
+     * the assertion that keeps the thing it released honest.
+     *
+     * The third state is the whole point: `ready` with a count of zero
+     * renders nothing, a failed read renders "not known", and they must not
+     * be the same pixel. A badge showing `0` because a fetch failed is a
+     * lawyer not doing something a colleague is waiting on, and it looks
+     * exactly like a quiet week.
+     */
+    expect(grepRepo(/assignedToMe/i, WEB_SOURCES)).toContain('src/lib/assignedToMe.ts');
+    const counter = codeOf(at('src/lib/assignedToMe.ts'));
+    expect(counter).toMatch(/status: 'error'/);
+    expect(counter).toMatch(/status: 'loading'/);
+    // …and the component renders the error state as words, never a digit.
+    expect(codeOf(at('src/features/assignments/AssignedToMe.tsx'))).toMatch(/not known/);
   });
 
   it('still defers ⌘K and the Report tab, by absence', () => {

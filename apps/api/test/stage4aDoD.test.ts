@@ -285,12 +285,21 @@ describe('Part 4A: the part boundary, enforced rather than remembered', () => {
     expect(route).toMatch(/appendAudit/);
   });
 
-  it('ships no assignee field and no second person in the single-user substrate', () => {
+  it('ships no assignee field, and the counter it once forbade is now real', () => {
     // R-G1's surviving half. The activity feed NAMES people as of Task 12
-    // and `CLAUDE.md` says so; what is still absent is an assignee chip and
-    // an "assigned to me" counter.
+    // and `CLAUDE.md` says so; `assigneeId` in a component stays forbidden
+    // for good, because a field carried through a data structure is
+    // invisible and a field a component renders is an affordance.
     expect(grepRepo(/assigneeId/, WEB_SOURCES.filter(f => f.endsWith('.tsx')))).toEqual([]);
-    expect(grepRepo(/assigned to me/i)).toEqual([]);
+    // The "assigned to me" counter was forbidden here BY ABSENCE and is now
+    // asserted BY PRESENCE (P46): Stage 5 Task 2 shipped it over a real
+    // mechanism, which is what R-G1 required all along. A deleted `it` would
+    // have passed every other test in the repository, so the prohibition is
+    // replaced rather than removed.
+    expect(grepRepo(/assignedToMe/i, WEB_SOURCES)).toContain('src/lib/assignedToMe.ts');
+    // …and the property that keeps it honest: a failed read is its own
+    // state and never a zero.
+    expect(codeOf(at('src/lib/assignedToMe.ts'))).toMatch(/status: 'error'/);
   });
 });
 

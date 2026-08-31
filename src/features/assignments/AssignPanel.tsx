@@ -148,6 +148,16 @@ export function AssignPanel({
         )}
       </label>
 
+      {/* HOW FAR THIS ACTUALLY REACHES, stated where the request is made.
+          §17 Q2 — whether LexPrompt should notify anybody outside the app —
+          is the owner's to answer and is unanswered, and an unstated absence
+          is exactly the silence R-G1 was written about: an assigner who
+          believes an email went out has asked nobody. The counter in the
+          header and the panel on the review are the whole of the reach. */}
+      <p className="font-ui text-ui-sm text-ink-3" data-assign-reach>
+        They will see this the next time they open LexPrompt. Nothing is sent by email or chat.
+      </p>
+
       <label className="block">
         <span className="block font-mono text-chip uppercase text-ink-4 mb-1">
           What you want them to look at

@@ -437,7 +437,17 @@ describe('the attribution surface Stage 3 promised NOT to build (P28, §13), now
     expect(codeOf(at('packages/core/src/domain/types.ts'))).not.toMatch(/\bassigneeId\b/);
     expect(codeOf(at('packages/core/src/domain/verification.ts'))).not.toMatch(/\bassigneeId\b/);
     expect(grepRepo(/\bassigneeId\b/).filter(f => f.endsWith('.tsx'))).toEqual([]);
-    expect(grepRepo(/assign(ed)?[- ]?to[- ]?me/i)).toEqual([]);
+    // THE COUNTER IS NO LONGER FORBIDDEN — Stage 5 Task 2 shipped it over
+    // the mechanism Stage 4 built and Stage 5 Task 1 widened, which is what
+    // R-G1 always required. The prohibition becomes a POSITIVE assertion
+    // rather than a deletion (P46), and what it now asserts is the property
+    // that keeps the counter honest: it has a THIRD state, so a failed read
+    // cannot render as a quiet week.
+    expect(grepRepo(/assignedToMe/i)).toContain('src/lib/assignedToMe.ts');
+    expect(codeOf(at('src/lib/assignedToMe.ts'))).toMatch(/status: 'error'/);
+    // …and the sanity half, since this file's own scanner is what the
+    // assertion above rests on.
+    expect(grepRepo(/assignedToMe/i).length).toBeGreaterThan(1);
   });
 });
 

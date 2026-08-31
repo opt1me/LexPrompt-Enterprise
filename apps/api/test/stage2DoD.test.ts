@@ -735,9 +735,24 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
     // presence marker as a forbidden hook. A scanner that fires on a
     // substring of an unrelated identifier is one that gets relaxed until it
     // stops biting.
-    const AFFORDANCE = /assign(ed)?[- ]?to[- ]?me|\bassignedToMe\b|\bassigneeChip\b/i;
+    // STAGE 5 TASK 2 RELEASED THE COUNTER, and what replaces the
+    // prohibition is a POSITIVE assertion rather than a deletion (P46). Its
+    // mechanism is real — Stage 4's `assignment` table, Stage 5 Task 1's
+    // cross-matter inbox — so R-G1 is satisfied by the mechanism existing,
+    // which was always what the rule said. `assigneeChip` stays forbidden
+    // until Task 3.
+    const AFFORDANCE = /\bassigneeChip\b/i;
     expect(ASSIGNEE.test('const x = f.assigneeId')).toBe(true);
-    expect(AFFORDANCE.test('const n = assignedToMe.length')).toBe(true);
+    expect(AFFORDANCE.test('const c = assigneeChip')).toBe(true);
+    // …and the counter that replaced it is genuinely there, with the third
+    // state that keeps it honest asserted at its SOURCE rather than by
+    // hoping the component test covers it. A counter that renders `0` on a
+    // failed read is indistinguishable from a quiet week.
+    expect(WEB_SOURCES.filter(f => /assignedToMe/i.test(codeOf(f))).map(rel))
+      .toContain('src/lib/assignedToMe.ts');
+    const counter = path.join(ROOT, 'src/lib/assignedToMe.ts');
+    expect(existsSync(counter)).toBe(true);
+    expect(codeOf(counter)).toMatch(/status: 'error'/);
     // …and it does NOT fire on the presence component's own name, which is
     // the false positive the boundaries above exist for.
     expect(AFFORDANCE.test('export function ClausePresence() {}')).toBe(false);

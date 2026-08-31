@@ -60,6 +60,10 @@ import { onConnectionState, onPresence, type ConnectionState } from './lib/api/s
 import {
   getOpenAssignments, resolveAssignment as resolveAssignmentRequest,
 } from './lib/api/assignments';
+import {
+  assignmentChanged, watchAssignedToMe, type AssignedToMe as AssignedToMeState,
+} from './lib/assignedToMe';
+import { AssignedToMe } from './features/assignments/AssignedToMe';
 // Task 17/18: the browser asks about a run instead of performing one.
 import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
@@ -897,6 +901,22 @@ function AppShell({ signIn }: { signIn: () => void }) {
     getProfile().then(setProfile).catch(() => { /* display-only; initials falls back to 'ME' */ });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /*
+   * "ASSIGNED TO ME" — THE CROSS-MATTER COUNTER (S18, Stage 5 Task 2).
+   *
+   * THREE STATES, and it starts in `loading` rather than in a zero: a badge
+   * showing `0` because a fetch failed is a lawyer not doing something a
+   * colleague is waiting on, and it looks exactly like a quiet week.
+   *
+   * Keyed on the profile's own id, and re-run when it arrives. Until it
+   * does, this tab does not know whose it is, so an `assignment.created`
+   * frame moves nothing — the same rule `assignmentParty` states: an
+   * unknown reader is a bystander, never a party.
+   */
+  const [assignedToMe, setAssignedToMe] = useState<AssignedToMeState>({ status: 'loading' });
+  const myUserId = profile?.id;
+  useEffect(() => watchAssignedToMe(setAssignedToMe, { meId: myUserId }), [myUserId]);
 
   /**
    * THE WORKSPACE'S PEOPLE, for every attribution line on screen (§6.3).
@@ -3081,6 +3101,18 @@ function AppShell({ signIn }: { signIn: () => void }) {
           ? [...without, payload.assignment]
           : without;
       });
+      /*
+       * …AND THE HEADER'S COUNTER HEARS ABOUT IT — as a DOORBELL, never as
+       * a number.
+       *
+       * The socket delivers assignment frames per review subscription (§8);
+       * the counter is on the header, which is not on a review. This is the
+       * one place that holds both facts, so it is the one place that
+       * connects them. `watchAssignedToMe` re-READS the inbox in response;
+       * nothing here increments anything, because a count maintained by
+       * incrementing on pushes diverges the first time a frame is missed.
+       */
+      assignmentChanged(payload.assignment);
       return;
     }
     // RULE 5: a `run.*` event is not handled here at all. `watchRun` has
@@ -4531,11 +4563,20 @@ function AppShell({ signIn }: { signIn: () => void }) {
           >
             <SettingsIcon className="w-4 h-4" aria-hidden="true" />
           </button>
+          {/* WHAT HAS BEEN ASKED OF YOU, across every matter (S18, Stage 5).
+              Beside the avatar because it is about YOU, and rendering
+              NOTHING when the answer is zero or not yet known. R-G1 is
+              satisfied by the mechanism being real — Stage 4's assignment
+              table and Stage 5's cross-matter inbox — not by the affordance
+              being absent. There is still no assignee named here and no
+              second actor: this counts requests addressed to the local
+              profile and nobody else's. */}
+          <AssignedToMe state={assignedToMe} />
           {/* §7: the avatar shows the LOCAL profile's own initials and goes
               to Settings, where the name is editable. An avatar of yourself
               is honest — and it is the only place the identity substrate
-              becomes visible. There is no counter, no badge, and no second
-              actor anywhere in this app (R-G1). */}
+              becomes visible. There is no second actor anywhere in this app
+              (R-G1). */}
           <button
             onClick={() => requestView('settings')}
             aria-label="Your profile"
