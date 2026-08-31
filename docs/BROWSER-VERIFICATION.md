@@ -188,12 +188,46 @@ rendered string is asserted in jsdom and by nothing that has seen a screen. Sign
       `auditExport.pg.test.ts` with a lowered ceiling. If you can produce it, check the
       narrower-range buttons are where a person would reach for them.
 
+## If you only have twenty minutes
+
+The six above, in the order of what being wrong costs. Each is a case where a passing
+test and a misread screen are the same green.
+
+1. **The counter's "not known" marker** (stop the API, reload). A badge that reads as a
+   quiet week when it means "I could not ask" leaves a colleague waiting on something
+   you were never told about.
+2. **The empty search versus the failed search.** Two different sentences and two
+   different controls; if they read the same, the search is answering "nothing in this
+   firm matches" to a question it never asked.
+3. **The widening sentence at `/admin/roles`**, read at real width before confirming.
+   It is produced by the server and rendered verbatim precisely so the screen cannot
+   describe a policy change in milder words than the server would.
+4. **The assignee chip**, at all three sizes. If it reads as *checked* rather than as
+   *asked to look*, it is a judgement the app invented.
+5. **The audit extract opened in a real spreadsheet.** Nobody has opened one. It is the
+   artefact that leaves the building and has no refresh button.
+6. **Two profiles in one review** — presence, a live override, and the refusal notice.
+   Five stages have closed without this and it is the app's central promise.
+
+Write what you find straight into this file — a checked box, or a line saying what it
+actually looked like. A checklist whose results live in somebody's memory is a
+checklist nobody can act on.
+
 ## Known unverified beyond this list
 
+- **No browser has been driven in any of the five stages.** `list_connected_browsers`
+  answers with an empty list and the Playwright MCP times out on connect. That is a
+  connection failure rather than a missing capability, and it has been recorded as such
+  at the close of every stage.
 - Nothing has been deployed to Azure. Spike 2's Azure half and Spike 3's Container Apps
   ingress half are both unanswered — cross-replica fan-out is proved locally at two
   replicas, never through Container Apps.
+- **§18 item 9's deployed two-account pass** has never been run, and **§18 item 10(c)**
+  — the integration and end-to-end suites against an ephemeral *deployed* environment —
+  has never been run either. Everything green here is green in one environment.
 - Entra itself has never been touched; both claim shapes are tested offline through one
   lookup, so overage, consent and conditional access are unproven.
 - The findings migration has never run against real user data (its report says so).
 - No `infra/` template has been compiled or validated.
+- **This list is the project's closing state, not a snapshot mid-way.** Stage 5 was the
+  last planned stage; nothing later is scheduled to close any of it.
