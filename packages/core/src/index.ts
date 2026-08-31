@@ -63,6 +63,12 @@ export { SEARCH_MIN_CHARS } from './api/records.ts';
 // `apps/api` writes them — one declaration, two programs, like every wire
 // shape above.
 export type { RoleMappingView, RoleMappingsPage, RoleMappingEffect } from './api/records.ts';
+// The workspace audit export (Stage 5 Task 15, P57). The API produces it and
+// the browser renders it; ONE declaration, because the manifest is the thing
+// that says what the file covers.
+export type {
+  AuditExport, AuditExportManifest, AuditExportRow, AuditExportSource,
+} from './api/records.ts';
 // Part 3B's wire shapes: a review's findings assembled from rows, a
 // disposition and its event, and what a per-clause retry cleared. One
 // declaration, two programs — the browser reads them and `apps/api` writes

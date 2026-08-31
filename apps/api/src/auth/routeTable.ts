@@ -371,4 +371,11 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // deployment holds and whether they are configured", which is an
   // operational fact about the firm's own posture.
   'GET /v1/admin/providers': 'admin',
+
+  // The workspace audit extract (Stage 5 Task 15, P57). `admin`, and it is
+  // the widest read in the application: every audited act, every disposition
+  // change and every run in a date range, across every matter. A reviewer
+  // reads their own matters' activity at `reviewer`; reading the firm's
+  // whole record as one file is a different act with a different audience.
+  'GET /v1/admin/audit-export': 'admin',
 };

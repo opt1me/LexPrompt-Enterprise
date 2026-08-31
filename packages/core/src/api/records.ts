@@ -1027,3 +1027,78 @@ export interface RoleMappingEffect {
    *  yet. Absent and `'reviewer'` are different facts. */
   currentRole?: Role;
 }
+
+/**
+ * WHAT THIS EXTRACT COVERS, WHEN IT WAS TAKEN, AND THAT IT IS COMPLETE FOR
+ * THAT RANGE (P57).
+ *
+ * §19 already names the export as the worst-consequence artefact in this
+ * design, because a card has a reader who can refresh and a printed document
+ * does not. An audit extract is that with legal weight attached: it is read
+ * months later, by somebody who was not there, as evidence.
+ *
+ * So it carries its own scope. A file with rows in it and no statement of
+ * what it covers is a file whose gaps are indistinguishable from absences of
+ * activity.
+ */
+export interface AuditExportManifest {
+  workspaceId: string;
+  /** Epoch milliseconds, INCLUSIVE of `from`, EXCLUSIVE of `to`. Stated on
+   *  the type because two adjacent extracts must not double-count a row that
+   *  fell on the boundary, and must not miss one either. */
+  from: number;
+  to: number;
+  /** When the extract was TAKEN. Different from `to`, always stated. */
+  takenAt: number;
+  takenByUserId: string;
+  /** The time zone the instants above should be read in — the SERVER's, so a
+   *  reader in another one is not left converting silently. */
+  timeZone: string;
+  /**
+   * Every source by name, with its row count. A source with zero rows is
+   * LISTED with zero — an omitted source reads as a source that was not
+   * covered, which is the blank-CSV-cell defect on an evidence file.
+   */
+  sources: { source: AuditExportSource; rows: number }[];
+  /**
+   * Always `true` in a delivered file: an incomplete extract is REFUSED
+   * rather than produced (P57). The field exists so a reader of the file
+   * does not have to know that, and so a future paged export cannot ship
+   * without deciding what to put here.
+   */
+  complete: true;
+}
+
+/** The three records an extract covers, named. The same three
+ *  `GET /v1/matters/:id/activity` unions (S22), at workspace scope. */
+export type AuditExportSource = 'audit_event' | 'finding_disposition_event' | 'run';
+
+/** One row of the extract, flat, with `source` naming which record it came
+ *  from — because the three are DIFFERENT RECORDS kept for different
+ *  reasons, and a reader who guessed the source from the fields would be one
+ *  field away from reading a disposition change as an audited act. */
+export interface AuditExportRow {
+  at: number;
+  source: AuditExportSource;
+  /** A disposition's `to_state`, an audit's `action`, or a run's `state`. */
+  kind: string;
+  byUserId: string;
+  matterId?: string;
+  matterName?: string;
+  reviewId?: string;
+  reviewName?: string;
+  clauseId?: string;
+  /** A disposition's `cause` — `rerun_reset` is not a person un-verifying
+   *  something, and an evidence file must not flatten them (§6.3). */
+  cause?: string;
+  /** An audited act's subject, so a row about a role mapping or an account
+   *  says what it was about. */
+  subjectType?: string;
+  subjectId?: string;
+}
+
+/** The answer to `GET /v1/admin/audit-export`. */
+export interface AuditExport {
+  manifest: AuditExportManifest;
+  rows: AuditExportRow[];
+}

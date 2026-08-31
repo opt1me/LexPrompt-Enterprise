@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { mount, buttons } from '../../test/mount';
 import { AdminScreen } from './AdminScreen';
+import { ADMIN_SECTIONS } from '../../lib/router';
 
 const noop = (): void => { /* the section change is App's to make */ };
 
@@ -47,15 +48,37 @@ describe('AdminScreen', () => {
     expect(container.textContent).toMatch(/not a refusal/i);
   });
 
-  it('names the sections that are not built yet rather than showing them empty', () => {
-    for (const section of ['audit'] as const) {
+  it('renders a real panel in EVERY section, and no placeholder anywhere', () => {
+    /*
+     * The prohibition this replaces (P46): while a section had no panel, the
+     * screen said so IN WORDS rather than rendering an empty tab, because a
+     * blank tab is indistinguishable from a workspace with no people, no
+     * providers and no audit trail. All four sections are built now, so the
+     * rule is asserted the other way round — every section renders something
+     * of its own, and the placeholder wording is gone rather than left
+     * standing where a fifth section could inherit it silently.
+     */
+    // Each panel's FIRST PAINT, which is the state a person actually sees on
+    // arrival — three of the four load from the server and say so, and the
+    // fourth waits to be asked for a range. Table-driven over
+    // `ADMIN_SECTIONS` itself so a fifth section cannot be added without a
+    // line here.
+    const FIRST_PAINT: Record<(typeof ADMIN_SECTIONS)[number], RegExp> = {
+      roles: /loading the role mapping/i,
+      people: /loading the people in this workspace/i,
+      providers: /reading this deployment/i,
+      audit: /audit export/i,
+    };
+    for (const section of ADMIN_SECTIONS) {
       const container = mount(
         <AdminScreen section={section} role={{ status: 'known', role: 'admin' }} onSelect={noop} />);
-      // A blank tab is indistinguishable from a workspace with no audit
-      // trail at all.
-      expect(container.textContent).toMatch(/is not built yet/i);
-      expect(container.textContent).toMatch(/this screen is/i);
+      expect(container.textContent, section).not.toMatch(/is not built yet/i);
+      expect(container.textContent, section).toMatch(FIRST_PAINT[section]);
     }
+    // The sanity half: the four patterns are genuinely different from one
+    // another, so a screen that rendered one panel in every tab would fail
+    // rather than matching four times over.
+    expect(new Set(Object.values(FIRST_PAINT).map(String)).size).toBe(ADMIN_SECTIONS.length);
   });
 
   it('asks its caller to change section, and never navigates itself', () => {

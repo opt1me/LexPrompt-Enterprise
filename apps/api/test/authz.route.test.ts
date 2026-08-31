@@ -277,6 +277,9 @@ describe('a reviewer is refused at every route the shipped table puts above them
       // Stage 5 Task 14: the providers an administrator can see. A READ, and
       // there is no write route to pair it with.
       'GET /v1/admin/providers',
+      // Stage 5 Task 15: the workspace audit extract — the widest read in the
+      // application, and the artefact that leaves the building.
+      'GET /v1/admin/audit-export',
       'POST /v1/playbooks/import',
       'POST /v1/playbooks/:id/versions',
       'POST /v1/changesets/:id/publish',

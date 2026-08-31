@@ -1,6 +1,6 @@
 import type {
   RoleMappingEffect, RoleMappingView, RoleMappingsPage, Role, WorkspaceUser, WorkspaceUsers,
-  AllowedModel, ProviderStatus, Bloc,
+  AllowedModel, ProviderStatus, Bloc, AuditExport,
 } from '@lexprompt/core';
 import { apiDelete, apiGet, apiSend } from './client';
 
@@ -136,4 +136,23 @@ export interface AdminProviders {
  *  statement about the deployment that a failed read cannot make. */
 export async function getAdminProviders(signal?: AbortSignal): Promise<AdminProviders> {
   return apiGet<AdminProviders>('/v1/admin/providers', signal);
+}
+
+/**
+ * The workspace audit extract for one BOUNDED range.
+ *
+ * Both ends are required by the route and by this signature: "everything
+ * this workspace has ever done" is a decision somebody makes, and an
+ * optional argument here would let a caller take it by forgetting.
+ *
+ * REJECTS on refusal, carrying the server's own message — which names the
+ * source that overflowed. It never resolves to an empty extract: a file
+ * saying nothing happened is the worst possible answer to a question asked
+ * about evidence.
+ */
+export async function getAuditExport(
+  from: number, to: number, signal?: AbortSignal,
+): Promise<AuditExport> {
+  return apiGet<AuditExport>(
+    `/v1/admin/audit-export?from=${from}&to=${to}`, signal);
 }

@@ -194,6 +194,7 @@ async function main(): Promise<void> {
     eventPageMax: config.eventPageMax,
     assignmentInboxLimit: config.assignmentInboxLimit,
     searchLimitPerSource: config.searchLimitPerSource,
+    auditExportMaxRows: config.auditExportMaxRows,
     instanceId,
     socket: {
       pingMs: config.wsPingMs,

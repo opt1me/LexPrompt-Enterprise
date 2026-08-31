@@ -70,6 +70,7 @@ const BASE: ApiConfig = {
   eventPageMax: 500,
   assignmentInboxLimit: 200,
   searchLimitPerSource: 20,
+  auditExportMaxRows: 50_000,
   hubTickMs: 1_000,
   wsPingMs: 25_000,
   wsMaxConnections: 500,

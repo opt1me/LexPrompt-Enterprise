@@ -86,6 +86,7 @@ async function listen(gateway: GatewayClient): Promise<number> {
     eventPageMax: 500,
     assignmentInboxLimit: 200,
     searchLimitPerSource: 20,
+    auditExportMaxRows: 50_000,
     socket: { ...WS_CAP_DEFAULTS, eventPageMax: 500 },
     instanceId: 'api-test-instance',
     db: UNUSED_DB,

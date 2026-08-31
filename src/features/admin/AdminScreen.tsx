@@ -5,6 +5,7 @@ import type { RoleState } from '../../lib/role';
 import { RoleMappingPanel } from './RoleMappingPanel';
 import { PeoplePanel } from './PeoplePanel';
 import { ProvidersPanel } from './ProvidersPanel';
+import { AuditExportPanel } from './AuditExportPanel';
 
 /**
  * §7's ADMINISTRATION SCREENS — a shell with four sections, behind a role.
@@ -105,17 +106,7 @@ export function AdminScreen({ section, role, selfUserId, onSelect }: AdminScreen
       {section === 'roles' && <RoleMappingPanel />}
       {section === 'people' && <PeoplePanel selfUserId={selfUserId} />}
       {section === 'providers' && <ProvidersPanel />}
-      {section === 'audit' && (
-        /*
-         * NAMED AS NOT BUILT YET rather than rendered as an empty section.
-         * The audit export arrives in Task 15; a blank tab in the meantime
-         * is indistinguishable from a workspace with no audit trail at all.
-         */
-        <p className="font-ui text-ui text-ink-3">
-          {SECTION_LABEL[section]} is not built yet. Nothing is missing from this workspace —
-          this screen is.
-        </p>
-      )}
+      {section === 'audit' && <AuditExportPanel />}
     </div>
   );
 }

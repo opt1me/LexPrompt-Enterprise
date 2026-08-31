@@ -69,6 +69,11 @@ const DECLARED = [
   // because a capped arm is reported by name -- an overall cap would starve
   // whichever arm finished last with nothing on screen saying which.
   'API_SEARCH_LIMIT_PER_SOURCE',
+  // The workspace audit extract's per-source ceiling. The ONE cap in this
+  // list that REFUSES rather than truncating: an evidence file whose rows
+  // stop at a number nobody stated has gaps that read as absences of
+  // activity.
+  'API_AUDIT_EXPORT_MAX_ROWS',
 ];
 
 /** `API_RUN_LEASE_MS` -> `runLeaseMs`, the naming `config.ts` uses without

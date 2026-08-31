@@ -31,6 +31,7 @@ import { registerRuns } from './routes/runs.ts';
 import { registerRoleMappings } from './routes/admin/roleMappings.ts';
 import { registerPeople } from './routes/admin/people.ts';
 import { registerAdminProviders } from './routes/admin/providers.ts';
+import { registerAuditExport } from './routes/admin/auditExport.ts';
 import { createHub, type Hub } from './realtime/hub.ts';
 import { attachSocket, type SocketCaps } from './realtime/socket.ts';
 import { createPresenceRegistry, type PresenceRegistry } from './realtime/presence.ts';
@@ -132,6 +133,10 @@ export interface ServerDeps {
   /** `API_SEARCH_LIMIT_PER_SOURCE` — the firm-wide search's per-arm ceiling,
    *  DECLARED rather than invented here, for the same reason as above. */
   searchLimitPerSource: number;
+  /** `API_AUDIT_EXPORT_MAX_ROWS` — the audit extract's per-source ceiling,
+   *  DECLARED rather than invented here, for the same reason as every cap
+   *  above: `loadConfig` is the one reader of the environment. */
+  auditExportMaxRows: number;
   /**
    * §8's live socket (Stage 4 Task 16), and the `verify` above is what
    * authenticates it — the SAME function, before the upgrade.
@@ -372,6 +377,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerRoleMappings(app, deps.db);
   registerPeople(app, deps.db);
   registerAdminProviders(app, deps.gateway);
+  registerAuditExport(app, deps.db, { maxRows: deps.auditExportMaxRows });
 
   /*
    * §8'S SOCKET — the route, then the upgrade.

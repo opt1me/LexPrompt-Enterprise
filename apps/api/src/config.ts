@@ -294,6 +294,22 @@ export interface ApiConfig {
    */
   searchLimitPerSource: number;
   /**
+   * `API_AUDIT_EXPORT_MAX_ROWS` — how many rows ONE SOURCE of the workspace
+   * audit extract may deliver (Stage 5 Task 15, P57).
+   *
+   * Per source rather than overall, for the same reason the search cap is:
+   * the manifest reports each source separately, so an overall cap would
+   * refuse (or worse, truncate) whichever source happened to be read last
+   * with nothing saying which.
+   *
+   * Read with a `limit + 1`, and an extra row REFUSES the whole request
+   * rather than capping it. Every other cap in this module answers a short
+   * page and says it was capped; this one cannot, because the artefact is
+   * read months later as evidence and a file whose rows stop at a ceiling
+   * nobody stated has gaps indistinguishable from absences of activity.
+   */
+  auditExportMaxRows: number;
+  /**
    * The live socket's caps (§8, Stage 4). DECLARED, like every other cap in
    * this module, because an undeclared one is a limit an operator hits with
    * no key to change and no sentence naming it — three of those have already
@@ -727,6 +743,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     eventPageMax: int(env, 'API_EVENT_PAGE_MAX', 500),
     assignmentInboxLimit: int(env, 'API_ASSIGNMENT_INBOX_LIMIT', 200),
     searchLimitPerSource: int(env, 'API_SEARCH_LIMIT_PER_SOURCE', 20),
+    auditExportMaxRows: int(env, 'API_AUDIT_EXPORT_MAX_ROWS', 50_000),
     hubTickMs: int(env, 'API_HUB_TICK_MS', 1_000),
     wsPingMs: int(env, 'API_WS_PING_MS', WS_CAP_DEFAULTS.pingMs),
     wsMaxConnections: int(env, 'API_WS_MAX_CONNECTIONS', WS_CAP_DEFAULTS.maxConnections),
@@ -830,6 +847,7 @@ export function describeConfig(cfg: ApiConfig): string {
     // "why does search say some results are missing" is answered by this
     // number and by nothing else on screen.
     `Search: at most ${cfg.searchLimitPerSource} hit(s) per source`,
+    `Audit export: at most ${cfg.auditExportMaxRows} row(s) per source, and REFUSES beyond it`,
     // The socket's caps on their own line, for the same reason the queue's
     // are: "why did everyone's live view go quiet" is answered by the ping
     // interval and the connection ceiling, and an operator must not have to
