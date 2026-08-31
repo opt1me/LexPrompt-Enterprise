@@ -1,8 +1,20 @@
 # LexPrompt — working notes for Claude
 
-A browser-only AI contract-review app. Pick a contract type, generate a review template (a "playbook") of clauses, run it over documents, read findings as cards whose citations highlight the exact quoted passage in a document viewer alongside.
+An AI contract-review app a firm runs itself. Pick a contract type, generate a review template (a "playbook") of clauses, run it over documents, read findings as cards whose citations highlight the exact quoted passage in a document viewer alongside.
 
-No backend. No accounts. The user supplies their own OpenRouter API key.
+A React single-page app, a Fastify **API** over Postgres and a blob store, an inference **gateway** that is the only thing holding a model-provider credential, and `packages/core`, which both sides import so one idea never gets two implementations. People sign in against the firm's own OIDC issuer; a role comes from the firm's own group membership. The browser holds **no** provider key — `src/lib/storage.ts` deletes any it finds left over, and `src/lib/model/stage1DoD.test.ts` asserts that nothing in the browser bundle can hold or send one.
+
+> **This section is checked.** `src/test/claudeMdHeader.test.ts` fails if these
+> paragraphs and the Architecture block below start describing an application
+> this repository does not ship. It was added because they described one for
+> five stages: the body of this document was rewritten twice and its opening
+> was never revisited, so it went on saying "browser-only… No backend. No
+> accounts", and naming `src/lib/openrouter.ts` as the only route to a
+> provider — a file `stage1DoD.test.ts` asserts does not exist. Every future
+> agent reads this before reading anything else, and one that believed it
+> would go looking for a deleted file, conclude the repository was broken, or
+> write a browser-side provider call because the binding document said that
+> was the architecture.
 
 ## The one rule that outranks the others
 
@@ -23,23 +35,23 @@ When you are deciding how something should behave on failure, that list is the p
 
 ## Architecture
 
-**Persistence** — `src/lib/db/` over IndexedDB via `idb`. `open.ts` owns the connection; one repository per store (`matters`, `documents`, `blobs`, `reviews`, `playbooks`, `profile`). `src/lib/storage.ts` keeps **settings only**, synchronously, in `localStorage` — deliberately, because they are a few hundred bytes read in render paths and moving them would make every caller async.
+**Persistence** — `src/lib/db/` is **sixteen HTTP clients over `apps/api`**, one per record type (`matters`, `documents`, `blobs`, `reviews`, `playbooks`, `playbookVersions`, `collections`, `changesets`, `precedents`, `positionBasis`, `profile`, `workspaceSettings`, …). Same files, same exports, same signatures as the IndexedDB repositories they replaced (ruling R3), which is why the browser code above them barely moved; what is new underneath is that a stale write is **refused** rather than applied. Records and text live in Postgres, original file bytes in a blob store, both inside the firm's own tenant. `open.ts` survives for exactly one purpose — reading the legacy IndexedDB database so the upload screen can move what is still in it — and nothing writes to it. `src/lib/storage.ts` still keeps a few UI **settings** synchronously in `localStorage`, and is also the file that purges a legacy provider key.
 
-**AI** — `src/lib/openrouter.ts` is the only route to a provider: `chat`, `chatStream`, `chatJson`, `listModels`. Retries **only** on 429 and 5xx; fails fast on 400/401/402/403. `parseJsonLoose` is the fallback for models that wrap JSON in prose.
+**AI** — `src/lib/openrouter.ts` **is deleted**, and `stage1DoD.test.ts` asserts it stays deleted. `src/lib/model/gatewayModelClient.ts` is the browser's only route to a model, and it does not reach a provider: it calls `apps/gateway`, which holds the credential, and **every call names a `purpose`** (`purposes.test.ts` scans both `src/` and `packages/core/src` for a bare one). The gateway's adapters are where retry and failure classification live — retry **only** on 429 and 5xx, fail fast on 400/401/402/403. `parseJsonLoose` (in `packages/core`) is still the fallback for models that wrap JSON in prose.
 
 **Review engine** — `extractClause(doc, clause, template, settings)` returns one `Finding` and **never rejects**; `runReview` fans it across a document × clause matrix with bounded concurrency. The card view and the tabular grid are two *renderers* over one `findings` map. Never build a second pipeline for a second view.
 
 **Three renderers now, over the same one map** (Stage 5): the card view, the tabular grid and `ReportView` — which is a view of the document the export produces, and which is why it discharges R-G11 rather than reopening it. R-G11 dropped the tab because *"a `Report` tab advertises a live report view the app does not have"*; the app has one now. It renders `findingOutcome.ts`'s strings and **declares none of its own**, including `exportSummaryLine`, `dispositionsAsAtLine` and `dispositionsMayChangeLine`, and it builds its rows with `buildReportRows` — the same function the DOCX builds its tables from, so it is the same rows rendered differently rather than a second derivation of them. A reader can therefore see on screen exactly what a DOCX read six weeks later on a train will say. `ReportView.test.tsx` asserts the component holds **no bare text anywhere in its JSX** (so a sentence cannot arrive as markup), that its only declared strings are short column headings naming a field rather than stating a fact, and that it imports nothing from `lib/api` — a report that fetched its own data would be the second pipeline the rule above forbids. The `ViewSwitch` grew a third tab rather than a second control; what disappears for a single-document or collection review is the **Compare** tab, not the switch, because hiding a view that does exist is the same defect as advertising one that does not.
 
-**Citations** — `src/lib/citations.ts` matches verbatim quotes to page coordinates. Pure, no React, no pdf.js. Verified end to end: 4/4 citations landed exactly after a full reload.
+**Citations** — `packages/core/src/domain/citations.ts` matches verbatim quotes to page coordinates (it was `src/lib/citations.ts` until Stage 3 moved the review closure into core, where both processes can reach it). Pure, no React, no pdf.js. Verified end to end: 4/4 citations landed exactly after a full reload.
 
 ## Conventions that were expensive to learn
 
-**Load paths must distinguish "empty" from "broken".** Every screen that loads from IndexedDB uses a dedicated error state, distinguishes `DbBlockedError` by type, renders an error branch *instead of* the content, and offers a retry. Never fall back to an empty list. Use `describeLoadError` / `LoadErrorPanel`; do not hand-roll a new one.
+**Load paths must distinguish "empty" from "broken".** Every screen that loads — over HTTP now, and from IndexedDB on the one screen that still reads the legacy database — uses a dedicated error state, distinguishes the failure by type (`DbBlockedError` there, `ModelError`'s code here), renders an error branch *instead of* the content, and offers a retry. Never fall back to an empty list. Use `describeLoadError` / `LoadErrorPanel`; do not hand-roll a new one.
 
-**Never delete what you cannot read.** Corrupt stored data is quarantined, not discarded. The migration never deletes its `localStorage` source — that backup is deliberate and disclosed in the README.
+**Never delete what you cannot read.** Corrupt stored data is quarantined, not discarded. The upload screen that moves a browser's existing records to the server deletes **nothing** from the browser — not on success, not on failure — and says so on screen; the startup migration that used to copy `localStorage` templates into IndexedDB was removed when every repository became an HTTP client, and its `localStorage` source was never deleted, so those templates are picked up by the upload screen instead of being orphaned. Both are disclosed in the README.
 
-**Fonts are self-hosted from `public/fonts/`, never hotlinked from a third-party host.** The app's own disclosure says nothing leaves the browser except calls to OpenRouter; a `<link>` to Google Fonts (or any other font CDN) would make that sentence false on every single page view, before a user has done anything at all. `src/test/fonts.test.ts` checks the total payload stays inside a 350 KiB budget and that no `@font-face` or stylesheet reference points outside the app's own origin. Updating a font version is a manual step — download it, subset it, drop it in — and that manual step is the cost of the disclosure staying true.
+**Fonts are self-hosted from `public/fonts/`, never hotlinked from a third-party host.** The app's own disclosure names exactly where a request goes — the firm's own API and gateway, and from the gateway to the model provider the firm chose — and a `<link>` to Google Fonts (or any other font CDN) would add a third-party host to every single page view, before a user has done anything at all. (The disclosure used to say "nothing leaves the browser except calls to OpenRouter". It is the successor sentence that is policed now, by `precedentPromise.test.ts` and by `stage1DoD.test.ts`'s egress scan.) `src/test/fonts.test.ts` checks the total payload stays inside a 350 KiB budget and that no `@font-face` or stylesheet reference points outside the app's own origin. Updating a font version is a manual step — download it, subset it, drop it in — and that manual step is the cost of the disclosure staying true.
 
 **Page images are never persisted.** Original file bytes are stored as Blobs; page images are derived data (base64, ~⅓ larger than the source) regenerated on demand and cached in-session with an LRU bound.
 
