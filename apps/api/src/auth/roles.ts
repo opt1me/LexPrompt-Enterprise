@@ -204,12 +204,15 @@ export async function seedRoleMappings(
     [workspaceId, mappings.map(m => m.issuer), mappings.map(m => m.groupValue)],
   );
 
-  const byKey = new Map(mappings.map(m => [`${m.issuer} ${m.groupValue}`, m.role]));
+  // Keyed by a JSON pair rather than a joined string: an issuer or a group
+  // value containing the separator would otherwise collide two mappings into
+  // one, and both are operator-supplied opaque strings.
+  const byKey = new Map(mappings.map(m => [JSON.stringify([m.issuer, m.groupValue]), m.role]));
   return superseded.map(row => ({
     issuer: row.issuer,
     groupValue: row.group_value,
     previousRole: row.role,
-    role: byKey.get(`${row.issuer} ${row.group_value}`)!,
+    role: byKey.get(JSON.stringify([row.issuer, row.group_value]))!,
   }));
 }
 
