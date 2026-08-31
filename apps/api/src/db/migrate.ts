@@ -47,6 +47,42 @@ export async function appliedVersions(db: Db): Promise<string[]> {
  * holding it. A leaked session lock would leave every future deploy hanging
  * with no message at all.
  */
+/**
+ * THE LEDGER READ IN THE OTHER DIRECTION: is there a row with no file?
+ *
+ * `runMigrations` asks one question — which files has this database not seen
+ * — and applies those. It never asks the reverse, so a migration RENAMED or
+ * DELETED is invisible in both directions: the ledger names a version this
+ * image does not carry, and nothing anywhere says so. The live development
+ * database is standing evidence that rows with no file are reachable (the
+ * migration suite left three behind for weeks, `901_a`/`902_b`/`903_once`),
+ * so this is not hypothetical.
+ *
+ * What it actually protects against is a deployment going BACKWARDS: an older
+ * image started against a schema a newer one already migrated. Every table
+ * the old code reads still exists, every query it issues still parses, and it
+ * runs — against columns whose meaning changed under it. That is this
+ * project's defining failure shape (something stale presented as correct)
+ * arriving at the one layer where nothing above it can notice.
+ *
+ * SEPARATE FROM `runMigrations` rather than folded into it, deliberately: the
+ * migration suite runs `runMigrations` over a temporary directory holding two
+ * probe files, against a database whose ledger legitimately holds sixteen
+ * real ones. A check inside `runMigrations` would refuse every one of those
+ * runs, which is how a guard gets relaxed until it stops biting. This is
+ * called by `main.ts`, over the shipped migration directory, where "the
+ * ledger and the directory must agree" is exactly true.
+ *
+ * Returns the versions rather than throwing, so the caller decides what a
+ * disagreement is worth — `main.ts` treats it as a refusal to start.
+ */
+export async function ledgerVersionsWithNoFile(db: Db, dir: string): Promise<string[]> {
+  const known = new Set(
+    readdirSync(dir).filter(f => f.endsWith('.sql')).map(f => f.replace(/\.sql$/, '')),
+  );
+  return (await appliedVersions(db)).filter(version => !known.has(version));
+}
+
 export async function runMigrations(
   db: Db,
   dir: string,

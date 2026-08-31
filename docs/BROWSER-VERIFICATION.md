@@ -188,6 +188,51 @@ rendered string is asserted in jsdom and by nothing that has seen a screen. Sign
       `auditExport.pg.test.ts` with a lowered ceiling. If you can produce it, check the
       narrower-range buttons are where a person would reach for them.
 
+## The cross-stage seam fixes — six surfaces changed wording, and nobody has seen any of them
+
+These came out of the cross-stage seam review. Every one is a sentence a reader acts
+on, changed because the old sentence made a **false first-person claim** — and a
+first-person claim is exactly the kind of thing a unit test can assert the letters of
+while the screen still reads wrongly. Two profiles are needed for four of the six: the
+whole point is what the OTHER person's screen says.
+
+1. **A net position confirmed by a colleague** (`NetPositionPanel`, inside a collection
+   review's finding card, and again inside the variation trail modal). Partner confirms
+   or amends; trainee opens the same review. The line must read *"Confirmed by
+   \<partner's name\> on …"*, never *"Confirmed by you"*. Check **both** places it is
+   rendered — the card and the trail — because they are two renders of one panel and an
+   attribution that differed between them would be invisible to a reader in either.
+2. **A version published by a partner** (`Version history`, from the playbook editor and
+   from a review header). A reviewer cannot publish and a partner can, so this is the
+   one screen whose author is *guaranteed* to sometimes be somebody else. Every row must
+   name a person. Check a row whose author has been pseudonymised too — it should read
+   *"Published by Former user 1a2b3c4d"*, not a uuid and not a blank.
+3. **Two colleagues' notes in one export.** Reviewer A notes one thing, reviewer B the
+   opposite, on the same clause. Take the DOCX and both CSVs. Each line must read
+   *"Note by \<name\>: …"*. This is the case with no card beside it to click, so if the
+   names are wrong here nothing else recovers them.
+4. **The audit extract, opened in a real spreadsheet** (already on the twenty-minute
+   list, and now with a specific thing to try). Rename a matter to
+   `=HYPERLINK("https://example.com","click")` as a reviewer, then take the extract as an
+   administrator and open it in Excel **and** in Google Sheets. The cell must show the
+   text, not a link. Nobody has opened one of these files at all.
+5. **A standard position's provenance** (`StandardPositionField`, playbook editor). It
+   now reads *"Written by a person"* / *"Drafted by AI, reviewed by a person"* rather
+   than "by you". Read it as the second person to open the clause and check it does not
+   look like a bug — the wording is deliberately weaker than the other two because
+   `StandardPosition` records no author to name.
+6. **An unresolvable actor, anywhere.** Sign in, open a review with a colleague's
+   disposition on it, then stop the API before the directory loads. Every attribution
+   surface should say *"someone this workspace does not name"* — the roster, the
+   assignee chip, the asked-of-you list, the activity feed, the card's actor line, the
+   net position and the version history. They now share one constant, so they should be
+   identical; if two of them differ, the constant is not reaching one of them.
+
+Also unseen, and not a browser task: **the API's new refusal to start** when the
+migration ledger names a version the build does not carry. Verify by hand against a
+disposable database — insert a row into `schema_migration` with a made-up version and
+confirm the container refuses with the sentence naming it, rather than booting.
+
 ## If you only have twenty minutes
 
 The six above, in the order of what being wrong costs. Each is a case where a passing
@@ -231,3 +276,8 @@ checklist nobody can act on.
 - No `infra/` template has been compiled or validated.
 - **This list is the project's closing state, not a snapshot mid-way.** Stage 5 was the
   last planned stage; nothing later is scheduled to close any of it.
+- **The six wording changes above have been verified only in jsdom.** Every one of them
+  is a sentence about WHO did something, and the tests that pin them supply a fake
+  directory. What no test can answer is whether the sentence reads correctly to the
+  second person on a real screen at real width, which is the failure the old wording
+  had for two whole stages while its tests were green.

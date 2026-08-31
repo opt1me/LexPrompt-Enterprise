@@ -6,7 +6,7 @@ import { discoverJwks, makeTokenVerifier, type Principal } from './oidc.ts';
 import { buildServer } from './server.ts';
 import { makeGatewayClient, type GatewayClient } from './gatewayClient.ts';
 import { makeDb, makePool, type Db } from './db/pool.ts';
-import { runMigrations } from './db/migrate.ts';
+import { ledgerVersionsWithNoFile, runMigrations } from './db/migrate.ts';
 import { ensureAuditPartitionsOrWarn } from './audit/partitions.ts';
 import { resolveActor, type Actor } from './auth/actor.ts';
 import { roleFor, seedRoleMappings } from './auth/roles.ts';
@@ -88,7 +88,35 @@ async function main(): Promise<void> {
     const migrationPool = makePool(config.databaseMigrationUrl, 2);
     try {
       const migrator = makeDb(migrationPool);
-      await runMigrations(migrator, fileURLToPath(new URL('../migrations/', import.meta.url)));
+      const migrationDir = fileURLToPath(new URL('../migrations/', import.meta.url));
+      await runMigrations(migrator, migrationDir);
+      /*
+       * THE LEDGER READ IN THE OTHER DIRECTION, and a refusal to start.
+       *
+       * `runMigrations` asks which files this database has not seen. This
+       * asks which versions this database HAS seen that this image does not
+       * carry, which is the question nothing asked — a renamed or deleted
+       * migration was invisible in both directions.
+       *
+       * A refusal rather than a warning, unlike the audit-partition line
+       * below, and the difference is which way the disagreement points. A
+       * missing partition is a calendar that has moved on and the fix is
+       * idempotent; a ledger row with no file means this database has been
+       * migrated by an image NEWER than this one. Every query this process
+       * issues would still parse and still return rows, against columns whose
+       * meaning changed under it — the stale-presented-as-correct failure
+       * this codebase's whole posture is against, at the one layer where
+       * nothing above it can notice.
+       */
+      const unknown = await ledgerVersionsWithNoFile(migrator, migrationDir);
+      if (unknown.length > 0) {
+        throw new Error(
+          `This database has applied ${unknown.length} migration(s) this build does not carry: `
+          + `${unknown.join(', ')}. That means it was migrated by a NEWER build than this one, `
+          + 'and running against it would issue this build\'s queries against a schema it does '
+          + 'not know. Deploy the build that owns those migrations, or restore the database to '
+          + 'a point this build can read. Nothing has been changed.');
+      }
       // On the MIGRATOR connection, because the app role holds no write grant
       // on `role_mapping` (001_identity.sql) — which is what makes "no request
       // can change a role mapping" a fact about the database rather than a
