@@ -548,6 +548,14 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
      * "the scanner found them" rather than "the list agrees with itself".
      */
     for (const added of [
+      // Stage 5 Part 5C's five admin routes, named for the same reason: a
+      // count alone cannot tell "the scanner found the new route" from
+      // "the scanner found a different one".
+      'GET /v1/admin/role-mappings',
+      'POST /v1/admin/role-mappings',
+      'POST /v1/admin/role-mappings/preview',
+      'PUT /v1/admin/role-mappings/:id',
+      'DELETE /v1/admin/role-mappings/:id',
       'GET /v1/assignments',
       'POST /v1/assignments/:id/resolve',
       'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/assignments',
@@ -555,6 +563,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       expect(urls, `${added} is invisible to the 401 sweep`).toContain(added);
     }
     expect(urls).toEqual([
+      'DELETE /v1/admin/role-mappings/:id',
       'DELETE /v1/collections/:id',
       'DELETE /v1/documents/:id',
       'DELETE /v1/matters/:id',
@@ -565,6 +574,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'DELETE /v1/reviews/:id',
       'GET /healthz',
       'GET /v1/admin/blob-orphans',
+      'GET /v1/admin/role-mappings',
       'GET /v1/assignments',
       'GET /v1/changesets/:id',
       'GET /v1/collections/:id',
@@ -619,6 +629,8 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/ws',
       'PATCH /v1/documents/:id/role',
       'POST /v1/admin/blob-orphans/delete',
+      'POST /v1/admin/role-mappings',
+      'POST /v1/admin/role-mappings/preview',
       'POST /v1/assignments/:id/resolve',
       'POST /v1/changesets/:id/publish',
       'POST /v1/documents',
@@ -634,6 +646,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'POST /v1/reviews/:id/findings/:findingsKey/:clauseId/retry',
       'POST /v1/reviews/:id/runs',
       'POST /v1/runs/:id/cancel',
+      'PUT /v1/admin/role-mappings/:id',
       'PUT /v1/changesets/:id',
       'PUT /v1/collections/:id',
       'PUT /v1/matters/:id',
@@ -678,7 +691,9 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // scanner found a different one". 70 with Stage 5 Task 3's
     // `GET /v1/reviews/:id/assignments`, which is also named in the list
     // above for the same reason. 71 with Stage 5 Task 4's `GET /v1/search`.
-    expect(checked).toHaveLength(71);
+    // 76 with Stage 5 Part 5C's five role-mapping routes, all named in the
+    // presence loop above so a count cannot stand in for the scanner.
+    expect(checked).toHaveLength(76);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

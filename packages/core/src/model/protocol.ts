@@ -271,6 +271,46 @@ export const MODEL_ERROR_CODES = [
    * must never be made about a query that was never run.
    */
   'query_too_short',
+  /**
+   * 409 — a write aimed at a role mapping that came from
+   * `API_ROLE_MAPPINGS` (Stage 5 Part 5C).
+   *
+   * The DATABASE already refuses it: migration 015 bounds the app role to
+   * `source = 'admin'` rows by row-level security. This code exists so the
+   * handler can refuse FIRST, with a sentence naming the variable an
+   * administrator would have to edit instead — a Postgres row-level-security
+   * error is a correct refusal that tells a lawyer nothing they can act on.
+   * Both layers are asserted; neither is trusted alone.
+   */
+  'mapping_is_configuration',
+  /**
+   * 409 — a change that would leave the workspace with no mapping granting
+   * `admin` at all (Stage 5 Part 5C).
+   *
+   * The message names `API_ROLE_MAPPINGS` because that is the only recovery
+   * path once it has happened: nobody would be able to reach the admin
+   * screen to undo it, and the repair would be a database session — which is
+   * not a repair a firm has at 17:40.
+   */
+  'last_admin_mapping',
+  /**
+   * 409 — an administrator asked to disable their own account (Stage 5 Part
+   * 5C, §7).
+   *
+   * Same reasoning as `last_admin_mapping` one object down: the refusal is
+   * about the state it would leave behind, not about the act.
+   */
+  'cannot_disable_self',
+  /**
+   * 413 — an audit extract whose range holds more rows than
+   * `API_AUDIT_EXPORT_MAX_ROWS` (Stage 5 Part 5C, P57).
+   *
+   * REFUSED rather than truncated. An audit extract is read months later, by
+   * somebody who was not there, as evidence; a file whose rows stop at a
+   * ceiling nobody stated is a file whose gaps are indistinguishable from
+   * absences of activity.
+   */
+  'export_too_large',
 ] as const;
 
 export type ModelErrorCode = (typeof MODEL_ERROR_CODES)[number];

@@ -315,4 +315,31 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // administrator may change (§7).
   'GET /v1/workspace/settings': 'reviewer',
   'PUT /v1/workspace/settings': 'admin',
+
+  // §7's ROLE MAPPING, ADMINISTERED (Stage 5 Part 5C). *"What a reviewer
+  // cannot do is publish a playbook version (partner) or change workspace
+  // configuration and role mapping (admin)"* — this table's own docstring,
+  // written in Stage 2 when these routes did not exist. They exist now, and
+  // every one of them is `admin`.
+  //
+  // `admin` ON THE READ TOO, unlike `GET /v1/workspace/settings` next door,
+  // and the difference is argued rather than inherited. A reviewer has a
+  // reason to see which model runs their reviews; nobody but an
+  // administrator has a reason to read the firm's whole group-to-role table,
+  // and it names every group an attacker would want to be added to.
+  //
+  // §7 says an admin is not a super-reviewer, so a PARTNER is refused here
+  // exactly as a reviewer is — `roleMappings.compose.test.ts` asserts both,
+  // because a test with only the admin proves the route works and proves
+  // nothing about the gate.
+  'GET /v1/admin/role-mappings': 'admin',
+  'POST /v1/admin/role-mappings/preview': 'admin',
+  'POST /v1/admin/role-mappings': 'admin',
+  // `:id` is base64url of `issuer\ngroupValue`, NOT `:issuer/:groupValue`.
+  // An issuer is a URL and the deployed nginx decodes `%2F` back into a path
+  // separator before Fastify routes — probed against this stack, an encoded
+  // issuer arrived with its slashes real and its double slash collapsed, so
+  // a two-segment route would never match. See `routes/admin/roleMappings.ts`.
+  'PUT /v1/admin/role-mappings/:id': 'admin',
+  'DELETE /v1/admin/role-mappings/:id': 'admin',
 };

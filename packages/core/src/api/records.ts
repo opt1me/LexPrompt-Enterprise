@@ -926,3 +926,104 @@ export interface RetryResult {
   run: RunView;
   cleared: RetryCleared;
 }
+
+// ---------------------------------------------------------------------------
+// §7's ADMIN SURFACES (Stage 5 Part 5C). Declared here for the same reason
+// every wire shape above is: `apps/api` writes them and the browser reads
+// them, and one declaration is what stops the two describing one field two
+// ways.
+// ---------------------------------------------------------------------------
+
+/**
+ * ONE GROUP-TO-ROLE MAPPING, as the admin screen sees it.
+ *
+ * `source` is the whole of what makes this table safe to put a screen on
+ * (migration 015): a `'configuration'` row came from `API_ROLE_MAPPINGS` and
+ * the app role cannot write it — enforced by row-level security, not by this
+ * type and not by the handler alone.
+ */
+export interface RoleMappingView {
+  /**
+   * AN OPAQUE HANDLE FOR THE (issuer, group_value) PAIR — base64url of the
+   * two, minted by the server and passed back verbatim.
+   *
+   * NOT `/:issuer/:groupValue`, which is what the plan drafted and what the
+   * deployed proxy breaks. An issuer is a URL, and nginx DECODES `%2F` back
+   * into a path separator before Fastify ever routes: probed against this
+   * project's own stack, `…/http%3A%2F%2Flocalhost%3A8088%2Frealms%2Flexprompt/admins`
+   * arrived as `…/http:/localhost:8088/realms/lexprompt/admins` — a different
+   * number of segments, and the double slash collapsed as well. The route
+   * would never match, and the symptom would be a 404 on the one screen
+   * whose subject is who can do what.
+   *
+   * `role_mapping` has no id column of its own — its primary key IS the pair
+   * — so this is the pair, encoded, rather than a new identity.
+   */
+  id: string;
+  issuer: string;
+  groupValue: string;
+  role: Role;
+  source: 'configuration' | 'admin';
+  createdAt: number;
+  /** ABSENT on a configuration row — nobody typed it into a screen, and
+   *  naming the deployment as an author would be an attribution nobody
+   *  made. */
+  createdByUserId?: string;
+  updatedAt?: number;
+  updatedByUserId?: string;
+  /** Present when deployment configuration later claimed a row an admin
+   *  authored (P52). The screen shows this permanently, so an administrator
+   *  can see their change was superseded without going and reading a log. */
+  convertedFromAdminAt?: number;
+}
+
+/** The answer to `GET /v1/admin/role-mappings`. */
+export interface RoleMappingsPage {
+  mappings: RoleMappingView[];
+  /**
+   * WHEN THIS WAS READ. The same idiom as the audit export's "as at"
+   * instant, and for the same reason: a policy screen showing a mapping with
+   * no instant cannot be told apart from a stale one, and the reader has no
+   * way to know which they are looking at.
+   */
+  readAt: number;
+  /** The variable a configuration row comes from, named so an administrator
+   *  can see that some of what they are looking at is not theirs to
+   *  change. */
+  configurationSource: 'API_ROLE_MAPPINGS';
+}
+
+/**
+ * WHAT A PROPOSED WRITE WOULD DO, IN WORDS, DECIDED BY THE SERVER (P53).
+ *
+ * The screen renders `sentence` VERBATIM and composes nothing of its own. A
+ * screen that describes a policy change in its own words is a screen that
+ * can describe it wrongly — and this is the one change in the application
+ * whose consequence is who can do what.
+ */
+export interface RoleMappingEffect {
+  /** e.g. *"Anyone whose sign-in carries the group "house-counsel" from this
+   *  issuer will be an administrator…"*, always ending with when it takes
+   *  effect. */
+  sentence: string;
+  /**
+   * True when the change grants a strictly higher role than the mapping
+   * currently gives, or grants one where none existed — the screen requires
+   * the role name typed for these and not for the others.
+   *
+   * A REMOVAL never widens, and neither does a narrowing; both still get a
+   * sentence, because the screen must never compose its own description of
+   * any of the three.
+   */
+  widens: boolean;
+  /** Which of the three writes this describes. Present because a removal has
+   *  no `grantsRole`, and a screen must not have to infer the difference
+   *  from a missing field. */
+  action: 'create' | 'change' | 'remove';
+  /** ABSENT on a removal: nothing is granted, and `grantsRole: undefined`
+   *  would read to an `in` check as a role that is there. */
+  grantsRole?: Role;
+  /** What the mapping grants today, or absent when there is no such mapping
+   *  yet. Absent and `'reviewer'` are different facts. */
+  currentRole?: Role;
+}

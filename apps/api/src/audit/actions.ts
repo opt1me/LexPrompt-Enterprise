@@ -32,7 +32,31 @@ export const AUDIT_ACTIONS = [
   'run.started', 'run.cancelled',
   'assignment.created', 'assignment.resolved',
   'workspace.settings_changed',
-  'user.role_changed',
+  /*
+   * §7'S ADMIN SURFACES (Stage 5 Part 5C). Each of these has a writer in
+   * this commit or the next, which is the bar this file's own docstring
+   * sets: an action with no reader is an action nobody has decided the
+   * wording of, and one with no writer is a verb the log can never carry.
+   */
+  'role_mapping.created', 'role_mapping.changed', 'role_mapping.removed',
+  /*
+   * `user.role_changed` IS DELIBERATELY ABSENT, and this comment is its
+   * replacement rather than its omission.
+   *
+   * It was in this set from Stage 2 with no writer anywhere — rendered by
+   * `MatterActivity.tsx` and produced by nothing. Part 5C is where it would
+   * have found one, and it did not, because the fact it names does not
+   * exist: nothing in LexPrompt changes a PERSON'S role. `app_user.role` is
+   * a per-request cache of what `roleFor` derived from the token's groups
+   * and this deployment's role mapping (`resolveActor`), and the thing an
+   * administrator actually changes is the MAPPING — which the three verbs
+   * above record, naming the group rather than a person.
+   *
+   * Keeping it would have been worse than an unused string: an audit log
+   * offering "someone changed a person's role" invites the reader to believe
+   * a per-person role exists to be changed, which is the exact confusion
+   * `RoleMappingPanel` refuses to render (P54).
+   */
 ] as const;
 
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];

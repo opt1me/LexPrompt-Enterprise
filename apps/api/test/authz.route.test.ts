@@ -262,6 +262,14 @@ describe('a reviewer is refused at every route the shipped table puts above them
     expect(above).toEqual([
       'GET /v1/admin/blob-orphans',
       'POST /v1/admin/blob-orphans/delete',
+      // Stage 5 Part 5C. All five at `admin`, and a PARTNER is refused at
+      // each of them too — §7's "an admin is not a super-reviewer" read in
+      // the other direction.
+      'GET /v1/admin/role-mappings',
+      'POST /v1/admin/role-mappings',
+      'POST /v1/admin/role-mappings/preview',
+      'PUT /v1/admin/role-mappings/:id',
+      'DELETE /v1/admin/role-mappings/:id',
       'POST /v1/playbooks/import',
       'POST /v1/playbooks/:id/versions',
       'POST /v1/changesets/:id/publish',

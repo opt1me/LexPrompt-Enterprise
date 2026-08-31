@@ -103,7 +103,23 @@ const AUDIT_VERB: Record<string, { you: string; passive: string }> = {
   'workspace.settings_changed': {
     you: 'You changed the workspace settings', passive: 'changed the workspace settings',
   },
-  'user.role_changed': { you: 'You changed a person s role', passive: 'changed a person s role' },
+  /*
+   * `user.role_changed` HAS BEEN REMOVED, and its absence is the point.
+   *
+   * It was rendered here from Stage 2 and written by nothing, anywhere.
+   * Stage 5 Part 5C is where it would have found a writer and did not,
+   * because the fact it names does not exist: nothing in LexPrompt changes a
+   * PERSON'S role. `app_user.role` is a per-request cache of what `roleFor`
+   * derived from the token's groups and the deployment's role mapping, and
+   * what an administrator actually changes is the MAPPING.
+   *
+   * The three verbs that replaced it in `AUDIT_ACTIONS`
+   * (`role_mapping.created`/`.changed`/`.removed`) are deliberately NOT
+   * added here. They are WORKSPACE acts and carry no matter, and this feed
+   * reads `where a.matter_id = $1` — so a rendering for them would be a
+   * string this component can never be handed. They are read from
+   * `audit_event` by the workspace audit export instead.
+   */
 };
 
 /**
