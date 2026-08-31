@@ -29,7 +29,36 @@ import { jurisdictionDefaultOffenders } from '../../../apps/api/test/jurisdictio
  *    can grow silently is a guard that reports whatever is convenient.
  */
 
-const CLIENT_FILES = walk(path.join(ROOT, 'src')).filter(f => !f.endsWith('stage1DoD.test.ts'));
+/**
+ * WHAT "THE BROWSER" MEANS TO THIS SUITE, AND WHY IT IS TWO ROOTS.
+ *
+ * Cross-stage seam review, M6. This walked `src` alone, and `packages/core/src`
+ * IS browser code: `vite.config.ts:12` aliases `@lexprompt/core` straight at
+ * `packages/core/src/index.ts`, so every one of its modules is compiled into
+ * the bundle a lawyer's browser downloads, and 128 non-test files under `src/`
+ * import from it. Three of Stage 1's definition-of-done sweeps — the `apiKey`
+ * sweep, the `openrouter.ai` sweep and the five-pattern egress scan — were
+ * therefore blind to it. A provider `fetch` with a key in its headers, added
+ * to `packages/core/src/review/extractClause.ts`, passed ALL THREE while a
+ * firm's document text left the browser to a provider with a credential in the
+ * bundle: the exact property Stage 1 exists to guarantee.
+ *
+ * THE NEIGHBOURING GUARD LEARNED THIS AND THIS ONE DID NOT.
+ * `purposes.test.ts`'s `SCANNED_ROOTS` carries the same fix with the same
+ * reasoning, written in the same stage — *"BOTH roots, and the second one is
+ * not optional … a walk that still looked only at `src/` would have gone on
+ * reporting green over EIGHT sites while calling itself a forever-guard"*.
+ * Same directory move, same stage, same failure mode, opposite outcome.
+ *
+ * `packages/core` is not scanned by the API and gateway sweeps below, and that
+ * is correct: those ask what a SERVER holds. This asks what ships to a
+ * browser, and core ships to the browser.
+ */
+const BROWSER_ROOTS = ['src', 'packages/core/src'];
+
+const CLIENT_FILES = BROWSER_ROOTS
+  .flatMap(root => walk(path.join(ROOT, root)))
+  .filter(f => !f.endsWith('stage1DoD.test.ts'));
 const API_FILES = walk(path.join(ROOT, 'apps/api/src'));
 const GATEWAY_FILES = walk(path.join(ROOT, 'apps/gateway/src'));
 const ADAPTERS = `${path.sep}adapters${path.sep}`;
@@ -40,6 +69,27 @@ describe('the sweep scans something (a guard that matches nothing passes vacuous
     expect(API_FILES.length).toBeGreaterThan(3);
     expect(GATEWAY_FILES.length).toBeGreaterThan(10);
     expect(GATEWAY_FILES.filter(f => f.includes(ADAPTERS)).length).toBeGreaterThan(4);
+  });
+
+  it('counts packages/core as browser code, because vite compiles it into the bundle', () => {
+    /*
+     * M6's sanity check, and it is named files rather than a count for the
+     * reason every other sanity check in this repository is: a count survives
+     * one root being dropped and another growing, which is precisely the
+     * drift that left this suite watching one half of the browser for two
+     * stages.
+     */
+    const reached = CLIENT_FILES.map(rel);
+    expect(reached).toContain('packages/core/src/review/extractClause.ts');
+    expect(reached).toContain('packages/core/src/api/socket.ts');
+    expect(reached).toContain('src/lib/storage.ts');
+
+    // …and the reason it counts: the alias is in the shipped Vite config, so
+    // if somebody removes it, this claim has to be re-argued rather than
+    // silently kept.
+    const vite = readFileSync(path.join(ROOT, 'vite.config.ts'), 'utf8');
+    expect(vite).toMatch(/@lexprompt\/core/);
+    expect(vite).toMatch(/packages\/core\/src/);
   });
 
   it('finds the files this suite makes claims about', () => {

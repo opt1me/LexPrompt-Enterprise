@@ -175,15 +175,66 @@ describe('every declared cap has a reader, and every reader has a declaration', 
   }, 20_000);
 
   it('names each cap in the boot banner, so an operator can read what is in force', () => {
-    // The banner is where "why is this run crawling" gets answered. A cap
-    // that is read and never printed is one an operator has to read the
-    // source to discover.
-    const text = describeConfig(loadConfig({ ...BASE }));
+    /*
+     * THIS CHECKED FIFTEEN SUBSTRINGS AND SAID "EACH CAP" (cross-stage seam
+     * review, m2).
+     *
+     * The fragment list was hand-written and ended at Stage 4's
+     * `'Presence: heartbeat'`. Stage 5's three caps — the inbox limit, the
+     * per-source search ceiling and the audit export's refusal threshold —
+     * were declared, were read, and WERE printed, and this test would not
+     * have noticed if they were not: deleting
+     * `Search: at most … hit(s) per source` from `describeConfig` left it
+     * green. A test whose title says "each" and whose body says "these
+     * fifteen" is a list somebody has to remember to extend, which is the
+     * same failure `importBoundary` had one directory over.
+     *
+     * So the completeness half is DERIVED: every declared cap's VALUE must
+     * appear in the banner. `DECLARED` itself is still the hand-written
+     * literal it has always been (a derived list could not notice a removal
+     * — see its own docstring), so this stays a check of the module against
+     * a ledger rather than against itself.
+     *
+     * The env below gives five caps that share a default a distinct value.
+     * Without it, `API_SEARCH_LIMIT_PER_SOURCE` (20) would be "found" in the
+     * banner by `API_WS_MAX_SUBSCRIPTIONS`'s 20, and the scan would pass over
+     * a cap that had stopped being printed — a check satisfied by a
+     * coincidence, which is the shape of the defect this suite exists for.
+     */
+    const DISTINCT: NodeJS.ProcessEnv = {
+      ...BASE,
+      API_PARSE_STUCK_REPORT_MS: '300001',
+      API_PRESENCE_TTL_MS: '15001',
+      API_HUB_TICK_MS: '1001',
+      API_WS_MAX_CONNECTIONS: '501',
+      API_SEARCH_LIMIT_PER_SOURCE: '21',
+    };
+    const cfg = loadConfig({ ...DISTINCT });
+    const values = new Map<string, string>();
+    for (const name of DECLARED) {
+      values.set(name, String((cfg as unknown as Record<string, unknown>)[fieldNameFor(name)]));
+    }
+    // The scan cannot be satisfied by a coincidence: no two caps share a
+    // value, so a value found in the banner was printed by ITS cap.
+    expect(new Set(values.values()).size, 'two caps share a value, so one could vanish from '
+      + 'the banner and be "found" by the other').toBe(DECLARED.length);
+
+    const text = describeConfig(cfg);
+    const unprinted = [...values]
+      .filter(([, value]) => !text.includes(value))
+      .map(([name, value]) => `${name} = ${value}`);
+    expect(unprinted, 'declared caps the boot banner does not print — an operator has to read '
+      + 'the source to discover them').toEqual([]);
+
+    // The SECTIONS, still named, because a number printed with no label
+    // answers nothing. The banner is where "why is this run crawling" gets
+    // answered.
     for (const fragment of [
       'Run queue:', 'worker(s)', 'lease ', 'heartbeat ', 'attempt(s)',
       'cell(s) per workspace', 'Events: kept', 'Page rendering:', 'Engine:',
       'Live socket: ping', 'fan-out tick', 'connection(s) per replica',
       'retry backoff ', 'Presence: heartbeat', 'believed for',
+      'Inbox:', 'Search:', 'Audit export:',
     ]) {
       expect(text, fragment).toContain(fragment);
     }

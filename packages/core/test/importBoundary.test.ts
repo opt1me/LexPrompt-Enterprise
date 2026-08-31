@@ -99,7 +99,61 @@ describe('import boundary (S14)', () => {
     // describe different conditions.
     'isNotYetRead', 'notYetReadMessage', 'notYetReadMessageFor',
     'STILL_READING_NOTICE', 'failedToRead', 'couldNotBeReadMessageFor',
+
+    // ---- Stage 4's WebSocket protocol (the cross-stage seam review, M4) ----
+    //
+    // THIS ARRAY WAS LAST EXTENDED IN STAGE 3, by the commit whose own
+    // preamble is quoted above — the one that widened it after finding it
+    // "omitted the five SSE/frame ones its own comment said it should carry".
+    // Stages 4 and 5 then added twenty-seven core exports and none of them
+    // reached here, `packages/core/src/api/socket.ts` entire among them: a
+    // file that did not exist before Stage 4 and that is the SAME CLASS as
+    // the SSE names one stage later. A browser and a server agreeing on a
+    // subprotocol token, a close code and a channel key is exactly the
+    // agreement a second copy breaks silently — a client subscribes to a
+    // channel the server never fans out to, and nothing anywhere says so.
+    //
+    // The ledger no longer depends on anybody remembering: the case below
+    // ("the ledger names every value export") derives the real set from
+    // `packages/core/src` and fails BY NAME on the next one that is added
+    // without being listed here. This array is the documented half of that
+    // check, not its only half.
+    'isClientFrame', 'isSubscriptionRef', 'subscriptionKey',
+    'EVENT_TYPES', 'isEventType', 'PRESENCE_SCREENS', 'isPresenceScreen',
+    'WS_PATH', 'WS_SUBPROTOCOL', 'WS_BEARER_PREFIX',
+    'WS_CLOSE_UNAUTHENTICATED', 'WS_CLOSE_UNRESPONSIVE',
+    'SEARCH_MIN_CHARS',
+
+    // ---- the error and capability vocabulary both processes share ----
+    //
+    // `ModelError` is the class every refusal in this system is thrown as,
+    // and `MODEL_ERROR_CODES` the closed set a browser switches on. A second
+    // `ModelError` in `src/` would be a class an `instanceof` check quietly
+    // stops recognising, which is a refusal rendered as an unknown crash.
+    'ModelError', 'MODEL_ERROR_CODES', 'PURPOSES', 'PROVIDER_IDS',
+
+    // ---- Stage 4's changeset/playbook vocabulary ----
+    //
+    // `isDecided`/`isPublishable` decide whether a changeset may be published
+    // at all, and `nextVersionContent`/`applyItem` decide what a published
+    // version CONTAINS. Two copies of either is two answers to "what did v4
+    // say", which is the one question a review's snapshot exists to make
+    // answerable.
+    'isDecided', 'isPublishable', 'applyItem', 'nextVersionContent',
+    'changeSummaryFor', 'provenanceFor', 'publishedTextFor',
+    'defaultExtractPrompt', 'effectiveReason', 'newClauseTitle',
   ];
+
+  /**
+   * Names listed above that are TYPES, not values.
+   *
+   * They are deliberately in the ledger — a second `Role` union or a second
+   * `MeResponse` shape is the same drift one level up — but the derivation
+   * below reads value exports only, because `redefinition` matches
+   * `function|const|class` and a ledger holding names the scan cannot act on
+   * would be a longer list that guards nothing extra.
+   */
+  const typeOnly = ['Role', 'MeResponse'];
 
   const scanned = (): string[] => [
     ...walkIfPresent(path.join(ROOT, 'src')),
@@ -108,6 +162,21 @@ describe('import boundary (S14)', () => {
 
   const redefinition = (name: string): RegExp =>
     new RegExp(`(function|const|class)\\s+${name}\\b`);
+
+  /** Every VALUE `packages/core` exports, read from its own source. The
+   *  ledger above is checked against this rather than against somebody's
+   *  memory of what the last task added. */
+  const coreValueExports = (): string[] => {
+    const names = new Set<string>();
+    const pattern = /^export\s+(?:async\s+)?(?:function|const|class|enum)\s+([A-Za-z_$][\w$]*)/gm;
+    for (const file of walk(path.join(ROOT, 'packages/core/src'))) {
+      if (/\.test\.tsx?$/.test(file)) continue;
+      const text = readFileSync(file, 'utf8');
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(text)) !== null) names.add(match[1]);
+    }
+    return [...names].sort();
+  };
 
   it('the scanner is actually reading files, and its pattern bites', () => {
     // A guard that walks nothing passes vacuously, and this one now names
@@ -119,6 +188,47 @@ describe('import boundary (S14)', () => {
     // …and does not bite on a call, or on an import of the real one.
     expect(redefinition('findingsKeyFor').test('const k = findingsKeyFor(target);')).toBe(false);
     expect(redefinition('unchecked').test("import { unchecked } from '@lexprompt/core';")).toBe(false);
+  });
+
+  it('the derivation finds what it claims to read', () => {
+    /*
+     * THE SANITY HALF, and it is the half three guards in this repository
+     * were missing when they went stale. A derivation that walked an empty
+     * directory, or whose pattern stopped matching, would report "nothing
+     * missing" over the whole package and read exactly like coverage.
+     */
+    const found = coreValueExports();
+    expect(found.length).toBeGreaterThan(100);
+    // Named individually: a count survives one export being deleted and
+    // another added, which is the drift this is here to notice.
+    expect(found).toContain('subscriptionKey');
+    expect(found).toContain('extractClause');
+    expect(found).toContain('findingsKeyFor');
+    // …and the pattern does not mistake a type or a re-export for a value.
+    expect(found).not.toContain('MeResponse');
+  });
+
+  it('the ledger names every value export packages/core has', () => {
+    /*
+     * WHY THIS EXISTS RATHER THAN A LONGER ARRAY.
+     *
+     * The array's own comment has said "EXTEND THIS ARRAY in every task that
+     * adds a core export" since Stage 3, and two whole stages did not. An
+     * instruction in a comment is not a guard; this is. A task that adds a
+     * core export and forgets the ledger now fails HERE, by name, instead of
+     * leaving a silently unguarded export for the next reviewer to diff by
+     * hand.
+     */
+    const found = coreValueExports();
+    const missing = found.filter(name => !exported.includes(name));
+    expect(missing, 'core exports with no entry in `exported` above — a second copy of '
+      + 'any of these in src/ or apps/ would pass this suite unnoticed. Add them, with a '
+      + 'line saying what a second copy would break').toEqual([]);
+
+    // The other direction: a ledger entry for something that no longer
+    // exists is a name the scan spends time on and a reader trusts.
+    const stale = exported.filter(name => !found.includes(name) && !typeOnly.includes(name));
+    expect(stale, 'names in `exported` that packages/core no longer exports').toEqual([]);
   });
 
   it('nothing outside packages/core defines an export of packages/core', () => {

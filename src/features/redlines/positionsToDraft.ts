@@ -53,7 +53,7 @@ export function inferredPositionText(position: InferredPosition): string {
 }
 
 /**
- * The extraction instruction a learned clause starts with.
+ * The extraction instruction a LEARNED clause starts with.
  *
  * The redlines say what the firm's POSITION is; they say nothing about how
  * a reviewer should go looking for the clause in a new contract. Rather
@@ -62,8 +62,20 @@ export function inferredPositionText(position: InferredPosition): string {
  * instruction and is shown in `DraftReview`'s "Extract"
  * field, where it must be read before the clause can be kept — E's save
  * gate does not let an unreviewed clause through.
+ *
+ * ## Why the name says "learned"
+ *
+ * It was `defaultExtractPrompt`, which is also the name of a DIFFERENT
+ * function `packages/core` exports (`applyChangeset.ts`) producing DIFFERENT
+ * text — "Extract the clause on X." there, a deliberately bare placeholder a
+ * person is expected to replace, against this one's usable question. Two
+ * intents under one name is worse than two names: the next person to
+ * "deduplicate" them silently rewrites one of the two prompts a review
+ * actually runs. The widened `importBoundary` guard (cross-stage seam
+ * review, M4) found the collision; renaming this one removes it without
+ * changing a character of either string.
  */
-export function defaultExtractPrompt(clauseTitle: string): string {
+export function learnedClauseExtractPrompt(clauseTitle: string): string {
   return `What does this agreement say about ${clauseTitle}? Quote the operative wording.`;
 }
 
@@ -215,7 +227,7 @@ export function positionsToDraft(
       // array would claim evidence was gathered and was empty, which is the
       // "silence wearing a position's clothes" shape one layer along.
       ...(basis.length > 0 ? { basis } : {}),
-      extractPrompt: defaultExtractPrompt(position.clauseTitle),
+      extractPrompt: learnedClauseExtractPrompt(position.clauseTitle),
       standardPosition: {
         text: inferredPositionText(position),
         origin: 'learned' as const,

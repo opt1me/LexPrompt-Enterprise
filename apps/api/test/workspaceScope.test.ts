@@ -25,9 +25,26 @@ import { ROOT, walk, rel, codeOf, statementsIn } from './sourceScan.ts';
  * tables a statement must scope.
  *
  * `workspace` and `role_mapping` are absent, and for a reason rather than an
- * omission: `role_mapping`'s own docstring in `roles.ts` says why a
- * workspace filter there could only ever remove a row the lookup should have
- * seen.
+ * omission.
+ *
+ * ## THE `role_mapping` EXEMPTION IS NARROWER THAN IT LOOKS
+ *
+ * The argument for it is `roles.ts`'s: a workspace filter on the SIGN-IN
+ * LOOKUP could only ever remove a row the lookup should have seen — the
+ * lookup runs before there is a workspace to filter by, which is the whole
+ * point of it. That argument covers one statement.
+ *
+ * Stage 5 added five more against the same table
+ * (`routes/admin/roleMappings.ts`, the administration CRUD), and the sign-in
+ * argument covers none of them: they are ordinary requests carrying an id out
+ * of a URL. All five DO carry `workspace_id = $1` — the code is right — but
+ * the exemption had become broader than its reason, which is the state a
+ * ruling is in just before somebody adds a sixth statement under it. They are
+ * pinned directly by the case below (`the admin role-mapping statements are
+ * scoped, even though the table is exempt`), so the exemption now buys
+ * exactly the one statement it argues for. Recorded here rather than fixed by
+ * adding the table, because adding it would flag the sign-in lookup this
+ * guard has no honest predicate to offer.
  *
  * ## `app_user` JOINED THIS LIST IN STAGE 4, AND THE REASON IT WAS OUT OF IT
  * ## STOPPED BEING TRUE
@@ -75,6 +92,18 @@ const SCOPED_TABLES = [
   // listing another firm's people opening another firm's matters, with
   // nothing on screen looking wrong.
   'audit_event',
+  // 013's assignment (Stage 4 Task 24, added by the cross-stage seam review,
+  // M5). It was missed IN THE SAME STAGE that added `audit_event` above, and
+  // it is the shape this guard's own docstring describes rather than a
+  // borderline case: `assignment` has a `workspace_id uuid not null`
+  // (`013_assignment.sql:29`) and is reached BY AN ID OUT OF A URL —
+  // `POST /v1/assignments/:id/resolve`. Six statements in
+  // `routes/assignments.ts` went unscanned for two stages. All six carried
+  // the predicate, so nothing leaked; the guard simply was not looking, and
+  // deleting `a.workspace_id = $1` from the cross-matter INBOX query would
+  // have left every guard in this repository green while the "asked of you"
+  // list started naming another firm's clauses and matters.
+  'assignment',
 ];
 
 /** `from x` / `into x` / `update x` / `join x`, where x is a scoped table.
@@ -245,6 +274,8 @@ describe('the scanner finds something (a guard that matches nothing passes vacuo
       'apps/api/src/run/queue.ts', 'apps/api/src/run/worker.ts',
       'apps/api/src/dispositions/service.ts', 'apps/api/src/findings/read.ts',
       'apps/api/src/findings/import.ts', 'apps/api/src/parse/parseWorker.ts',
+      // M5: the module whose table was not on the list for two stages.
+      'apps/api/src/routes/assignments.ts',
     ]) {
       expect(reached, file).toContain(file);
     }
@@ -265,6 +296,22 @@ describe('the scanner finds something (a guard that matches nothing passes vacuo
     expect(unscoped('select * from finding_disposition_event where review_id = $1')).toBe(true);
     expect(unscoped('select * from run_cell where run_id = $1')).toBe(true);
     expect(unscoped('select * from event where run_id = $1')).toBe(true);
+    // M5's own mutation, as a literal: the INBOX query with its workspace
+    // predicate removed. The guard must call this a violation, or adding
+    // `assignment` to the list above was decoration.
+    expect(unscoped('select a.id from assignment a join review r on r.id = a.review_id'
+      + ' where a.assignee_user_id = $2')).toBe(true);
+    expect(unscoped('select a.id from assignment a where a.workspace_id = $1')).toBe(false);
+    // AND the shape that actually shipped: the real predicate deleted, with a
+    // sub-select's `where` first and a join still naming the column. This is
+    // the case the old first-`where` region passed — see `predicateRegion`.
+    const inboxShape = (predicate: string): string =>
+      'select a.*, (select c from jsonb_array_elements(x) c where c = a.clause_id limit 1) as t'
+      + ' from assignment a join review r on r.id = a.review_id'
+      + ' and r.workspace_id = a.workspace_id' + predicate;
+    expect(unscoped(inboxShape(' where a.resolved_at is null'))).toBe(true);
+    expect(unscoped(inboxShape(' where a.workspace_id = $1 and a.resolved_at is null')))
+      .toBe(false);
     // …and the same six WITH the predicate are not violations, so the check
     // above is about the predicate rather than about the table name.
     expect(unscoped('select * from finding where review_id = $1 and workspace_id = $2'))
@@ -287,6 +334,30 @@ describe('the scanner finds something (a guard that matches nothing passes vacuo
     }
   });
 
+  it('the admin role-mapping statements are scoped, even though the table is exempt', () => {
+    /*
+     * M5's second half. The exemption above argues about ONE statement — the
+     * sign-in lookup, which runs before there is a workspace to filter by.
+     * Stage 5 added five more against the same table that the argument does
+     * not cover, so they are asserted here directly rather than left inside a
+     * silence written for something else.
+     *
+     * This is the same posture `TRUNCATED_BY_INTERPOLATION` takes for a
+     * statement the scanner cannot parse: not a silence, a different
+     * assertion.
+     */
+    const file = path.join(ROOT, 'apps/api/src/routes/admin/roleMappings.ts');
+    expect(existsSync(file), 'the admin role-mapping routes moved').toBe(true);
+    const statements = statementsIn(codeOf(file))
+      .filter(st => /\b(?:from|into|update|join)\s+role_mapping\b/i.test(st));
+    // Named as a floor rather than an exact count so adding a sixth is not a
+    // failure — but a floor high enough that losing them all is.
+    expect(statements.length).toBeGreaterThanOrEqual(5);
+    for (const statement of statements) {
+      expect(/workspace_id/.test(statement), statement.slice(0, 90)).toBe(true);
+    }
+  });
+
   it('recognises a statement that names a scoped table, and one that does not', () => {
     expect(namesScopedTable('select * from matter where id = $1')).toBe('matter');
     expect(namesScopedTable('insert into review (id) values ($1)')).toBe('review');
@@ -298,6 +369,7 @@ describe('the scanner finds something (a guard that matches nothing passes vacuo
     // deleted. A guard whose only negative case disappears when the answer
     // changes has stopped being able to tell the two apart.
     expect(namesScopedTable('update app_user set display_name = $2')).toBe('app_user');
+    expect(namesScopedTable('select id from assignment where id = $1')).toBe('assignment');
     expect(namesScopedTable('select role from role_mapping where issuer = $1')).toBeUndefined();
     expect(namesScopedTable('select id from workspace where id = $1')).toBeUndefined();
     expect(namesScopedTable('SAVEPOINT sp1')).toBeUndefined();
@@ -466,19 +538,53 @@ function lostClauses(code: string, extract: (text: string) => string[]): string[
  *     region.
  *
  * `returning` is trimmed off in every case: it names columns, not rows.
+ *
+ * ## THE `where` IT TAKES IS THE STATEMENT'S OWN, NOT A SUB-SELECT'S
+ *
+ * Cross-stage seam review, M5. This used to take the FIRST `where` anywhere
+ * in the text, and the cross-matter inbox query
+ * (`routes/assignments.ts`'s `INBOX`) opens with a correlated sub-select —
+ * `(select c ->> 'title' from … where c ->> 'id' = a.clause_id limit 1)` —
+ * whose `where` comes first. The region therefore began INSIDE the select
+ * list and swallowed the joins, two of which read
+ * `r.workspace_id = a.workspace_id`. Deleting the real predicate
+ * `a.workspace_id = $1` left the guard green on the join's mention of the
+ * column: the exact mutation M5 names, passing the exact check it names.
+ *
+ * `whereAtTopLevel` counts parentheses, so a `where` inside a sub-select,
+ * a lateral or a CTE body is not mistaken for the statement's own filter. A
+ * statement with no top-level `where` at all (`activity.ts`'s feed, whose
+ * three arms are all inside a `from ( … )`) falls through to the same
+ * whole-statement region it had before — that case is unchanged, and is
+ * covered by the arm-by-arm assertions in the search and feed suites rather
+ * than by pretending this scanner can see into it.
  */
+function whereAtTopLevel(text: string): string | undefined {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === '(') { depth++; continue; }
+    if (ch === ')') { depth--; continue; }
+    if (depth !== 0) continue;
+    if (!/w/i.test(ch)) continue;
+    if (!/^where\b/i.test(text.slice(i, i + 6))) continue;
+    // Word-bounded on the left too, so `nowhere` and `somewhere` are not it.
+    if (i > 0 && /[\w$]/.test(text[i - 1])) continue;
+    return text.slice(i + 'where'.length);
+  }
+  return undefined;
+}
+
 function predicateRegion(statement: string): string {
   const trimmed = statement.replace(/\breturning\b[\s\S]*$/i, '');
   const upsert = /\bdo\s+update\b([\s\S]*)$/i.exec(trimmed);
   if (upsert) {
-    const where = /\bwhere\b([\s\S]*)$/i.exec(upsert[1]);
+    const where = whereAtTopLevel(upsert[1]);
     // A `do update` with NO `where` cannot be scoped at all — return the
     // empty string so it is reported rather than passed by its column list.
-    return where ? where[1] : '';
+    return where ?? '';
   }
-  const where = /\bwhere\b([\s\S]*)$/i.exec(trimmed);
-  if (where) return where[1];
-  return trimmed;
+  return whereAtTopLevel(trimmed) ?? trimmed;
 }
 
 describe('every SQL statement in a route module names workspace_id', () => {
@@ -692,9 +798,24 @@ describe('every SQL statement in a route module names workspace_id', () => {
  * scanner requires is exactly the one a matter context needs.
  */
 describe('every statement reading `document` in a matter context also names kind', () => {
+  /*
+   * WIDENED TO ALL OF `apps/api/src` (cross-stage seam review, m4).
+   *
+   * It walked `ROUTES_DIR` while its `workspace_id` sibling in this same file
+   * had been widened to `apps/api/src` in Stage 3, with a long note saying
+   * why — *"a pattern pointed at the wrong half of the codebase"*. The `kind`
+   * half was not widened in the same edit, so a matter-context `document`
+   * statement in `findings/read.ts` or `run/queue.ts` was invisible to it,
+   * with §19's own symptom: nothing on screen would look wrong.
+   *
+   * No violation existed when this was widened — `run/worker.ts` carries
+   * `kind = 'matter'` and the other out-of-`routes/` document statements do
+   * not name `matter_id`, so the predicate would not apply to them anyway.
+   * That is what makes it a guard-scope fix rather than a behavioural one.
+   */
   it('has no matter-context document statement without a kind predicate', () => {
     const offenders: string[] = [];
-    for (const file of walk(ROUTES_DIR)) {
+    for (const file of walk(SCANNED)) {
       for (const statement of statementsIn(codeOf(file))) {
         if (!/\bfrom document\b|\bjoin document\b|\bupdate document\b|\binto document\b/i.test(statement)) continue;
         if (!/matter_id/.test(statement)) continue;
@@ -709,12 +830,15 @@ describe('every statement reading `document` in a matter context also names kind
     // mode the `workspace_id` scanner's own sanity check exists for, and
     // this one narrows on two conditions rather than one, so it has twice
     // as many ways to match nothing.
-    const matched = walk(ROUTES_DIR)
+    const matched = walk(SCANNED)
       .flatMap(f => statementsIn(codeOf(f)))
       .filter(s => /\bfrom document\b|\bjoin document\b|\bupdate document\b|\binto document\b/i.test(s))
       .filter(s => /matter_id/.test(s));
     expect(matched.length).toBeGreaterThan(3);
     expect(statementsIn(codeOf(path.join(ROUTES_DIR, 'documents.ts'))).length).toBeGreaterThan(3);
+    // …and the walk now reaches past `routes/`, which is the whole of m4.
+    // Named, so a move fails here rather than meeting a number by accident.
+    expect(walk(SCANNED).map(rel)).toContain('apps/api/src/run/worker.ts');
   });
 
   it('recognises a statement missing the predicate, and one carrying it', () => {
