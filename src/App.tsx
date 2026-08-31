@@ -161,6 +161,7 @@ import { LocalDataBanner, type LocalDataBannerState } from './features/upload/Lo
 import { countLocalData } from './lib/upload/scan';
 import { STORE_LABELS } from './lib/upload/report';
 import { markUploadComplete, wasUploadComplete } from './lib/upload/uploaded';
+import { AdminScreen } from './features/admin/AdminScreen';
 
 /** `authoring-form` and `authoring-review` are sub-project E's two
  *  session-only screens. They deliberately have **no `Route`**: a draft
@@ -173,6 +174,9 @@ type View =
   | 'authoring-form' | 'authoring-review'
   | 'redlines-intake' | 'redlines-learned' | 'redlines-workings'
   | 'positions'
+  /** §7's administration screens (Stage 5 Part 5C). One view, four sections,
+   *  each with its own URL. */
+  | 'admin'
   /** Stage 2 §13.1's uploader, available for one release. */
   | 'upload-local-data';
 
@@ -452,6 +456,7 @@ function viewForRoute(route: Route): View {
     case 'playbook': return 'editor';
     case 'settings': return 'settings';
     case 'positions': return 'positions';
+    case 'admin': return 'admin';
     case 'upload-local-data': return 'upload-local-data';
     case 'not-found': return 'not-found';
     default: return 'matters';
@@ -4586,6 +4591,20 @@ function AppShell({ signIn }: { signIn: () => void }) {
           >
             Standard positions
           </button>
+          {roleState.status === 'known' && roleState.role === 'admin' && (
+            // SHOWN ONLY TO AN ADMINISTRATOR, and only once the role is
+            // KNOWN — an `unknown` role must not put a link on screen that
+            // may turn out to lead to a refusal, and must not hide one from
+            // somebody who is entitled to it either. The link is the
+            // courtesy; `AdminScreen` refuses a non-admin who types the URL,
+            // and the API refuses every call behind it regardless.
+            <button
+              onClick={() => navigate({ name: 'admin', section: 'roles' })}
+              className={`font-ui text-ui-sm px-2.5 py-1.5 rounded-inset ${view === 'admin' ? 'font-semibold text-ink-1 bg-accent-tint' : 'font-medium text-ink-3 hover:text-ink-1'}`}
+            >
+              Administration
+            </button>
+          )}
           {run && (
             // Important 6: nothing else sets `view` back to 'results' once
             // the user navigates elsewhere (e.g. to Playbooks), so a run was
@@ -4864,6 +4883,24 @@ function AppShell({ signIn }: { signIn: () => void }) {
               onCreatePlaybook={() => setChooserOpen(true)}
             />
           ) : null
+        )}
+        {view === 'admin' && route.name === 'admin' && (
+          /*
+           * §7's administration screens. `navigate` directly rather than
+           * through `ROUTE_FOR_VIEW`, for the reason that table already
+           * gives about `matter`/`results`/`editor`: this route carries a
+           * section, and a static per-`View` table cannot express one.
+           *
+           * The role goes IN as `RoleState` — three states, not two — and
+           * `AdminScreen` renders all three. The gate is a courtesy either
+           * way: every route these panels call is `admin` in `ROUTE_POLICY`
+           * and is refused by the server whatever this renders.
+           */
+          <AdminScreen
+            section={route.section}
+            role={roleState}
+            onSelect={(section) => navigate({ name: 'admin', section })}
+          />
         )}
         {view === 'not-found' && (
           <div className="p-8 max-w-md mx-auto text-center space-y-4 bg-paper">

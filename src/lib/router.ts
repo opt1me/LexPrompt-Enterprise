@@ -12,6 +12,13 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+/** The four sections `/admin/:section` accepts. A closed set, checked rather
+ *  than cast — a bare `string` here would make every unrecognised path a
+ *  valid admin route, which is the silent fallback this module forbids
+ *  everywhere else. */
+export const ADMIN_SECTIONS = ['roles', 'people', 'providers', 'audit'] as const;
+export type AdminSection = (typeof ADMIN_SECTIONS)[number];
+
 export type Route =
   | { name: 'matters' }
   | { name: 'matter'; matterId: string }
@@ -20,6 +27,20 @@ export type Route =
   | { name: 'playbook'; playbookId: string }
   | { name: 'settings' }
   | { name: 'positions' }
+  /**
+   * §7's administration screens (Stage 5 Part 5C). The section is IN THE URL
+   * so an administrator can be sent straight to the one they need — a
+   * refusal that says "ask an administrator to map your group" is worth a
+   * link somebody can follow.
+   *
+   * An UNKNOWN section yields `not-found`, never a silent fall back to the
+   * first tab: this module's own docstring forbids that for every other
+   * route and the rule is not relaxed for the screen that writes policy. A
+   * bare `/admin` opens `roles` — a section that is MISSING is a different
+   * thing from one that is not recognised, and only the second is a wrong
+   * address.
+   */
+  | { name: 'admin'; section: AdminSection }
   /** The uploader (Stage 2 §13.1), available for ONE release. It has a real
    *  URL rather than being a modal because a person interrupted half way
    *  through moving a firm's working history has to be able to come back to
@@ -64,6 +85,11 @@ function parsePath(pathname: string): Route {
     return { name: 'settings' };
   } else if (segments[0] === 'positions' && segments.length === 1) {
     return { name: 'positions' };
+  } else if (segments[0] === 'admin') {
+    if (segments.length === 1) return { name: 'admin', section: 'roles' };
+    if (segments.length === 2 && (ADMIN_SECTIONS as readonly string[]).includes(segments[1])) {
+      return { name: 'admin', section: segments[1] as AdminSection };
+    }
   } else if (segments[0] === 'upload-local-data' && segments.length === 1) {
     return { name: 'upload-local-data' };
   }
@@ -91,6 +117,8 @@ export function buildPath(route: Route): string {
       return '/settings';
     case 'positions':
       return '/positions';
+    case 'admin':
+      return `/admin/${route.section}`;
     case 'upload-local-data':
       return '/upload-local-data';
     case 'not-found':

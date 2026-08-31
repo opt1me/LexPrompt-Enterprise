@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { parseRoute, buildPath, useRoute, type Route } from './router';
+import { parseRoute, buildPath, useRoute, type Route, ADMIN_SECTIONS } from './router';
 
 // No @testing-library/react in this project; driving a real react-dom root
 // directly needs this flag set for React's `act()` to recognize the
@@ -139,6 +139,34 @@ describe('the standard positions route', () => {
 
   it('does not swallow a deeper path', () => {
     expect(parseRoute('/positions/anything')).toEqual({ name: 'not-found', path: '/positions/anything' });
+  });
+});
+
+describe('the administration route', () => {
+  it('parses every section it declares, and only those', () => {
+    // Table-driven over `ADMIN_SECTIONS` itself, plus the negative case —
+    // a loop over the constant alone would pass against a parser that
+    // accepted anything.
+    for (const section of ADMIN_SECTIONS) {
+      expect(parseRoute(`/admin/${section}`)).toEqual({ name: 'admin', section });
+      expect(buildPath(parseRoute(`/admin/${section}`))).toBe(`/admin/${section}`);
+    }
+    expect(ADMIN_SECTIONS.length).toBe(4);
+  });
+
+  it('sends an UNRECOGNISED section to not-found, never to the first tab', () => {
+    // The rule this module's own docstring sets, applied to the screen that
+    // writes policy: a silent fallback would put an administrator on the
+    // role-mapping tab when they asked for something else, at an address
+    // that says otherwise.
+    expect(parseRoute('/admin/billing'))
+      .toEqual({ name: 'not-found', path: '/admin/billing' });
+    expect(parseRoute('/admin/roles/extra'))
+      .toEqual({ name: 'not-found', path: '/admin/roles/extra' });
+  });
+
+  it('opens `roles` for a bare /admin — a MISSING section, not an unknown one', () => {
+    expect(parseRoute('/admin')).toEqual({ name: 'admin', section: 'roles' });
   });
 });
 
