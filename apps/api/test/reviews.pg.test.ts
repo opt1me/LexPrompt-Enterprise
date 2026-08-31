@@ -394,6 +394,196 @@ describe('a review round-trips through Postgres unchanged', () => {
     });
   });
 
+  /*
+   * THE THIRD ATTRIBUTION ON THE IMPORT PATH — the one the fix round that
+   * closed the verification and the note did not reach, found by the
+   * cross-stage seam review (C1).
+   *
+   * A net position is synthesised text no document contains: `CLAUDE.md`
+   * calls it "the most dangerous output this app produces", which is why it
+   * starts `unconfirmed` and why only a human confirms it or amends it. That
+   * makes forging its authorship WORSE than forging a verification, not
+   * lesser — a verification says a person checked the model's reading of a
+   * document that exists; an amended net position says a person WROTE EVERY
+   * WORD of a paragraph no document contains.
+   *
+   * `readFindingsBlob` validates the net position as `isRecord(...)` and
+   * nothing more, on purpose, and `toFindingRow` JSON.stringifies it straight
+   * into `finding.net_position`. So until this guard existed, any reviewer
+   * could read a colleague's `app_user` id off `GET /v1/workspace/users` and
+   * `PUT /v1/reviews/<a fresh id>` with a confirmed position carrying it.
+   */
+  it('REFUSES an imported NET POSITION attributed to anybody but the actor', async () => {
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      const attacker = await aUser(t);
+      const h = harness(t, attacker);
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'unchecked' },
+          notes: [],
+          netPosition: {
+            proposed: 'The tenant may assign without consent.',
+            amended: 'The tenant may assign without consent.',
+            state: 'confirmed', byUserId: HUMAN, at: 1_700_000_000_000, trail: [],
+          },
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error.message).toMatch(/net position at d1\/c1/i);
+      expect(res.json().error.message).toMatch(/is not the person signed in/i);
+      expect(res.json().error.message).toContain(HUMAN);
+      // NOTHING WAS WRITTEN. The check runs before the first insert.
+      expect(await t.query("select 1 from finding where review_id = 'r1'")).toHaveLength(0);
+      expect(await t.query("select 1 from review where id = 'r1'")).toHaveLength(0);
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES a confirmed net position that names nobody', async () => {
+    // The same rule `readFindingsBlob` already applies to a verification that
+    // "is verified but names nobody", one field over. A confirmation whose
+    // whole content is "a person accepted this" is worth exactly the person,
+    // and the panel would render "Confirmed on " with nothing after it.
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      const h = harness(t, await aUser(t));
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'unchecked' },
+          notes: [],
+          netPosition: { proposed: 'X', state: 'confirmed', trail: [] },
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error.message).toMatch(/is confirmed but names nobody/i);
+      expect(await t.query("select 1 from review where id = 'r1'")).toHaveLength(0);
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES a net position state it does not recognise, which would export as confirmed', async () => {
+    // `netPositionLabel` emits its UNCONFIRMED caveat for the literal string
+    // 'unconfirmed' and `null` for everything else — so an unrecognised state
+    // is not exported as "unknown", it is exported with no caveat at all,
+    // which a reader takes as a human having stood behind it.
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      const h = harness(t, await aUser(t));
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'unchecked' },
+          notes: [],
+          netPosition: { proposed: 'X', state: 'agreed', trail: [] },
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error.message).toMatch(/not one of unconfirmed, confirmed/i);
+      expect(await t.query("select 1 from review where id = 'r1'")).toHaveLength(0);
+      await h.app.close();
+    });
+  });
+
+  it('REFUSES an amended net position with no text', async () => {
+    // `amendPosition` throws `NetPositionError` for exactly this, so an
+    // import that took it would produce through jsonb the one value the
+    // constructor exists to prevent — an "AMENDED NET POSITION: this text was
+    // rewritten by a person" caveat over an empty string.
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      const me = await aUser(t);
+      const h = harness(t, me);
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'unchecked' },
+          notes: [],
+          netPosition: {
+            proposed: 'X', amended: '   ', state: 'confirmed', byUserId: me,
+            at: 1_700_000_000_000, trail: [],
+          },
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json().error.message).toMatch(/amended but the amendment has no text/i);
+      await h.app.close();
+    });
+  });
+
+  it('IMPORTS a net position the actor themselves confirmed, with the actor id on it', async () => {
+    // The other half of the refusal: an uploader moving their own work must
+    // still be able to move a position they themselves confirmed, keeping
+    // their own instant. The id stored is the ACTOR'S — `vouchedContent`
+    // rewrites the key rather than trusting the (already-refused) body value,
+    // so there is no expression on this path a forged id could travel
+    // through.
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      const me = await aUser(t);
+      const h = harness(t, me);
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'unchecked' },
+          notes: [],
+          netPosition: {
+            proposed: 'The tenant may assign with consent, not to be unreasonably withheld.',
+            state: 'confirmed', byUserId: me, at: 1_700_000_055_000, trail: [],
+          },
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const back = (await h.get('/v1/reviews/r1/findings')).findings as
+        Record<string, Record<string, { netPosition: {
+          state: string; byUserId: string; at: number } }>>;
+      expect(back.d1.c1.netPosition.state).toBe('confirmed');
+      expect(back.d1.c1.netPosition.byUserId).toBe(me);
+      expect(back.d1.c1.netPosition.at).toBe(1_700_000_055_000);
+      await h.app.close();
+    });
+  });
+
+  it('keeps an UNCONFIRMED net position authorless rather than stamping the importer on it', async () => {
+    // ABSENT, never `byUserId: undefined`. "Nobody has confirmed this" is a
+    // different fact from "somebody did", and an import that helpfully filled
+    // the field in would turn every imported synthesis into one a named
+    // person appears to have stood behind.
+    await withPg(async t => {
+      await aMatter(t);
+      await aVersion(t);
+      await aDocument(t, 'd1');
+      const me = await aUser(t);
+      const h = harness(t, me);
+      const res = await h.raw('PUT', '/v1/reviews/r1', {
+        ...REVIEW(),
+        findings: { d1: { c1: finding({
+          verification: { state: 'unchecked' },
+          notes: [],
+          netPosition: { proposed: 'X', state: 'unconfirmed', trail: [] },
+        }) } },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const back = (await h.get('/v1/reviews/r1/findings')).findings as
+        Record<string, Record<string, { netPosition: Record<string, unknown> }>>;
+      expect(back.d1.c1.netPosition.state).toBe('unconfirmed');
+      expect('byUserId' in back.d1.c1.netPosition).toBe(false);
+      await h.app.close();
+    });
+  });
+
   it('refuses a byUserId that is not a uuid BY NAME, not with a Postgres error', async () => {
     /*
      * Final review m4. `upload/attribution.ts` rule 3 deliberately leaves a

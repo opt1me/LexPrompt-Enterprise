@@ -117,11 +117,21 @@ import { ensureDisposition, setDisposition } from '../dispositions/service.ts';
 /**
  * Refuses an imported attribution that names anyone but the actor.
  *
- * One function for the verification and the note, because they are the same
- * claim about the same person, and two copies is how one of them comes to
- * be relaxed. It returns nothing on purpose: the value written below is
- * `actor`, never the body's, so there is no path from a body-supplied id to
- * a column even if this check were somehow skipped.
+ * One function for the verification, the note AND the net position, because
+ * they are the same claim about the same person, and two copies is how one
+ * of them comes to be relaxed. That is not hypothetical here: this file
+ * shipped the check over the first two and not the third, and the cross-stage
+ * seam review found the gap — a `PUT /v1/reviews/<a fresh id>` carrying a
+ * `netPosition` with `state: 'confirmed'` and a colleague's `app_user` id
+ * wrote a row asserting that a named lawyer had personally accepted
+ * synthesised text they never saw. `CLAUDE.md` calls a net position *"the
+ * most dangerous output this app produces"*; forging its authorship is worse
+ * than forging a verification, not lesser.
+ *
+ * It returns nothing on purpose: the value written below is `actor`, never
+ * the body's — see `vouchedContent` for how that property is kept for the
+ * net position, which unlike the other two is stored as jsonb rather than
+ * rebuilt column by column.
  */
 function refuseForeignAuthor(what: string, byUserId: string, actor: { id: string }): void {
   if (byUserId === actor.id) return;
@@ -133,6 +143,114 @@ function refuseForeignAuthor(what: string, byUserId: string, actor: { id: string
     + 'there is no way for this server to check a claim that somebody else made this one. '
     + 'Nothing has been saved).',
     'unknown', 400);
+}
+
+/**
+ * The states a net position may arrive in. `unconfirmed` is what
+ * `unconfirmedPosition` mints and `resetPosition` returns to; `confirmed` is
+ * what `confirmPosition`/`amendPosition` produce. Anything else is refused
+ * rather than stored, because of how the export layer reads this field:
+ * `netPositionLabel` emits its `UNCONFIRMED NET POSITION` caveat for the
+ * literal string `'unconfirmed'` and `null` — no caveat at all — for
+ * everything else. A misspelt or absent state therefore does not read as
+ * "unknown"; it reads, in a DOCX a lawyer sends, as CONFIRMED.
+ */
+const POSITION_STATES = ['unconfirmed', 'confirmed'];
+
+/**
+ * WHAT AN IMPORTED NET POSITION MUST SAY ABOUT WHO STOOD BEHIND IT.
+ *
+ * `readFindingsBlob` checks that the net position is an object and stops
+ * there, deliberately — it is stored and returned UNREAD at that layer so
+ * there is not a second place deciding what a net position is. That is the
+ * right call for the model-authored half (`proposed`, `trail`), and the
+ * wrong one for the four fields a HUMAN sets, which is what this reads:
+ *
+ *  - `state`, because of `POSITION_STATES` above;
+ *  - `byUserId`, the forgery this whole module's header is about;
+ *  - `at`, because a confirmation with no instant renders as
+ *    "Confirmed on " with nothing after it and exports with no date;
+ *  - `amended`, because `amendPosition` REFUSES an amendment with no text
+ *    (`NetPositionError`), and an import that accepted one would produce
+ *    through jsonb the exact value the constructor is written to prevent —
+ *    an "AMENDED NET POSITION: this text was rewritten by a person" caveat
+ *    over an empty string.
+ *
+ * A confirmed position with no author is refused for the same reason
+ * `readFindingsBlob` refuses a verification that "is verified but names
+ * nobody": the whole claim a confirmation makes is that a person made it.
+ */
+function refuseUnvouchedNetPosition(
+  where: string, netPosition: unknown, actor: { id: string },
+): void {
+  if (netPosition === undefined || netPosition === null) return;
+  const p = netPosition as Record<string, unknown>;
+
+  const state = p.state;
+  if (typeof state !== 'string' || !POSITION_STATES.includes(state)) {
+    throw new ModelError(
+      `LexPrompt could not save this review (the net position at ${where} has state `
+      + `${JSON.stringify(state)}, which is not one of ${POSITION_STATES.join(', ')}. A net `
+      + 'position whose state LexPrompt does not recognise is exported with no caveat at all, '
+      + 'which reads as confirmed. Nothing has been saved).',
+      'unknown', 400);
+  }
+
+  if (p.byUserId !== undefined && p.byUserId !== null) {
+    if (typeof p.byUserId !== 'string' || !p.byUserId) {
+      throw new ModelError(
+        `LexPrompt could not save this review (the net position at ${where} names an author `
+        + 'that is not a user id. Nothing has been saved).', 'unknown', 400);
+    }
+    refuseForeignAuthor(`the ${state} net position at ${where}`, p.byUserId, actor);
+  }
+
+  if (state === 'confirmed') {
+    if (typeof p.byUserId !== 'string' || !p.byUserId) {
+      throw new ModelError(
+        `LexPrompt could not save this review (the net position at ${where} is confirmed but `
+        + 'names nobody. A net position is synthesised text no document contains, so a '
+        + 'confirmation is worth exactly the person who made it. Nothing has been saved).',
+        'unknown', 400);
+    }
+    if (typeof p.at !== 'number' || !Number.isFinite(p.at)) {
+      throw new ModelError(
+        `LexPrompt could not save this review (the net position at ${where} is confirmed but `
+        + 'has no timestamp. Nothing has been saved).', 'unknown', 400);
+    }
+  }
+
+  if (p.amended !== undefined && p.amended !== null
+    && (typeof p.amended !== 'string' || !p.amended.trim())) {
+    throw new ModelError(
+      `LexPrompt could not save this review (the net position at ${where} is amended but the `
+      + 'amendment has no text. An amended position claims a person wrote every word of it. '
+      + 'Nothing has been saved).', 'unknown', 400);
+  }
+}
+
+/**
+ * The content actually written, with the net position's author replaced by
+ * the actor's id.
+ *
+ * `refuseForeignAuthor` above has already refused anything but the actor, so
+ * this changes no value in practice. It exists for the property that
+ * function's docstring claims and that the verification and the note get for
+ * free by being rebuilt column by column: THERE IS NO EXPRESSION HERE THAT A
+ * BODY-SUPPLIED ID COULD TRAVEL THROUGH, even if the check above were later
+ * moved inside an `if` that skips it. The net position is the one attribution
+ * on this path stored as jsonb rather than as a column, so it is the one that
+ * needed saying out loud.
+ *
+ * The key is rewritten and NEVER added: a net position with no author must
+ * come out with no author, because `structuredClone` and `JSON.stringify`
+ * both preserve an `undefined`-valued key differently from an absent one, and
+ * "nobody has confirmed this" is a different fact from "somebody did".
+ */
+function vouchedContent<T extends { netPosition?: unknown }>(content: T, actor: { id: string }): T {
+  const p = content.netPosition as Record<string, unknown> | undefined | null;
+  if (!p || p.byUserId === undefined) return content;
+  return { ...content, netPosition: { ...p, byUserId: actor.id } };
 }
 
 export async function importFindings(
@@ -163,6 +281,11 @@ export async function importFindings(
     for (const note of cell.notes) {
       refuseForeignAuthor(`the note ${JSON.stringify(note.id)} at ${where}`, note.byUserId, actor);
     }
+    // THE THIRD ATTRIBUTION ON THIS PATH, and the one that was missing. In
+    // the same loop as the other two rather than beside it, so a reader
+    // checking "which authorships does an import refuse" meets all three at
+    // once and cannot add a fourth field somewhere else.
+    refuseUnvouchedNetPosition(where, cell.content.netPosition, actor);
   }
 
   for (const cell of cells) {
@@ -170,7 +293,8 @@ export async function importFindings(
       `insert into finding (${FINDING_COLUMNS.join(', ')})
        values (${FINDING_COLUMNS.map((c, i) =>
         (c === 'citations' || c === 'net_position' ? `$${i + 1}::jsonb` : `$${i + 1}`)).join(', ')})`,
-      findingValues(toFindingRow(cell.content, reviewId, cell.findingsKey, workspaceId)));
+      findingValues(toFindingRow(
+        vouchedContent(cell.content, actor), reviewId, cell.findingsKey, workspaceId)));
 
     const key: FindingKey = { reviewId, findingsKey: cell.findingsKey, clauseId: cell.clauseId };
     const row = await ensureDisposition(t, key, workspaceId);
