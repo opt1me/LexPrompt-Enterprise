@@ -29,6 +29,7 @@ import { registerAssignments } from './routes/assignments.ts';
 import { registerSearch } from './routes/search.ts';
 import { registerRuns } from './routes/runs.ts';
 import { registerRoleMappings } from './routes/admin/roleMappings.ts';
+import { registerPeople } from './routes/admin/people.ts';
 import { createHub, type Hub } from './realtime/hub.ts';
 import { attachSocket, type SocketCaps } from './realtime/socket.ts';
 import { createPresenceRegistry, type PresenceRegistry } from './realtime/presence.ts';
@@ -368,6 +369,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerRuns(app, deps.db, { eventPageMax: deps.eventPageMax });
   registerWorkspaceSettings(app, deps.db, deps.gateway);
   registerRoleMappings(app, deps.db);
+  registerPeople(app, deps.db);
 
   /*
    * §8'S SOCKET — the route, then the upgrade.

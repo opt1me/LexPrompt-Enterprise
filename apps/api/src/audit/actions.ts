@@ -39,6 +39,7 @@ export const AUDIT_ACTIONS = [
    * wording of, and one with no writer is a verb the log can never carry.
    */
   'role_mapping.created', 'role_mapping.changed', 'role_mapping.removed',
+  'user.disabled', 'user.enabled', 'user.pseudonymised',
   /*
    * `user.role_changed` IS DELIBERATELY ABSENT, and this comment is its
    * replacement rather than its omission.

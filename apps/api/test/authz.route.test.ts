@@ -270,6 +270,10 @@ describe('a reviewer is refused at every route the shipped table puts above them
       'POST /v1/admin/role-mappings/preview',
       'PUT /v1/admin/role-mappings/:id',
       'DELETE /v1/admin/role-mappings/:id',
+      // Stage 5 Task 12: turning an account off, and retiring a name.
+      'POST /v1/admin/users/:id/disable',
+      'POST /v1/admin/users/:id/enable',
+      'POST /v1/admin/users/:id/pseudonymise',
       'POST /v1/playbooks/import',
       'POST /v1/playbooks/:id/versions',
       'POST /v1/changesets/:id/publish',

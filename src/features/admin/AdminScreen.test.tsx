@@ -47,12 +47,12 @@ describe('AdminScreen', () => {
     expect(container.textContent).toMatch(/not a refusal/i);
   });
 
-  it('names the three sections that are not built yet rather than showing them empty', () => {
-    for (const section of ['people', 'providers', 'audit'] as const) {
+  it('names the sections that are not built yet rather than showing them empty', () => {
+    for (const section of ['providers', 'audit'] as const) {
       const container = mount(
         <AdminScreen section={section} role={{ status: 'known', role: 'admin' }} onSelect={noop} />);
-      // A blank tab is indistinguishable from a firm with no people, no
-      // providers and no audit trail.
+      // A blank tab is indistinguishable from a firm with no providers and
+      // no audit trail at all.
       expect(container.textContent).toMatch(/is not built yet/i);
       expect(container.textContent).toMatch(/this screen is/i);
     }

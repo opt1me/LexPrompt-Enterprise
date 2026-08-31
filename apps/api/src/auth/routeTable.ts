@@ -342,4 +342,21 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // a two-segment route would never match. See `routes/admin/roleMappings.ts`.
   'PUT /v1/admin/role-mappings/:id': 'admin',
   'DELETE /v1/admin/role-mappings/:id': 'admin',
+
+  // §7 names DISABLING a person as an administrator's power over an account.
+  // The REFUSAL has existed since Stage 2 — `resolveActor` answers 403
+  // `account_disabled` and says signing in again will not change it — and
+  // nothing could set the status, so the path was correct, tested and
+  // unreachable. These three routes are the missing half.
+  //
+  // `pseudonymise` sits at the same bar and is §17 Q6's only available
+  // remedy. It also turns the account off, which is not incidental: an
+  // account that can still sign in under a retired name is not a retired
+  // name.
+  //
+  // `admin` on all three, and nothing lower could be argued: these are the
+  // routes that decide whether a person can use LexPrompt at all.
+  'POST /v1/admin/users/:id/disable': 'admin',
+  'POST /v1/admin/users/:id/enable': 'admin',
+  'POST /v1/admin/users/:id/pseudonymise': 'admin',
 };

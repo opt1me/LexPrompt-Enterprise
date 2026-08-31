@@ -3,6 +3,7 @@ import type { AdminSection } from '../../lib/router';
 import { ADMIN_SECTIONS } from '../../lib/router';
 import type { RoleState } from '../../lib/role';
 import { RoleMappingPanel } from './RoleMappingPanel';
+import { PeoplePanel } from './PeoplePanel';
 
 /**
  * §7's ADMINISTRATION SCREENS — a shell with four sections, behind a role.
@@ -27,6 +28,9 @@ import { RoleMappingPanel } from './RoleMappingPanel';
 export interface AdminScreenProps {
   section: AdminSection;
   role: RoleState;
+  /** The signed-in administrator's own id, so `PeoplePanel` can say why it
+   *  offers nothing on their own row. */
+  selfUserId?: string;
   onSelect(section: AdminSection): void;
 }
 
@@ -43,7 +47,7 @@ const TAB_CLASS = {
   off: 'font-ui text-ui-sm px-2.5 py-1.5 rounded-inset font-medium text-ink-3 hover:text-ink-1',
 };
 
-export function AdminScreen({ section, role, onSelect }: AdminScreenProps) {
+export function AdminScreen({ section, role, selfUserId, onSelect }: AdminScreenProps) {
   if (role.status === 'unknown') {
     return (
       <div className="p-8 font-ui text-ui text-ink-3" data-busy="true" aria-live="polite">
@@ -98,12 +102,13 @@ export function AdminScreen({ section, role, onSelect }: AdminScreenProps) {
       </nav>
 
       {section === 'roles' && <RoleMappingPanel />}
-      {section !== 'roles' && (
+      {section === 'people' && <PeoplePanel selfUserId={selfUserId} />}
+      {section !== 'roles' && section !== 'people' && (
         /*
          * NAMED AS NOT BUILT YET rather than rendered as an empty section.
-         * The three remaining panels arrive in Tasks 12, 14 and 15; a blank
-         * tab in the meantime is indistinguishable from a firm with no
-         * people, no providers and no audit trail.
+         * The two remaining panels arrive in Tasks 14 and 15; a blank tab in
+         * the meantime is indistinguishable from a firm with no providers
+         * and no audit trail at all.
          */
         <p className="font-ui text-ui text-ink-3">
           {SECTION_LABEL[section]} is not built yet. Nothing is missing from this workspace —

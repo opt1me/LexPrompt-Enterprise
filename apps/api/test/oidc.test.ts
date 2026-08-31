@@ -631,6 +631,9 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'POST /v1/admin/blob-orphans/delete',
       'POST /v1/admin/role-mappings',
       'POST /v1/admin/role-mappings/preview',
+      'POST /v1/admin/users/:id/disable',
+      'POST /v1/admin/users/:id/enable',
+      'POST /v1/admin/users/:id/pseudonymise',
       'POST /v1/assignments/:id/resolve',
       'POST /v1/changesets/:id/publish',
       'POST /v1/documents',
@@ -693,7 +696,7 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // above for the same reason. 71 with Stage 5 Task 4's `GET /v1/search`.
     // 76 with Stage 5 Part 5C's five role-mapping routes, all named in the
     // presence loop above so a count cannot stand in for the scanner.
-    expect(checked).toHaveLength(76);
+    expect(checked).toHaveLength(79);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

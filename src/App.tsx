@@ -4899,6 +4899,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
           <AdminScreen
             section={route.section}
             role={roleState}
+            selfUserId={profile?.id}
             onSelect={(section) => navigate({ name: 'admin', section })}
           />
         )}

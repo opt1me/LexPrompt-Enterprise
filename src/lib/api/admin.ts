@@ -1,5 +1,5 @@
 import type {
-  RoleMappingEffect, RoleMappingView, RoleMappingsPage, Role,
+  RoleMappingEffect, RoleMappingView, RoleMappingsPage, Role, WorkspaceUser, WorkspaceUsers,
 } from '@lexprompt/core';
 import { apiDelete, apiGet, apiSend } from './client';
 
@@ -72,4 +72,46 @@ export async function changeRoleMapping(
 
 export async function removeRoleMapping(id: string, signal?: AbortSignal): Promise<void> {
   await apiDelete(`/v1/admin/role-mappings/${encodeURIComponent(id)}`, signal);
+}
+
+/**
+ * THE WORKSPACE'S PEOPLE, READ FRESH, for the administration screen.
+ *
+ * A second reader of `GET /v1/workspace/users`, and deliberately not
+ * `lib/api/users.ts`'s. That module answers *"what is this id's name"* and
+ * memoises the directory for the session, which is right for a card and
+ * wrong here: this panel changes what it is showing, and a cache would leave
+ * an administrator looking at the status they just changed. The two ask
+ * different questions of one endpoint, and the difference is the caching
+ * rather than the parsing — so nothing is duplicated except the URL.
+ */
+export async function listWorkspacePeople(signal?: AbortSignal): Promise<WorkspaceUser[]> {
+  const { users } = await apiGet<WorkspaceUsers>('/v1/workspace/users', signal);
+  return users;
+}
+
+/** Turns an account off. The person is refused on their NEXT REQUEST, with
+ *  the token they already hold, and signing in again does not undo it. */
+export async function disableUser(id: string, signal?: AbortSignal): Promise<WorkspaceUser> {
+  return apiSend<WorkspaceUser>(
+    'POST', `/v1/admin/users/${encodeURIComponent(id)}/disable`, {}, signal);
+}
+
+export async function enableUser(id: string, signal?: AbortSignal): Promise<WorkspaceUser> {
+  return apiSend<WorkspaceUser>(
+    'POST', `/v1/admin/users/${encodeURIComponent(id)}/enable`, {}, signal);
+}
+
+/**
+ * Retires a person's name and address, permanently, and turns the account
+ * off.
+ *
+ * It is NOT erasure and the screen must not call it that: every judgement
+ * that person recorded stays attributed to the same id, in records nothing
+ * in this system can delete. See `apps/api/src/routes/admin/people.ts` and
+ * the README section this feature is disclosed in.
+ */
+export async function pseudonymiseUser(id: string, signal?: AbortSignal): Promise<WorkspaceUser> {
+  return apiSend<WorkspaceUser>(
+    'POST', `/v1/admin/users/${encodeURIComponent(id)}/pseudonymise`, {}, signal);
 }
