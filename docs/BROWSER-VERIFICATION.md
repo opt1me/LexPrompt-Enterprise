@@ -66,7 +66,49 @@ Use two profiles, or one normal and one private window.
 - [ ] `trainee` assigns a clause to `partner`. It reaches `partner` live **and** is in
       their list after a reload.
 - [ ] A **third** account with the review open sees neither "you asked" nor "asked you"
-      on that assignment, and no Withdraw button.
+      on that assignment, and no Withdraw button. **Changed in Stage 5:** they now see an
+      assignee **chip** instead of nothing — check it reads as *"R. Okafor was asked to
+      look"* and never as a verification, that it carries **no message** (the assigner's
+      brief is between the two of them), and that it still offers **no control at all**.
+
+## Stage 5's four new surfaces — nobody has seen any of them
+
+Every claim about these is a rendered string asserted in jsdom. That is a weaker claim
+than the mechanisms above, and it is weaker in exactly the place it matters: whether a
+person reading quickly takes the right meaning from it.
+
+- [ ] **The "assigned to me" counter** (header, beside your avatar). With something
+      assigned to you it shows a number; with nothing assigned it shows **nothing at
+      all** — check the empty case really is invisible and not a "0".
+- [ ] **The counter's "not known" marker**, which is the one that matters. Stop the API
+      (`docker compose … stop api`) and reload: the counter must read **"not known"**
+      with the reason on hover and in its accessible name, and must never show a digit.
+      A badge showing `0` because a fetch failed looks exactly like a quiet week.
+- [ ] The counter **names the matters** in its tooltip and its accessible name, since
+      there is no cross-matter inbox screen to click through to. Does that read as
+      useful, or as a dead end?
+- [ ] **The assignee chip** on a card, on a clause row in the rail, and in a grid cell.
+      Three sizes of the same mark: does any of them read as a state? Does the grid cell
+      look crowded beside the state chip and the risk chip?
+- [ ] **The search palette** (`⌘K` / `Ctrl-K`, or the magnifier in the header). Opens on
+      the shortcut, closes on Escape, and focus returns to whatever opened it.
+- [ ] The palette's **corpus sentence** — *"It does not search the text inside
+      documents"* — is on screen in every state. Is it read, or is it wallpaper?
+- [ ] **An empty result and a failed search do not read the same.** Type something that
+      matches nothing (*"nothing matched …"*, no button), then stop the API and search
+      again (*"That search could not be run …"*, with **Try again**). This is the pair
+      the whole feature exists to keep apart.
+- [ ] A **partial** failure: one source missing with the rest answering. Hard to produce
+      by hand — the assertion is `search.pg.test.ts`'s injected broken arm — but if you
+      can, check the named line reads as *"some results are missing"* rather than as an
+      error covering the whole list.
+- [ ] A **precedent** hit is labelled as a precedent and never as a document in a
+      matter, and it is **not clickable**, because there is no screen to open one on.
+- [ ] **The Report tab** (third tab in the review header). Check it says the same things
+      the DOCX says — export the same review and read them side by side. Check the
+      Compare tab is absent for a single-document review while Report is still there.
+- [ ] Print the Report tab (`Ctrl-P`). It is print-friendly by CSS only; nobody has seen
+      a page break.
 
 ## Known unverified beyond this list
 
