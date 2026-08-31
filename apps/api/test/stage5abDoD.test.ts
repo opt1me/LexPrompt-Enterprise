@@ -180,13 +180,21 @@ describe('one home for every piece of wording, still', () => {
   });
 });
 
-describe('Part 5C has not started — administration, where a screen writes policy', () => {
-  it('has no admin write route, no migration and no panel yet', () => {
-    // The seam between 5B and 5C is PRIVILEGE. Everything above could be
-    // wrong and cost a person a retry; everything in 5C could be wrong and
-    // cost a firm an access-control failure.
-    expect(existsSync(at('apps/api/migrations/014_role_mapping_source.sql'))).toBe(false);
-    expect(grepRepo(/RoleMappingPanel/, COMPONENTS)).toEqual([]);
+describe('Part 5C — administration, where a screen writes policy', () => {
+  /*
+   * THE PROHIBITIONS BECAME POSITIVE ASSERTIONS, exactly as the four in Part
+   * 5A did (P46). Each keeps the RULE it was protecting rather than being
+   * deleted along with the state it described.
+   *
+   * The seam between 5B and 5C is PRIVILEGE. Everything above could be wrong
+   * and cost a person a retry; everything here could be wrong and cost a
+   * firm an access-control failure.
+   */
+  it('widens the app role in 015 and NOWHERE ELSE — 001 still grants select and nothing more', () => {
+    // The rule the prohibition was protecting: a request may not write the
+    // half of `role_mapping` that deployment configuration owns. 001 is an
+    // APPLIED migration and is therefore immutable; the widening is a new
+    // file, and the boundary is a POLICY rather than a grant.
     const grants = readFileSync(at('apps/api/migrations/001_identity.sql'), 'utf8')
       .replace(/--[^\n]*/g, '');
     expect(grants).toMatch(/grant select on role_mapping to lexprompt_app/);
@@ -195,9 +203,30 @@ describe('Part 5C has not started — administration, where a screen writes poli
     // The sanity half: the scan can see a grant that IS there.
     expect(/grant [^;]*insert[^;]*on role_mapping/i
       .test('grant insert on role_mapping to lexprompt_app;')).toBe(true);
+
+    const m015 = readFileSync(at('apps/api/migrations/015_role_mapping_source.sql'), 'utf8');
+    const sql = m015.replace(/--[^\n]*/g, '');
+    expect(sql).toMatch(/grant insert, update, delete on role_mapping to lexprompt_app/);
+    expect(sql).toMatch(/alter table role_mapping enable row level security/);
+    // WITHOUT `force`. The owner (`lexprompt_migrator`) must keep full reach
+    // or the startup seed silently stops revoking — see the migration's own
+    // note, and `roleMappingGrants.pg.test.ts`'s migrator case.
+    expect(sql).not.toMatch(/force row level security/);
+    // THREE write policies and a SEPARATE read policy, never one `for all`.
+    // That is the tidier-looking implementation, it passes every write test,
+    // and it breaks every sign-in — proved live: with it applied, all three
+    // seeded accounts answered 403 `no_role` at `GET /v1/me`.
+    expect(sql).toMatch(/create policy role_mapping_read on role_mapping\s+for select/);
+    expect(sql).toMatch(/create policy role_mapping_insert_admin on role_mapping\s+for insert/);
+    expect(sql).toMatch(/create policy role_mapping_update_admin on role_mapping\s+for update/);
+    expect(sql).toMatch(/create policy role_mapping_delete_admin on role_mapping\s+for delete/);
+    expect(sql).not.toMatch(/for all to lexprompt_app/);
+    // The sanity half for the `for all` scan.
+    expect(/for all to lexprompt_app/
+      .test('create policy p on role_mapping for all to lexprompt_app using (true);')).toBe(true);
   });
 
-  it('keeps every applied migration immutable — and the next free number is 015', () => {
+  it('keeps every applied migration immutable — and 5C took 015, not the taken 014', () => {
     const migrations = readdirSync(at('apps/api/migrations')).filter(f => f.endsWith('.sql'));
     const numbers = migrations.map(f => Number(f.slice(0, 3))).sort((a, b) => a - b);
     // No gaps and no duplicates: a migration applied out of order is a
@@ -205,19 +234,17 @@ describe('Part 5C has not started — administration, where a screen writes poli
     expect(numbers).toEqual(numbers.map((_, i) => i));
     expect(migrations).toContain('013_assignment.sql');
     /*
-     * PARTS 5A AND 5B ADDED NO MIGRATION AT ALL, which is the plan's own
-     * ordering claim ("5A adds no grant, table or policy") asserted rather
-     * than described.
-     *
-     * AND THE NEXT FREE NUMBER IS 015, NOT 014. The plan's Part 5C brief
-     * names `014_role_mapping_source.sql`; `014_audit_partitions.sql`
-     * already exists and an applied migration is immutable, so that file
-     * name is taken and 5C's has to be `015_`. Recorded here, in the gate
-     * that runs before 5C starts, because the alternative is discovering it
-     * when two files claim one number.
+     * THE NUMBER 5C TOOK IS 015, NOT 014. The plan's Part 5C brief names
+     * `014_role_mapping_source.sql`; `014_audit_partitions.sql` already
+     * exists and an applied migration is immutable, so that file name was
+     * taken. This gate asserted "the next free number is 015" before 5C
+     * started; it now asserts the file that was actually written, and that
+     * 014 was left alone.
      */
-    expect(Math.max(...numbers)).toBe(14);
+    expect(existsSync(at('apps/api/migrations/014_role_mapping_source.sql'))).toBe(false);
     expect(migrations).toContain('014_audit_partitions.sql');
+    expect(migrations).toContain('015_role_mapping_source.sql');
+    expect(Math.max(...numbers)).toBe(15);
   });
 
   it('adds no runtime dependency in any workspace', () => {

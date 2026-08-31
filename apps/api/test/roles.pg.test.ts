@@ -138,7 +138,7 @@ describe('seedRoleMappings makes the table EQUAL the configuration', () => {
   });
 });
 
-describe('the role a request runs under is READ by the app role and WRITABLE by nobody', () => {
+describe('the role a request runs under is READ by the app role, and its CONFIGURATION half is writable by nobody', () => {
   // roleFor runs on the app connection in production (main.ts resolves the
   // actor inside `db.tx`), so the SELECT grant in 001_identity.sql is
   // load-bearing on the sign-in path: without it every sign-in in the firm
@@ -171,14 +171,26 @@ describe('the role a request runs under is READ by the app role and WRITABLE by 
     });
   });
 
-  it('the app role cannot INSERT a role mapping, so no request can grant itself one', async () => {
+  it('the app role cannot INSERT a CONFIGURATION role mapping, so no request can supersede the deployment', async () => {
+    /*
+     * NARROWED BY MIGRATION 015 (P51), not deleted. The describe's heading
+     * said "WRITABLE by nobody" and that was true of Stage 2's table; §7 has
+     * always said the table is admin-editable, and 015 gives the app role
+     * the three write verbs bounded by row-level security to `source =
+     * 'admin'`.
+     *
+     * What this case was protecting survives exactly: a request cannot write
+     * the half of the table `API_ROLE_MAPPINGS` owns. The refusal moved from
+     * the grant to the policy, so the message moved with it.
+     */
     await withPg(async t => {
       const err = await t.query(
-        'insert into role_mapping (workspace_id, issuer, group_value, role) values ($1,$2,$3,$4)',
+        `insert into role_mapping (workspace_id, issuer, group_value, role, source)
+         values ($1,$2,$3,$4,'configuration')`,
         [WS, KC, 'attackers', 'admin'],
       ).catch((e: unknown) => e) as Error;
       expect(err).toBeInstanceOf(Error);
-      expect(err.message).toMatch(/permission denied/i);
+      expect(err.message).toMatch(/row-level security/i);
     });
   });
 });

@@ -54,13 +54,64 @@ describe('a published playbook version is immutable by GRANT, not by convention'
   });
 });
 
-describe('the app role has no write on role_mapping or workspace (P10, carried over from 001)', () => {
-  it('the app role cannot insert into role_mapping', async () => {
+describe('the app role has no write on a CONFIGURATION role mapping, and none at all on workspace', () => {
+  /*
+   * NARROWED BY MIGRATION 015, NOT DELETED (P51).
+   *
+   * Until 015 the app role held no write grant on `role_mapping` at all, and
+   * this case asserted `permission denied`. §7 has always said the table is
+   * admin-editable, so 015 gives the app role `insert, update, delete` and
+   * bounds it, by row-level security, to `source = 'admin'` rows — the seed
+   * keeps the configuration half, and `lexprompt_migrator` owns the table so
+   * RLS (enabled WITHOUT `force`) does not apply to it.
+   *
+   * What this case protected is unchanged and is asserted here: NO REQUEST
+   * MAY WRITE A DEPLOYMENT-CONFIGURATION ROW. The refusal is now the policy
+   * rather than the grant, so the message is Postgres's row-level-security
+   * one. `roleMappingGrants.pg.test.ts` is where the whole boundary lives,
+   * verb by verb, including the positive half that makes each refusal about
+   * the ROW rather than about a missing grant.
+   */
+  it('the app role cannot insert a CONFIGURATION role mapping', async () => {
     await withPg(async t => {
       await expect(t.query(
-        "insert into role_mapping (workspace_id, issuer, group_value, role) values ($1, 'i', 'g', 'reviewer')",
+        `insert into role_mapping (workspace_id, issuer, group_value, role, source)
+         values ($1, 'i', 'g', 'reviewer', 'configuration')`,
         [WS],
-      )).rejects.toThrow(/permission denied/i);
+      )).rejects.toThrow(/row-level security/i);
+    }, appDb());
+  });
+
+  it('…and cannot insert one that names no source at all', async () => {
+    // The column DEFAULTS to 'configuration', so an omitted `source` is
+    // refused by the policy rather than quietly becoming deployment
+    // configuration. Asserted here as well as in `roleMappingGrants` because
+    // this is the file a reader opens to ask "what may a request write".
+    await withPg(async t => {
+      await expect(t.query(
+        "insert into role_mapping (workspace_id, issuer, group_value, role) values ($1, 'i', 'g2', 'reviewer')",
+        [WS],
+      )).rejects.toThrow(/row-level security/i);
+    }, appDb());
+  });
+
+  it('the app role holds nothing at all on workspace', async () => {
+    // The describe has named `workspace` since Stage 2 and no case ever
+    // asserted it — the sibling half of a pair, missing, in a file whose
+    // whole subject is what a role may do. Migration 015 widened the OTHER
+    // half of this describe's subject, so the untouched half is written down
+    // here rather than left as a claim in a heading.
+    // TWO transactions, not two statements in one: the first refusal aborts
+    // the transaction, so a second statement inside it comes back with
+    // "current transaction is aborted" and the assertion would be testing
+    // Postgres's error cascade rather than the grant.
+    await withPg(async t => {
+      await expect(t.query("insert into workspace (id, name) values (gen_random_uuid(), 'sneaky')"))
+        .rejects.toThrow(/permission denied/i);
+    }, appDb());
+    await withPg(async t => {
+      await expect(t.query("update workspace set name = 'renamed' where id = $1", [WS]))
+        .rejects.toThrow(/permission denied/i);
     }, appDb());
   });
 });
