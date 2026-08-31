@@ -364,6 +364,74 @@ export interface AssignmentsPage {
 }
 
 /**
+ * WHAT A FIRM-WIDE SEARCH LOOKS IN (Stage 5, R-G14).
+ *
+ * `precedent` is its own source and is never a `document` (S23): a precedent
+ * is somebody else's deal, brought in to learn from, and one appearing in a
+ * matter's document list could be opened as though it were the deal under
+ * review. The distinction survives into the result list because it has to
+ * survive everywhere.
+ *
+ * `clause` is the one source whose `id` is not the thing it names — see
+ * `SearchHit.id`.
+ */
+export type SearchSource =
+  | 'matter' | 'document' | 'precedent' | 'review' | 'collection'
+  | 'playbook' | 'clause';
+
+export interface SearchHit {
+  source: SearchSource;
+  /** The record's own id. A `clause` hit carries the PLAYBOOK's id here and
+   *  the clause id in `clauseId`, because a clause is not a record a URL can
+   *  open on its own. */
+  id: string;
+  title: string;
+  /** The one line of context that makes a hit legible — a matter's client, a
+   *  document's matter name, a clause's playbook name. ABSENT rather than
+   *  empty when there is none. */
+  context?: string;
+  clauseId?: string;
+  matterId?: string;
+}
+
+/**
+ * WHAT HAPPENED TO EACH ARM, ALWAYS, including on a completely successful
+ * search.
+ *
+ * A result set with no per-source outcome cannot distinguish "nothing
+ * matched" from "one arm threw and the rest matched nothing" — and those two
+ * render identically as an empty list, which is this project's founding
+ * defect at a search box. A corpus of seven things where one query errored
+ * and six returned nothing must not read as "nothing found".
+ */
+export interface SearchSourceOutcome {
+  source: SearchSource;
+  status: 'ok' | 'failed' | 'capped';
+  count: number;
+  /** Present only for `failed`; a sentence, never a stack. */
+  message?: string;
+  /** Present only for `capped`; the limit that was reached. */
+  limit?: number;
+}
+
+export interface SearchResults {
+  query: string;
+  hits: SearchHit[];
+  sources: SearchSourceOutcome[];
+}
+
+/**
+ * The shortest query the search will run, shared by the route that refuses a
+ * shorter one and the palette that stays idle below it.
+ *
+ * ONE constant, in `@lexprompt/core`, because two would drift — and the
+ * failure when they do is a browser that fires a request the server refuses,
+ * or worse, a palette that renders "nothing matched" for a single letter,
+ * which is a false statement about the corpus.
+ */
+export const SEARCH_MIN_CHARS = 2;
+
+/**
  * EVERY OPEN REQUEST ON ONE REVIEW, whoever it was addressed to.
  *
  * A DIFFERENT QUESTION from `GET /v1/assignments`, which answers only the

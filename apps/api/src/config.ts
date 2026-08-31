@@ -283,6 +283,17 @@ export interface ApiConfig {
    */
   assignmentInboxLimit: number;
   /**
+   * `API_SEARCH_LIMIT_PER_SOURCE` — how many hits ONE source of the
+   * firm-wide search may return (Stage 5, R-G14).
+   *
+   * Per source rather than overall, because the answer is reported per
+   * source: an overall cap would silently starve whichever arm finished last
+   * and there would be nothing on screen saying which. Read with a
+   * `limit + 1` so a capped arm says `capped` rather than returning a short
+   * list that reads as "this is all of them".
+   */
+  searchLimitPerSource: number;
+  /**
    * The live socket's caps (§8, Stage 4). DECLARED, like every other cap in
    * this module, because an undeclared one is a limit an operator hits with
    * no key to change and no sentence naming it — three of those have already
@@ -715,6 +726,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): ApiConfig {
     eventRetentionDays: int(env, 'API_EVENT_RETENTION_DAYS', 7),
     eventPageMax: int(env, 'API_EVENT_PAGE_MAX', 500),
     assignmentInboxLimit: int(env, 'API_ASSIGNMENT_INBOX_LIMIT', 200),
+    searchLimitPerSource: int(env, 'API_SEARCH_LIMIT_PER_SOURCE', 20),
     hubTickMs: int(env, 'API_HUB_TICK_MS', 1_000),
     wsPingMs: int(env, 'API_WS_PING_MS', WS_CAP_DEFAULTS.pingMs),
     wsMaxConnections: int(env, 'API_WS_MAX_CONNECTIONS', WS_CAP_DEFAULTS.maxConnections),
@@ -815,6 +827,9 @@ export function describeConfig(cfg: ApiConfig): string {
     // COUNTER is Task 2's, and a banner string is not the place to spend a
     // prohibition that is about a screen.
     `Inbox: at most ${cfg.assignmentInboxLimit} open request(s) read at once`,
+    // "why does search say some results are missing" is answered by this
+    // number and by nothing else on screen.
+    `Search: at most ${cfg.searchLimitPerSource} hit(s) per source`,
     // The socket's caps on their own line, for the same reason the queue's
     // are: "why did everyone's live view go quiet" is answered by the ping
     // interval and the connection ceiling, and an operator must not have to

@@ -600,6 +600,13 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/reviews/:id/runs/live',
       'GET /v1/runs/:id',
       'GET /v1/runs/:id/events',
+      // Stage 5 Task 4: firm-wide search. Named explicitly, for the same
+      // reason as the routes above — and with more force here than anywhere
+      // else in this list, because this is the one route that returns the
+      // names of records from every matter in the firm at once. It answers
+      // 401 with no token like every other, and the sweep below is what
+      // proves it rather than the table saying so.
+      'GET /v1/search',
       'GET /v1/versions/:id',
       'GET /v1/workspace/settings',
       'GET /v1/workspace/users',
@@ -670,8 +677,8 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // count alone cannot tell "the scanner found the new route" from "the
     // scanner found a different one". 70 with Stage 5 Task 3's
     // `GET /v1/reviews/:id/assignments`, which is also named in the list
-    // above for the same reason.
-    expect(checked).toHaveLength(70);
+    // above for the same reason. 71 with Stage 5 Task 4's `GET /v1/search`.
+    expect(checked).toHaveLength(71);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

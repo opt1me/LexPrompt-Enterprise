@@ -53,7 +53,9 @@ export type {
 export type {
   AssignmentView, AssignmentsPage, AssignmentInboxItem, AssignmentInboxPage,
   ReviewAssignments,
+  SearchSource, SearchHit, SearchSourceOutcome, SearchResults,
 } from './api/records.ts';
+export { SEARCH_MIN_CHARS } from './api/records.ts';
 // Part 3B's wire shapes: a review's findings assembled from rows, a
 // disposition and its event, and what a per-clause retry cleared. One
 // declaration, two programs — the browser reads them and `apps/api` writes

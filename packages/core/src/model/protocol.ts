@@ -260,6 +260,17 @@ export const MODEL_ERROR_CODES = [
    * catches, and the wording is free to change without breaking anything.
    */
   'changeset_stale_base',
+  /**
+   * 400 — a search query below `SEARCH_MIN_CHARS` (Stage 5).
+   *
+   * A code rather than a status alone, for the reason the entry above gives:
+   * a browser that had to match on the message would silently stop
+   * classifying the day the message was reworded. And a code rather than an
+   * empty result set, which is the thing this route exists not to answer —
+   * "nothing in this firm matches" is a statement about the corpus, and it
+   * must never be made about a query that was never run.
+   */
+  'query_too_short',
 ] as const;
 
 export type ModelErrorCode = (typeof MODEL_ERROR_CODES)[number];

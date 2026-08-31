@@ -69,6 +69,7 @@ const BASE: ApiConfig = {
   eventRetentionDays: 7,
   eventPageMax: 500,
   assignmentInboxLimit: 200,
+  searchLimitPerSource: 20,
   hubTickMs: 1_000,
   wsPingMs: 25_000,
   wsMaxConnections: 500,

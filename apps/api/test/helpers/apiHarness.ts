@@ -99,6 +99,9 @@ export interface TestApiOptions {
   /** Overrides `API_ASSIGNMENT_INBOX_LIMIT`, so a test can prove `capped`
    *  without seeding two hundred requests. */
   assignmentInboxLimit?: number;
+  /** Overrides `API_SEARCH_LIMIT_PER_SOURCE`, so a test can prove a capped
+   *  arm without seeding twenty matters. */
+  searchLimitPerSource?: number;
   /** The instance id every socket's `hello` frame carries. Overridable so a
    *  test can stand two servers up and tell their sockets apart -- which is
    *  the cross-replica condition, in one process. */
@@ -225,6 +228,7 @@ export function buildTestApi(
     eventPageMax: opts.eventPageMax ?? 500,
     // The SHIPPED default (config.ts), never a number this harness invented.
     assignmentInboxLimit: opts.assignmentInboxLimit ?? 200,
+    searchLimitPerSource: opts.searchLimitPerSource ?? 20,
     // The SHIPPED defaults (config.ts's WS_CAP_DEFAULTS), never numbers this
     // harness invented: a suite exercising a ping interval no deployment
     // uses is the quiet half of an undeclared cap.

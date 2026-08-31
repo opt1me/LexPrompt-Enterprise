@@ -65,6 +65,10 @@ const DECLARED = [
   // against -- an undeclared one here would be a number a lawyer's queue
   // stopped at with nothing on screen saying so.
   'API_ASSIGNMENT_INBOX_LIMIT',
+  // The firm-wide search's per-arm ceiling. Per SOURCE rather than overall,
+  // because a capped arm is reported by name -- an overall cap would starve
+  // whichever arm finished last with nothing on screen saying which.
+  'API_SEARCH_LIMIT_PER_SOURCE',
 ];
 
 /** `API_RUN_LEASE_MS` -> `runLeaseMs`, the naming `config.ts` uses without

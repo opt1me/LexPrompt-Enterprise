@@ -251,6 +251,22 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   // the wrong instrument for "is this yours".
   'GET /v1/reviews/:id/assignments': 'reviewer',
 
+  // FIRM-WIDE SEARCH (Stage 5, R-G14 discharged).
+  //
+  // `reviewer`, and NOT higher, because it returns the NAMES of records
+  // every reviewer can already list one screen at a time -- matters,
+  // documents, reviews, collections, playbooks and clause titles. It reads
+  // no document text and no finding. S10 has no per-matter ACLs for it to
+  // respect, so there is nothing a higher bar here would protect that a
+  // lower bar on `GET /v1/matters` does not already expose.
+  //
+  // IF THAT EVER STOPS BEING TRUE, THIS IS THE ROUTE THAT HAS TO CHANGE
+  // FIRST. The day a matter can be restricted to some reviewers, a search
+  // that names every matter in the firm is the widest hole in the system,
+  // and it will not announce itself: each arm would keep answering exactly
+  // as it does now.
+  'GET /v1/search': 'reviewer',
+
   // The review's whole disposition history (section 6.3.1). `reviewer`: it
   // is the same facts the per-finding history route already returns at the
   // same bar, gathered for one review. A higher bar here would mean a

@@ -26,6 +26,7 @@ import { registerFindings } from './routes/findings.ts';
 import { registerHistory } from './routes/history.ts';
 import { registerActivity } from './routes/activity.ts';
 import { registerAssignments } from './routes/assignments.ts';
+import { registerSearch } from './routes/search.ts';
 import { registerRuns } from './routes/runs.ts';
 import { createHub, type Hub } from './realtime/hub.ts';
 import { attachSocket, type SocketCaps } from './realtime/socket.ts';
@@ -125,6 +126,9 @@ export interface ServerDeps {
    *  environment, and a default picked in this file would be an undeclared
    *  cap in the tier that cannot report it. */
   assignmentInboxLimit: number;
+  /** `API_SEARCH_LIMIT_PER_SOURCE` — the firm-wide search's per-arm ceiling,
+   *  DECLARED rather than invented here, for the same reason as above. */
+  searchLimitPerSource: number;
   /**
    * §8's live socket (Stage 4 Task 16), and the `verify` above is what
    * authenticates it — the SAME function, before the upgrade.
@@ -359,6 +363,7 @@ export function buildServer(deps: ServerDeps): FastifyInstance {
   registerHistory(app, deps.db);
   registerActivity(app, deps.db);
   registerAssignments(app, deps.db, { inboxLimit: deps.assignmentInboxLimit });
+  registerSearch(app, deps.db, { limitPerSource: deps.searchLimitPerSource });
   registerRuns(app, deps.db, { eventPageMax: deps.eventPageMax });
   registerWorkspaceSettings(app, deps.db, deps.gateway);
 

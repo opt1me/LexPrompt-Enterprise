@@ -168,6 +168,7 @@ async function main(): Promise<void> {
     resolveActor: resolveActorForRequest,
     eventPageMax: config.eventPageMax,
     assignmentInboxLimit: config.assignmentInboxLimit,
+    searchLimitPerSource: config.searchLimitPerSource,
     instanceId,
     socket: {
       pingMs: config.wsPingMs,
