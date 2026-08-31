@@ -1,5 +1,6 @@
 import type {
   RoleMappingEffect, RoleMappingView, RoleMappingsPage, Role, WorkspaceUser, WorkspaceUsers,
+  AllowedModel, ProviderStatus, Bloc,
 } from '@lexprompt/core';
 import { apiDelete, apiGet, apiSend } from './client';
 
@@ -114,4 +115,25 @@ export async function enableUser(id: string, signal?: AbortSignal): Promise<Work
 export async function pseudonymiseUser(id: string, signal?: AbortSignal): Promise<WorkspaceUser> {
   return apiSend<WorkspaceUser>(
     'POST', `/v1/admin/users/${encodeURIComponent(id)}/pseudonymise`, {}, signal);
+}
+
+/**
+ * The allowlist and the credential status, joined by provider.
+ *
+ * ONE call, because the pair is the point: "which providers" with no answer
+ * to "and does this deployment hold a key for them" is the half §12.0 exists
+ * to keep together. The API joins them; this browser holds no copy of either
+ * (S14).
+ */
+export interface AdminProviders {
+  models: AllowedModel[];
+  providers: ProviderStatus[];
+  declaredJurisdictions: Bloc[];
+}
+
+/** REJECTS on failure and never resolves to an empty list. An empty provider
+ *  list reads as "this firm has no providers configured", which is a
+ *  statement about the deployment that a failed read cannot make. */
+export async function getAdminProviders(signal?: AbortSignal): Promise<AdminProviders> {
+  return apiGet<AdminProviders>('/v1/admin/providers', signal);
 }

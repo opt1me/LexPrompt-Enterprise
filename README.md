@@ -169,6 +169,18 @@ Which jurisdictions you permit follows from the contracts and data provisions yo
 
 **The per-provider retention note is your record of terms you agreed.** Each allowlist entry can carry a `dataHandling` note — what the provider's terms say about retention, training and sub-processing — with the date you last checked them. The date is a staleness marker: it prompts you to re-read your own contract when it ages. It passes no judgement on the provider, and nothing in the code grades or scores it. Check each configured provider's current retention terms before you go live; they have a shelf life, and this file cannot know when they changed.
 
+### Seeing what this deployment is configured with
+
+An administrator can read the whole of it at `/admin/providers`: every model on the allowlist with its provider and its jurisdiction, the operator's dated note of the terms they agreed with that provider, and — per provider — whether a credential source is configured and when it was last rotated.
+
+**The screen is read-only, and not by disabling a form.** There is no write route at all. The allowlist has one home, the gateway's `models.json`, so a provider or a model is added by editing that file and redeploying — which is what the screen says, in words.
+
+**It reports whether a credential is configured, and when it was rotated, and nothing else.** No key, no prefix, no last four characters, no fingerprint, no length. Each of those has been argued for somewhere as a debugging aid and each is a fact about a secret on a page an administrator would screenshot into a risk pack. Nor does reading the page acquire anything: `configured` means *a source is configured*, never *a token was obtained*, so refreshing this screen mints no tokens and a provider outage does not take the status page down with it.
+
+**It states one of two guarantees per provider, and never a third.** Where a provider is reached by managed identity, the screen says **no provider key exists in this deployment at all**. Where it is reached with a key, the screen says **the key is held only by the gateway** — it never reaches the browser, the API or the database. Both are true statements about a *deployment*. The merged, unconditional version of them — the one that would claim keys exist nowhere at all, in any deployment — is not true, and it appears nowhere in this application, this README or the design, because it is false for every deployment using OpenAI, Anthropic or OpenRouter directly. `stage1DoD.test.ts` scans this file and the app's own strings for it; the screen's own test asserts the same over its rendered wording, and the mutation that replaces the two sentences with the shorter one fails both.
+
+**It never grades a provider.** The data-handling note is the operator's record of terms *they* agreed, and no code path in LexPrompt scores it or decides anything from it. A note the operator has not re-read for over a year is marked as worth re-reading — a fact about the note, not a judgement about the provider.
+
 ## Matters
 
 Work in LexPrompt is organised around **matters** — a matter is the top-level object, and it holds the documents you've added to it and every review you've run over them. This replaced an earlier, session-only version of the app where a review's results vanished on reload; a matter that forgot its documents wasn't really a matter, so this was changed deliberately (see [Privacy](#privacy) below for exactly what that means for your data).

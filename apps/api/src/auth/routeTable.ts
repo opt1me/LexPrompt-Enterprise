@@ -359,4 +359,16 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'POST /v1/admin/users/:id/disable': 'admin',
   'POST /v1/admin/users/:id/enable': 'admin',
   'POST /v1/admin/users/:id/pseudonymise': 'admin',
+
+  // §12.0's providers, READ-ONLY (Stage 5 Part 5C). `admin`, and there is no
+  // write route to pair it with: the allowlist has ONE home, the gateway
+  // (S14), so a provider is added by editing the operator's models.json and
+  // redeploying. The absence is the design and the screen says so in words.
+  //
+  // Not `reviewer` like `GET /v1/models` next door, and the difference is
+  // argued: that route answers "which models may I choose", which every
+  // reviewer needs. This one answers "which credential sources this
+  // deployment holds and whether they are configured", which is an
+  // operational fact about the firm's own posture.
+  'GET /v1/admin/providers': 'admin',
 };

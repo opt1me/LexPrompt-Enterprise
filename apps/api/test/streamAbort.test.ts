@@ -71,6 +71,9 @@ function slowGateway(seen: { aborted: boolean; delivered: number }): GatewayClie
         text: async () => '',
       };
     },
+    // The credential-status hop (Stage 5 Part 5C). Present so this fake
+    // satisfies `GatewayClient`; nothing in this file calls it.
+    credentials: async () => ({ status: 200, json: { providers: [], declaredJurisdictions: [] } }),
   } as GatewayClient;
 }
 
@@ -155,6 +158,9 @@ describe('a client that goes away aborts this hop (M1)', () => {
           text: async () => '',
         };
       },
+      // The credential-status hop (Stage 5 Part 5C). Present so this fake
+      // satisfies `GatewayClient`; nothing in this file calls it.
+      credentials: async () => ({ status: 200, json: { providers: [], declaredJurisdictions: [] } }),
     } as GatewayClient;
     const port = await listen(gateway);
 

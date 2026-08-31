@@ -187,6 +187,13 @@ export function makeGatewayClient(config: ApiConfig, getGatewayToken?: () => Pro
       });
       return { status: res.statusCode, json: await readJson(res.statusCode, () => res.body.json()) };
     },
+    async credentials() {
+      const res = await request(`${config.gatewayUrl}/v1/admin/credentials`, {
+        method: 'GET', dispatcher, headers: await headers(),
+        headersTimeout: GATEWAY_HEADERS_TIMEOUT_MS,
+      });
+      return { status: res.statusCode, json: await readJson(res.statusCode, () => res.body.json()) };
+    },
     async stream(body: unknown, signal: AbortSignal): Promise<StreamResponse> {
       const res = await request(`${config.gatewayUrl}/v1/infer/stream`, {
         method: 'POST', dispatcher, headers: await headers(),
@@ -209,5 +216,13 @@ export interface GatewayClient {
    *  socket rather than stopping at this boundary. */
   infer(body: unknown, signal?: AbortSignal): Promise<{ status: number; json: unknown }>;
   models(): Promise<{ status: number; json: unknown }>;
+  /**
+   * §14's credential status (Stage 5 Part 5C). The GATEWAY is the only
+   * process that knows which credential source a provider is configured
+   * with, so this is a proxy hop exactly as `models()` is — and for the same
+   * reason it takes no arguments: there is nothing about the caller that
+   * could change the answer.
+   */
+  credentials(): Promise<{ status: number; json: unknown }>;
   stream(body: unknown, signal: AbortSignal): Promise<StreamResponse>;
 }

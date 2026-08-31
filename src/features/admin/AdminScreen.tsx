@@ -4,6 +4,7 @@ import { ADMIN_SECTIONS } from '../../lib/router';
 import type { RoleState } from '../../lib/role';
 import { RoleMappingPanel } from './RoleMappingPanel';
 import { PeoplePanel } from './PeoplePanel';
+import { ProvidersPanel } from './ProvidersPanel';
 
 /**
  * §7's ADMINISTRATION SCREENS — a shell with four sections, behind a role.
@@ -103,12 +104,12 @@ export function AdminScreen({ section, role, selfUserId, onSelect }: AdminScreen
 
       {section === 'roles' && <RoleMappingPanel />}
       {section === 'people' && <PeoplePanel selfUserId={selfUserId} />}
-      {section !== 'roles' && section !== 'people' && (
+      {section === 'providers' && <ProvidersPanel />}
+      {section === 'audit' && (
         /*
          * NAMED AS NOT BUILT YET rather than rendered as an empty section.
-         * The two remaining panels arrive in Tasks 14 and 15; a blank tab in
-         * the meantime is indistinguishable from a firm with no providers
-         * and no audit trail at all.
+         * The audit export arrives in Task 15; a blank tab in the meantime
+         * is indistinguishable from a workspace with no audit trail at all.
          */
         <p className="font-ui text-ui text-ink-3">
           {SECTION_LABEL[section]} is not built yet. Nothing is missing from this workspace —

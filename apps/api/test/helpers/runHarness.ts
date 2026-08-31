@@ -105,6 +105,9 @@ export function fakeGateway(
       log.models += 1;
       return { status: 200, json: { models: opts.models ?? [MODEL] } };
     },
+    // The credential-status hop (Stage 5 Part 5C). Present so this fake
+    // satisfies `GatewayClient`; nothing in this file calls it.
+    credentials: async () => ({ status: 200, json: { providers: [], declaredJurisdictions: [] } }),
     stream() {
       throw new Error('the run worker does not stream');
     },

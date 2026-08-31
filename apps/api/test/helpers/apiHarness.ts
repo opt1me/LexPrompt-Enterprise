@@ -34,6 +34,12 @@ export interface TestApiOptions {
   principalError?: PrincipalError;
   inferResponse?: GatewayResponse;
   modelsResponse?: GatewayResponse;
+  /** What the gateway's `GET /v1/admin/credentials` answers (Stage 5 Part
+   *  5C). Defaults to an empty, well-formed page so every existing suite is
+   *  unchanged. */
+  credentialsResponse?: GatewayResponse;
+  /** Makes the credential hop REJECT, as an unreachable gateway would. */
+  credentialsThrows?: Error;
   /** Makes the fake gateway's `infer` reject, as an unreachable gateway
    *  would (ECONNREFUSED, DNS failure, …). */
   inferThrows?: Error;
@@ -187,6 +193,12 @@ export function buildTestApi(
     },
     async models() {
       return opts.modelsResponse ?? { status: 200, json: { models: [] } };
+    },
+    // The credential-status hop (Stage 5 Part 5C).
+    async credentials() {
+      if (opts.credentialsThrows) throw opts.credentialsThrows;
+      return opts.credentialsResponse
+        ?? { status: 200, json: { providers: [], declaredJurisdictions: [] } };
     },
     async stream(body: unknown) {
       calls.stream.push(body as Record<string, unknown>);

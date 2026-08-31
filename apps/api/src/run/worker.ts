@@ -485,6 +485,11 @@ function observing(
       return result;
     },
     models: () => gateway.models(),
+    // Forwarded rather than refused, and observed by nothing: this wrapper
+    // exists to catch the ENVELOPE of a model call so `run.provider` is
+    // written from what the gateway said. A credential-status read is not a
+    // model call and has no envelope to observe.
+    credentials: () => gateway.credentials(),
     stream: (body, signal) => gateway.stream(body, signal),
   };
 }

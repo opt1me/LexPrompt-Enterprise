@@ -177,6 +177,26 @@ describe('every route that forwards a body applies the actor overwrite (m13)', (
   const registersRoutes = (code: string): boolean =>
     /\bapp\.(?:get|post|put|patch|delete)\s*\(/.test(code);
 
+  /**
+   * A module whose routes actually TOUCH WORKSPACE DATA — which is the
+   * subject of the rule below.
+   *
+   * Narrowed again in Stage 5 Part 5C, when `routes/` gained its first module
+   * that registers a route and reads nothing belonging to anybody:
+   * `admin/providers.ts` proxies the gateway's allowlist and its credential
+   * status, both of which are facts about the DEPLOYMENT rather than about a
+   * workspace (S14 — the allowlist has one home and `apps/api` holds no
+   * copy). There is no row to scope and no attribution to make, so requiring
+   * a `req.actor` reference there would put a meaningless one in the file,
+   * which is exactly what the docstring above says weakens a guard.
+   *
+   * What still protects that route: `ROUTE_POLICY` puts it at `admin`, and
+   * `authz.route.test.ts` names it in the list of routes a reviewer is
+   * refused at, executed against a real server.
+   */
+  const readsWorkspaceData = (code: string): boolean =>
+    /\bDb\b/.test(code) || /\bwithActor\s*\(/.test(code) || /gateway\.(?:infer|stream)\(/.test(code);
+
   it('every route module reads its workspace and its attribution from req.actor', () => {
     // The companion rule, covering the POSTs the check above deliberately
     // does not: a route module that never reads `req.actor` scopes nothing
@@ -185,7 +205,7 @@ describe('every route that forwards a body applies the actor overwrite (m13)', (
     const offenders: string[] = [];
     for (const file of walk(path.join(SRC, 'routes'))) {
       const code = codeOf(file);
-      if (!registersRoutes(code)) continue;
+      if (!registersRoutes(code) || !readsWorkspaceData(code)) continue;
       // Both spellings the codebase actually uses: `req.actor!` in the
       // repository routes, `request.actor as Actor` in the two forwarding
       // ones. Matching the property rather than one call site's variable
@@ -216,6 +236,26 @@ describe('every route that forwards a body applies the actor overwrite (m13)', (
     for (const file of skipped) {
       expect(codeOf(path.join(ROOT, file))).toMatch(/\bws\s*:\s*string\b/);
     }
+  });
+
+  it('the workspace-data narrowing skips exactly one registering module, and names it', () => {
+    // The other half of the same discipline: WHICH registering modules the
+    // `readsWorkspaceData` narrowing lets through with no `req.actor`, and
+    // why. A predicate that quietly started skipping everything would empty
+    // the rule above and leave it green — which is the shape this file's own
+    // "skips some" case already exists to prevent one narrowing earlier.
+    const skipped: string[] = [];
+    for (const file of walk(path.join(SRC, 'routes'))) {
+      const code = codeOf(file);
+      if (registersRoutes(code) && !readsWorkspaceData(code)) skipped.push(rel(file));
+    }
+    expect(skipped).toEqual(['apps/api/src/routes/admin/providers.ts']);
+    // …and it is skipped because it reads a DEPLOYMENT fact rather than
+    // because somebody forgot: it proxies the gateway and holds no database
+    // handle at all.
+    const code = codeOf(path.join(ROOT, skipped[0]));
+    expect(code).toMatch(/GatewayClient/);
+    expect(code).not.toMatch(/\bDb\b/);
   });
 
   it('finds the routes it is checking', () => {
