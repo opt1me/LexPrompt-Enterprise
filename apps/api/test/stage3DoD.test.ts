@@ -391,7 +391,15 @@ describe('the attribution surface Stage 3 promised NOT to build (P28, §13), now
     // itself — which is also a point-in-time claim, because the history can
     // GROW after the file is taken and a reader holding it has no way to
     // know whether it is still the whole of it.
+    // FOUR READERS AS OF STAGE 5, and the new one is not an exporter: it is
+    // a VIEW of what the exporters produce (`ReportView`, R-G11 discharged).
+    // It belongs on this list for exactly the reason the three files do —
+    // it renders the same point-in-time stamp, through the same function,
+    // so a reader on screen sees what the DOCX will say. A fifth
+    // hand-written "Dispositions as at …" would be the drift this check is
+    // about, and the list growing is how a new one gets noticed.
     const EXPORTERS = [
+      'src/features/review/ReportView.tsx',
       'src/features/review/exportDocx.ts',
       'src/features/review/exportHistoryCsv.ts',
       'src/features/tabular/csv.ts',
@@ -409,12 +417,17 @@ describe('the attribution surface Stage 3 promised NOT to build (P28, §13), now
     const outcome = codeOf(at('src/lib/findingOutcome.ts'));
     expect(outcome).toContain('export function verificationLabel');
     expect(outcome).toContain('export function exportSummaryLine');
-    // Four readers and one definition. `draftEmail.ts` is the fourth and
-    // belongs: an email drafted about a review states what a human concluded
-    // about each finding, and a fifth hand-written phrasing of "Verified by
-    // …" is exactly the drift this module exists to prevent.
+    // Five readers and one definition. `draftEmail.ts` is one: an email
+    // drafted about a review states what a human concluded about each
+    // finding. `ReportView.tsx` is the newest (Stage 5, R-G11) and reads it
+    // through `buildReportRows`, the same function the DOCX builds its
+    // tables from — the SAME rows rendered differently rather than a second
+    // derivation of them. A sixth HAND-WRITTEN phrasing of "Verified by …"
+    // is exactly the drift this module exists to prevent, and this list
+    // growing is how one gets noticed.
     expect(grepRepo('verificationLabel')).toEqual([
       'src/features/assistant/draftEmail.ts',
+      'src/features/review/ReportView.tsx',
       'src/features/review/exportDocx.ts',
       'src/features/tabular/csv.ts',
       'src/lib/findingOutcome.ts',

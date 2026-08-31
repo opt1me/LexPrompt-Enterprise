@@ -22,6 +22,8 @@ export interface TabularReviewProps {
   onRetryCell: (docId: string, clauseId: string) => void;
   /** Switches back to the card view (`ResultsView`). Optional so the grid can be used standalone. */
   onOpenCards?: () => void;
+  /** Opens the Report view (R-G11), on the same terms as `onOpenCards`. */
+  onOpenReport?: () => void;
   /** Mirrors `FindingCard`'s `interrupted` prop (Important 1): true when this
    *  run is not currently live, so a `pending`/`running` cell means "stalled
    *  after an abandoned run," not "still in flight" — and gets the same
@@ -110,7 +112,7 @@ const RISK_CELL: Record<RiskLevel, string> = {
  * callback the card view's Retry button calls.
  */
 export function TabularReview({
-  run, documents, onRetryCell, onOpenCards, interrupted = false,
+  run, documents, onRetryCell, onOpenCards, onOpenReport, interrupted = false,
   onVerify, onAddNote, verifyBusyKey, stale = false, authorInitials, localUserId,
   dispositionOf, audience, exportContext, assignments, onAssigned, onResolveAssignment,
   verifyConflict, onReapplyConflict, onDismissConflict, onOpenInReview,
@@ -177,10 +179,13 @@ export function TabularReview({
           <Button variant="ghost" onClick={handleExport} className="shrink-0">
             <Download className="w-4 h-4" aria-hidden="true" /> Export CSV
           </Button>
-          {onOpenCards && (
+          {(onOpenCards || onOpenReport) && (
             <ViewSwitch
               value="compare"
-              onChange={(next) => { if (next === 'review') onOpenCards(); }}
+              onChange={(next) => {
+                if (next === 'review' && onOpenCards) onOpenCards();
+                if (next === 'report' && onOpenReport) onOpenReport();
+              }}
               target={run.target}
               documentCount={run.documentIds.length}
             />

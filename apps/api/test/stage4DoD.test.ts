@@ -395,20 +395,30 @@ describe('what Stage 5 inherits, asserted rather than described', () => {
     expect(grepRepo(/LoadErrorPanel/, COMPONENTS).length).toBeGreaterThan(3);
   });
 
-  it('still defers the Report tab, by absence', () => {
+  it('ships a Report view, and it renders the export s own words (R-G11 discharged)', () => {
     /*
-     * The Report tab is Task 6. Until then it is absent, and the ABSENCE is
-     * what is asserted — by PATH rather than by name, because the name is
-     * already taken: `src/features/upload/UploadLocalData.tsx` exports a
-     * `ReportView` of its own, for the uploader's report, and a name grep
-     * would have reported the Report tab as already shipped. That is the
-     * same failure as the ⌘K guard above, in the opposite direction: a
-     * scanner that matches the wrong thing.
-     *
-     * With the sanity half this `it` never had either: the check has to be
-     * able to see a component that IS there.
+     * INVERTED (P46). Asserted by PATH rather than by name, because the name
+     * is already taken: `src/features/upload/UploadLocalData.tsx` exports a
+     * `ReportView` of its own for the uploader's report, and a name grep
+     * would have reported this tab as shipped before it was — the same
+     * failure as the ⌘K guard, in the opposite direction.
      */
-    expect(existsSync(at('src/features/review/ReportView.tsx'))).toBe(false);
+    expect(existsSync(at('src/features/review/ReportView.tsx'))).toBe(true);
+    // The rule that outlives the deferral: it borrows every sentence.
+    const src = codeOf(at('src/features/review/ReportView.tsx'));
+    expect(src).toMatch(/dispositionsAsAtLine/);
+    expect(src).toMatch(/exportSummaryLine/);
+    expect(src).toMatch(/dispositionsMayChangeLine/);
+    // …and it is a RENDERER, not a pipeline: nothing it shows comes from a
+    // fetch of its own.
+    expect(src).not.toMatch(/from '.*lib\/api/);
+    // Still exactly one home for the wording, which is the property the tab
+    // could most easily break by writing its own version of one line.
+    expect(grepRepo(/export function dispositionsAsAtLine/, WEB_SOURCES))
+      .toEqual(['src/lib/findingOutcome.ts']);
+    expect(grepRepo(/export function exportSummaryLine/, WEB_SOURCES))
+      .toEqual(['src/lib/findingOutcome.ts']);
+    // THE SANITY HALF: the scanner can see a component that IS there.
     expect(existsSync(at('src/features/tabular/TabularReview.tsx'))).toBe(true);
   });
 

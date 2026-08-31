@@ -71,6 +71,10 @@ export interface ResultsViewProps {
   onRetryCell: (docId: string, clauseId: string) => void;
   /** Optional: wired in Task 17. Renders the "Tabular view" toggle only when supplied. */
   onOpenTabular?: () => void;
+  /** Opens the Report view -- the third renderer over this same findings
+   *  map (R-G11). Optional, like the toggle above: omitted, the tab is not
+   *  offered rather than offered dead. */
+  onOpenReport?: () => void;
   /** Where to land when this view is opened from the comparison grid's
    *  "Open in review" handoff: the document to show and the clause to put
    *  the keyboard cursor on. Without this the grid's handoff would drop the
@@ -263,7 +267,8 @@ type Tab = 'findings' | 'chat';
  * documents above.
  */
 export function ResultsView({
-  run, documents, settings, onRetryCell, onOpenTabular, onError, onAuthError, interrupted = false,
+  run, documents, settings, onRetryCell, onOpenTabular, onOpenReport, onError, onAuthError,
+  interrupted = false,
   onVerify, onAddNote, verifyBusyKey, stale = false, authorInitials, localUserId,
   dispositionOf, audience, exportContext, verifyConflict, onReapplyConflict, onDismissConflict,
   onConfirmNetPosition, onAmendNetPosition, documentDates, openAt,
@@ -741,10 +746,13 @@ export function ResultsView({
             <span className="sr-only">Open in document</span>
           </button>
 
-          {onOpenTabular && (
+          {(onOpenTabular || onOpenReport) && (
             <ViewSwitch
               value="review"
-              onChange={(next) => { if (next === 'compare') onOpenTabular(); }}
+              onChange={(next) => {
+                if (next === 'compare' && onOpenTabular) onOpenTabular();
+                if (next === 'report' && onOpenReport) onOpenReport();
+              }}
               target={run.target}
               documentCount={run.documentIds.length}
             />

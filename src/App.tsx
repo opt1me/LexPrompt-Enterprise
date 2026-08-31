@@ -121,6 +121,7 @@ import { firstUncheckedClauseId } from './features/review/ClauseIndex';
 // server's first answer.
 import { emptyRun, type CollectionRunInput } from './features/review/runReview';
 import { TabularReview } from './features/tabular/TabularReview';
+import { ReportView } from './features/review/ReportView';
 import { parseFiles, parseFile, toDocumentRecord, documentFileForViewing } from './lib/documents';
 // --- Sub-project F: learning from redlines ---------------------------------
 //
@@ -167,7 +168,8 @@ import { markUploadComplete, wasUploadComplete } from './lib/upload/uploaded';
  *  that promised a draft it cannot produce — see `AUTHORING_VIEWS` below
  *  and R-E1. */
 type View =
-  | 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'settings' | 'matter' | 'not-found'
+  | 'matters' | 'library' | 'editor' | 'run' | 'results' | 'tabular' | 'report'
+  | 'settings' | 'matter' | 'not-found'
   | 'authoring-form' | 'authoring-review'
   | 'redlines-intake' | 'redlines-learned' | 'redlines-workings'
   | 'positions'
@@ -4591,7 +4593,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
             // back except starting a brand new one.
             <button
               onClick={() => requestView('results')}
-              className={`font-ui text-ui-sm px-2.5 py-1.5 rounded-inset flex items-center gap-1.5 ${view === 'results' || view === 'tabular' ? 'font-semibold text-ink-1 bg-accent-tint' : 'font-medium text-ink-3 hover:text-ink-1'}`}
+              className={`font-ui text-ui-sm px-2.5 py-1.5 rounded-inset flex items-center gap-1.5 ${view === 'results' || view === 'tabular' || view === 'report' ? 'font-semibold text-ink-1 bg-accent-tint' : 'font-medium text-ink-3 hover:text-ink-1'}`}
               title="Back to the current run's results"
             >
               <ClipboardList className="w-4 h-4" /> Current run
@@ -4952,7 +4954,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
             <div className="p-8 font-ui text-ui text-ink-3">No template selected.</div>
           )
         )}
-        {(view === 'results' || view === 'tabular') && (
+        {(view === 'results' || view === 'tabular' || view === 'report') && (
           route.name === 'review' && reviewLoadError ? (
             <LoadErrorPanel
               message={reviewLoadError}
@@ -5022,7 +5024,18 @@ function AppShell({ signIn }: { signIn: () => void }) {
                 }}
               />
               <div className="flex-1 min-h-0">
-                {view === 'results' ? (
+                {view === 'report' ? (
+                  /* THE THIRD RENDERER over the same one findings map
+                     (R-G11 discharged). It shows what the export will say,
+                     which is the last place anyone can look at what a DOCX
+                     read six weeks later on a train will carry. */
+                  <ReportView
+                    run={run}
+                    documents={documents}
+                    exportContext={exportContext}
+                    playbookVersion={runPlaybookVersion}
+                  />
+                ) : view === 'results' ? (
                   <ResultsView
                     run={run}
                     documents={documents}
@@ -5030,6 +5043,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     matterId={activeMatterId ?? undefined}
                     onRetryCell={handleRetryCell}
                     onOpenTabular={() => { setOpenReviewAt(undefined); setView('tabular'); }}
+                    onOpenReport={() => { setOpenReviewAt(undefined); setView('report'); }}
                     openAt={openReviewAt}
                     onError={(message) => notify(message, 'error')}
                     onAuthError={handleModelError}
@@ -5066,6 +5080,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
                     documents={documents}
                     onRetryCell={handleRetryCell}
                     onOpenCards={() => setView('results')}
+                    onOpenReport={() => setView('report')}
                     onOpenInReview={(docId, clauseId) => { setOpenReviewAt({ docId, clauseId }); setView('results'); }}
                     interrupted={isInterrupted}
                     onVerify={handleVerify}
