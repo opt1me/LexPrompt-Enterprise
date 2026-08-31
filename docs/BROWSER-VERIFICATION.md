@@ -110,6 +110,84 @@ person reading quickly takes the right meaning from it.
 - [ ] Print the Report tab (`Ctrl-P`). It is print-friendly by CSS only; nobody has seen
       a page break.
 
+
+## Stage 5 Part 5C — the administration screens
+
+**Nobody has looked at any of these.** Every mechanism below is proved headlessly — over
+real HTTP with three real accounts, against the real Postgres, or in jsdom — and every
+rendered string is asserted in jsdom and by nothing that has seen a screen. Sign in as
+`admin` / `admin` at `http://localhost:3005` and open **Administration** in the header
+(the link appears only for an administrator).
+
+### `/admin/roles` — the screen that writes policy
+
+- [ ] **The nav link is absent** for `trainee` and for `partner`, and typing
+      `/admin/roles` as either of them shows the refusal panel — *"These screens are for
+      administrators"* naming their own role — rather than a half-drawn screen whose
+      every fetch 403s.
+- [ ] **The "read at" line.** It must be on screen, in local time, and it must move when
+      you reload. A policy screen with no instant cannot be told apart from a stale one,
+      and this is the whole of P54.
+- [ ] **A configuration row's controls are disabled AND say why**, naming
+      `API_ROLE_MAPPINGS`. Does the reason read as a reason, or does the row just look
+      broken? All three seeded mappings (`reviewers`, `partners`, `admins`) are
+      configuration rows, so this is the default view.
+- [ ] **Add a mapping**, then read the dialog before confirming. The sentence is the
+      SERVER's, rendered verbatim: does it read as English on screen, at that width, or
+      does it wrap into something nobody finishes?
+- [ ] The **typed confirmation** for a widening. The word asked for is the role's own
+      name (`admin`). Is it obvious what to type? Does the disabled button explain
+      itself?
+- [ ] **A narrowing asks for no typing at all.** Change an admin-authored mapping down a
+      level and check the dialog still shows a sentence and the button is live
+      immediately.
+- [ ] **A superseded row.** Hard to produce by hand: set a mapping from the screen, then
+      add the same `issuer|group` to `OIDC_ROLE_MAPPINGS` in `/tmp/compose.env` and
+      `docker compose --env-file /tmp/compose.env up -d --build api`. The row must then
+      read *"replaced by deployment configuration"* with a date, permanently, and the
+      api log must carry the supersession line. Both are asserted headlessly; neither
+      has been read on a screen.
+- [ ] **The empty state.** Delete every mapping (migrator connection — no route can
+      empty it) and reload: it must say **nobody can sign in**, loudly, and never render
+      an empty table. Put them back afterwards, or the stack is locked out.
+
+### `/admin/people`
+
+- [ ] The role line reads **"the role at their last request"** and claims no instant.
+      Does that read as pedantry or as the distinction it is?
+- [ ] **Your own row offers nothing**, and says why. Check the sentence is where a
+      person looks for the missing buttons rather than at the bottom of the card.
+- [ ] **Turn an account off**, then use that person's other browser: they must be
+      refused on their next click, with the account-disabled wording. Turn it back on.
+- [ ] **The retire-a-name dialog.** It must say **permanent**, must say it is NOT
+      deletion, and must say what survives. Do not confirm it against a seeded account —
+      it cannot be undone from the application.
+
+### `/admin/providers`
+
+- [ ] **Nothing on this screen is editable** — no input, no select, no button at all.
+      Does it read as a report, or as a form somebody forgot to enable?
+- [ ] The per-provider guarantee sentence. The compose stack uses the `recorded`
+      provider with an env credential, so it should read **"the key is held only by the
+      gateway"** and must NOT read "no provider key exists". Nobody has seen the
+      managed-identity wording on a screen at all, because no local deployment can
+      produce it.
+- [ ] The **dated `dataHandling` note**, and the over-a-year marker. `models.json` in
+      this stack may carry no note — if so, the *"No note of this provider's terms has
+      been recorded"* line is what to read instead.
+
+### `/admin/audit` — the artefact that leaves the building
+
+- [ ] **The manifest is on screen before the download**, and it lists all three sources
+      including the ones with zero rows. Is the zero readable as "covered, nothing
+      happened", or does it read as an error?
+- [ ] **Download it and open it in a spreadsheet.** The manifest must be the first block
+      of the file, before the header row. Does Excel mangle it? Nobody has opened this
+      file in any spreadsheet.
+- [ ] **The refusal.** Not reproducible by hand without 50 000 rows; the assertion is
+      `auditExport.pg.test.ts` with a lowered ceiling. If you can produce it, check the
+      narrower-range buttons are where a person would reach for them.
+
 ## Known unverified beyond this list
 
 - Nothing has been deployed to Azure. Spike 2's Azure half and Spike 3's Container Apps
