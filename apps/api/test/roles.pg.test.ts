@@ -105,6 +105,22 @@ describe('seedRoleMappings makes the table EQUAL the configuration', () => {
     }, migratorDb());
   });
 
+  it('marks every row it writes as `configuration`, which is what the delete-half is scoped by', async () => {
+    // Migration 015 split this table between two writers. The seed writing a
+    // row WITHOUT `source = 'configuration'` would take the column's default
+    // — which is the same value — and so would look correct here; what it
+    // would NOT do is convert an admin row it collided with, and the row
+    // would keep a source its content no longer matches. Asserted directly
+    // because it is the field the delete's own predicate reads.
+    await withPg(async t => {
+      await seed(t);
+      const rows = await t.query<{ source: string }>(
+        'select source from role_mapping where issuer = $1', [KC]);
+      expect(rows).toHaveLength(3);
+      expect(rows.every(r => r.source === 'configuration')).toBe(true);
+    }, migratorDb());
+  });
+
   it('REVOKES a mapping the configuration no longer names', async () => {
     // `role_mapping` is deployment configuration in this stage: the app role
     // holds no write grant, so removing the entry from API_ROLE_MAPPINGS and

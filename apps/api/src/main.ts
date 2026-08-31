@@ -99,7 +99,32 @@ async function main(): Promise<void> {
       // statements, a failure between them could leave the deletion applied
       // and the replacement not, which is an outage; or the grant applied and
       // the revocation not, which is worse and silent.
-      await migrator.tx(t => seedRoleMappings(t, config.workspaceId, config.roleMappings));
+      const superseded = await migrator.tx(
+        t => seedRoleMappings(t, config.workspaceId, config.roleMappings));
+      /*
+       * A SUPERSESSION IS SAID OUT LOUD, HERE, ONCE PER PAIR.
+       *
+       * `API_ROLE_MAPPINGS` naming a group an administrator had already
+       * mapped from `/admin/roles` takes the row back: configuration wins,
+       * and the row becomes deployment configuration. That is recorded
+       * permanently on the row (`converted_from_admin_at`, rendered by the
+       * admin screen), and it is written here as well because the two
+       * readers are different people — the administrator sees the row, the
+       * operator who redeployed sees this line, and the operator is the one
+       * who can decide whether the collision was intended.
+       *
+       * There is no `audit_event` row for it. `appendAudit` requires an
+       * actor and a startup has no person to name; see `seedRoleMappings`'s
+       * own docstring for why every available candidate would be a false
+       * attribution.
+       */
+      for (const s of superseded) {
+        process.stdout.write(
+          `api: role mapping ${s.groupValue} (issuer ${s.issuer}) was authored by an `
+          + `administrator granting ${s.previousRole}; API_ROLE_MAPPINGS now claims it and `
+          + `grants ${s.role}. Configuration wins: the row is deployment configuration from `
+          + 'now on and can no longer be changed from /admin/roles.\n');
+      }
       // THE AUDIT HORIZON, rolled forward on the one connection that owns
       // the schema. A migration runs once; the calendar does not. See
       // `audit/partitions.ts` — a failure here is a sentence and not a
