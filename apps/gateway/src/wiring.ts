@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import type { Writable } from 'node:stream';
 import { DefaultAzureCredential } from '@azure/identity';
 import { SecretClient } from '@azure/keyvault-secrets';
@@ -56,6 +56,16 @@ export function buildDeps(config: GatewayConfig, out: Writable): ServerDeps {
     audit: new AuditLogger(new JsonlAuditSink(out)),
     credentials,
     transport: undiciTransport,
+    credentialStatus: {
+      // The mtime of a mounted secret file, or nothing. A missing or
+      // unreadable file is ABSENT rather than an error: absent means "not
+      // recorded", which is exactly what the wire type says and exactly
+      // what is true here.
+      fileRotatedAt: (path: string) => {
+        try { return statSync(path).mtime; } catch { return undefined; }
+      },
+      log: (line: string) => { out.write(line); },
+    },
     // §10's real budgets. `unlimitedRateLimiter` (rateLimit.ts) enforces
     // nothing and stays only as a fixture for tests unrelated to rate
     // limiting — production wiring must never read that name, and

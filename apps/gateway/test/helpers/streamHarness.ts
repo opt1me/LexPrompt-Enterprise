@@ -106,6 +106,7 @@ export function buildTestServer(opts: { stream: Transport; limiter?: RateLimiter
     transport: opts.stream,
     limiter: opts.limiter ?? unlimitedRateLimiter,
     registry: buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' }),
+    credentialStatus: { fileRotatedAt: () => undefined, log: () => { /* the status route is not what these suites are about */ } },
   }) as TestApp;
   app.auditSink = sink;
   return app;

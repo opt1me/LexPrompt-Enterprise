@@ -122,6 +122,51 @@ export interface AllowedModel {
 }
 
 /**
+ * WHETHER A CREDENTIAL IS CONFIGURED, AND WHEN IT WAS ROTATED — §14's
+ * `credential` suite: *"the admin endpoint reports only whether a credential
+ * is configured and when it was rotated."*
+ *
+ * Nothing else is on this type, and the absence is the feature. There is no
+ * `key`, no `keyPrefix`, no `last4`, no `fingerprint` and no `length`. Each
+ * of those has been argued for somewhere as a debugging aid; each is a fact
+ * about a secret, on an endpoint an administrator would screenshot into a
+ * risk pack.
+ *
+ * Declared beside `AllowedModel` because that is where a reader looks for
+ * "what the gateway says about a provider", and because the API's own
+ * providers screen joins the two by `provider`.
+ */
+export interface ProviderStatus {
+  provider: ProviderId;
+  /**
+   * How this deployment authenticates to that provider.
+   *
+   * `'managed-identity'` is the case where S2's no-key half is TRUE and a
+   * screen may say so; every other value is the case where only the custody
+   * half holds — the key exists and the gateway is the only process that
+   * holds it. §18 item 8 forbids the unconditional claim anywhere, and this
+   * field is what lets a screen make the true one instead.
+   */
+  auth: 'managed-identity' | 'key' | 'none';
+  /** Whether a SOURCE IS CONFIGURED for this provider. Never "a token was
+   *  obtained" — reporting status must not itself perform an acquisition. */
+  configured: boolean;
+  /** ISO 8601, or ABSENT. Absent means *not recorded*, never *never*. */
+  rotatedAt?: string;
+  /** How many allowlist entries route to this provider. Zero is a real and
+   *  useful answer: a configured credential nothing uses. */
+  modelCount: number;
+}
+
+/** The answer to the gateway's `GET /v1/admin/credentials`. */
+export interface ProvidersPage {
+  providers: ProviderStatus[];
+  /** The operator's declared jurisdiction set (S27), echoed so a screen can
+   *  show what is ENFORCED rather than what it assumes. */
+  declaredJurisdictions: Bloc[];
+}
+
+/**
  * What the call was for, in the app's own terms — logged so a client's
  * "what of ours went where, and when" is answerable.
  *

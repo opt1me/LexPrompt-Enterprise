@@ -8,6 +8,9 @@ export type {
   Purpose, ProviderId, Bloc, Jurisdiction, DataHandling, AllowedModel,
   InferContext, InferRequest, InferUsage, InferResponse, ModelErrorCode,
   StopReason,
+  // §14 credential status (Stage 5 Part 5C). The GATEWAY answers it and the
+  // API proxies it; declared here because both read the same shape.
+  ProviderStatus, ProvidersPage,
 } from './model/protocol.ts';
 export type { ModelClient } from './model/client.ts';
 // The two "a retry cannot fix this" predicates. They lived in

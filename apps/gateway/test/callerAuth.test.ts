@@ -241,6 +241,7 @@ describe('buildServer wiring (Task 15) — the caller-auth hook runs before the 
       transport: neverCalledTransport,
       limiter: unlimitedRateLimiter,
       registry: buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' }),
+      credentialStatus: { fileRotatedAt: () => undefined, log: () => { /* the status route is not what these suites are about */ } },
     });
     return app;
   }

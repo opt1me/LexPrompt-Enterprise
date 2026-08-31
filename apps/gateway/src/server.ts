@@ -11,6 +11,7 @@ import { registerHealth } from './routes/health.ts';
 import { registerModels } from './routes/models.ts';
 import { registerInfer, type InferBody } from './routes/infer.ts';
 import { registerInferStream } from './routes/inferStream.ts';
+import { registerAdminCredentials } from './routes/adminCredentials.ts';
 
 export interface ServerDeps {
   config: GatewayConfig;
@@ -26,6 +27,24 @@ export interface ServerDeps {
   // actually running in `entra` mode with no `verifyEntra` wired fails
   // loudly at the first call, rather than silently admitting every caller.
   verifyEntra?: VerifyEntra;
+  /**
+   * What `GET /v1/admin/credentials` needs and cannot work out for itself.
+   *
+   * `fileRotatedAt` is the ONE rotation instant this gateway can report
+   * without asking anybody for anything — the mtime of a mounted secret
+   * file. Injected rather than read here so this module touches no
+   * filesystem and every branch is testable with no disk.
+   *
+   * `log` writes ONE line, on the error path only, to the stream the boot
+   * banner already goes to. `audit.ts` owns every CALL log line this service
+   * writes (§10) and that is unchanged: this is a configuration fault, the
+   * same class of thing as the startup banner, and it is the only place the
+   * message of a caught error goes — it never reaches the response.
+   */
+  credentialStatus: {
+    fileRotatedAt(path: string): Date | undefined;
+    log(line: string): void;
+  };
 }
 
 const NO_VERIFY_ENTRA: VerifyEntra = async () => {
@@ -121,6 +140,12 @@ export function buildServer(deps: ServerDeps, httpsOptions?: MtlsHttpsOptions): 
   });
   registerHealth(app);
   registerModels(app, deps.allowlist);
+  registerAdminCredentials(app, {
+    models: deps.config.models,
+    allowedJurisdictions: deps.config.allowedJurisdictions,
+    readEnv: deps.config.readEnv,
+    fileRotatedAt: deps.credentialStatus.fileRotatedAt,
+  }, deps.credentialStatus.log);
   registerInfer(app, makeContext(deps));
   registerInferStream(app, makeContext(deps));
   return app;

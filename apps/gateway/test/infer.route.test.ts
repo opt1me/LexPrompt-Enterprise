@@ -43,6 +43,7 @@ function server(transport: Transport, over: Partial<{ allowedJurisdictions: stri
     transport,
     limiter: unlimitedRateLimiter,
     registry: buildRegistry({ publicOrigin: 'https://lexprompt.local', recordedDir: 'fixtures/recorded' }),
+    credentialStatus: { fileRotatedAt: () => undefined, log: () => { /* the status route is not what these suites are about */ } },
   });
   return { app, sink };
 }
