@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Settings as SettingsIcon, ClipboardList, Briefcase, ShieldCheck } from 'lucide-react';
+import {
+  Settings as SettingsIcon, ClipboardList, Briefcase, ShieldCheck, Search as SearchIcon,
+} from 'lucide-react';
 import type { Playbook, PlaybookClause, PlaybookDraft, PlaybookVersion, DocumentFile, DocumentRecord, Review, ReviewRun, ReviewTarget, Matter, Collection, Finding, UserProfile, Verification, NetPosition } from './types';
 import {
   applyVerification,
@@ -64,6 +66,8 @@ import {
   assignmentChanged, watchAssignedToMe, type AssignedToMe as AssignedToMeState,
 } from './lib/assignedToMe';
 import { AssignedToMe } from './features/assignments/AssignedToMe';
+import { SearchPalette } from './features/search/SearchPalette';
+import { useSearch } from './features/search/useSearch';
 // Task 17/18: the browser asks about a run instead of performing one.
 import {
   cancelRun, getRun, isRunOver, liveRunFor, retryCell, startRun, watchRun,
@@ -924,6 +928,44 @@ function AppShell({ signIn }: { signIn: () => void }) {
   const [assignedToMe, setAssignedToMe] = useState<AssignedToMeState>({ status: 'loading' });
   const myUserId = profile?.id;
   useEffect(() => watchAssignedToMe(setAssignedToMe, { meId: myUserId }), [myUserId]);
+
+  /*
+   * FIRM-WIDE SEARCH (R-G14 discharged, Stage 5 Task 5).
+   *
+   * The shortcut opens it; Escape closes it, through `Modal`'s own control
+   * and through the key, and FOCUS GOES BACK to whatever opened it — a
+   * palette that swallows the caret is one a reader has to click their way
+   * out of.
+   */
+  const [searchOpen, setSearchOpen] = useState(false);
+  const openedSearchFrom = useRef<HTMLElement | null>(null);
+  const searching = useSearch();
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    // The element that opened it, not "the body". Returning the caret to
+    // nowhere is the same failure as never moving it.
+    openedSearchFrom.current?.focus();
+    openedSearchFrom.current = null;
+  }, []);
+  const openSearch = useCallback(() => {
+    openedSearchFrom.current = document.activeElement as HTMLElement | null;
+    setSearchOpen(true);
+  }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        if (searchOpen) closeSearch(); else openSearch();
+        return;
+      }
+      if (e.key === 'Escape' && searchOpen) {
+        e.preventDefault();
+        closeSearch();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => { window.removeEventListener('keydown', onKey); };
+  }, [searchOpen, openSearch, closeSearch]);
 
   /**
    * THE WORKSPACE'S PEOPLE, for every attribution line on screen (§6.3).
@@ -4556,6 +4598,19 @@ function AppShell({ signIn }: { signIn: () => void }) {
             </button>
           )}
           <div className="h-4 w-px bg-rule mx-2" />
+          {/* FIRM-WIDE SEARCH (R-G14 discharged). A visible control as well
+              as the shortcut: a feature reachable only by a key combination
+              is a feature most people never learn exists, and this project
+              has nineteen recorded instances of a correct mechanism with no
+              path to it. */}
+          <button
+            onClick={openSearch}
+            className="p-1.5 rounded-inset text-ink-3 hover:text-ink-1"
+            title="Search this firm (Ctrl/Cmd K)"
+            aria-label="Search this firm"
+          >
+            <SearchIcon className="w-4 h-4" aria-hidden="true" />
+          </button>
           <button
             onClick={() => requestView('settings')}
             className={`p-1.5 rounded-inset ${view === 'settings' ? 'text-ink-1' : 'text-ink-3 hover:text-ink-1'}`}
@@ -5049,6 +5104,43 @@ function AppShell({ signIn }: { signIn: () => void }) {
           is now true — the card was built enabled from the start (R-E6)
           specifically so switching it on was this one line plus a real
           handler, never a re-design of the chooser itself. */}
+      {/* FIRM-WIDE SEARCH (R-G14). Outside `main`, because it is about the
+          firm rather than the screen the reader happens to be on. */}
+      <SearchPalette
+        open={searchOpen}
+        state={searching.state}
+        query={searching.query}
+        onQuery={searching.setQuery}
+        onRetry={searching.retry}
+        onClose={closeSearch}
+        // WHICH HITS HAVE SOMEWHERE TO GO, decided here because routing is
+        // this file's knowledge and not the palette's. A precedent has no
+        // screen — precedents are read in a session and never stored
+        // (§11.1) — so it renders as text rather than as a control that
+        // would navigate nowhere.
+        canOpen={(hit) => hit.source !== 'precedent'
+          && (hit.source === 'matter' || hit.source === 'playbook' || hit.source === 'clause'
+            || hit.matterId !== undefined)}
+        onOpen={(hit) => {
+          closeSearch();
+          if (hit.source === 'playbook' || hit.source === 'clause') {
+            navigate({ name: 'playbook', playbookId: hit.id });
+            return;
+          }
+          if (hit.source === 'matter') {
+            navigate({ name: 'matter', matterId: hit.id });
+            return;
+          }
+          if (hit.source === 'review' && hit.matterId) {
+            navigate({ name: 'review', matterId: hit.matterId, reviewId: hit.id });
+            return;
+          }
+          // A document or a collection lives inside its matter, and the
+          // matter home is where a reader opens either.
+          if (hit.matterId) navigate({ name: 'matter', matterId: hit.matterId });
+        }}
+      />
+
       {chooserOpen && (
         <RouteChooser
           onDraftWithAI={handleDraftWithAI}

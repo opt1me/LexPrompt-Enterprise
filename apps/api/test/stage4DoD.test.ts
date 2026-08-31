@@ -370,8 +370,46 @@ describe('what Stage 5 inherits, asserted rather than described', () => {
     expect(codeOf(at('src/features/assignments/AssignedToMe.tsx'))).toMatch(/not known/);
   });
 
-  it('still defers ⌘K and the Report tab, by absence', () => {
-    expect(grepRepo(/cmdk|CommandPalette/i, WEB_SOURCES)).toEqual([]);
+  it('ships firm-wide search, and it declares its own corpus (R-G14 discharged)', () => {
+    /*
+     * INVERTED (P46) — AND THE GUARD IT REPLACES WAS NOT GUARDING.
+     *
+     * The shipped assertion was `grepRepo(/cmdk|CommandPalette/i)` with no
+     * sanity check, so it would have passed a palette named anything else —
+     * which is exactly what shipped: `SearchPalette`. It reported a deferral
+     * that a later commit could have discharged without a word. Fixed where
+     * it was found rather than where it was convenient (the fifteenth guard
+     * in this project found not guarding).
+     */
+    const palette = grepRepo(/SearchPalette/, COMPONENTS);
+    expect(palette).toContain('src/features/search/SearchPalette.tsx');
+    // The rule that outlives the deferral: the corpus sentence exists, in
+    // ONE place, and the palette renders it. A search that silently misses
+    // documents turns "I looked and it is not there" into a claim the
+    // software invited and cannot support.
+    expect(codeOf(at('src/features/search/SearchPalette.tsx')))
+      .toMatch(/does not search the text inside documents/);
+    // THE SANITY CHECK THE SHIPPED GUARD NEVER HAD: the scanner can find a
+    // component that IS present. A `toEqual([])` over a scanner that matches
+    // nothing passes vacuously, and that is how this one lasted.
+    expect(grepRepo(/LoadErrorPanel/, COMPONENTS).length).toBeGreaterThan(3);
+  });
+
+  it('still defers the Report tab, by absence', () => {
+    /*
+     * The Report tab is Task 6. Until then it is absent, and the ABSENCE is
+     * what is asserted — by PATH rather than by name, because the name is
+     * already taken: `src/features/upload/UploadLocalData.tsx` exports a
+     * `ReportView` of its own, for the uploader's report, and a name grep
+     * would have reported the Report tab as already shipped. That is the
+     * same failure as the ⌘K guard above, in the opposite direction: a
+     * scanner that matches the wrong thing.
+     *
+     * With the sanity half this `it` never had either: the check has to be
+     * able to see a component that IS there.
+     */
+    expect(existsSync(at('src/features/review/ReportView.tsx'))).toBe(false);
+    expect(existsSync(at('src/features/tabular/TabularReview.tsx'))).toBe(true);
   });
 
   it('keeps every applied migration immutable — the next one is 014', () => {
