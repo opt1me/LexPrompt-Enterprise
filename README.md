@@ -472,6 +472,24 @@ A green local run says nothing about:
 
 A green run here is evidence about the authentication *path* and about the *shape* of the system. It is not evidence about a tenant.
 
+## What a first firm deployment still needs
+
+Six things, and **none of them is code this project can write on its own**. They are listed here rather than left to be discovered, because the last planned stage is done and there is no later one to defer them to.
+
+1. **The owner's and the DPO's answers to five questions in §17 of the design.** Q3 — retention, including how long precedent documents are kept — because there is no retention job and no retention screen, and a screen for a policy nobody has chosen would choose one. Q4 — which providers, and the declared jurisdiction set — and this one is **not optional**: the gateway **refuses to start** until a jurisdiction set is declared, and nothing ships a default. Q6 — GDPR erasure against a permanent history — which is materially larger than it was, because `audit_event` is now a second insert-only table with no application erasure path alongside `finding_disposition_event`, and the only remedy this design can offer is the pseudonymisation described above. **That remedy is built; the policy half is the DPO's, and LexPrompt takes no position on whether it satisfies a particular request.** Q12 and Q13 — whether an export must say where a review was processed, and what a non-Azure production deployment looks like.
+
+2. **An Entra app registration**, its group claim, admin consent, and a deployed run against it. Keycloak implements the same protocol; it is not an emulator of a tenant. The case most likely to be met in a real firm and impossible to meet locally is **group overage** — the claim being replaced by a Graph pointer once a person is in enough groups — and nothing here has met it.
+
+3. **Spike 2's Azure half.** `api`'s inability to reach the internet, and the gateway's provider-hostname allowlist, proven by a test *in Azure* rather than in `docker compose`. Open since the first stage.
+
+4. **Spike 3's Container Apps half.** A long-lived WebSocket through Container Apps ingress with scale-to-zero, and whether the `maxReplicas` pinned in the Bicep still holds there. Cross-replica fan-out is proved locally at two replicas and has never been proved through Container Apps.
+
+5. **§18 item 10(c) — the integration and end-to-end suites run against an ephemeral deployed environment**, not only against compose. A test that only ever runs in one environment is evidence about one environment.
+
+6. **A browser pass with two real accounts on the deployed environment** (§18 item 9) — and, before it, **the local two-profile pass that five stages have now closed without**. Every rendered-string claim in the last two stages is asserted in jsdom and by nothing that has looked at a screen. `docs/BROWSER-VERIFICATION.md` is that checklist, and its first six items are ordered by what being wrong would cost.
+
+**And nothing in `infra/` has ever been compiled, validated or deployed.** No `az`, `azd` or `bicep` CLI was available in the environment these templates were written in, and there is no subscription behind them.
+
 ## Deploying to Azure (`azd`)
 
 `azure.yaml` and `infra/` provision the **same system** described above — three services, one gateway holding every provider credential, one auth path with two issuers — in Azure Container Apps. §5.1's argument is that local and Azure differ in *deployment*, not in code: `docker-compose.yml`'s `mtls` caller-auth mode becomes `entra`, Keycloak becomes Entra, and the compose network isolation (`api` not on `egress`) becomes an internal-only Container App for the gateway. Nothing in `apps/api` or `apps/gateway` branches on being in Azure; only the environment variables in `infra/modules/containerApps.bicep` differ from `docker-compose.yml`'s.

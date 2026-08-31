@@ -2833,3 +2833,335 @@ asked.
 *Cost if wrong: the same as it has been for three stages — two of this project's worst
 defects were invisible to thousands of passing tests and appeared only when somebody drove
 the real app.*
+
+# Server Stage 5 — collaborative surfaces, administration, and the close (2026-08-31)
+
+**This is the last planned stage, so this section is a statement rather than a deferral.**
+
+Every ruling below was taken without owner review. Three things are recorded here that were
+not recorded anywhere durable before:
+
+1. **Stage 4's P29–P44 as executed.** Stage 4's section above says they live in
+   `.superpowers/sdd/2026-08-30-lexprompt-server-stage-4-live-change/`. **`.superpowers/` is
+   gitignored** — `CLAUDE.md` calls it "SDD execution scratch, safe to delete" — so sixteen
+   numbered decisions would have vanished on a clean checkout, exactly as sub-project B's
+   nearly did. They are folded in below.
+2. **Stage 5's P45–P61 as executed.**
+3. **Two findings that outlived every stage**, which are the most transferable thing this
+   project produced and belong somewhere a later reader will actually look.
+
+Several of the rulings below **correct an earlier decision rather than record a success**,
+and they are kept in that form deliberately. A rulings file that reads as a victory lap
+teaches nobody; the corrections are the part with instructional value.
+
+## The two findings worth carrying to another project
+
+### Seventeen guards were found not guarding
+
+Across five stages, seventeen separate guards were discovered to be asserting nothing. Not
+one of them failed. Every one reported green while the property it named was unprotected,
+and the failure mode in every case was **silence**:
+
+- a scanner whose pattern matched **no file at all**, so every absence assertion written
+  with it passed vacuously;
+- a walker that covered **one directory** while its name and its docstring claimed a
+  workspace;
+- a query that matched **no rows**, because the notes it searched are a `jsonb` array and it
+  was written as though they were a column;
+- a string-literal extractor **desynchronised by a single apostrophe** — one `\'` in one
+  error message terminated its literal early and made six `workspace_id`-scoped statements
+  invisible to the guard whose only job is to notice a missing `workspace_id`;
+- a `workspace_id` check **satisfied by a type declaration** rather than by a predicate;
+- a route **invisible to the sweep that asserted it was authenticated**, because of how it
+  was registered;
+- a Cmd-K guard that **would have passed a palette named anything else** — and did: the
+  palette that shipped is `SearchPalette`;
+- a file-level scanner exemption added for a `<canvas>` that **hid an entire file**,
+  including a scroll gutter, a zoom toolbar and two banners still on the old palette;
+- and, found in this stage, `people.compose.test.ts`'s `if (!MIGRATOR_URL) return` — a
+  cleanup and a load-bearing live assertion that **skip silently** when a variable is unset,
+  so the suite's most important case can pass by not running.
+
+**The rule that comes out of it:** every guard needs a **sanity check that it finds what it
+claims to scan** — a positive case proving the pattern can see the thing it forbids, and a
+bound proving the scanned set is not empty — and every load-bearing assertion needs the
+**mutation that proves it bites**. A green suite is not evidence. A test that fails when you
+break the thing is.
+
+*Cost if wrong: seventeen times, this project believed a boundary was held by something that
+was not holding it. Two of those boundaries were tenant isolation.*
+
+### Every task brief in five stages contained real bugs
+
+**19/23, 21/21, 26/26, 25/26, 15/17.** A hundred and six of a hundred and fifteen briefs,
+written from the plan by the same process that wrote the plan, contained at least one error
+their implementer had to find by running the code: an identifier that had moved, a test
+snippet asserting something the shipped source contradicts, a migration number already taken,
+a config key filed under the wrong classification, a route shape the deployed proxy breaks, a
+count that was wrong.
+
+**The rule that comes out of it:** *where a brief and the shipped source disagree, the shipped
+source wins* — and an implementer runs the brief's reference code **before** adopting it and
+reports which parts failed. This was a standing rule from Stage 2 onward and it is the single
+thing that kept the plan's errors from becoming the codebase's.
+
+*Cost if wrong: a brief is a confident description of code that may not exist. Adopting one
+unread is how a plan's mistake becomes a shipped defect with a passing test beside it.*
+
+## P29–P44, as executed (Stage 4, recorded here for the first time)
+
+- **P29 — honesty first, transport second.** Held. Attribution, history and export shipped
+  over Stage 3's poll before the socket replaced it.
+- **P30 — invert the absence assertions task by task, never delete them wholesale.** Held,
+  and **carried into P46**, where it found more than it was told to: **four** definition-of-
+  done files carried the counter's prohibition, not the two the plan named.
+- **P31 — overriding another person's disposition is not role-gated.** Held. Assignment is
+  the escape hatch, not a permission.
+- **P32 — one workspace directory, and it is the only place an id becomes a name.** Held
+  through two more stages and three more consumers: the assignee chip, the report and the
+  admin panels all resolve through `src/lib/api/users.ts`, and `undefined` renders as
+  *"someone this workspace does not name"* in every one of them.
+- **P33 — `findingOutcome.ts` does not move to `packages/core`, and the deferral is
+  recorded.** Held. Stage 5's server-side export carries **audit rows**, not findings, so the
+  pressure §6.3 names has still not arrived. It is now **pinned by a test**
+  (`stage5DoD.test.ts`), so the next person to build a server-side findings export finds the
+  assertion and moves the module deliberately.
+- **P34 — attribution travels beside the findings, never inside `Finding`.** Held.
+- **P35 — a stale change is refused, named and re-offered; never merged, never auto-retried.**
+  Held.
+- **P36 — a push never silently replaces what a person is mid-decision on.** Held.
+- **P37 — `audit_event` lands with its reader, insert-only, partitioned, and does not restate
+  a disposition change.** Held, and Stage 5 is where the second reader arrived (the export)
+  without a disposition verb ever being added.
+- **P38 — `CLAUDE.md` is edited in the task that makes each affordance real, never in a
+  tidy-up commit.** Held in Stage 4 and again in Stage 5 (Task 11).
+- **P39 — the hub is behind an interface; the outbox is the delivery; `pg_notify` is a
+  doorbell.** Held, with presence as the sole, documented exception (R-S4E4).
+- **P40 — one outbox, one vocabulary.** Held.
+- **P41 — Spike 3 answered locally at two replicas, `maxReplicas` pinned.** Held, and the
+  Container Apps half is **still unanswered one stage later**.
+- **P42 — the `stale` state disables the write controls and says why.** Held.
+- **P43 — two accounts through a separate Keycloak client; the app's client is untouched.**
+  Held **and extended**: Stage 5's `threeAccounts()` adds an administrator through the same
+  `lexprompt-test` client, and `keycloakRealm.test.ts` still asserts the app's own client has
+  `directAccessGrantsEnabled: false`. The concession did not spread, which was the whole
+  point of carving it out.
+- **P44 — the definition of done is reported in three categories.** Held, and executed a
+  second time here. Stage 4 was 17 / 8 / 4; Stage 5 is **17 / 8 / 7**.
+
+## P45–P61, as executed
+
+- **P45 — 17 tasks, three parts, two hard gates.** Held. The pre-flight finding that
+  justified it was confirmed: three of the five named deliverables genuinely had no mechanism
+  at all — `role_mapping` was unwritable by the app and its rows were deleted by the startup
+  seed on every restart, "disable a user" had a refusal path and no route, and the credential
+  admin endpoint §14 tests did not exist.
+- **P46 — invert each absence assertion in the task that makes it false.** Held, and it
+  corrected the plan twice. (a) **Four** definition-of-done files carried the counter's
+  prohibition, not two. (b) The plan said `stage4DoD` forbade `firmTag`; **no shipped suite
+  ever did** — the absence lived in `CLAUDE.md` and in nothing executable. It is asserted
+  now, for the first time, with the sanity half.
+- **P47 — three states, and "not known" never renders as a number.** Held, with one
+  deviation: the `ready` state carries `matters: string[]` as well as `count` and `capped`.
+  No cross-matter inbox *screen* ships, so a button would have gone somewhere the requests
+  are not; the marker names the matters instead, which is what the inbox projection exists
+  for.
+- **P48 — the corpus is declared on screen and document body text is outside it.** Held, and
+  the reason is two-part rather than one. `pg_trgm` is unavailable — `lexprompt_migrator` is
+  not a superuser and it is not a trusted extension — so a substring index over bodies cannot
+  be built at all. Postgres's built-in `tsvector` **needs no extension and would work**, and
+  was rejected on the second, decisive ground: it matches by stemmed word, so mixing it with
+  the `ilike` name search would make one empty result mean two different things. Closing it
+  needs a `tsvector` column, a GIN index and a **second labelled section that explains its own
+  matching**.
+- **P49 — an outcome per source, on every answer.** Held. `SearchSourceOutcome` is returned
+  even for a completely successful search, and the mutation turning `'failed'` into `'ok'`
+  reddened two named pg tests.
+- **P50 — the Report tab is a third renderer and declares no wording.** Held. The brief's
+  suggested `displayLiteralsIn` extractor did not exist and could not be written robustly; the
+  stronger checkable property shipped instead — **no JSX text node with letters in it,
+  anywhere in the file** — with a sanity half over a component that has plenty.
+- **P51 — `role_mapping` gains a `source`, and RLS bounds the app role to `source='admin'`.**
+  Held, as migration **015** (not the plan's 014; `014_audit_partitions.sql` was already
+  applied and an applied migration is immutable). **Four policies, never one `for all`**: the
+  tidier version passes every write test and, applied live, answered **403 `no_role` to all
+  three accounts at `GET /v1/me`**, because it narrows `select` and `roleFor` stops seeing the
+  configuration mappings every sign-in resolves through.
+- **P52 — the seed owns configuration rows only, and a collision supersedes loudly.** Held
+  with **one deviation**: there is **no `audit_event` row for a supersession**, and
+  `AUDIT_ACTIONS` gained no `role_mapping.superseded_by_configuration` verb. `appendAudit`
+  requires an `actorUserId` and `audit_event.actor_user_id` is `not null references
+  app_user(id)` and means *the person who did this*. A container start has no person, and
+  every candidate is false in the same way — the administrator whose row was taken did not
+  take it, an arbitrary `role='admin'` user did nothing, and a synthetic "system" id is a
+  fabrication in the one table a firm treats as evidence. So the brief's own fallback shipped:
+  **the row column and a startup log line**, two of the three the plan promised, deliberately.
+  *Cost if wrong: a supersession is visible on the screen and in the log and not in the
+  export. Closing it is a schema question about what `actor_user_id` may hold for a
+  deployment's own act, and that is a decision, not a fix.*
+- **P53 — every write states its effect in words first, is audited, and a lock-out is
+  refused.** Held, with two shape changes the plan did not anticipate: `RoleMappingEffect`
+  gained `action` and `grantsRole` became optional, because a **removal** needs a
+  server-composed sentence too and grants no role — and `grantsRole: undefined` would read to
+  an `in` check as a role that is there. The lock-out guard **cannot be provoked over HTTP**
+  (reducing the workspace to one admin mapping removes the caller's own admin role, so every
+  request 403s at the role gate first); it is proved in `roleMappingLockout.pg.test.ts` with
+  two committing connections, and the mutation removing the `for update` let **both**
+  concurrent deletes through, leaving the workspace with no admin mapping at all.
+- **P54 — no admin screen renders `app_user.role` as the effective policy.** Held. The People
+  panel labels it as the role of that person's **last request**, with the instant.
+- **P55 — the providers screen is read-only by construction.** Held. There is no write route,
+  and `stage5DoD.test.ts` asserts the absence with its sanity half.
+- **P56 — the credential endpoint reports `configured` and `rotatedAt` and nothing else.**
+  Held, with a **correction to the brief's own design**: it told the implementer to redact the
+  error path through `redactCredential` over every env-sourced value, and the test firing an
+  error carrying a **file**-sourced key went red, correctly. The set of values that could
+  appear is not knowable without acquiring them, which is the one thing this route must not
+  do. **A redactor that removes some of the secrets is a partial defence presented as a
+  complete one.** What is logged instead cannot be a secret by construction: which provider,
+  which source kind, and the error's class name.
+- **P57 — the export declares coverage, instant and completeness, and refuses rather than
+  truncating.** Held. The counts come from the same statement that delivered the rows.
+- **P58 — pseudonymisation acts on `app_user` and rewrites no history row.** Held. The
+  mutation that also nulled `finding_disposition_event.by_user_id` was refused **by the GRANT
+  from migration 006**, before any assertion could run — the database is the first layer, and
+  the test is the second.
+- **P59 — no out-of-app notification, and the assign surface says so.** Held. No seam, no
+  interface, no stub.
+- **P60 — §17 Q12 stays open; the export does not say where a review was processed.** Held.
+  `finding` carries no `run_id`, so no clause can honestly be attributed to a run.
+- **P61 — three accounts, not two.** Held, and it earned itself twice: the **bystander** case
+  (a third real session that may see an assignment and may not act on it) cannot be expressed
+  with two accounts at all, and every admin refusal is now asserted for a **partner** as well
+  as a reviewer, because §7 says an admin is not a super-reviewer and a partner is not a
+  half-admin.
+
+## The R-G rulings this stage discharged, and the three still standing
+
+- **R-G1 / R1 — fully discharged, across Stages 4 and 5.** Its *rule* survives verbatim and is
+  the one that still binds: **do not add an affordance implying collaboration the app cannot
+  deliver.** Every affordance R-G1 dropped is back only where its mechanism is real, and the
+  ones with no mechanism — the firm tag, a mobile "Assigned" tab, a second person's name in
+  the header avatar — are still absent and now asserted absent by an executable guard rather
+  than by a sentence in `CLAUDE.md`.
+- **R-G11 — discharged (Task 6), and how matters.** Not by building the live report view
+  R-G11 doubted, but by **rendering the report the export already produces**. The objection
+  was that a Report tab advertises a live report the app does not have; the answer is a view
+  of the report the app actually has, declaring no wording of its own.
+- **R-G14 — discharged (Tasks 4–5), with P48's corpus limit as part of the discharge rather
+  than a footnote to it.** A search that silently missed a lease's text would be worse than no
+  search; what makes this a discharge is the sentence on screen saying what was searched.
+- **S18 — discharged.**
+- **Still standing, and none of them is Stage 5's:** **R-G12** (no AI playbook suggestion in
+  intake), **R-G13** (no OCR progress UI — the app does not OCR), **R-G15** (no playbook
+  version diff). None acquired a mechanism.
+
+## R-S5E1 — `user.role_changed` was REMOVED from `AUDIT_ACTIONS`, not given a writer
+
+It had been declared since Stage 2, rendered by `MatterActivity.tsx`, and written by nothing
+at all. Part 5C was where it would have found a writer and it did not, because **the fact it
+names does not exist**: nothing in LexPrompt changes a *person's* role. `app_user.role` is a
+per-request cache of what `roleFor` derived from the token's groups and this deployment's
+mapping, and what an administrator changes is the **mapping** — which the three new verbs
+record, naming the group rather than a person. Its rendering went with it.
+
+*Cost if wrong: an audit log offering "somebody changed a person's role" invites a reader to
+believe a per-person role exists to be changed, which is the exact confusion `RoleMappingPanel`
+refuses to render (P54). The guard that would have caught it three stages earlier — every verb
+in `AUDIT_ACTIONS` has a writer — now exists, in `stage5DoD.test.ts`.*
+
+## R-S5E2 — the role-mapping handle is base64url of `(issuer, groupValue)`, not two path segments
+
+The plan's `ROUTE_POLICY` entry was `/:issuer/:groupValue`. **The deployed nginx decodes `%2F`
+back into a path separator before Fastify routes** — probed against this stack, an encoded
+issuer arrived with its slashes real and its double slash collapsed, so a two-segment route
+would never match. The symptom would have been a 404 on the one screen whose subject is who
+can do what. `role_mapping` has no id column (its primary key **is** the pair), so the handle
+is the pair encoded rather than a new identity.
+
+*Cost if wrong: a handle is opaque and has to be passed back verbatim. Against that: a route
+that cannot be reached from the screen that owns it.*
+
+## R-S5E3 — `getOpenAssignments` was deleted rather than left beside its successor
+
+The app now reads the review-wide `getReviewAssignments`, a strict superset of the old
+answer, and every consumer already filters through `assignmentParty`. Keeping both would have
+been two client calls for one screen's question — and the same URL with no `review` parameter
+now answers a *different shape*, so an omitted argument would have produced a page with no
+`assignments` key, read as an empty list. The server projection is unchanged.
+
+*Cost if wrong: one deleted function. Against it: sibling drift, which is the failure this
+project has had six times.*
+
+## R-S5E4 — a NUL byte introduced during execution, and what it would have hidden
+
+Task 9's supersession report keyed a map on an issuer and a group joined by a separator, and
+the separator landed in `roles.ts` as a literal **NUL byte**. `git`, `grep` and `file` all
+then classify the file as binary, so **every source-scanning guard in this repository would
+have skipped it silently** — including the ones that check what the role resolver may do.
+Replaced with `JSON.stringify([issuer, groupValue])`, which also closes the smaller defect
+underneath: both halves are operator-supplied opaque strings, so any joined separator is one
+an operator could put inside a value. A repo-wide NUL scan found no others.
+
+*Cost if wrong: it is an eighteenth guard-not-guarding, self-inflicted, in the stage whose own
+report names seventeen.*
+
+## R-S5E5 — `schema_migration` has no checksum, so an applied migration is pinned by a test
+
+`apps/api/src/db/migrate.ts` records a **version** and an **applied-at** and nothing else. An
+edit to an already-applied `.sql` file is therefore **silently ignored** on every database
+that has run it and **silently applied** on every fresh one — two schemas from one repository,
+with nothing anywhere saying they differ. `stage5DoD.test.ts` now pins a SHA-256 per file
+(CRLF-normalised, because one file is checked out with CRLF and a raw hash would fail for a
+reason unrelated to what it guards).
+
+*Cost if wrong: the pin is a snapshot and has to be extended by the commit that adds a
+migration — one line. The real fix is a checksum column in the ledger, and that is itself a
+migration. Recorded rather than done, because a schema change on the last commit of the last
+stage is not a decision to take without the owner.*
+
+## Spec-versus-plan disagreements from this stage, recorded rather than smoothed
+
+- **The migration number.** The plan said `014_role_mapping_source.sql`; `014_audit_partitions.sql`
+  was already applied. Shipped as **015**. Third time in this project a migration has moved
+  from the number its plan gave it, which is why "read the directory and take the next unused
+  number" is now written down as an interface note.
+- **Two config keys' classification.** The plan filed `API_ASSIGNMENT_INBOX_LIMIT` and
+  `API_SEARCH_LIMIT_PER_SOURCE` as `sameEverywhere`. `configSurface.test.ts` requires a
+  `sameEverywhere` key to be **set in both** `docker-compose.yml` and the Bicep; neither sets
+  these, and they fall back in `config.ts` like every other cap. Filed as
+  `defaultedInBothEnvironments`.
+- **`reviewName` is optional.** The plan declared it required. `review` has **no name
+  column** — the name comes from `playbook_snapshot ->> 'name'` and can be NULL. Shipped
+  optional and **absent** rather than invented.
+- **The chip does not carry the assigner's message.** The plan asked for it. That is the half
+  of Stage 4's own defect that most deserved deleting — a bystander reading a colleague's
+  private brief — so the chip carries the two names and nothing else.
+- **The audit lifecycle writes three rows, not the plan's four.** A preview is not an act and
+  writes nothing, which is the behaviour the confirmation screen depends on.
+- **`egressSurface.test.ts` was narrowed by predicate** so `admin/providers.ts` — which reads
+  a *deployment* fact and has no row to scope — passes. Narrowing a guard is the move this
+  project distrusts most, so it came with **a new positive case naming the one module the
+  narrowing lets through**, so a predicate that quietly started skipping everything fails
+  rather than passes.
+
+## What Stage 5 could not verify
+
+**No browser was driven, for the fifth consecutive stage.** `list_connected_browsers` returns
+an empty list and the Playwright MCP times out on connect (`CONNECT_TIMEOUT`, 30 s) — a
+connection failure, not a missing capability. Eight definition-of-done clauses rest on jsdom
+and nothing else, including the two where being wrong costs the most: the counter's *"not
+known"* marker, and the sentence an administrator reads before widening a role. **There is no
+later stage to defer this to.**
+
+**The local two-profile pass has never been run either**, five stages on. Nor has §18 item 9's
+deployed two-account pass, Entra's group-claim shape, or its **group overage** case.
+
+**Spike 2's Azure half, Spike 3's Container Apps ingress half and §18 item 10(c) are all still
+unanswered.** Nothing in `infra/` has ever been compiled, validated or deployed — there is no
+`az`, `azd` or `bicep` CLI in this environment and no subscription. Every green result this
+project has is a green result in **one** environment.
+
+*Cost if wrong: the same as it has been for four stages, and now permanent rather than
+deferred — two of this project's worst defects were invisible to thousands of passing tests
+and appeared only when somebody drove the real app.*
