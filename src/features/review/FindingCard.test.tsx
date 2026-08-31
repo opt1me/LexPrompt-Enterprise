@@ -781,7 +781,22 @@ describe('a request one person made of another (§6.3, Task 25)', () => {
    * affordance offering an action on another person's act. There were two
    * cases in the code and three in the world.
    */
-  it('tells a BYSTANDER nothing at all about a request between two other people', () => {
+  it('tells a BYSTANDER that somebody was asked, and nothing more (Stage 5 Task 3)', () => {
+    /*
+     * THIS TEST USED TO ASSERT "nothing at all", AND THAT WAS RIGHT WHILE A
+     * BYSTANDER HAD NOTHING HONEST TO BE SHOWN.
+     *
+     * Stage 4's fix round removed the row entirely, because what a third
+     * reviewer was being shown was a FIRST-PERSON sentence ("You asked B.
+     * Trainee to look at this"), the assigner's private brief, and a live
+     * Withdraw button — an action offered on somebody else's act.
+     *
+     * Stage 5 Task 3 gives them the honest half of that: a chip saying
+     * somebody was asked to look. A reader told nothing reopens a clause a
+     * colleague is already on. Every one of the four things that were wrong
+     * is still absent, and they are asserted individually rather than by the
+     * row's absence, because the row is now allowed to exist.
+     */
     const container = mount(
       <FindingCard
         {...baseProps}
@@ -792,12 +807,28 @@ describe('a request one person made of another (§6.3, Task 25)', () => {
         onResolveAssignment={() => { /* … */ }}
       />,
     );
-    // Not the sentence, not the message, and not the button.
+    // Not the first-person sentence, not the private message, not the
+    // button, and not the party block.
     expect(container.textContent).not.toContain('You asked');
     expect(container.textContent).not.toContain('asked you to look at this');
     expect(container.textContent).not.toContain('Not sure the cap survives 14.2.');
     expect(container.textContent).not.toContain('Withdraw the request');
     expect(container.querySelector('[data-assignments]')).toBeNull();
+    expect(container.querySelectorAll('button, a').length)
+      .toBe(mount(
+        <FindingCard {...baseProps} finding={doneFinding()} localUserId="c-the-bystander"
+          audience={TEST_AUDIENCE} onResolveAssignment={() => { /* … */ }}
+        />).querySelectorAll('button, a').length);
+    // …and the chip, which is the whole of what they DO get.
+    const chip = container.querySelector('[data-asked-of-others]');
+    expect(chip).not.toBeNull();
+    expect(chip!.textContent).toMatch(/asked to look/i);
+    // NAMED, so "somebody" is a person rather than a rumour.
+    expect(chip!.textContent).toContain('R. Okafor');
+    // …and it is not a disposition: no state word anywhere in it.
+    for (const word of ['Verified', 'Flagged', 'Rejected', 'Checked']) {
+      expect(chip!.textContent, word).not.toContain(word);
+    }
   });
 
   it('says nothing in the assignee s own window before the profile has resolved', () => {

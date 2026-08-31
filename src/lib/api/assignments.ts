@@ -1,5 +1,5 @@
 import type {
-  AssignmentInboxPage, AssignmentView, AssignmentsPage,
+  AssignmentInboxPage, AssignmentView, ReviewAssignments,
 } from '@lexprompt/core';
 import { apiGet, apiSend } from './client';
 
@@ -44,26 +44,24 @@ export async function resolveAssignment(id: string): Promise<AssignmentView> {
     'POST', `/v1/assignments/${encodeURIComponent(id)}/resolve`, {});
 }
 
-/**
- * The open requests I AM A PARTY TO — asked of me, and made by me — within
- * one review.
+/*
+ * `getOpenAssignments(reviewId)` USED TO BE HERE, and it is gone rather than
+ * left standing beside `getReviewAssignments` below.
  *
- * BOTH DIRECTIONS, because this is the only read there is. A request the
- * caller made used to exist in this tab's memory and nowhere else, so it
- * disappeared on reload along with its "Withdraw the request" control, while
- * the assignee went on seeing it open. It is a third party who is told
- * nothing, which the server enforces and `assignmentParty` mirrors on the
- * push.
+ * It read `GET /v1/assignments?state=open&review=…` — the caller's own queue
+ * within one review, both directions. `getReviewAssignments` is a strict
+ * SUPERSET of that answer (every open request on the review, whoever was
+ * asked) and every consumer already decides what to render from
+ * `assignmentParty`, so keeping both would have been two client calls for
+ * one screen's question, differing only in a filter one of them applies
+ * server-side and the other applies twice. That is the sibling drift this
+ * project has paid for six times, and the copy that stops being called is
+ * always the one that quietly goes wrong.
  *
- * Scoped to a review because that is the Stage 4 surface. The firm-wide
- * "assigned to me" counter is Stage 5 (S18) — a different screen over the
- * same mechanism, not a different truth.
+ * The `?review=` projection itself is unchanged and still served: Stage 4's
+ * contract, pinned by `assignments.pg.test.ts` and
+ * `assignmentReaches.compose.test.ts`.
  */
-export async function getOpenAssignments(reviewId: string): Promise<AssignmentView[]> {
-  const page = await apiGet<AssignmentsPage>(
-    `/v1/assignments?state=open&review=${encodeURIComponent(reviewId)}`);
-  return page.assignments;
-}
 
 /**
  * EVERY OPEN REQUEST ADDRESSED TO ME, ACROSS EVERY MATTER (Stage 5, S18).
@@ -91,4 +89,29 @@ export async function getOpenAssignments(reviewId: string): Promise<AssignmentVi
  */
 export async function getMyInbox(): Promise<AssignmentInboxPage> {
   return apiGet<AssignmentInboxPage>('/v1/assignments?state=open');
+}
+
+/**
+ * EVERY OPEN REQUEST ON ONE REVIEW, WHOEVER WAS ASKED (Stage 5 Task 3).
+ *
+ * A different question from `getOpenAssignments`, and a different route. That
+ * one answers the caller's own queue and always will; this one answers what
+ * is outstanding on a review the caller can already read, INCLUDING requests
+ * between two other people — which is the fact the assignee chip renders and
+ * which a third reviewer otherwise has no way to learn at all.
+ *
+ * WHAT IT DOES NOT COME WITH IS AN ACTION. The server refuses anybody but
+ * the assignee and the assigner at `resolve`, and the chip offers no
+ * control: a bystander is told that somebody was asked, and nothing more.
+ * Stage 4's fix round is why that sentence is worth writing down — a third
+ * reviewer was being shown "You asked B. Trainee to look at this" with a
+ * live Withdraw button.
+ *
+ * REJECTS on failure, like every call in this module, and never resolves to
+ * an empty list.
+ */
+export async function getReviewAssignments(reviewId: string): Promise<AssignmentView[]> {
+  const page = await apiGet<ReviewAssignments>(
+    `/v1/reviews/${encodeURIComponent(reviewId)}/assignments`);
+  return page.assignments;
 }

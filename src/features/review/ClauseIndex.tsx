@@ -1,8 +1,9 @@
 import React from 'react';
 import { CheckCircle2, Flag, XCircle, Circle, CircleDashed, Loader, AlertTriangle, CircleSlash } from 'lucide-react';
 import type { Finding, PlaybookClause } from '../../types';
-import type { PresenceMember } from '@lexprompt/core';
+import type { AssignmentView, PresenceMember } from '@lexprompt/core';
 import { ClausePresence } from '../../components/PresenceRoster';
+import { ClauseAssignees } from '../assignments/AssigneeChip';
 import type { DispositionAudience } from '../../lib/findingOutcome';
 
 export interface ClauseIndexProps {
@@ -26,6 +27,18 @@ export interface ClauseIndexProps {
    * name never meant nobody is there.
    */
   presenceByClause?: Record<string, PresenceMember[]>;
+  /**
+   * Clause id -> the OPEN requests about it, whoever was asked (Stage 5).
+   *
+   * The same shape and the same reasoning as `presenceByClause` above: a
+   * mark on a row that is NOT a state. It says somebody was asked to look at
+   * this clause, which is a third fact beside "what the machine found" and
+   * "what a reviewer decided", and it must not be readable as either.
+   *
+   * Optional: a rail rendered with none shows no markers, which is the same
+   * as a review nobody has been asked about.
+   */
+  assignmentsByClause?: Record<string, AssignmentView[]>;
   /** How a user id becomes a name, for the marker's own sentence. */
   audience?: DispositionAudience;
 }
@@ -84,7 +97,8 @@ export function firstUncheckedClauseId(
  * disagreement.
  */
 export function ClauseIndex({
-  clauses, findings, activeClauseId, onSelect, presenceByClause, audience,
+  clauses, findings, activeClauseId, onSelect, presenceByClause, assignmentsByClause,
+  audience,
 }: ClauseIndexProps) {
   let high = 0, flagged = 0, unchecked = 0, failed = 0, cancelled = 0;
   for (const clause of clauses) {
@@ -162,6 +176,16 @@ export function ClauseIndex({
                     component's `presenceByClause` doc comment forbids. */}
                 <ClausePresence
                   members={presenceByClause?.[clause.id] ?? []}
+                  audience={audience}
+                />
+                {/* …and, on the same terms, WHO HAS BEEN ASKED to look at
+                    it. A third mark for a third fact: the status icon is
+                    what the machine and a reviewer made of the clause, the
+                    presence dot is who is reading it now, and this is who
+                    was asked to. None of the three may be readable as
+                    another. */}
+                <ClauseAssignees
+                  assignments={assignmentsByClause?.[clause.id] ?? []}
                   audience={audience}
                 />
               </button>

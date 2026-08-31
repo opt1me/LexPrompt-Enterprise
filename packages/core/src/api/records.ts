@@ -364,6 +364,23 @@ export interface AssignmentsPage {
 }
 
 /**
+ * EVERY OPEN REQUEST ON ONE REVIEW, whoever it was addressed to.
+ *
+ * A DIFFERENT QUESTION from `GET /v1/assignments`, which answers only the
+ * caller's own queue — and it needs its own route for that reason. This one
+ * answers *"what is outstanding on this review"*, which is the fact a card
+ * needs in order to say that somebody has been asked, to a reader who is
+ * neither of the two people involved.
+ *
+ * A third party is told THAT somebody was asked and never offered an action
+ * on it: `POST /v1/assignments/:id/resolve` still refuses anybody but the
+ * assignee and the assigner.
+ */
+export interface ReviewAssignments {
+  assignments: AssignmentView[];
+}
+
+/**
  * ONE OPEN REQUEST, WITH ENOUGH CONTEXT TO ACT ON IT from a screen that is
  * not inside any particular matter (Stage 5, S18).
  *

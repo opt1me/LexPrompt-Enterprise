@@ -17,7 +17,7 @@ import { reportPresence } from '../../lib/api/socket';
 import { PresenceRoster } from '../../components/PresenceRoster';
 import { AskedOfYou } from '../assignments/AskedOfYou';
 import { progressLabel, progressPercent } from '../../lib/reviewProgress';
-import { assignmentParty, isPartyTo } from '../../lib/assignmentParty';
+import { assignmentParty } from '../../lib/assignmentParty';
 import {
   isVerifiable, NO_EXPORT_CONTEXT, type DispositionAudience, type ExportContext,
 } from '../../lib/findingOutcome';
@@ -618,28 +618,35 @@ export function ResultsView({
   }, [presence, localUserId]);
 
   /**
-   * Clause id -> the open requests about it THIS READER IS A PARTY TO.
+   * Clause id -> every open request about it, WHOEVER was asked.
    *
-   * The actor filter is the point. `assignment.created` is a review-scoped
-   * event, so a request between two other people reaches every tab with the
-   * review open — and the card's line is first person. Without this a third
-   * reviewer was told "You asked B. Trainee to look at this", under a
-   * message B's assigner wrote, beside a live "Withdraw the request"
-   * button: an action offered on somebody else's act.
+   * ## The party filter moved INTO the card, and did not go away
    *
-   * The same set `GET /v1/assignments` answers with, so what a card shows
-   * live is what it shows after a reload — the two used to disagree, and a
-   * control that vanishes on refresh is its own defect.
+   * It used to be here, because `assignment.created` is a review-scoped
+   * event and the card's line is first person: a third reviewer was
+   * otherwise told "You asked B. Trainee to look at this", under a message
+   * B's assigner wrote, beside a live "Withdraw the request" button — an
+   * action offered on somebody else's act.
+   *
+   * Dropping the row entirely was the right fix while a bystander had
+   * nothing honest to be shown. Stage 5 Task 3 gives them something: a chip
+   * saying somebody was **asked to look**, with no first-person claim and no
+   * control. So the filter is now `FindingCard`'s — through the same
+   * `assignmentParty`, which is still the one place that comparison is made
+   * — and it decides which of two renders a row gets rather than whether the
+   * row survives at all.
+   *
+   * The same set `GET /v1/reviews/:id/assignments` answers with, so what a
+   * card shows live is what it shows after a reload.
    */
   const assignmentsByClause = useMemo(() => {
     const out: Record<string, AssignmentView[]> = {};
     for (const a of assignments ?? []) {
       if (findingsKey && a.findingsKey !== findingsKey) continue;
-      if (!isPartyTo(a, localUserId)) continue;
       (out[a.clauseId] ??= []).push(a);
     }
     return out;
-  }, [assignments, findingsKey, localUserId]);
+  }, [assignments, findingsKey]);
 
   /** Only the ones addressed to YOU, for the panel that says so. Through
    *  the same comparison the cards use, rather than a second copy of it. */
@@ -661,6 +668,7 @@ export function ResultsView({
           activeClauseId={activeClauseId}
           onSelect={handleSelectClause}
           presenceByClause={presenceByClause}
+          assignmentsByClause={assignmentsByClause}
           audience={audience}
         />
       </div>

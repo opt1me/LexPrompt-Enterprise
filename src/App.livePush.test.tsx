@@ -112,10 +112,10 @@ vi.mock('./lib/api/users', () => ({
  * than a rejected fetch — the push tests below are about what ARRIVES, and a
  * failed read would render the error panel instead.
  */
-const getOpenAssignmentsMock = vi.fn().mockResolvedValue([]);
+const getReviewAssignmentsMock = vi.fn().mockResolvedValue([]);
 vi.mock('./lib/api/assignments', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/api/assignments')>()),
-  getOpenAssignments: (...args: unknown[]) => getOpenAssignmentsMock(...args),
+  getReviewAssignments: (...args: unknown[]) => getReviewAssignmentsMock(...args),
   createAssignment: vi.fn(),
   resolveAssignment: vi.fn(),
 }));
@@ -544,10 +544,16 @@ describe('a push held under an open control', () => {
     expect(container.textContent).toContain('Check the cap.');
   });
 
-  it('tells a BYSTANDER nothing about a request between two other people', async () => {
+  it('tells a BYSTANDER that somebody was asked, and nothing more', async () => {
     // `u1` is neither the assignee nor the assigner. The event still reaches
     // this tab, because it is scoped to the REVIEW and the socket has no
     // per-recipient filter — and should not grow one.
+    //
+    // What this reader is shown CHANGED in Stage 5 Task 3, from nothing at
+    // all to a chip saying somebody was asked to look. The three things that
+    // were actually wrong — a first-person sentence, the assigner's private
+    // brief, and a live control on somebody else's act — are still absent,
+    // and are still asserted one by one.
     await openTheReview();
     act(() => { deliverPush!(assignmentPush('as2', 'u2', 'u3', 'Not sure about 14.2.')); });
     await flush();
@@ -555,6 +561,8 @@ describe('a push held under an open control', () => {
     expect(container.textContent).not.toContain('asked you to look at this');
     expect(container.textContent).not.toContain('Not sure about 14.2.');
     expect(container.textContent).not.toContain('Withdraw the request');
+    // …and the chip, live, which is the whole of what a bystander gains.
+    expect(container.textContent).toMatch(/asked to look/i);
   });
 
   it('shows a request YOU MADE, with the control only you should have', async () => {

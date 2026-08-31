@@ -52,6 +52,7 @@ export type {
 // and the browser renders it, like every other wire shape in this file.
 export type {
   AssignmentView, AssignmentsPage, AssignmentInboxItem, AssignmentInboxPage,
+  ReviewAssignments,
 } from './api/records.ts';
 // Part 3B's wire shapes: a review's findings assembled from rows, a
 // disposition and its event, and what a per-clause retry cleared. One

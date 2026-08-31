@@ -58,7 +58,7 @@ import { StalePanel } from './components/StalePanel';
 import { subscribe } from './lib/api/socket';
 import { onConnectionState, onPresence, type ConnectionState } from './lib/api/socket';
 import {
-  getOpenAssignments, resolveAssignment as resolveAssignmentRequest,
+  getReviewAssignments, resolveAssignment as resolveAssignmentRequest,
 } from './lib/api/assignments';
 import {
   assignmentChanged, watchAssignedToMe, type AssignedToMe as AssignedToMeState,
@@ -644,14 +644,21 @@ function AppShell({ signIn }: { signIn: () => void }) {
    * find nothing waiting is exactly the "a mechanism that reaches nobody"
    * failure §18 item 5 is about.
    *
-   * A FAILURE IS SAID AND THE LIST IS EMPTIED. `getOpenAssignments` rejects
-   * rather than resolving to an empty list, and this keeps the two apart:
-   * the panel renders the error branch INSTEAD of a list, which is the load
-   * rule this codebase applies everywhere else.
+   * A FAILURE IS SAID AND THE LIST IS EMPTIED. `getReviewAssignments`
+   * rejects rather than resolving to an empty list, and this keeps the two
+   * apart: the panel renders the error branch INSTEAD of a list, which is
+   * the load rule this codebase applies everywhere else.
+   *
+   * REVIEW-WIDE since Stage 5 Task 3, not the caller's own queue. It is a
+   * SUPERSET of what `getOpenAssignments` answered — every open request on
+   * this review, including requests between two other people — and every
+   * consumer already decides what to render from `assignmentParty`. That is
+   * what lets a third reviewer be shown a chip saying a colleague was asked
+   * to look, instead of being told nothing and reopening the clause.
    */
   const readAssignments = useCallback(async (reviewId: string) => {
     try {
-      const open = await getOpenAssignments(reviewId);
+      const open = await getReviewAssignments(reviewId);
       setAssignments(open);
       setAssignmentsError(null);
     } catch (e) {
@@ -3149,7 +3156,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
      * signing in to find nothing waiting is exactly the "a mechanism that
      * reaches nobody" failure §18 item 5 is about.
      *
-     * A FAILURE IS SAID. `getOpenAssignments` rejects rather than resolving
+     * A FAILURE IS SAID. `getReviewAssignments` rejects rather than resolving
      * to an empty list, and a silent empty list here would read as "nobody
      * has asked you anything" — which is the load-path rule this codebase
      * has under `describeLoadError`, at a surface where the cost is a

@@ -589,6 +589,11 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
       'GET /v1/precedent-sets/:id',
       'GET /v1/precedent-sets/:id/documents',
       'GET /v1/reviews/:id',
+      // Stage 5 Task 3: what is outstanding on one review, whoever was
+      // asked. Named explicitly, like the three assignment routes below,
+      // because a count alone cannot tell "the scanner found the new route"
+      // from "the scanner found a different one".
+      'GET /v1/reviews/:id/assignments',
       'GET /v1/reviews/:id/findings',
       'GET /v1/reviews/:id/findings/:findingsKey/:clauseId/history',
       'GET /v1/reviews/:id/history',
@@ -663,8 +668,10 @@ describe('there is no authentication bypass anywhere in apps/api', () => {
     // stopped being registered. 69 with Stage 4 Task 24's three assignment
     // routes -- and the list above names all three explicitly, because a
     // count alone cannot tell "the scanner found the new route" from "the
-    // scanner found a different one".
-    expect(checked).toHaveLength(69);
+    // scanner found a different one". 70 with Stage 5 Task 3's
+    // `GET /v1/reviews/:id/assignments`, which is also named in the list
+    // above for the same reason.
+    expect(checked).toHaveLength(70);
   });
 
   it('answers /healthz without a token — the one exemption, and it reaches no gateway', async () => {

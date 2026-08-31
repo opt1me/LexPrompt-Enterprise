@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import {
   ModelError, uid,
   type AssignmentInboxItem, type AssignmentInboxPage,
-  type AssignmentsPage, type AssignmentView,
+  type AssignmentsPage, type AssignmentView, type ReviewAssignments,
 } from '@lexprompt/core';
 import type { Db, Tx } from '../db/pool.ts';
 import { appendAudit } from '../audit/write.ts';
@@ -240,6 +240,45 @@ export function registerAssignments(
    * needs (Task 25). The firm-wide "assigned to me" counter is Stage 5 (S18)
    * and is a different screen, not a different truth.
    */
+  /**
+   * WHAT IS OUTSTANDING ON THIS REVIEW, whoever was asked.
+   *
+   * A DIFFERENT QUESTION from `GET /v1/assignments`, which is token-scoped
+   * and always will be. This one is scoped to ONE REVIEW the caller can
+   * already read, and it answers with requests between other people —
+   * because "somebody has been asked to look at this clause" is a fact a
+   * card needs to be able to show a third reviewer, and the alternative is
+   * a reader who reopens a clause a colleague is already on.
+   *
+   * It carries NO ACTION. `POST /v1/assignments/:id/resolve` still refuses
+   * anybody but the assignee and the assigner, so a third party is told
+   * what is happening and offered nothing to do about it — which is exactly
+   * the shape Stage 4's fix round had to impose on the card (a bystander was
+   * being shown "You asked B. Trainee to look at this" with a live Withdraw
+   * button, for a request they had nothing to do with).
+   *
+   * OPEN ONLY. A resolved request is not outstanding, and a chip for one
+   * would say somebody is looking at a clause nobody is looking at.
+   */
+  app.get('/v1/reviews/:id/assignments', async (req): Promise<ReviewAssignments> => {
+    const ws = req.actor!.workspaceId;
+    const { id } = req.params as { id: string };
+    // REFUSES rather than answering an empty list for a review this
+    // workspace cannot see. "Nothing is outstanding here" and "this is not
+    // yours" are different facts, and only the first is an answer. 404 and
+    // not 403, because a 403 would confirm the id exists somewhere.
+    const reviews = await db.query<{ id: string }>(
+      'select id from review where id = $1 and workspace_id = $2', [id, ws]);
+    if (!reviews[0]) {
+      throw new ModelError('LexPrompt has no such review in your workspace.', 'not_found', 404);
+    }
+    const rows = await db.query<AssignmentRow>(
+      `select * from assignment
+        where workspace_id = $1 and review_id = $2 and resolved_at is null
+        order by created_at desc`, [ws, id]);
+    return { assignments: rows.map(toAssignmentView) };
+  });
+
   app.get('/v1/assignments',
     async (req): Promise<AssignmentsPage | AssignmentInboxPage> => {
       const ws = req.actor!.workspaceId;

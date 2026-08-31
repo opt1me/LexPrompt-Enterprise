@@ -237,6 +237,20 @@ export const ROUTE_POLICY: RoutePolicyTable = {
   'POST /v1/assignments/:id/resolve': 'reviewer',
   'GET /v1/assignments': 'reviewer',
 
+  // WHAT IS OUTSTANDING ON ONE REVIEW, whoever was asked (Stage 5 Task 3).
+  //
+  // `reviewer`, and it is NOT "reading another person's queue" -- which is
+  // the thing the list route above deliberately refuses to become. This
+  // answers a question about ONE REVIEW the caller can already read, and
+  // the fact it returns is the one a card needs in order to show a third
+  // reviewer that a colleague has been asked to look at a clause. Without
+  // it that reader is told nothing and reopens work somebody is already on.
+  //
+  // It carries NO ACTION at any bar: `resolve` still refuses anybody but
+  // the assignee and the assigner, inside the handler, because a role is
+  // the wrong instrument for "is this yours".
+  'GET /v1/reviews/:id/assignments': 'reviewer',
+
   // The review's whole disposition history (section 6.3.1). `reviewer`: it
   // is the same facts the per-finding history route already returns at the
   // same bar, gathered for one review. A higher bar here would mean a

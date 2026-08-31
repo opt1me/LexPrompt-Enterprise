@@ -726,42 +726,41 @@ describe('Stage 2 definition of done (§18 item 3)', () => {
       // re-reads.
       'src/lib/upload/attribution.ts',
     ];
-    const ASSIGNEE = /\bassigneeId\b|\bassignedTo\b/;
-    // STAGE 5'S TWO SURFACES, and no longer presence's stand-ins.
-    //
     // The word boundaries are not decoration: without the leading `\b` this
     // pattern matched `ClausePresence` — the Task 23 component — through the
     // `usePresence` inside `ClaUSEPRESENCE`, and reported the shipped
     // presence marker as a forbidden hook. A scanner that fires on a
     // substring of an unrelated identifier is one that gets relaxed until it
     // stops biting.
-    // STAGE 5 TASK 2 RELEASED THE COUNTER, and what replaces the
-    // prohibition is a POSITIVE assertion rather than a deletion (P46). Its
-    // mechanism is real — Stage 4's `assignment` table, Stage 5 Task 1's
-    // cross-matter inbox — so R-G1 is satisfied by the mechanism existing,
-    // which was always what the rule said. `assigneeChip` stays forbidden
-    // until Task 3.
-    const AFFORDANCE = /\bassigneeChip\b/i;
+    const ASSIGNEE = /\bassigneeId\b|\bassignedTo\b/;
+    // STAGE 5 RELEASED BOTH OF THE OTHER TWO, and what replaces each is
+    // a POSITIVE assertion rather than a deletion (P46). Their mechanism is
+    // real — Stage 4's `assignment` table, Stage 5 Task 1's cross-matter
+    // inbox and its review-wide read — so R-G1 is satisfied by the mechanism
+    // existing, which was always what the rule said. What is left to forbid
+    // here is `assigneeId`, and that stays forbidden for good.
     expect(ASSIGNEE.test('const x = f.assigneeId')).toBe(true);
-    expect(AFFORDANCE.test('const c = assigneeChip')).toBe(true);
-    // …and the counter that replaced it is genuinely there, with the third
-    // state that keeps it honest asserted at its SOURCE rather than by
-    // hoping the component test covers it. A counter that renders `0` on a
-    // failed read is indistinguishable from a quiet week.
+    // The COUNTER, with the third state that keeps it honest asserted at its
+    // SOURCE rather than by hoping the component test covers it: a counter
+    // that renders `0` on a failed read is indistinguishable from a quiet
+    // week.
     expect(WEB_SOURCES.filter(f => /assignedToMe/i.test(codeOf(f))).map(rel))
       .toContain('src/lib/assignedToMe.ts');
     const counter = path.join(ROOT, 'src/lib/assignedToMe.ts');
     expect(existsSync(counter)).toBe(true);
     expect(codeOf(counter)).toMatch(/status: 'error'/);
-    // …and it does NOT fire on the presence component's own name, which is
-    // the false positive the boundaries above exist for.
-    expect(AFFORDANCE.test('export function ClausePresence() {}')).toBe(false);
-
+    // …and the CHIP, with the rule that outlives its prohibition: it may not
+    // draw itself in a state or outcome ink, because the fastest way to make
+    // "somebody was asked to look" read as "somebody has verified this" is
+    // to draw it in the ink a verification is drawn in.
+    const chipFile = path.join(ROOT, 'src/features/assignments/AssigneeChip.tsx');
+    expect(existsSync(chipFile)).toBe(true);
+    expect(codeOf(chipFile)).not.toMatch(/text-state-|bg-state-|text-outcome-|bg-outcome-/);
+    expect(/text-state-/.test('text-state-verified')).toBe(true);   // the sanity half
     const offenders: string[] = [];
     for (const file of [...WEB_SOURCES, ...CORE_SOURCES]) {
       const code = codeOf(file);
       const name = rel(file);
-      if (AFFORDANCE.test(code)) offenders.push(`${name} names a collaboration affordance`);
       if (!ASSIGNEE.test(code)) continue;
       // A component naming it is a screen offering it.
       if (name.endsWith('.tsx')) offenders.push(`${name} renders an assignee field`);

@@ -11,6 +11,7 @@ import { StateChip } from '../../components/StateChip';
 import { RiskChip } from '../../components/RiskChip';
 import { Button } from '../../components/Button';
 import { ViewSwitch } from '../review/ViewSwitch';
+import { ClauseAssignees } from '../assignments/AssigneeChip';
 import { CellDetail } from './CellDetail';
 import type { VerificationConflict } from '../review/ConflictNotice';
 import { downloadTabularCsv } from './csv';
@@ -241,6 +242,13 @@ export function TabularReview({
                       onOpen={() => setSelected({ docId, clauseId: clause.id })}
                       onRetry={() => onRetryCell(docId, clause.id)}
                       interrupted={interrupted}
+                      // KEYED THROUGH `findingsKeyFor`, like the disposition
+                      // and the detail panel: `docId` names the row, not the
+                      // cell that owns the answer.
+                      assignments={(assignments ?? []).filter(
+                        a => a.clauseId === clause.id
+                          && a.findingsKey === findingsKeyFor(run.target, docId))}
+                      audience={audience}
                     />
                   ))}
                 </tr>
@@ -310,11 +318,29 @@ interface CellProps {
   onRetry: () => void;
   /** Mirrors `FindingCard`'s `interrupted` — see `TabularReviewProps`. */
   interrupted?: boolean;
+  /**
+   * The OPEN requests on this cell, whoever was asked (Stage 5 Task 3).
+   *
+   * Rendered as the initials mark BESIDE the state chip, never in place of
+   * it. R-S4E10 is the exemption this grid holds on ATTRIBUTION — a
+   * disposition here is shown without its actor, because a name per cell at
+   * this density is unreadable, and the attribution is one click away in
+   * the cell detail panel. **This does not extend that exemption**, and it
+   * does not need to: a chip is not a disposition, so it has nothing to be
+   * exempt from. It says somebody was asked to look, which is a fact about
+   * the cell rather than a judgement on it.
+   */
+  assignments?: AssignmentView[];
+  /** How a user id becomes initials, for the mark's own sentence. */
+  audience?: DispositionAudience;
 }
 
 /** One grid cell. Status mirrors `FindingCard`: pending dims, running pulses,
  *  error turns red with an inline retry, done shows the (risk-tinted) summary. */
-function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = false }: CellProps) {
+function Cell({
+  finding, wrapText, isSelected, onOpen, onRetry, interrupted = false,
+  assignments, audience,
+}: CellProps) {
   const status = finding?.status ?? 'pending';
   const riskClass = finding?.riskLevel ? RISK_CELL[finding.riskLevel] : '';
   const selectedRing = isSelected ? 'ring-1 ring-inset ring-accent' : '';
@@ -437,6 +463,10 @@ function Cell({ finding, wrapText, isSelected, onOpen, onRetry, interrupted = fa
         <div className="flex items-center gap-1.5 flex-wrap">
           {finding && <StateChip verification={finding.verification} />}
           <RiskChip level={finding?.riskLevel} />
+          {/* A THIRD MARK, and it is neither of the two above: the state
+              chip is what a person decided, the risk chip is what the model
+              concluded, and this is that somebody was asked to look. */}
+          <ClauseAssignees assignments={assignments ?? []} audience={audience} />
         </div>
         <div className="flex items-start justify-between gap-1">
           <div className="flex items-start gap-1 min-w-0">

@@ -14,6 +14,7 @@ import { PositionComparison } from './PositionComparison';
 import { VariationTrailModal, type TrailDocumentInfo } from './VariationTrailModal';
 import { DispositionHistory } from './DispositionHistory';
 import { AssignPanel } from '../assignments/AssignPanel';
+import { AssigneeChip } from '../assignments/AssigneeChip';
 import { ConflictNotice, type VerificationConflict } from './ConflictNotice';
 import { mayApplyNow, sameCell, sameDisposition } from './pendingUpdate';
 import { verificationFromDisposition } from '../../lib/api/findings';
@@ -236,16 +237,29 @@ export function FindingCard({
   /**
    * THE REQUESTS THIS READER IS A PARTY TO — mine to answer, or mine to give.
    *
-   * The caller filters too (`ResultsView.assignmentsByClause`), and this is
-   * not the same filter twice for the sake of it: a request between two
-   * OTHER people arrives on this tab's socket because the event is
-   * review-scoped, and the sentence below is FIRST PERSON. A component that
-   * renders "You asked X" from a list it did not filter is one careless
-   * caller away from telling a bystander they made a request they never
-   * made, which is exactly what shipped. `assignmentParty` is the one place
-   * the comparison lives.
+   * The sentence below is FIRST PERSON, so this filter is what stops a
+   * bystander being told they made a request they never made — which is
+   * exactly what shipped, beside a live "Withdraw the request" button.
+   * `assignmentParty` is the one place the comparison lives.
+   *
+   * THE CALLER NO LONGER FILTERS (Stage 5 Task 3), and this is now the only
+   * place it happens rather than the second. `ResultsView` used to drop a
+   * bystander's rows entirely, which was right while a bystander had nothing
+   * honest to be shown; they now get the chip below instead — a third
+   * reviewer who is told nothing reopens a clause a colleague is already on.
    */
   const mineToAnswerOrGive = (assignments ?? []).filter(a => isPartyTo(a, localUserId));
+  /**
+   * THE REQUESTS BETWEEN TWO OTHER PEOPLE.
+   *
+   * Rendered as a CHIP and never as the block below: no first-person
+   * sentence, no message, and no control — the two people a request is
+   * between get those, and nobody else does. A chip is not a disposition
+   * either, so it carries no state word and no state ink
+   * (`AssigneeChip.tsx`).
+   */
+  const askedOfOthers = (assignments ?? [])
+    .filter(a => assignmentParty(a, localUserId) === 'bystander');
   const [trailOpen, setTrailOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [ownRejectOpen, setOwnRejectOpen] = useState(false);
@@ -617,6 +631,22 @@ export function FindingCard({
             onChange={(change) => onVerify(change, shownDisposition?.disposition.version)}
             onRejectOpenChange={setOwnRejectOpen}
           />
+        )}
+
+        {/* SOMEBODY ELSE HAS BEEN ASKED — the chip, for a reader who is
+           neither of the two people involved (Stage 5 Task 3).
+
+           BESIDE the disposition line, never inside it and never in its
+           place: the state chip says what somebody DECIDED and this says
+           somebody was ASKED TO LOOK. Two facts, two marks. A surface that
+           could be read as "someone has verified this" when it means
+           "someone was asked to look" is the defect. */}
+        {isVerifiable(finding) && askedOfOthers.length > 0 && (
+          <div data-asked-of-others className="flex flex-wrap items-center gap-1">
+            {askedOfOthers.map(a => (
+              <AssigneeChip key={a.id} assignment={a} audience={audience} />
+            ))}
+          </div>
         )}
 
         {/* WHAT HAS BEEN ASKED, and by whom. Above the notes and below the

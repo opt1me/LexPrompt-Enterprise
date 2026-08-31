@@ -323,15 +323,30 @@ describe('the properties a later stage would break quietly', () => {
 });
 
 describe('what Stage 5 inherits, asserted rather than described', () => {
-  it('still ships no assignee chip (S18)', () => {
-    // The MECHANISM is Stage 4's and is real. The chip over it is Stage 5
-    // Task 3's, and this is what stops one arriving quietly. The SANITY
-    // HALF stays here, on the half that still forbids something.
-    const FORBIDDEN = /\bassigneeChip\b/i;
-    expect(FORBIDDEN.test('const c = assigneeChip')).toBe(true);
-    expect(grepRepo(FORBIDDEN, WEB_SOURCES)).toEqual([]);
-    // …and `assigneeId` is still not a field any component names (P24).
+  it('ships an assignee chip, and a chip is not a disposition (S18 released)', () => {
+    /*
+     * INVERTED, NOT DELETED (P46). This forbade the chip by absence; what
+     * replaces the prohibition is the rule that OUTLIVES it — the chip may
+     * not render a disposition word or a state ink.
+     *
+     * Asserted over the component's SOURCE as well as over its render
+     * (`AssigneeChip.test.tsx`), because a class added in a hurry is not
+     * something a render test with three fixtures would catch.
+     */
+    expect(grepRepo(/AssigneeChip/, COMPONENTS))
+      .toContain('src/features/assignments/AssigneeChip.tsx');
+    const chip = codeOf(at('src/features/assignments/AssigneeChip.tsx'));
+    expect(chip).not.toMatch(/text-state-|bg-state-|text-outcome-|bg-outcome-/);
+    expect('text-state-verified').toMatch(/text-state-/);   // the sanity half
+    // …and no disposition word in the wording it declares.
+    for (const word of ['Verified', 'Flagged', 'Rejected', 'Unchecked', 'Approved']) {
+      expect(chip, word).not.toContain(word);
+    }
+    // …and `assigneeId` is still not a field any component names (P24). The
+    // chip reads `AssignmentView.assigneeUserId`, which is a different field
+    // on a different record; `Verification.assigneeId` (S17) stays retired.
     expect(grepRepo(/\bassigneeId\b/, COMPONENTS)).toEqual([]);
+    expect(chip).toContain('assigneeUserId');
   });
 
   it('ships an assigned-to-me counter, and it has THREE states (S18 released)', () => {
