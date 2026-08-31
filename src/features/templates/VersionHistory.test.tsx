@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mount, buttonNamed, click } from '../../test/mount';
 import { VersionHistory } from './VersionHistory';
 import { SCHEMA_VERSION, type PlaybookVersion } from '../../types';
+import { TEST_AUDIENCE } from '../../test/dispositionShapes';
 
 function version(n: number, changeSummary: string): PlaybookVersion {
   return {
@@ -115,19 +116,48 @@ describe('VersionHistory', () => {
       .toMatch(/not used|no reviews/i);
   });
 
-  // R1: this app is single-user, so a recorded `publishedByUserId` can only
-  // ever be the one local profile — printing the raw id at a reader is the
-  // defect commit cd89c27 fixed for `NetPositionPanel`; this is the same
-  // defect shape one screen over.
-  it('says a version was published by you, never by its raw user id', () => {
-    const out = mount(<VersionHistory versions={[v1]} onClose={noop} />).textContent!;
-    expect(out).toContain('you');
+  /*
+   * THESE TWO CHANGED DIRECTION (cross-stage seam review, M2).
+   *
+   * They pinned "Published by you" for every version with an author, on
+   * ruling R1 — one local profile, so the only person who could have
+   * published is the person reading. R1 is superseded, and THIS is the screen
+   * where that matters most: publishing is the one `partner` write in the
+   * whole route table (`POST /v1/playbooks/:id/versions`), so a reviewer
+   * cannot publish and a partner can. A reviewer opening version history read
+   * "v3 … Published by you" over a partner's changed standard position, with
+   * no way to find who actually did it.
+   *
+   * The raw id is still never printed — that half of the old test is kept.
+   */
+  it('names the person who published a version, never the reader and never the raw id', () => {
+    const out = mount(
+      <VersionHistory versions={[v1]} onClose={noop} audience={TEST_AUDIENCE} />,
+    ).textContent!;
+    expect(out).toContain('Published by A. Trainee');
+    expect(out).not.toContain('by you');
     expect(out).not.toContain('u1');
   });
 
-  it('says nothing about authorship when none was recorded', () => {
+  it('says an id it cannot resolve is one this workspace does not name', () => {
+    const stranger = { ...v1, publishedByUserId: 'vzcsj71fs7mtalycwr' };
+    const out = mount(
+      <VersionHistory versions={[stranger]} onClose={noop} audience={TEST_AUDIENCE} />,
+    ).textContent!;
+    expect(out).toContain('Published by someone this workspace does not name');
+    expect(out).not.toContain('vzcsj71fs7mtalycwr');
+  });
+
+  it('says a version with NO recorded author is one the record does not name', () => {
+    // It no longer says NOTHING. An author line that disappears reads as
+    // "nobody published this", which is the blank-CSV-cell defect at a new
+    // surface — and the two absences are different facts: an id the directory
+    // could not resolve is about the directory, no id at all is about the
+    // record.
     const noAuthor = { ...v1, publishedByUserId: '' };
-    const out = mount(<VersionHistory versions={[noAuthor]} onClose={noop} />).textContent!;
-    expect(out).not.toMatch(/published by/i);
+    const out = mount(
+      <VersionHistory versions={[noAuthor]} onClose={noop} audience={TEST_AUDIENCE} />,
+    ).textContent!;
+    expect(out).toContain('Published by someone this record does not name');
   });
 });

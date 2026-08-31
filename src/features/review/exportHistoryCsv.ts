@@ -2,6 +2,7 @@ import type { ReviewHistoryEvent } from '@lexprompt/core';
 import {
   dispositionHistoryLine, dispositionsAsAtLine, dispositionsMayChangeLine,
   safeFileName, type DispositionAudience,
+  actorPhrase,
 } from '../../lib/findingOutcome';
 import { escapeCsvField } from '../tabular/csv';
 
@@ -70,7 +71,7 @@ export function buildHistoryCsv(
     event.cause,
     // NEVER the raw id: it says nothing to a reader while looking like it
     // should. `actorPhrase`'s three cases, through the audience.
-    context.audience.nameOf(event.byUserId) ?? 'someone this workspace does not name',
+    actorPhrase(event.byUserId, context.audience),
     context.audience.timeOf(event.at),
     event.reason ?? '',
     // The SAME sentence the panel shows, from the one function that composes

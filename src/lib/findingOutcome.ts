@@ -174,15 +174,34 @@ export function netPositionLabel(finding: Finding | undefined): string | null {
  * is not a caveat — it is provenance a reader is entitled to know, the
  * export-side equivalent of `NetPositionPanel`'s "Amended by … on …" line.
  *
- * Not attributed to a specific person, for the same reason `noteLines`
- * isn't: R1 means there is exactly one local user, and an opaque id would
- * communicate nothing while implying multi-user collaboration this app does
- * not deliver.
+ * ## IT NAMES THE PERSON (Stage 5 seam review, M3)
+ *
+ * It used to say "a person" and stop, on the fossil that *"R1 means there is
+ * exactly one local user"*. That stopped being true in Stage 4:
+ * `PUT /v1/reviews/:id/findings/:k/:c/net-position` stamps `req.actor!.id`,
+ * so a colleague's amendment carries THEIR id, and a partner reading a report
+ * beside a `dispositionLine` that names one actor and an amendment that names
+ * none cannot tell whether the two are the same person. A net position is
+ * synthesised text no document contains; an amendment claims a named person
+ * wrote every word of it, and that claim is worth exactly the name.
+ *
+ * The audience is REQUIRED, not optional, and that is the whole point of
+ * putting it here. An optional one would give this function two wordings —
+ * attributed and unattributed — and the two exporters would then differ
+ * whenever one of them had a directory and the other did not, which is the
+ * precise failure this module exists to make impossible. A caller with no
+ * directory passes `NO_EXPORT_CONTEXT.audience`, which resolves nothing and
+ * says so in `actorPhrase`'s words.
  */
-export function netPositionAmendmentLabel(finding: Finding | undefined): string | null {
+export function netPositionAmendmentLabel(
+  finding: Finding | undefined,
+  audience: DispositionAudience,
+): string | null {
   if (!hasStandingPosition(finding)) return null;
-  if (!finding?.netPosition?.amended) return null;
-  return 'AMENDED NET POSITION: this text was rewritten by a person, not the model';
+  const position = finding?.netPosition;
+  if (!position?.amended) return null;
+  return 'AMENDED NET POSITION: this text was rewritten by '
+    + `${actorPhrase(position.byUserId, audience)}, not the model`;
 }
 
 /**
@@ -232,21 +251,41 @@ export function trailLines(
  * regardless of its verification state, and the spec's honesty rule ("say
  * what a human has and has not confirmed") applies just as much there.
  *
- * Deliberately NOT attributed in the exported line. An earlier version
- * printed the raw `byUserId`, reasoning that this module cannot see the
- * profile store and that R1 means there is one local user anyway. Driving
- * the real app showed where that lands: a client-facing report containing
- * `Note (vzcsj71fs7mtalycwr): …`. That is worse than both alternatives —
- * it communicates nothing to the reader, and an opaque per-person id
- * *implies* the multi-user product R1 says this app must not pretend to
- * be. With exactly one local author, the author is not the information;
- * the note is. `Note.byUserId` is still recorded on the finding, so
- * attribution can be rendered the day there is more than one person to
- * attribute to.
+ * ## WHY IT NAMES A PERSON NOW, AND WHY IT DID NOT
+ *
+ * An early version printed the raw `byUserId`, and driving the real app
+ * showed where that lands: a client-facing report containing
+ * `Note (vzcsj71fs7mtalycwr): …` — an opaque id that communicates nothing to
+ * a reader while looking like it should. The fix was to drop the author
+ * entirely, on the reasoning that *"with exactly one local author, the author
+ * is not the information; the note is"*, with a note saying attribution could
+ * be rendered THE DAY THERE IS MORE THAN ONE PERSON TO ATTRIBUTE TO.
+ *
+ * That day was Stage 4, and nothing came back. `POST …/notes` stamps
+ * `req.actor!.id`, a playbook and a matter are shared, and two reviewers can
+ * write contradictory notes on one clause: *"Agreed with the partner - accept
+ * as drafted"* and *"Do not accept; escalate"*. Exported unattributed, those
+ * are two sentences a partner cannot weigh — and the export is where that is
+ * least recoverable, since there is no card beside it to click. Meanwhile
+ * `dispositionLabel`, in this same module, names its actor. One module that
+ * exists to stop export wording drifting cannot have one function that names
+ * people and another that refuses to.
+ *
+ * The third option — the raw id — is still refused, and that is what
+ * `actorPhrase` is for: a name, or a sentence saying no name is available,
+ * never a uuid.
+ *
+ * The audience is REQUIRED for the reason `netPositionAmendmentLabel` gives
+ * above: an optional one would give this function two wordings, and the DOCX
+ * and the CSV would print different ones the moment their contexts differed.
+ * A caller with no directory passes `NO_EXPORT_CONTEXT.audience`.
  */
-export function noteLines(finding: Finding | undefined): string[] {
+export function noteLines(
+  finding: Finding | undefined,
+  audience: DispositionAudience,
+): string[] {
   const notes = finding?.notes ?? [];
-  return notes.map(note => `Note: ${note.text}`);
+  return notes.map(note => `Note by ${actorPhrase(note.byUserId, audience)}: ${note.text}`);
 }
 
 export interface VerificationCounts {
@@ -599,11 +638,41 @@ const STATE_WORD: Record<VerificationState, string> = {
  * `matterActivity`'s R-GP5 ruled the same thing one layer down for the local
  * profile: *"an entry whose author matches nothing known is rendered with NO
  * actor rather than an invented one"*.
+ *
+ * ## EXPORTED, because the sentence had reached seven copies
+ *
+ * `"Someone this workspace does not name"` was written out as a literal at
+ * seven sites across Stages 4 and 5 — the presence roster twice, the asked-of-
+ * you list, the assignee chip, the matter activity feed, the history CSV and
+ * the card's asker lines — with `CLAUDE.md` describing the agreement between
+ * them as a mechanism. It was not a mechanism; it was seven strings that
+ * happened to match, which is the state `uid()` reached at exactly this count
+ * before anyone extracted it. Callers that need only the wording take
+ * `UNRESOLVED_ACTOR`; callers that have an id and an audience call this.
+ *
+ * The capitalised form is a separate export rather than a `capitalise()` call
+ * on this one: a sentence-initial surface and a mid-sentence one are two
+ * renderings of ONE string here, not two strings that have to be kept level
+ * with each other.
  */
-function actorPhrase(id: string | undefined, audience: DispositionAudience): string {
-  if (!id) return 'someone this record does not name';
-  return audience.nameOf(id) ?? 'someone this workspace does not name';
+export function actorPhrase(id: string | undefined, audience: DispositionAudience): string {
+  if (!id) return UNNAMED_BY_RECORD;
+  return audience.nameOf(id) ?? UNRESOLVED_ACTOR;
 }
+
+/** An id the directory could not resolve — it has left the firm, or the
+ *  directory never loaded, and a caller cannot act on the difference. */
+export const UNRESOLVED_ACTOR = 'someone this workspace does not name';
+
+/** The same fact at the start of a sentence. One string, two renderings. */
+export const UNRESOLVED_ACTOR_SENTENCE = 'Someone this workspace does not name';
+
+/** NO id at all — a statement about the RECORD rather than about the
+ *  directory, and a different fact from the two above. */
+export const UNNAMED_BY_RECORD = 'someone this record does not name';
+
+/** The same fact at the start of a sentence. */
+export const UNNAMED_BY_RECORD_SENTENCE = 'Someone this record does not name';
 
 /**
  * One movement of a disposition, in words — shared by the card's line and by

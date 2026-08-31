@@ -7,6 +7,9 @@ import type { ActivityRow } from '@lexprompt/core';
 import type { Review } from '../../types';
 import { matterActivity, type ActivityEntry, type ActivityKind } from '../../lib/matterActivity';
 import { userName } from '../../lib/api/users';
+import {
+  UNNAMED_BY_RECORD_SENTENCE, UNRESOLVED_ACTOR_SENTENCE,
+} from '../../lib/findingOutcome';
 import { getMatterActivity } from '../../lib/api/activity';
 import { describeLoadError } from '../../lib/loadError';
 
@@ -133,8 +136,8 @@ const AUDIT_VERB: Record<string, { you: string; passive: string }> = {
  */
 function actor(entry: ActivityEntry): string {
   if (entry.byYou) return 'You';
-  if (!entry.byUserId) return 'Someone this record does not name';
-  return userName(entry.byUserId) ?? 'Someone this workspace does not name';
+  if (!entry.byUserId) return UNNAMED_BY_RECORD_SENTENCE;
+  return userName(entry.byUserId) ?? UNRESOLVED_ACTOR_SENTENCE;
 }
 
 function line(entry: ActivityEntry): string {

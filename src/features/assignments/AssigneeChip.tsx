@@ -1,11 +1,19 @@
 import React from 'react';
 import type { AssignmentView } from '@lexprompt/core';
-import type { DispositionAudience } from '../../lib/findingOutcome';
+import {
+  UNRESOLVED_ACTOR_SENTENCE, type DispositionAudience,
+} from '../../lib/findingOutcome';
 
-/** The one wording for a person the directory does not hold, matching the
- *  activity feed and the presence roster to the letter. Two wordings for one
- *  fact is how they come to disagree. */
-const UNNAMED = 'Someone this workspace does not name';
+/**
+ * The one wording for a person the directory does not hold.
+ *
+ * IMPORTED now, not declared. This constant used to hold its own copy of the
+ * sentence under a comment claiming it matched the activity feed and the
+ * presence roster "to the letter" — which was true, and was a coincidence
+ * rather than a mechanism: seven files held seven literals that happened to
+ * agree. `uid()` is this project's own cautionary case at exactly that count.
+ */
+const UNNAMED = UNRESOLVED_ACTOR_SENTENCE;
 
 export interface AssigneeChipProps {
   /** The OPEN request. A resolved one is not outstanding, and a chip for it

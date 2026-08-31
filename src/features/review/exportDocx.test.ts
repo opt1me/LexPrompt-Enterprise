@@ -16,6 +16,14 @@ import {
   collectionExportLabel, dispositionLabel, dispositionsAsAtLine, dispositionsMayChangeLine,
   NO_EXPORT_CONTEXT, type ExportContext,
 } from '../../lib/findingOutcome';
+
+/** A context WITH a directory, for the assertions about attribution — the
+ *  loud fallback above proves what an export says with no directory, and
+ *  this proves what it says with one. */
+const EXPORT_CONTEXT: ExportContext = {
+  ...NO_EXPORT_CONTEXT, readAt: 1_700_000_000_000, audience: TEST_AUDIENCE,
+};
+
 import { DISPOSITION_SHAPES, TEST_AUDIENCE } from '../../test/dispositionShapes';
 
 /**
@@ -232,8 +240,16 @@ describe('buildReportRows', () => {
         notes: [{ id: 'n1', findingId: 'x', text: 'Confirm against the side letter.', byUserId: 'u1', at: 1 }],
       }),
     });
+    // WITH a directory, the note names its author (M3). Without one, the
+    // sentence says so — `buildReportRows` falls back to
+    // `NO_EXPORT_CONTEXT.audience` rather than to a second, unattributed
+    // wording the CSV would not also produce.
+    const named = buildReportRows(run, 'doc-1', {}, EXPORT_CONTEXT);
+    expect(named[0].notes).toEqual(['Note by A. Trainee: Confirm against the side letter.']);
+
     const rows = buildReportRows(run, 'doc-1');
-    expect(rows[0].notes).toEqual(['Note: Confirm against the side letter.']);
+    expect(rows[0].notes)
+      .toEqual(['Note by someone this workspace does not name: Confirm against the side letter.']);
 
     const doc = await buildReportDocument(rows, 'doc-1', 'stub summary line');
     const { Packer } = await import('docx');
@@ -496,20 +512,28 @@ describe('buildReportRows / exportDocx / buildReportDocument — net positions',
     expect(xml).toContain('UNCONFIRMED NET POSITION');
   });
 
-  // An amended position exports the HUMAN text, and says a person wrote it —
+  // An amended position exports the HUMAN text and NAMES THE HUMAN (M3) —
   // not the model's original proposal, and not silently as though the model
-  // had written every word.
-  it('exports the human\'s amended text, and says it was amended by a person', async () => {
+  // had written every word. An amendment is the strongest claim an export
+  // makes: a named person wrote every word of a paragraph no document
+  // contains.
+  it('exports the human\'s amended text, and names who amended it', async () => {
     const pos = amendPosition(unconfirmedPosition('Break on 6 months notice (model draft).', trail), 'Break on 3 months notice.', 'u1', 1);
     const run = runWithNetPosition(doneCollectionFinding({ netPosition: pos }));
+    const [named] = buildReportRows(run, 'lease', {}, EXPORT_CONTEXT);
+    expect(named.netPositionAmendmentLabel)
+      .toBe('AMENDED NET POSITION: this text was rewritten by A. Trainee, not the model');
+
     const [row] = buildReportRows(run, 'lease');
     expect(row.summary).toBe('Break on 3 months notice.');
     expect(row.summary).not.toContain('model draft');
+    // Never the raw id, with or without a directory.
+    expect(row.netPositionAmendmentLabel).not.toContain('u1');
 
     const xml = await docXml(run, 'lease');
     expect(xml).toContain('Break on 3 months notice.');
     expect(xml).not.toContain('model draft');
-    expect(xml).toMatch(/amend.*person|person.*amend/i);
+    expect(xml).toMatch(/amend/i);
   });
 
   // Task 11: the standard-position comparison, distinct from every caveat

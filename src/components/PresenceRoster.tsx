@@ -1,6 +1,6 @@
 import React from 'react';
 import type { PresenceMember } from '@lexprompt/core';
-import type { DispositionAudience } from '../lib/findingOutcome';
+import { UNRESOLVED_ACTOR_SENTENCE, type DispositionAudience } from '../lib/findingOutcome';
 
 export interface PresenceRosterProps {
   /** The server's roster for this subscription, as it last stated it. */
@@ -92,7 +92,7 @@ function PresenceDot({ member, audience }: { member: PresenceMember; audience?: 
   // that supplied an audience got a name from it and initials from
   // somewhere else, which is how "R. Okafor" comes to wear "?".
   const initials = audience?.initialsOf(member.userId);
-  const label = name ?? 'Someone this workspace does not name';
+  const label = name ?? UNRESOLVED_ACTOR_SENTENCE;
   return (
     <span
       data-presence-member={member.userId}
@@ -133,7 +133,7 @@ export interface ClausePresenceProps {
 export function ClausePresence({ members, audience }: ClausePresenceProps) {
   if (members.length === 0) return null;
   const names = members
-    .map(m => audience?.nameOf(m.userId) ?? 'Someone this workspace does not name')
+    .map(m => audience?.nameOf(m.userId) ?? UNRESOLVED_ACTOR_SENTENCE)
     .join(', ');
   const sentence = members.length === 1
     ? `${names} is viewing this clause`

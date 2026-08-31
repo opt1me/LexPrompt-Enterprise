@@ -5220,6 +5220,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
           loading={historyLoading}
           error={historyError ?? undefined}
           matterNamesByVersion={historyMatterNames}
+          // M2: publishing is the one `partner` write in the whole route
+          // table, so this is the screen whose author is guaranteed to
+          // sometimes be somebody other than the reader.
+          audience={audience}
           onRetry={() => { if (playbookRouteId) loadVersionHistory(playbookRouteId); }}
           onClose={() => setVersionHistoryOpen(false)}
         />

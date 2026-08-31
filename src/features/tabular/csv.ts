@@ -4,7 +4,8 @@ import {
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionRationaleLines,
-  exportDispositionLine, dispositionsAsAtLine, dispositionsMayChangeLine, type ExportContext,
+  exportDispositionLine, dispositionsAsAtLine, dispositionsMayChangeLine,
+  type DispositionAudience, type ExportContext,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
 
@@ -51,6 +52,10 @@ function cellText(
    *  `dispositionLabel`, the same call the DOCX makes. Section 6.3.1's
    *  changed-from facts. */
   dispositionLine: string | undefined,
+  /** Who wrote each note, and who amended the net position — M3. Optional on
+   *  the same terms as everywhere else in this module: no audience is the
+   *  unattributed wording, never an invented name. */
+  audience: DispositionAudience | undefined,
 ): string {
   const outcome = describeFindingOutcome(finding);
   // Task 9: a net position caveat is a SECOND, independent label from the
@@ -68,7 +73,8 @@ function cellText(
   // there is none. Last in the bracket list so the human-judgement labels a
   // reader is used to meeting first keep their place.
   const labels = [
-    verificationLabel(finding), netPositionLabel(finding), netPositionAmendmentLabel(finding),
+    verificationLabel(finding), netPositionLabel(finding),
+    netPositionAmendmentLabel(finding, audience),
     truncationLabel(finding), positionOutcomeLabel(finding),
   ]
     .filter((label): label is string => label !== null);
@@ -86,7 +92,8 @@ function cellText(
   // exporters cannot disagree about any of them.
   const extras = [
     ...(dispositionLine ? [dispositionLine] : []),
-    ...positionRationaleLines(finding), ...noteLines(finding), ...trailLines(finding, documentNames),
+    ...positionRationaleLines(finding), ...noteLines(finding, audience),
+    ...trailLines(finding, documentNames),
   ];
   return extras.length > 0 ? `${base} | ${extras.join(' | ')}` : base;
 }
@@ -160,7 +167,7 @@ export function buildTabularCsv(
   const clauseCells = (key: string) =>
     clauses.map(c => cellText(
       run.findings[key]?.[c.id], documentNames,
-      exportDispositionLine(context, key, c.id)));
+      exportDispositionLine(context, key, c.id), context.audience));
 
   const rows = isCollectionTarget(run.target)
     // ONE row for a collection, whatever its member count. A collection

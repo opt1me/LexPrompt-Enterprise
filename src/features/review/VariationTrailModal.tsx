@@ -4,6 +4,7 @@ import type { NetPosition, TrailStep } from '../../types';
 import { Modal } from '../../components/Modal';
 import { NetPositionPanel } from './NetPositionPanel';
 import { stepEffectText } from '@lexprompt/core';
+import type { DispositionAudience } from '../../lib/findingOutcome';
 
 /** What the trail needs to know about a contributing document, keyed by its
  *  id — nothing else in this app needs a lookup shaped quite like this, so
@@ -32,6 +33,11 @@ export interface VariationTrailModalProps {
   stale?: boolean;
   onConfirm?: () => void;
   onAmend?: (text: string) => void;
+  /** Handed straight to the terminal `NetPositionPanel`, so the confirmation
+   *  line inside the trail names the same person the card outside it does.
+   *  Two surfaces rendering one net position is exactly where an attribution
+   *  comes to differ. */
+  audience?: DispositionAudience;
 }
 
 function formatDate(at: number | undefined): string | null {
@@ -128,6 +134,7 @@ function TrailStepCard({ step, info, index, isLast }: {
  */
 export function VariationTrailModal({
   open, onClose, netPosition, documents, busy = false, stale = false, onConfirm, onAmend,
+  audience,
 }: VariationTrailModalProps) {
   return (
     <Modal isOpen={open} onClose={onClose} title="Variation trail" size="lg">
@@ -152,6 +159,7 @@ export function VariationTrailModal({
               stale={stale}
               onConfirm={onConfirm}
               onAmend={onAmend}
+              audience={audience}
             />
           </div>
         </div>

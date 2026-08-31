@@ -6,6 +6,7 @@ import { Modal } from '../../components/Modal';
 import { Button } from '../../components/Button';
 import { AutoResizeTextarea } from '../../components/AutoResizeTextarea';
 import { STALE_CONTROL_NOTICE } from '../../lib/loadError';
+import { actorPhrase, type DispositionAudience } from '../../lib/findingOutcome';
 
 export interface NetPositionPanelProps {
   /** Absent for a standalone-document finding, or a collection finding that
@@ -31,6 +32,15 @@ export interface NetPositionPanelProps {
    *  `VariationTrailModal`) — otherwise its own "see trail" button would
    *  try to reopen the trail it is already inside. */
   onOpenTrail?: () => void;
+  /**
+   * How this panel turns `netPosition.byUserId` into a name — M1.
+   *
+   * Optional on the same terms as every other audience prop in this app
+   * (`AssigneeChip`, `PresenceRoster`, `AskedOfYou`): a caller with no
+   * directory in hand gets a sentence saying no name is available, never an
+   * invented one and never a raw uuid.
+   */
+  audience?: DispositionAudience;
 }
 
 function formatWhen(at: number | undefined): string {
@@ -133,8 +143,22 @@ function AmendPositionModal({ open, initialText, onCancel, onConfirm }: {
  * is deliberate — an empty panel would read as "we tried and found nothing",
  * which is a different, false claim.
  */
+/**
+ * The audience this panel falls back to when its caller hands it none — the
+ * same object `FindingCard` keeps for the same reason, and it names NOBODY.
+ * Honest rather than helpful: `actorPhrase` turns an unresolvable id into
+ * "someone this workspace does not name", which is true of every actor when
+ * nothing has been given a directory, and is never a name somebody did not
+ * have.
+ */
+const NO_DIRECTORY: DispositionAudience = {
+  nameOf: () => undefined,
+  initialsOf: () => undefined,
+  timeOf: (at: number) => new Date(at).toLocaleString(),
+};
+
 export function NetPositionPanel({
-  netPosition, busy = false, stale = false, onConfirm, onAmend, onOpenTrail,
+  netPosition, busy = false, stale = false, onConfirm, onAmend, onOpenTrail, audience,
 }: NetPositionPanelProps) {
   const [amendOpen, setAmendOpen] = useState(false);
 
@@ -159,22 +183,30 @@ export function NetPositionPanel({
 
       <p className="font-prose text-finding text-ink-prose leading-relaxed whitespace-pre-wrap">{text}</p>
 
-      {/* "Confirmed by you", never "Confirmed by vzcsj71fs7mtalycwr".
-          Found by driving the real app: this was the last place in the
-          product printing a raw user id at a reader. It is the same defect
-          `noteLines` already fixed on the export side, for the same two
-          reasons — an opaque id communicates nothing, and a per-person id
-          *implies* the multi-user collaboration ruling R1 says this app must
-          not pretend to offer. `NotesPanel` never printed one; this was the
-          outlier.
+      {/* THE PERSON, NEVER "you", AND NEVER A RAW UUID.
 
-          A position confirmed with no recorded author says when, and drops
-          the actor rather than inventing "an unknown user" — which reads as
-          "somebody else", the very implication R1 forbids. */}
+          Both halves of that were learned the hard way and neither may be
+          dropped. Driving the real app once found "Confirmed by
+          vzcsj71fs7mtalycwr" at a reader, so an id is never printed. The fix
+          for that was " by you" for ANY author, justified by ruling R1 — this
+          app is single-user, so the one local profile that could have
+          confirmed a position always is it. R1 is superseded (Stages 4 and 5,
+          `rulings.md`: "R-G1 / R1 - fully discharged"): a matter is shared,
+          `PUT …/net-position` stamps `req.actor!.id`, and a partner's
+          confirmation carries the PARTNER's id. A trainee opening that review
+          read "Confirmed by you on 27 Aug 16:04" over something they had
+          never seen — a false first-person claim about the most dangerous
+          output this app produces, on the surface `CLAUDE.md`'s "never shown
+          without its actor and its time" rule was written for.
+
+          `actorPhrase` is the same resolver `dispositionLabel` uses one panel
+          over, so the confirmation line and the verification line beside it
+          name a person the same way or say the same thing about not being
+          able to. */}
       {netPosition.state === 'confirmed' && (
         <p className="font-mono text-pin text-ink-4">
-          {netPosition.amended ? 'Amended' : 'Confirmed'}
-          {netPosition.byUserId ? ' by you' : ''} on {formatWhen(netPosition.at)}
+          {netPosition.amended ? 'Amended' : 'Confirmed'} by{' '}
+          {actorPhrase(netPosition.byUserId, audience ?? NO_DIRECTORY)} on {formatWhen(netPosition.at)}
         </p>
       )}
 

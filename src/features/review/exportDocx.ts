@@ -4,7 +4,8 @@ import {
   netPositionLabel, netPositionAmendmentLabel, trailLines,
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionRationaleLines,
-  exportDispositionLine, dispositionsAsAtLine, dispositionsMayChangeLine, type ExportContext,
+  exportDispositionLine, dispositionsAsAtLine, dispositionsMayChangeLine,
+  NO_EXPORT_CONTEXT, type ExportContext,
 } from '../../lib/findingOutcome';
 import { findingsKeyFor, isCollectionTarget } from '@lexprompt/core';
 
@@ -90,6 +91,9 @@ export function buildReportRows(
   // ordinary document review, where it just returns `docId` back). Keying
   // directly by `docId` here used to make a collection review's export
   // silently empty (Step 0 of this task).
+  // The LOUD fallback, never a second wording: `NO_EXPORT_CONTEXT`'s audience
+  // resolves nothing and says so, exactly as its `dispositionOf` does.
+  const audience = context?.audience ?? NO_EXPORT_CONTEXT.audience;
   const findingsKey = findingsKeyFor(run.target, docId);
   const findings = run.findings[findingsKey];
   if (!findings) return [];
@@ -124,9 +128,12 @@ export function buildReportRows(
         summary,
         citations: [],
         verificationLabel: verificationLabel(finding),
-        notes: noteLines(finding),
+        // ONE audience for the whole build, so a note and an amendment name
+        // the person who wrote them — M3 — and so this exporter and the CSV
+        // cannot print different wordings because their contexts differed.
+        notes: noteLines(finding, audience),
         netPositionLabel: netPositionLabel(finding),
-        netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
+        netPositionAmendmentLabel: netPositionAmendmentLabel(finding, audience),
         trail: trailLines(finding, documentNames),
         truncationLabel: truncationLabel(finding),
         positionOutcomeLabel: positionOutcomeLabel(finding),
@@ -142,9 +149,9 @@ export function buildReportRows(
       riskAnalysis: finding.riskAnalysis,
       citations: finding.citations,
       verificationLabel: verificationLabel(finding),
-      notes: noteLines(finding),
+      notes: noteLines(finding, audience),
       netPositionLabel: netPositionLabel(finding),
-      netPositionAmendmentLabel: netPositionAmendmentLabel(finding),
+      netPositionAmendmentLabel: netPositionAmendmentLabel(finding, audience),
       trail: trailLines(finding, documentNames),
       truncationLabel: truncationLabel(finding),
       positionOutcomeLabel: positionOutcomeLabel(finding),

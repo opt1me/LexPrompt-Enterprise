@@ -19,14 +19,32 @@ export interface StandardPositionFieldProps {
  * and `reviewedByHuman` says whether a person has read them: two different
  * facts, and collapsing them is how an AI suggestion nobody read comes to be
  * presented as the firm's position.
+ *
+ * ## "a person", not "you" (cross-stage seam review, m6)
+ *
+ * It said *"Written by you"* and *"Drafted by AI, reviewed by you"*, which
+ * was true while a playbook belonged to one browser. Under Stage 4 a playbook
+ * is shared: the second person to open a clause read "Written by you" over
+ * words a colleague wrote.
+ *
+ * This is NOT the same fix as `NetPositionPanel`'s or `VersionHistory`'s, and
+ * the difference is worth stating rather than glossing. Those two hold a
+ * `byUserId` and can resolve it to a name through `actorPhrase`.
+ * `StandardPosition` carries **no author at all** — only `origin` and
+ * `reviewedByHuman` — so there is nothing here to resolve, and inventing a
+ * resolver would mean inventing the field. The honest line is the one that
+ * says what the record actually knows: a person wrote it, or a person
+ * reviewed it, and this app cannot say which person. Naming one would need a
+ * `byUserId` on the position, which is a schema change and a separate piece
+ * of work.
  */
 export function provenanceLine(position: StandardPosition): string {
   switch (position.origin) {
     case 'authored':
-      return 'Written by you';
+      return 'Written by a person';
     case 'ai-drafted':
       return position.reviewedByHuman
-        ? 'Drafted by AI, reviewed by you'
+        ? 'Drafted by AI, reviewed by a person'
         : 'Drafted by AI — not yet reviewed';
     case 'learned':
       return 'Learned from redlines';

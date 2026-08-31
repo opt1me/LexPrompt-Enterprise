@@ -4,6 +4,7 @@ import { mount, buttons, buttonNamed, click, textbox, type } from '../../test/mo
 import { NetPositionPanel } from './NetPositionPanel';
 import { unconfirmedPosition, confirmPosition, amendPosition } from '@lexprompt/core';
 import type { TrailStep } from '../../types';
+import { TEST_AUDIENCE } from '../../test/dispositionShapes';
 
 const TRAIL: TrailStep[] = [
   { documentId: 'd1', kind: 'original', effect: 'Break on 12 months notice.', citations: [] },
@@ -39,14 +40,17 @@ describe('NetPositionPanel — states', () => {
     expect(container.textContent).toMatch(/unconfirmed/i);
   });
 
-  it('a confirmed position shows that a person confirmed it, and when', () => {
+  it('a confirmed position names the person who confirmed it, and when', () => {
     const confirmed = confirmPosition(unconfirmedPosition('Rent is fixed at £10,000 p.a.', TRAIL), 'u1', 1_700_000_000_000);
     const container = mount(
-      <NetPositionPanel netPosition={confirmed} onConfirm={() => {}} onAmend={() => {}} />,
+      <NetPositionPanel
+        netPosition={confirmed} onConfirm={() => {}} onAmend={() => {}} audience={TEST_AUDIENCE}
+      />,
     );
     expect(container.textContent).toMatch(/confirmed/i);
-    // "by you", never the stored id — see the attribution describe below.
-    expect(container.textContent).toContain('Confirmed by you');
+    // THE PERSON, never "by you" and never the stored id — see the
+    // attribution describe below for why this changed direction.
+    expect(container.textContent).toContain('Confirmed by A. Trainee');
     expect(container.textContent).not.toContain('u1');
     expect(container.textContent).toContain(new Date(1_700_000_000_000).toLocaleDateString());
   });
@@ -177,40 +181,81 @@ describe('NetPositionPanel — optional handlers (preview contexts)', () => {
   });
 });
 
-// Found by driving the real app in sub-project C's browser verification:
-// the panel printed "Confirmed by vzcsj71fs7mtalycwr on ..." at the reader.
-// It was the last place in the product showing a raw user id — the same
-// defect `noteLines` had already been fixed for on the export side, and for
-// the same two reasons: an opaque id communicates nothing, and a per-person
-// id implies the multi-user collaboration ruling R1 says this app must not
-// pretend to offer.
-describe('NetPositionPanel — attribution never shows a raw user id', () => {
+/*
+ * THIS DESCRIBE CHANGED DIRECTION (cross-stage seam review, M1), and the
+ * change is the finding rather than the chore.
+ *
+ * What it pinned was correct when it was written and false by Stage 4.
+ * Driving the real app in sub-project C found the panel printing
+ * "Confirmed by vzcsj71fs7mtalycwr on ..." at a reader — the last raw user id
+ * in the product. The fix was " by you" for ANY author, on ruling R1: this
+ * app is single-user, so the only person who could have confirmed a position
+ * is the person reading. R1 is superseded (`rulings.md`: "R-G1 / R1 - fully
+ * discharged, across Stages 4 and 5"). A matter is shared and
+ * `PUT …/net-position` stamps `req.actor!.id`, so partner P's confirmation
+ * carries P's id — and trainee T opening the same review read "Confirmed by
+ * you on 27 Aug 16:04" over something they had never seen.
+ *
+ * The id is STILL never printed. What replaces "you" is `actorPhrase`, the
+ * same resolver `dispositionLabel` uses on the line above this one.
+ */
+describe('NetPositionPanel — attribution names a person and never a raw user id', () => {
   const confirmed = {
     proposed: 'Six months notice.',
     state: 'confirmed' as const,
-    byUserId: 'vzcsj71fs7mtalycwr',
+    byUserId: 'u2',
     at: 1756300205000,
     trail: [],
   };
 
-  it('says "Confirmed by you", not the stored user id', () => {
-    const c = mount(<NetPositionPanel netPosition={confirmed} onOpenTrail={() => {}} />);
-    expect(c.textContent).toContain('Confirmed by you');
+  it('names the person who confirmed it, not the reader and not the stored id', () => {
+    const c = mount(
+      <NetPositionPanel netPosition={confirmed} onOpenTrail={() => {}} audience={TEST_AUDIENCE} />,
+    );
+    expect(c.textContent).toContain('Confirmed by R. Okafor');
+    expect(c.textContent).not.toContain('by you');
+    expect(c.textContent).not.toContain('u2');
+  });
+
+  it('names the person who rewrote it — a stronger claim than confirming', () => {
+    const c = mount(
+      <NetPositionPanel
+        netPosition={{ ...confirmed, amended: 'My wording.' }}
+        onOpenTrail={() => {}}
+        audience={TEST_AUDIENCE}
+      />,
+    );
+    expect(c.textContent).toContain('Amended by R. Okafor');
+    expect(c.textContent).not.toContain('by you');
+    expect(c.textContent).not.toContain('u2');
+  });
+
+  it('says an id it cannot resolve is one this workspace does not name', () => {
+    // NEVER the uuid, and never a guess. The sentence is true whether the
+    // person has left the firm or the directory simply has not loaded, which
+    // is exactly why `actorPhrase` does not say "no longer in this workspace".
+    const c = mount(
+      <NetPositionPanel
+        netPosition={{ ...confirmed, byUserId: 'vzcsj71fs7mtalycwr' }}
+        onOpenTrail={() => {}}
+        audience={TEST_AUDIENCE}
+      />,
+    );
+    expect(c.textContent).toContain('someone this workspace does not name');
     expect(c.textContent).not.toContain('vzcsj71fs7mtalycwr');
   });
 
-  it('says "Amended by you" for a position a person rewrote', () => {
-    const c = mount(<NetPositionPanel netPosition={{ ...confirmed, amended: 'My wording.' }} onOpenTrail={() => {}} />);
-    expect(c.textContent).toContain('Amended by you');
-    expect(c.textContent).not.toContain('vzcsj71fs7mtalycwr');
-  });
-
-  it('drops the actor entirely when none was recorded, rather than saying "an unknown user"', () => {
-    // "an unknown user" reads as "somebody else" — the exact implication R1
-    // forbids when there is only ever one local person.
+  it('says a position with NO recorded author is one the record does not name', () => {
+    // A different fact from the one above, and the two must not collapse:
+    // "the directory could not resolve this id" is about the directory,
+    // "there is no id" is about the record. The line is still rendered — an
+    // author line that disappears reads as "nobody confirmed this", beside a
+    // Confirmed badge saying somebody did.
     const { byUserId: _omit, ...noAuthor } = confirmed;
-    const c = mount(<NetPositionPanel netPosition={noAuthor} onOpenTrail={() => {}} />);
-    expect(c.textContent).toContain('Confirmed on');
+    const c = mount(
+      <NetPositionPanel netPosition={noAuthor} onOpenTrail={() => {}} audience={TEST_AUDIENCE} />,
+    );
+    expect(c.textContent).toContain('Confirmed by someone this record does not name');
     expect(c.textContent).not.toMatch(/unknown user/i);
     expect(c.textContent).not.toContain('by you');
   });

@@ -5,6 +5,8 @@ import {
   collectionExportLabel, safeFileName, truncationLabel,
   positionOutcomeLabel, positionOutcomeCounts,
   dispositionLabel, dispositionHistoryLine,
+  actorPhrase, UNRESOLVED_ACTOR, UNRESOLVED_ACTOR_SENTENCE,
+  UNNAMED_BY_RECORD, UNNAMED_BY_RECORD_SENTENCE,
 } from './findingOutcome';
 import {
   DISPOSITION_SHAPES, BY_A_STRANGER, HISTORY_EVENTS, RERUN_EVENT, TEST_AUDIENCE,
@@ -110,35 +112,62 @@ describe('verificationLabel', () => {
   });
 });
 
-describe('noteLines (Important 3 — spec section 6: "a flagged finding carries its flag and any note")', () => {
+/*
+ * THIS DESCRIBE CHANGED DIRECTION (cross-stage seam review, M3).
+ *
+ * `noteLines` used to emit `Note: <text>` with no author, on a docstring that
+ * said attribution could be rendered *"the day there is more than one person
+ * to attribute to"*. That day was Stage 4 and nothing came back. Two
+ * reviewers can now write contradictory notes on one clause — "Agreed with
+ * the partner - accept as drafted" and "Do not accept; escalate" — and an
+ * export rendering both unattributed is where that is least recoverable,
+ * since there is no card beside it to click. `dispositionLabel`, in the same
+ * module, names its actor.
+ *
+ * The raw id is still never printed; `actorPhrase` is what replaced it.
+ */
+describe('noteLines (spec section 6: "a flagged finding carries its flag and any note")', () => {
   it('returns nothing for a finding with no notes', () => {
-    expect(noteLines(finding('flagged'))).toEqual([]);
+    expect(noteLines(finding('flagged'), TEST_AUDIENCE)).toEqual([]);
   });
 
   it('returns nothing for a missing finding', () => {
-    expect(noteLines(undefined)).toEqual([]);
+    expect(noteLines(undefined, TEST_AUDIENCE)).toEqual([]);
   });
 
-  it('formats one note, attributed to who wrote it', () => {
+  it('names the person who wrote a note, never their raw id', () => {
     const f: Finding = {
       ...finding('flagged'),
       notes: [{ id: 'n1', findingId: 'x', text: 'Check this against the side letter.', byUserId: 'u1', at: 1 }],
     };
-    expect(noteLines(f)).toEqual(['Note: Check this against the side letter.']);
+    expect(noteLines(f, TEST_AUDIENCE))
+      .toEqual(['Note by A. Trainee: Check this against the side letter.']);
   });
 
-  it('formats every note on a finding, not just the first', () => {
+  it('tells two colleagues apart, which is the whole reason it names them', () => {
+    // The concrete failure M3 describes: two contradictory notes on one
+    // clause, read by a partner with no card beside them.
     const f: Finding = {
       ...finding('flagged'),
       notes: [
-        { id: 'n1', findingId: 'x', text: 'First note.', byUserId: 'u1', at: 1 },
-        { id: 'n2', findingId: 'x', text: 'Second note.', byUserId: 'u1', at: 2 },
+        { id: 'n1', findingId: 'x', text: 'Agreed with the partner - accept as drafted.', byUserId: 'u1', at: 1 },
+        { id: 'n2', findingId: 'x', text: 'Do not accept; escalate.', byUserId: 'u2', at: 2 },
       ],
     };
-    expect(noteLines(f)).toEqual([
-      'Note: First note.',
-      'Note: Second note.',
+    expect(noteLines(f, TEST_AUDIENCE)).toEqual([
+      'Note by A. Trainee: Agreed with the partner - accept as drafted.',
+      'Note by R. Okafor: Do not accept; escalate.',
     ]);
+  });
+
+  it('says an unresolvable author is one this workspace does not name', () => {
+    const f: Finding = {
+      ...finding('flagged'),
+      notes: [{ id: 'n1', findingId: 'x', text: 'Check the side letter.', byUserId: 'u9', at: 1 }],
+    };
+    expect(noteLines(f, TEST_AUDIENCE))
+      .toEqual(['Note by someone this workspace does not name: Check the side letter.']);
+    expect(noteLines(f, TEST_AUDIENCE)[0]).not.toContain('u9');
   });
 
   it('is not limited to flagged findings — a note on a verified finding still carries', () => {
@@ -146,7 +175,8 @@ describe('noteLines (Important 3 — spec section 6: "a flagged finding carries 
       ...finding('verified'),
       notes: [{ id: 'n1', findingId: 'x', text: 'Confirmed against the executed copy.', byUserId: 'u1', at: 1 }],
     };
-    expect(noteLines(f)).toEqual(['Note: Confirmed against the executed copy.']);
+    expect(noteLines(f, TEST_AUDIENCE))
+      .toEqual(['Note by A. Trainee: Confirmed against the executed copy.']);
   });
 });
 
@@ -258,26 +288,38 @@ describe('netPositionLabel', () => {
 });
 
 describe('netPositionAmendmentLabel', () => {
-  it('says a human wrote the text for an amended position', () => {
-    const pos = amendPosition(unconfirmedPosition('model text', trail), 'human text', 'u1', 1);
+  it('NAMES the person who rewrote the text — M3, and the strongest claim in an export', () => {
+    // An amended net position says a named person wrote every word of a
+    // paragraph no document contains. Unattributed beside a disposition line
+    // that names one, a reader cannot tell whether the two are the same
+    // person.
+    const pos = amendPosition(unconfirmedPosition('model text', trail), 'human text', 'u2', 1);
     const f = collectionFinding({ netPosition: pos });
-    expect(netPositionAmendmentLabel(f)).toMatch(/amend/i);
-    expect(netPositionAmendmentLabel(f)).toMatch(/person/i);
+    expect(netPositionAmendmentLabel(f, TEST_AUDIENCE))
+      .toBe('AMENDED NET POSITION: this text was rewritten by R. Okafor, not the model');
+  });
+
+  it('says an unresolvable amender is one this workspace does not name, never their id', () => {
+    const pos = amendPosition(unconfirmedPosition('model text', trail), 'human text', 'u9', 1);
+    const f = collectionFinding({ netPosition: pos });
+    expect(netPositionAmendmentLabel(f, TEST_AUDIENCE))
+      .toContain('someone this workspace does not name');
+    expect(netPositionAmendmentLabel(f, TEST_AUDIENCE)).not.toContain('u9');
   });
 
   it('does not say a person wrote it for a merely confirmed (unamended) position', () => {
     const pos = confirmPosition(unconfirmedPosition('model text', trail), 'u1', 1);
     const f = collectionFinding({ netPosition: pos });
-    expect(netPositionAmendmentLabel(f)).toBeNull();
+    expect(netPositionAmendmentLabel(f, TEST_AUDIENCE)).toBeNull();
   });
 
   it('does not say a person wrote it for an unconfirmed position', () => {
-    expect(netPositionAmendmentLabel(collectionFinding())).toBeNull();
+    expect(netPositionAmendmentLabel(collectionFinding(), TEST_AUDIENCE)).toBeNull();
   });
 
   it('returns null for a finding with no net position at all', () => {
     const f: Finding = { clauseId: 'c', status: 'done', summary: 's', citations: [], verification: { state: 'unchecked' }, notes: [] };
-    expect(netPositionAmendmentLabel(f)).toBeNull();
+    expect(netPositionAmendmentLabel(f, TEST_AUDIENCE)).toBeNull();
   });
 });
 
@@ -368,7 +410,7 @@ describe('a derivation does not outlive the output it described', () => {
 
   it('raises no net-position caveat on a finding that failed', () => {
     expect(netPositionLabel(stale('error'))).toBeNull();
-    expect(netPositionAmendmentLabel(stale('error'))).toBeNull();
+    expect(netPositionAmendmentLabel(stale('error'), TEST_AUDIENCE)).toBeNull();
   });
 
   it('exports no trail for a finding that failed', () => {
@@ -707,5 +749,41 @@ describe('dispositionHistoryLine', () => {
 
   it('never returns an empty string, even for an event with no reason', () => {
     expect(dispositionHistoryLine(HISTORY_EVENTS[1], TEST_AUDIENCE)).not.toBe('');
+  });
+});
+
+describe('actorPhrase — the one home for how this app names a person it cannot resolve (m1)', () => {
+  /*
+   * The sentence was written out as a literal at SEVEN sites across Stages 4
+   * and 5, with `CLAUDE.md` describing the agreement between them as a
+   * mechanism. It was not a mechanism; it was seven strings that happened to
+   * match — the state `uid()` reached at exactly this count before anybody
+   * extracted it. `actorPhrase` already existed and already took the
+   * audience; it is exported now, and the surfaces call it.
+   *
+   * `stage5abDoD.test.ts` holds the repo-wide half (nothing outside this
+   * module writes the sentence out). This holds the half a grep cannot see:
+   * that the two renderings of each fact really are ONE string, and that the
+   * two FACTS really are two.
+   */
+  it('renders each fact as one string in two cases, never two strings', () => {
+    const sentenceCase = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
+    expect(UNRESOLVED_ACTOR_SENTENCE).toBe(sentenceCase(UNRESOLVED_ACTOR));
+    expect(UNNAMED_BY_RECORD_SENTENCE).toBe(sentenceCase(UNNAMED_BY_RECORD));
+  });
+
+  it('keeps the two facts apart — the directory could not say, versus there is no id', () => {
+    // Collapsing them would make a statement about a person out of a failed
+    // fetch, or a statement about a directory out of a repaired record.
+    expect(UNRESOLVED_ACTOR).not.toBe(UNNAMED_BY_RECORD);
+    expect(UNRESOLVED_ACTOR).toContain('workspace');
+    expect(UNNAMED_BY_RECORD).toContain('record');
+  });
+
+  it('names a person it can resolve, and never an id it cannot', () => {
+    expect(actorPhrase('u1', TEST_AUDIENCE)).toBe('A. Trainee');
+    expect(actorPhrase('u9', TEST_AUDIENCE)).toBe(UNRESOLVED_ACTOR);
+    expect(actorPhrase('u9', TEST_AUDIENCE)).not.toContain('u9');
+    expect(actorPhrase(undefined, TEST_AUDIENCE)).toBe(UNNAMED_BY_RECORD);
   });
 });

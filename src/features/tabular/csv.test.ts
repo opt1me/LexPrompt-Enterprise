@@ -5,6 +5,14 @@ import {
   positionOutcomeLabel, dispositionLabel, dispositionsAsAtLine, dispositionsMayChangeLine,
   NO_EXPORT_CONTEXT, type ExportContext,
 } from '../../lib/findingOutcome';
+
+/** A context WITH a directory, for the assertions about attribution — the
+ *  loud fallback above proves what an export says with no directory, and
+ *  this proves what it says with one. */
+const EXPORT_CONTEXT: ExportContext = {
+  ...NO_EXPORT_CONTEXT, readAt: 1_700_000_000_000, audience: TEST_AUDIENCE,
+};
+
 import { DISPOSITION_SHAPES, TEST_AUDIENCE } from '../../test/dispositionShapes';
 
 /**
@@ -330,13 +338,15 @@ describe('buildTabularCsv', () => {
     expect(csv).not.toMatch(/\(d2\)/);
   });
 
-  it('exports the human\'s amended text in the CSV, and says a person amended it', () => {
-    const pos = amendPosition(unconfirmedPosition('Model draft position.', npTrail), 'Break on 3 months notice.', 'u1', 1);
+  it('exports the human\'s amended text in the CSV, and names who amended it', () => {
+    const pos = amendPosition(unconfirmedPosition('Model draft position.', npTrail), 'Break on 3 months notice.', 'u2', 1);
     const run = runWith({ 'clause-1': doneFinding({ summary: undefined, netPosition: pos }) });
-    const csv = buildTabularCsv(run, docs);
+    const csv = buildTabularCsv(run, docs, EXPORT_CONTEXT);
     expect(csv).toContain('Break on 3 months notice.');
     expect(csv).not.toContain('Model draft position.');
-    expect(csv).toMatch(/amend.*person|person.*amend/i);
+    // M3: the person, never "a person" and never the raw id.
+    expect(csv).toContain('rewritten by R. Okafor');
+    expect(csv).not.toContain('u2');
   });
 
   // Important 3 (spec §6: "a flagged finding carries its flag and any
@@ -365,7 +375,12 @@ describe('buildTabularCsv', () => {
     });
     const docxNotes = buildReportRows(run, 'doc-1')[0].notes;
     const csv = buildTabularCsv(run, docs);
-    expect(docxNotes).toEqual(['Note: Cross-check clause 14.2.']);
+    // The SAME wording from both, with no directory in hand — which is the
+    // point of `noteLines` taking a REQUIRED audience: an optional one would
+    // give the two exporters an attributed and an unattributed form to
+    // disagree with.
+    expect(docxNotes)
+      .toEqual(['Note by someone this workspace does not name: Cross-check clause 14.2.']);
     for (const noteLine of docxNotes) {
       expect(csv).toContain(noteLine);
     }

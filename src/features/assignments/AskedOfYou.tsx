@@ -1,6 +1,8 @@
 import React from 'react';
 import type { AssignmentView } from '@lexprompt/core';
-import type { DispositionAudience } from '../../lib/findingOutcome';
+import {
+  UNRESOLVED_ACTOR_SENTENCE, type DispositionAudience,
+} from '../../lib/findingOutcome';
 
 export interface AskedOfYouProps {
   /** The OPEN requests addressed to this browser's own user, in this review.
@@ -122,8 +124,7 @@ export function AskedOfYou({
         {assignments.map(a => {
           // NEVER an invented name and never a raw id — the rule
           // `dispositionLabel` follows for an actor (P32, R-GP5).
-          const asker = audience?.nameOf(a.assignedByUserId)
-            ?? 'Someone this workspace does not name';
+          const asker = audience?.nameOf(a.assignedByUserId) ?? UNRESOLVED_ACTOR_SENTENCE;
           return (
             <li key={a.id} className="space-y-1">
               <p className="font-ui text-ui-sm text-ink-2">

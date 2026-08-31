@@ -165,18 +165,50 @@ describe('one home for every piece of wording, still', () => {
       .toEqual(['src/lib/loadError.ts']);
   });
 
-  it('has exactly one home for the unnamed-person wording, across four surfaces', () => {
-    // The activity feed, the presence roster, the assignee chip and
-    // `dispositionLabel` all render an id the directory does not hold. Two
-    // wordings for one fact is how they come to disagree — so the STRING is
-    // the same everywhere, checked rather than trusted.
-    const users = grepRepo(/does not name/i, WEB_SOURCES);
-    expect(users).toContain('src/features/assignments/AssigneeChip.tsx');
-    expect(users).toContain('src/components/PresenceRoster.tsx');
-    expect(users).toContain('src/lib/findingOutcome.ts');
-    for (const file of users) {
-      expect(codeOf(at(file)), file).toMatch(/this (workspace|record) does not name/i);
+  it('has exactly one home for the unnamed-person wording, and it is a constant now', () => {
+    /*
+     * THIS CHANGED DIRECTION (cross-stage seam review, m1), and its own title
+     * is why. It said "one home" and then asserted the STRING appeared in
+     * three named files, checking that the copies agreed rather than that
+     * there were none — which is agreement by coincidence, the state `uid()`
+     * reached at seven copies before anybody extracted it. The sentence was
+     * at seven sites across Stages 4 and 5.
+     *
+     * `actorPhrase` already existed, already took the audience, and already
+     * held both wordings. It is exported now, with `UNRESOLVED_ACTOR` and
+     * `UNNAMED_BY_RECORD` (and their sentence-initial forms) beside it, and
+     * the surfaces call it or name the constant.
+     *
+     * TWO facts, two strings, deliberately, and that half is unchanged: "this
+     * RECORD does not name" for a missing id, "this WORKSPACE does not name"
+     * for one the directory could not resolve. A file may state either only
+     * by importing it.
+     */
+    // ANY string literal of the sentence, in any position — `= '…'`,
+    // `?? '…'`, an argument, a JSX attribute. An earlier draft of this scan
+    // anchored on `= '` and passed over `name ?? 'Someone this workspace does
+    // not name'`, which is the exact shape the seven copies had.
+    const declarations = grepRepo(
+      /['"`](?:S|s)omeone this (?:workspace|record) does not name/, WEB_SOURCES);
+    expect(declarations, 'the unnamed-person sentence is written out somewhere other than '
+      + 'findingOutcome.ts — two wordings for one fact is how they come to disagree')
+      .toEqual(['src/lib/findingOutcome.ts']);
+
+    // …and the surfaces still SAY it, through the constants. A guard that
+    // only forbade the literal would pass over a screen that had stopped
+    // naming the fact at all.
+    for (const file of [
+      'src/features/assignments/AssigneeChip.tsx', 'src/components/PresenceRoster.tsx',
+      'src/features/matters/MatterActivity.tsx', 'src/features/review/FindingCard.tsx',
+      'src/features/review/exportHistoryCsv.ts',
+    ]) {
+      expect(codeOf(at(file)), file)
+        .toMatch(/UNRESOLVED_ACTOR|UNNAMED_BY_RECORD|actorPhrase/);
     }
+    // The sanity half: both wordings really are declared, in that one home.
+    const home = codeOf(at('src/lib/findingOutcome.ts'));
+    expect(home).toMatch(/this workspace does not name/i);
+    expect(home).toMatch(/this record does not name/i);
   });
 });
 

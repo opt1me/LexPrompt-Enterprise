@@ -24,24 +24,37 @@ describe('StandardPositionField — provenance (spec §8)', () => {
     expect(c.textContent).not.toMatch(/reviewed by you/i);
   });
 
-  it('says an AI-drafted position a human accepted was reviewed by them', () => {
+  /*
+   * "a person", NOT "you" — cross-stage seam review, m6, and the two cases
+   * below changed direction with it.
+   *
+   * They pinned "reviewed by you" / "written by you", which was true while a
+   * playbook belonged to one browser. Under Stage 4 a playbook is shared, so
+   * the second person to open a clause read "Written by you" over a
+   * colleague's words. Unlike `NetPositionPanel` and `VersionHistory`, this
+   * cannot be fixed by resolving an id: `StandardPosition` carries no author
+   * at all, so the honest line says what the record knows and no more.
+   */
+  it('says an AI-drafted position a human accepted was reviewed by a person', () => {
     const c = mount(
       <StandardPositionField
         position={{ text: 'x', origin: 'ai-drafted', reviewedByHuman: true }}
         onChange={() => {}}
       />,
     );
-    expect(c.textContent).toMatch(/drafted by AI, reviewed by you/i);
+    expect(c.textContent).toMatch(/drafted by AI, reviewed by a person/i);
+    expect(c.textContent).not.toMatch(/by you/i);
   });
 
-  it('says an authored position was written by you', () => {
+  it('says an authored position was written by a person, never by the reader', () => {
     const c = mount(
       <StandardPositionField
         position={{ text: 'x', origin: 'authored', reviewedByHuman: true }}
         onChange={() => {}}
       />,
     );
-    expect(c.textContent).toMatch(/written by you/i);
+    expect(c.textContent).toMatch(/written by a person/i);
+    expect(c.textContent).not.toMatch(/by you/i);
   });
 
   it('names where a learned position came from', () => {

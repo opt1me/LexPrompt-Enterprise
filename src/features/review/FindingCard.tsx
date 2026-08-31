@@ -20,6 +20,7 @@ import { mayApplyNow, sameCell, sameDisposition } from './pendingUpdate';
 import { verificationFromDisposition } from '../../lib/api/findings';
 import {
   dispositionLabel, heldUpdateLine, isVerifiable, type DispositionAudience,
+  UNRESOLVED_ACTOR, UNRESOLVED_ACTOR_SENTENCE,
 } from '../../lib/findingOutcome';
 import { formatInstant } from '../../lib/instant';
 import { assignmentParty, isPartyTo } from '../../lib/assignmentParty';
@@ -534,6 +535,10 @@ export function FindingCard({
           onConfirm={onConfirmNetPosition}
           onAmend={onAmendNetPosition}
           onOpenTrail={() => setTrailOpen(true)}
+          // M1: this card already held the resolver and passed it to the
+          // history panel, the assignee chip and the asker lines, and not to
+          // the one panel that was rendering "by you" for everybody.
+          audience={audience}
         />
 
         {finding && (
@@ -661,10 +666,10 @@ export function FindingCard({
               // and the button, from one comparison rather than two.
               const party = assignmentParty(a, localUserId);
               const mine = party === 'assignee';
-              const asker = audience.nameOf(a.assignedByUserId)
-                ?? 'Someone this workspace does not name';
-              const asked = audience.nameOf(a.assigneeUserId)
-                ?? 'someone this workspace does not name';
+              // ONE wording, imported. Sentence-initial and mid-sentence
+              // are two renderings of the same string, not two strings.
+              const asker = audience.nameOf(a.assignedByUserId) ?? UNRESOLVED_ACTOR_SENTENCE;
+              const asked = audience.nameOf(a.assigneeUserId) ?? UNRESOLVED_ACTOR;
               return (
                 <div key={a.id} className="space-y-1">
                   <p data-assignment={a.id} className="font-ui text-ui-sm text-ink-2">
@@ -754,6 +759,7 @@ export function FindingCard({
           stale={stale}
           onConfirm={onConfirmNetPosition}
           onAmend={onAmendNetPosition}
+          audience={audience}
         />
       )}
     </div>

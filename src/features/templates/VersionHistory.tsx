@@ -2,6 +2,7 @@ import React from 'react';
 import type { PlaybookVersion } from '../../types';
 import { Modal } from '../../components/Modal';
 import { LoadErrorPanel } from '../../components/LoadErrorPanel';
+import { actorPhrase, type DispositionAudience } from '../../lib/findingOutcome';
 
 export interface VersionHistoryProps {
   /** Newest first, as `listVersions` returns them. */
@@ -28,6 +29,15 @@ export interface VersionHistoryProps {
    *  has not gathered reviews gets the same honest "not used yet" for every
    *  version, rather than this component guessing. */
   matterNamesByVersion?: Record<string, string[]>;
+  /**
+   * How a `publishedByUserId` becomes a name — M2, and the reason the
+   * component doc comment below was rewritten.
+   *
+   * Optional on the same terms as every other audience prop in this app: a
+   * caller with no directory gets a sentence saying no name is available,
+   * never an invented one and never a raw uuid.
+   */
+  audience?: DispositionAudience;
 }
 
 /**
@@ -43,19 +53,40 @@ export interface VersionHistoryProps {
  * file (matter usage per version, and the review header's link into it)
  * instead of replacing a temporary block. Task 9A deliberately omitted two
  * things, both added here: `matterNamesByVersion`, and each version's
- * author. The author is resolved to "you" rather than printed as the raw
- * `publishedByUserId` it is stored as — this app is single-user (ruling
- * R1: identity fields are schema-ready but nothing routes an assignment to
- * anyone else), so the one local profile that could have published a
- * version always is it, and printing the id instead is a defect this
- * project has already shipped once and fixed (`NetPositionPanel`, commit
- * cd89c27: "Confirmed by vzcsj71fs7mtalycwr" reached a reader). A version
- * with no recorded author (pre-migration data) says nothing about who,
- * rather than inventing "an unknown user" — which reads as "somebody else",
- * the very implication R1 forbids.
+ * author.
+ *
+ * ## THE AUTHOR IS NAMED, AND THIS IS THE SCREEN WHERE THAT MATTERS MOST
+ *
+ * Every row used to read "Published by you" whenever `publishedByUserId` was
+ * set, justified by ruling R1 — *"this app is single-user … so the one local
+ * profile that could have published a version always is it"*. That reasoning
+ * expired in Stage 4 and this screen is the worst place for it to have
+ * survived: publishing is the ONE `partner` write in the entire route table
+ * (`POST /v1/playbooks/:id/versions`), so a reviewer cannot publish and a
+ * partner can, which makes the version history the one screen where the
+ * author is GUARANTEED to sometimes be somebody other than the reader. A
+ * reviewer opening it read "v3 … Published by you" over a partner's changed
+ * standard position, with no way to find who actually did it.
+ *
+ * The raw `publishedByUserId` is still never printed — that is a defect this
+ * project shipped once and fixed (`NetPositionPanel`, commit cd89c27:
+ * "Confirmed by vzcsj71fs7mtalycwr" reached a reader). `actorPhrase` is the
+ * third option and the one both rules allow: a name, or a sentence saying no
+ * name is available. A version with no recorded author at all (pre-migration
+ * data) is a statement about the RECORD, which `actorPhrase` says in its own
+ * words rather than this file inventing a second wording for it.
  */
+/** The audience this modal falls back to when its caller hands it none. It
+ *  names NOBODY, for the reason `FindingCard`'s copy of this gives: honest
+ *  rather than helpful, and never a name somebody did not have. */
+const NO_DIRECTORY: DispositionAudience = {
+  nameOf: () => undefined,
+  initialsOf: () => undefined,
+  timeOf: (at: number) => new Date(at).toLocaleString(),
+};
+
 export function VersionHistory({
-  versions, error, onRetry, onClose, loading, matterNamesByVersion,
+  versions, error, onRetry, onClose, loading, matterNamesByVersion, audience,
 }: VersionHistoryProps) {
   return (
     <Modal isOpen title="Version history" onClose={onClose} size="lg">
@@ -96,13 +127,15 @@ export function VersionHistory({
                       {new Date(v.publishedAt).toLocaleString()}
                     </span>
                     <span className="font-mono text-pin text-ink-4">{v.clauses.length} clauses</span>
-                    {/* "Published by you", never the raw `publishedByUserId` —
-                       see the component doc comment / cd89c27. A version with
-                       no recorded author (pre-migration data) says nothing
-                       about who, rather than guessing. */}
-                    {v.publishedByUserId && (
-                      <span className="font-ui text-meta text-ink-4">Published by you</span>
-                    )}
+                    {/* The PERSON, never "you" and never the raw
+                       `publishedByUserId` — see the component doc comment.
+                       Rendered for every version, including one whose author
+                       the record does not hold: an author line that
+                       disappears reads as "nobody published this", which is
+                       the blank-CSV-cell defect at a new surface. */}
+                    <span className="font-ui text-meta text-ink-4">
+                      Published by {actorPhrase(v.publishedByUserId, audience ?? NO_DIRECTORY)}
+                    </span>
                   </div>
                   {/* v1 legitimately has no summary — there was nothing for it to
                      have changed from — and saying so reads as the fact it is,
