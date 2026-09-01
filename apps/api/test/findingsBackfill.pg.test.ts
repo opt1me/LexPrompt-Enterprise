@@ -187,7 +187,8 @@ describe('every human judgement lands on the key it was recorded under', () => {
       });
       await backfillFindings(t);
       const notes = await t.query<{ id: string; findings_key: string; clause_id: string; text: string; at: Date }>(
-        'select id, findings_key, clause_id, text, at from note order by id');
+        `select id, findings_key, clause_id, text, at from note where review_id = 'br1'
+         order by id`);
       expect(notes.map(n => [n.id, n.findings_key, n.clause_id])).toEqual([
         ['n1', 'coll-1', 'c1'],
         ['n2', 'coll-1', 'c1'],
@@ -220,7 +221,8 @@ describe('every human judgement lands on the key it was recorded under', () => {
       });
       await backfillFindings(t);
       const rows = await t.query<{ clause_id: string; net_position: unknown }>(
-        'select clause_id, net_position from finding order by clause_id');
+        `select clause_id, net_position from finding where review_id = 'br1'
+         order by clause_id`);
       expect(rows[0].net_position).toEqual(netPosition);
       expect(rows[1].net_position).toBeNull();
       expect(rows[2].net_position).toBeNull();
@@ -238,7 +240,8 @@ describe('every human judgement lands on the key it was recorded under', () => {
         'coll-1': { c1: finding() },
       });
       await backfillFindings(t);
-      const rows = await t.query<{ findings_key: string }>('select findings_key from finding');
+      const rows = await t.query<{ findings_key: string }>(
+        "select findings_key from finding where review_id = 'br1'");
       expect(rows.map(r => r.findings_key)).toEqual(['coll-1']);
     }, migratorDb());
   });
@@ -254,7 +257,7 @@ describe('every human judgement lands on the key it was recorded under', () => {
       });
       await backfillFindings(t);
       const rows = await t.query<{ clause_id: string; status: string }>(
-        'select clause_id, status from finding order by clause_id');
+        "select clause_id, status from finding where review_id = 'br1' order by clause_id");
       expect(rows.map(r => r.status)).toEqual(['pending', 'running', 'cancelled']);
     }, migratorDb());
   });
@@ -280,9 +283,10 @@ describe('it refuses rather than guesses, and changes nothing when it does', () 
     // Inside a savepoint, so the rollback the real migration gets from its
     // own transaction is the rollback this assertion observes.
     await expect(t.tx(tt => backfillFindings(tt))).rejects.toThrow(pattern);
-    expect(await t.query('select 1 from finding')).toEqual([]);
-    expect(await t.query('select 1 from finding_disposition')).toEqual([]);
-    expect(await t.query('select 1 from note')).toEqual([]);
+    expect(await t.query("select 1 from finding where review_id = 'br1'")).toEqual([]);
+    expect(await t.query(
+      "select 1 from finding_disposition where review_id = 'br1'")).toEqual([]);
+    expect(await t.query("select 1 from note where review_id = 'br1'")).toEqual([]);
     expect(await t.query('select 1 from finding_migration_census')).toEqual([]);
   };
 

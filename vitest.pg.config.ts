@@ -22,6 +22,10 @@ export default defineConfig({
     environment: 'node',
     globals: false,
     include: ['apps/api/test/**/*.pg.test.ts'],
+    // Checks, once, that the application tables are empty — a precondition a
+    // large part of this suite has always had and never stated. See the file
+    // for why the backfill suites cannot simply be scoped instead.
+    setupFiles: ['apps/api/test/helpers/requireCleanDb.ts'],
     // One database, one schema: these files share a pool and each test rolls
     // its own transaction back, so they must not race each other.
     fileParallelism: false,

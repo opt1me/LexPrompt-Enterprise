@@ -243,7 +243,7 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
 
       const events = await t.query<{ from_state: string; to_state: string; cause: string; at: Date }>(
         `select from_state, to_state, cause, at from finding_disposition_event
-         where clause_id = 'c1' order by id`);
+         where review_id = 'dr1' and clause_id = 'c1' order by id`);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({ from_state: 'unchecked', to_state: 'verified', cause: 'human' });
       // The human's own instant, not the moment their browser autosaved.
@@ -261,7 +261,8 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
         .rejects.toThrow(/needs a reason/);
       // Nothing was written — not the state, and not a half-history.
       expect((await dispositionFor(t, key('c1'), WS))?.state).toBe('unchecked');
-      expect(await t.query('select 1 from finding_disposition_event')).toEqual([]);
+      expect(await t.query(
+        "select 1 from finding_disposition_event where review_id = 'dr1'")).toEqual([]);
     });
   });
 
@@ -303,7 +304,8 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
       const now = await dispositionFor(t, key('c1'), WS);
       expect(now?.state).toBe('rejected');
       expect(now?.by_user_id).toBe(partner.id);
-      expect(await t.query('select 1 from finding_disposition_event')).toHaveLength(1);
+      expect(await t.query(
+        "select 1 from finding_disposition_event where review_id = 'dr1'")).toHaveLength(1);
     });
   });
 
@@ -318,7 +320,8 @@ describe('setDisposition is the only writer, and it writes both rows or neither'
       expect(after.by_user_id).toBe(partner.id);
       // …and the trainee is still in the history, which is where they belong.
       const events = await t.query<{ by_user_id: string }>(
-        'select by_user_id from finding_disposition_event order by id');
+        `select by_user_id from finding_disposition_event
+         where review_id = 'dr1' order by id`);
       expect(events.map(e => e.by_user_id)).toEqual([trainee.id, partner.id]);
     });
   });
@@ -376,7 +379,8 @@ describe('a disposition belongs to the finding it is about', () => {
       await ensureDisposition(t, key('c1'), WS);
       await setDisposition(t, key('c1'), { state: 'verified' }, 'human', actor, new Date(), 1);
       await t.query("delete from finding where review_id = 'dr1' and clause_id = 'c1'");
-      expect(await t.query('select 1 from finding_disposition')).toEqual([]);
+      expect(await t.query(
+        "select 1 from finding_disposition where review_id = 'dr1'")).toEqual([]);
       // THE HISTORY DOES NOT (migration 009). This assertion used to read
       // `.toEqual([])` for the event table too, and that was the defect: 006
       // calls this table evidence BECAUSE no application role may delete
@@ -387,7 +391,8 @@ describe('a disposition belongs to the finding it is about', () => {
       // Since migration 011 no application role holds `delete on finding`
       // either, so the cascade is reachable only from the schema owner —
       // which is why this test runs on the migrator connection.
-      expect(await t.query('select 1 from finding_disposition_event')).toHaveLength(1);
+      expect(await t.query(
+        "select 1 from finding_disposition_event where review_id = 'dr1'")).toHaveLength(1);
     }, migratorDb());
   });
 
@@ -398,7 +403,8 @@ describe('a disposition belongs to the finding it is about', () => {
       await ensureDisposition(t, key('c1'), WS);
       await setDisposition(t, key('c1'), { state: 'verified' }, 'human', actor, new Date(), 1);
       await t.query("delete from review where id = 'dr1'");
-      expect(await t.query('select 1 from finding_disposition_event')).toEqual([]);
+      expect(await t.query(
+        "select 1 from finding_disposition_event where review_id = 'dr1'")).toEqual([]);
     });
   });
 
@@ -417,7 +423,8 @@ describe('a disposition belongs to the finding it is about', () => {
       await ensureDisposition(t, key('c1'), WS);
       const again = await ensureDisposition(t, key('c1'), WS);
       expect(again).toMatchObject({ state: 'unchecked', changed_count: 0, by_user_id: null, at: null });
-      expect(await t.query('select 1 from finding_disposition_event')).toEqual([]);
+      expect(await t.query(
+        "select 1 from finding_disposition_event where review_id = 'dr1'")).toEqual([]);
     });
   });
 });

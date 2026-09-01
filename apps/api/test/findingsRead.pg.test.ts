@@ -432,7 +432,7 @@ describe('a stale whole-review save can no longer destroy an authoritative row',
         d2: { c1: finding({ verification: { state: 'verified', byUserId: HUMAN,
           at: 1_700_000_030_000 } }) },
       }, HUMAN);
-      expect(await t.query('select 1 from finding')).toHaveLength(2);
+      expect(await t.query("select 1 from finding where review_id = 'r1'")).toHaveLength(2);
 
       // The stale save: the same review again, saying nothing about findings
       // — which is now the ONLY thing a whole-review save can say about them.
@@ -442,7 +442,7 @@ describe('a stale whole-review save can no longer destroy an authoritative row',
       });
 
       const keys = await t.query<{ findings_key: string }>(
-        'select findings_key from finding order by findings_key');
+        "select findings_key from finding where review_id = 'r1' order by findings_key");
       expect(keys.map(k => k.findings_key)).toEqual(['d1', 'd2']);
       const disposition = await t.query<{ state: string }>(
         "select state from finding_disposition where findings_key = 'd2'");
