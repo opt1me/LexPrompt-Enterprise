@@ -118,6 +118,18 @@ afterEach(async () => {
     await db.query('delete from event where review_id = $1', [reviewId]);
     await db.query('delete from review where id = $1', [reviewId]);
   }
+  // AND THE MATTER THOSE REVIEWS HUNG OFF. This file is one of the few that
+  // COMMITS — the feed's whole subject is an append made on another
+  // connection, which a rolled-back transaction cannot express — so whatever
+  // it does not delete, it leaves in the database for good.
+  //
+  // It did not delete this, so every run left one `feed-m1` row behind. It
+  // showed up as a stray "Feed suite" matter in the running app, and it is
+  // what tripped `requireCleanDb` on the first clean run after that check was
+  // added: the suite was polluting the database its own siblings depend on
+  // being empty. Re-seeded by `seedReview` on the next test, so deleting it
+  // here costs nothing.
+  await db.query("delete from matter where id = 'feed-m1'");
 });
 
 describe('the outbox is the delivery', () => {

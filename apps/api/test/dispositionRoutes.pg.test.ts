@@ -127,7 +127,7 @@ describe('a disposition is a person s request, refused when stale', () => {
       expect(res.json().current).toMatchObject({ state: 'verified', version: 2, byUserId: HUMAN });
 
       const stored = await t.query<{ state: string; changed_count: number }>(
-        "select state, changed_count from finding_disposition where review_id = 'dr1'");
+        "select state, changed_count from finding_disposition where review_id = 'r1'");
       expect(stored[0]).toMatchObject({ state: 'verified', changed_count: 1 });
       await h.app.close();
     });
@@ -142,7 +142,7 @@ describe('a disposition is a person s request, refused when stale', () => {
       expect(res.statusCode).toBe(400);
       expect(res.json().error.message).toMatch(/reason/);
       expect(await t.query(
-        "select 1 from finding_disposition_event where review_id = 'dr1'")).toEqual([]);
+        "select 1 from finding_disposition_event where review_id = 'r1'")).toEqual([]);
       await h.app.close();
     });
   });
@@ -257,7 +257,7 @@ describe('a note is a person s remark about the clause', () => {
       await aFinding(t);
       const h = harness(t);
       expect((await h.send('POST', NOTES, { text: '   ' })).statusCode).toBe(400);
-      expect(await t.query("select 1 from note where review_id = 'dr1'")).toEqual([]);
+      expect(await t.query("select 1 from note where review_id = 'r1'")).toEqual([]);
       await h.app.close();
     });
   });
@@ -273,7 +273,7 @@ describe('a note is a person s remark about the clause', () => {
       await h.ok('PUT', DISPOSITION, { state: 'verified', version: 1 });
       await h.ok('PUT', DISPOSITION,
         { state: 'rejected', reason: 'Wrong clause.', version: 2 });
-      expect(await t.query("select 1 from note where review_id = 'dr1'")).toHaveLength(1);
+      expect(await t.query("select 1 from note where review_id = 'r1'")).toHaveLength(1);
       await h.app.close();
     });
   });
@@ -285,7 +285,7 @@ describe('a note is a person s remark about the clause', () => {
       const h = harness(t);
       const res = await h.send('POST', '/v1/reviews/r1/findings/d9/c1/notes', { text: 'x' });
       expect(res.statusCode).toBe(404);
-      expect(await t.query("select 1 from note where review_id = 'dr1'")).toEqual([]);
+      expect(await t.query("select 1 from note where review_id = 'r1'")).toEqual([]);
       await h.app.close();
     });
   });
