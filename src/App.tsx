@@ -3316,9 +3316,28 @@ function AppShell({ signIn }: { signIn: () => void }) {
     setVerifyBusyKey(findingKey(docId, clauseId));
     try {
       const note = await addNote(current.id, key, clauseId, text);
-      applyToFinding(docId, clauseId, finding => ({
-        ...finding, notes: [...finding.notes, note],
-      }));
+      // BY ID, exactly as `applyPush`'s `note.added` handler appends by id,
+      // and for a reason that only shows up against a real server: the
+      // server broadcasts the note as it writes it, so the socket frame can
+      // — and routinely does — arrive BEFORE this `await` resolves. The push
+      // handler then appends the note (its guard finds nothing to match),
+      // and this line appended it a second time. One click, two identical
+      // remarks on the card, same id, same timestamp, for the rest of the
+      // session; a reload showed the one note the server actually holds.
+      //
+      // Observed in a browser. No unit test could see it: it needs a real
+      // socket racing a real HTTP response, and every test that exercises
+      // this path resolves `addNote` before any frame arrives.
+      //
+      // Not fixed by dropping this append and trusting the push. A note the
+      // writer cannot see until a frame arrives is the silent half of the
+      // same defect, and the socket may be stale — `handleVerify` and this
+      // are await-then-apply for that reason.
+      applyToFinding(docId, clauseId, finding => (
+        finding.notes.some(n => n.id === note.id)
+          ? finding
+          : { ...finding, notes: [...finding.notes, note] }
+      ));
     } catch (e) {
       notify(e instanceof Error ? `This note was not saved: ${e.message}` : 'This note was not saved.', 'error');
     } finally {

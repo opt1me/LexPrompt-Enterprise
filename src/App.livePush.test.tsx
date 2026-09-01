@@ -430,6 +430,73 @@ describe('someone else s write arrives, and the card changes without a reload', 
     expect(occurrences).toBe(1);
   });
 
+  it("does not write a note twice when the server's own broadcast beats its HTTP reply", async () => {
+    /*
+     * THE RACE, AND WHY ONLY A BROWSER FOUND IT.
+     *
+     * The server broadcasts `note.added` as it writes the note, so the socket
+     * frame can — and against a real server routinely does — arrive BEFORE
+     * `addNote`'s HTTP response resolves. `applyPush` appends by id and finds
+     * nothing to match, so it appends; `handleAddNote` then appended
+     * unconditionally, so the same note landed a second time. One click, two
+     * identical remarks on the card, same id, same timestamp, for the rest of
+     * the session. A reload showed the one note the server actually holds,
+     * which is what makes it a display defect rather than a data one — but an
+     * export taken from that screen would have carried the duplicate, and a
+     * note is a person's own words on the record.
+     *
+     * Observed live. Every existing test resolves `addNote` before any frame
+     * arrives, which is precisely the ordering that hides this.
+     *
+     * THE MUTATION: drop the `notes.some(n => n.id === note.id)` guard in
+     * `handleAddNote` and this goes red at 2.
+     */
+    await openReview();
+
+    const NOTE = {
+      id: 'n-race', findingId: 'd1::c1', text: 'Chase the side letter.',
+      byUserId: 'u1', at: T_1604,
+    };
+
+    // `addNote` is HELD, so the frame is delivered while the write is still
+    // in flight — the actual ordering, not a simulation of its effect.
+    let replyWithNote = (): void => {};
+    addNoteMock.mockImplementation(() => new Promise((resolve) => {
+      replyWithNote = () => resolve(NOTE);
+    }));
+
+    const textareas = container.querySelectorAll('textarea');
+    const textarea = textareas[textareas.length - 1] as HTMLTextAreaElement;
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, 'value')!.set!;
+      setter.call(textarea, NOTE.text);
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => {
+      const add = Array.from(container.querySelectorAll('button'))
+        .filter(b => /Add note/i.test(b.textContent || ''));
+      (add[add.length - 1] as HTMLButtonElement).click();
+    });
+    await flush();
+    expect(addNoteMock).toHaveBeenCalled();
+
+    // The broadcast lands first.
+    await push({
+      id: 310, type: 'note.added', workspaceId: 'ws-1', matterId: 'm1', reviewId: 'r1',
+      at: T_1604,
+      payload: { reviewId: 'r1', findingsKey: 'd1', clauseId: 'c1', note: NOTE },
+    } as unknown as AppEvent);
+    expect(container.textContent).toContain(NOTE.text);
+
+    // …then the write resolves, carrying the note it already has.
+    await act(async () => { replyWithNote(); await Promise.resolve(); });
+    await flush();
+
+    const occurrences = (container.textContent ?? '').split(NOTE.text).length - 1;
+    expect(occurrences, 'one click must leave one remark on the record').toBe(1);
+  });
+
   it('re-reads the findings and SAYS SO when the cursor fell outside the window', async () => {
     await openReview();
     const readsBefore = getFindingsMock.mock.calls.length;
