@@ -58,10 +58,24 @@ vi.mock('./lib/db/blobs', () => ({
   getDocumentBlob: (...args: unknown[]) => getDocumentBlobMock(...args),
 }));
 
+const saveReviewMock = vi.fn();
+
 vi.mock('./lib/db/reviews', () => ({
   listReviews: (...args: unknown[]) => listReviewsMock(...args),
   getReview: (...args: unknown[]) => getReviewMock(...args),
-  saveReview: vi.fn().mockResolvedValue(undefined),
+  saveReview: (...args: unknown[]) => saveReviewMock(...args),
+}));
+
+/**
+ * `GET /v1/reviews/:id/assignments` — the ONE call that asks the API about a
+ * review by id the instant `run.id` becomes readable. Named here because the
+ * last block in this file is about WHEN it is allowed to happen.
+ */
+const getReviewAssignmentsMock = vi.fn();
+
+vi.mock('./lib/api/assignments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/assignments')>()),
+  getReviewAssignments: (...args: unknown[]) => getReviewAssignmentsMock(...args),
 }));
 
 vi.mock('./lib/db/profile', () => ({
@@ -343,6 +357,8 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     cancelRunMock.mockReset().mockResolvedValue({ ...RUNNING_RUN, state: 'cancelling' });
     getFindingsMock.mockReset().mockResolvedValue(
       { findings: {}, dispositionVersions: {}, version: 1 });
+    saveReviewMock.mockReset().mockResolvedValue(undefined);
+    getReviewAssignmentsMock.mockReset().mockResolvedValue([]);
 
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -576,5 +592,50 @@ describe('App — auth-error redirect vs. a reopened review\'s stale authError f
     // the raw finding text verbatim.
     expect(container.querySelector('[data-service-config-error]')).toBeTruthy();
     expect(container.textContent).toContain(SERVICE_CONFIG_HINT);
+  });
+
+  // --- The review row has to EXIST before anything asks the API about it ---
+
+  it("does not ask for a freshly started review's assignments until its row has been written", async () => {
+    // WHAT THIS IS ABOUT. `handleStartRun` calls `setRun` before it awaits
+    // `saveReview`, deliberately, so the results view is on screen during the
+    // round trip. That made `run.id` readable before the server had ever
+    // heard of it, and the effect that reads open assignments fired straight
+    // into `GET /v1/reviews/:id/assignments` — which answers 404 ("LexPrompt
+    // has no such review in your workspace"), correctly, for a review that
+    // was about to exist. The panel then rendered its error branch ABOVE a
+    // review running perfectly well, and — the quiet half — emptied the
+    // assignments list for the rest of the run, so a colleague's request
+    // would never have appeared. Seen in a browser against the live stack.
+    getWorkspaceSettingsMock.mockResolvedValue({ modelChoiceId: 'test/model', concurrency: 5, version: 1, updatedAt: 1 });
+    listPlaybooksMock.mockResolvedValue([makePlaybook()]);
+
+    // `saveReview` is held OPEN. Everything between `setRun` and this
+    // resolving is exactly the window the defect lived in, so the assertion
+    // below is made while the window is held open rather than raced.
+    let writeRow = (): void => {};
+    saveReviewMock.mockImplementation(() => new Promise<void>((resolve) => {
+      writeRow = () => resolve();
+    }));
+
+    act(() => { root.render(<App />); });
+    await flush();
+    clickNav(container, 'Playbooks');
+    await flush();
+    clickByText(container, /^Run Basic Contract Review$/);
+    await flush();
+
+    // The run is on screen — `run.id` is readable — and the row is not
+    // written yet. Nothing may have asked the server about it.
+    expect(saveReviewMock).toHaveBeenCalled();
+    expect(getReviewAssignmentsMock).not.toHaveBeenCalled();
+
+    // Let the write land. NOW the question is answerable, so it is asked —
+    // the read is deferred, never dropped. A gate that simply skipped the
+    // read would pass the assertion above and leave every open request
+    // invisible, which is the failure this app exists not to have.
+    await act(async () => { writeRow(); await Promise.resolve(); });
+    await flush();
+    expect(getReviewAssignmentsMock).toHaveBeenCalled();
   });
 });

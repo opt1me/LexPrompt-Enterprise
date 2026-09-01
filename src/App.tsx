@@ -527,6 +527,19 @@ function AppShell({ signIn }: { signIn: () => void }) {
   const [activeDraft, setActiveDraft] = useState<PlaybookDraft | null>(null);
   const [documents, setDocuments] = useState<DocumentFile[]>([]);
   const [run, setRun] = useState<ReviewRun | null>(null);
+  /**
+   * Whether the open review EXISTS AS A ROW ON THE SERVER yet.
+   *
+   * `false` for exactly one window: between `handleStartRun`'s `setRun` and
+   * the `saveReview` that writes the row. The results view is deliberately on
+   * screen during that round trip, so `run.id` is readable before the server
+   * has ever heard of it — and anything that asks the API about the review by
+   * id in that window gets a truthful 404 for a review that is about to
+   * exist. Only the assignments read does; see the effect that consumes this.
+   *
+   * NOT a ref: an effect has to re-run when it flips.
+   */
+  const [reviewRowExists, setReviewRowExists] = useState(false);
   // Task 10 / R-D15: `run.playbookVersionId` resolved against the LIVE
   // playbookVersions store, for the results header's "ran against vN" line.
   // FOUR states, not three (a browser check found the third collapsed into
@@ -1110,6 +1123,24 @@ function AppShell({ signIn }: { signIn: () => void }) {
   const [authoringError, setAuthoringError] = useState<string | undefined>(undefined);
   const [authoringAuthFailed, setAuthoringAuthFailed] = useState(false);
   const [savingAuthoringDraft, setSavingAuthoringDraft] = useState(false);
+  /**
+   * WHY A REFUSED SAVE GETS STATE OF ITS OWN AND NOT A TOAST.
+   *
+   * `POST /v1/playbooks/:id/versions` is `partner` in `ROUTE_POLICY`, so a
+   * reviewer who drafts a playbook, reviews every clause and clicks Save is
+   * answered 403 — correctly. What was wrong was everything around the
+   * refusal: it went to `notify()`, which is a three-second toast in the
+   * bottom-right corner, on a screen whose own state does not change. Found
+   * in a browser as a user clicking Save over and over with no idea why
+   * nothing happened, which is CLAUDE.md's opening rule failing at the exact
+   * moment of failure — a refusal nobody can see is indistinguishable from a
+   * bug.
+   *
+   * Held here rather than inside `DraftReview` because the call that fails
+   * is made here, and cleared on the next attempt rather than on a timer: it
+   * describes the state of the draft, and the draft is still sitting there.
+   */
+  const [authoringSaveError, setAuthoringSaveError] = useState<string | null>(null);
   const [megaPromptOpen, setMegaPromptOpen] = useState(false);
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -1603,6 +1634,8 @@ function AppShell({ signIn }: { signIn: () => void }) {
       createdByUserIdRef.current = review.createdByUserId;
       latestRunRef.current = reviewRun;
       setRun(reviewRun);
+      // This run was READ from the server, so its row is not in question.
+      setReviewRowExists(true);
       setIsRunning(false);
 
       // A RUN STARTED IN ANOTHER TAB, OR BEFORE A RELOAD, IS FINDABLE (Task
@@ -1947,6 +1980,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
     setAuthoringAuthFailed(false);
     setAuthoringBusy(false);
     setSavingAuthoringDraft(false);
+    // A refusal describes a draft. Leaving the screen destroys the draft
+    // (R-E1), so the sentence about it must go with it rather than greet
+    // the next draft as though it had already been refused.
+    setAuthoringSaveError(null);
   }, [view]);
 
   // Sub-project F: the learning session dies with its screen, exactly like
@@ -2533,6 +2570,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
     // itself.
     activeCollectionRef.current = collectionInput ?? null;
     setDocuments(docs);
+    // BEFORE `setRun`, because the effects that read this run's id run on the
+    // render `setRun` schedules. The row does not exist until `saveReview`
+    // below returns.
+    setReviewRowExists(false);
     setRun(newRun);
     // Task 10 / R-D15: `template` IS the live `PlaybookVersion` this run
     // just read (`emptyRun` mints `newRun.playbookVersionId` from its own
@@ -2557,6 +2598,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
       // which is what the review genuinely holds at this instant. The run
       // then replaces them with its own.
       await saveReview(reviewFromRun(newRun, matterId, settings.modelChoiceId, userId));
+      // The row is now real, which releases everything that had to wait for
+      // it. Set here and not after `startRun`: the review exists the moment
+      // this resolves, and a run is a separate thing from the review it is on.
+      setReviewRowExists(true);
       const started = await startRun(newRun.id);
       attachRun(started, matterId);
     } catch (e) {
@@ -3197,21 +3242,6 @@ function AppShell({ signIn }: { signIn: () => void }) {
     // subscription, two things it carries; a second `subscribe` for presence
     // would be a second cursor over the same review.
     const offPresence = onPresence({ review: reviewId }, setPresence);
-    /*
-     * WHAT IS ALREADY OPEN, once, when the review opens.
-     *
-     * The socket carries what happens NEXT; a request made while this
-     * browser was closed has no event it will ever receive, and a person
-     * signing in to find nothing waiting is exactly the "a mechanism that
-     * reaches nobody" failure §18 item 5 is about.
-     *
-     * A FAILURE IS SAID. `getReviewAssignments` rejects rather than resolving
-     * to an empty list, and a silent empty list here would read as "nobody
-     * has asked you anything" — which is the load-path rule this codebase
-     * has under `describeLoadError`, at a surface where the cost is a
-     * colleague waiting on an answer nobody knows was requested.
-     */
-    detach(readAssignments(reviewId), 'reading this review s open assignments');
     const subscription = subscribe({ review: reviewId }, {
       onEvent: applyPush,
       onResync: () => {
@@ -3236,6 +3266,46 @@ function AppShell({ signIn }: { signIn: () => void }) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reviewId]);
+
+  /**
+   * WHAT IS ALREADY OPEN, once, when the review opens — AND NOT BEFORE THE
+   * REVIEW EXISTS SERVER-SIDE.
+   *
+   * The socket carries what happens NEXT; a request made while this browser
+   * was closed has no event it will ever receive, and a person signing in to
+   * find nothing waiting is exactly the "a mechanism that reaches nobody"
+   * failure §18 item 5 is about. So this read has to happen, once, on open.
+   *
+   * Its own effect, gated on `reviewRowExists`, because of what happens on a
+   * run that has only just been STARTED. `handleStartRun` calls `setRun`
+   * before it `await`s `saveReview` — deliberately, so the results view is on
+   * screen during the round trip — which meant this read fired against a
+   * review id the server had never heard of. `GET
+   * /v1/reviews/:id/assignments` answers that 404 ("LexPrompt has no such
+   * review in your workspace"), correctly, and the panel then rendered its
+   * error branch ABOVE a review that was running perfectly well. Two costs,
+   * and the quiet one is worse: `readAssignments` empties the list on
+   * failure, so nothing was outstanding as far as this screen was concerned
+   * for the rest of the run, and a colleague's request would never have
+   * appeared.
+   *
+   * Not fixed by moving `setRun` after the save (that trades a false alarm
+   * for a blank screen during the round trip) and not by swallowing the 404
+   * (the 404 is the honest answer to the question that was asked; asking it
+   * at the wrong moment is the defect). Found by driving a real run in a
+   * browser — no unit test starts a run against a live API.
+   *
+   * A FAILURE IS STILL SAID. `getReviewAssignments` rejects rather than
+   * resolving to an empty list, and a silent empty list would read as
+   * "nobody has asked you anything" — the load-path rule this codebase has
+   * under `describeLoadError`, at a surface where the cost is a colleague
+   * waiting on an answer nobody knows was requested.
+   */
+  useEffect(() => {
+    if (!reviewId || !reviewRowExists) return;
+    detach(readAssignments(reviewId), 'reading this review s open assignments');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewId, reviewRowExists]);
 
   const handleAddNote = async (docId: string, clauseId: string, text: string) => {
     const current = latestRunRef.current ?? run;
@@ -3787,6 +3857,7 @@ function AppShell({ signIn }: { signIn: () => void }) {
    *  second time about a draft the user has just agreed to throw away. */
   const handleDiscardDraft = () => {
     updateAuthoringDraft(null);
+    setAuthoringSaveError(null);
     navigate({ name: 'playbooks' });
   };
 
@@ -3803,6 +3874,10 @@ function AppShell({ signIn }: { signIn: () => void }) {
   const handleSaveDraftAsV1 = async () => {
     if (!authoringDraftRef.current) return;
     setSavingAuthoringDraft(true);
+    // Cleared on the ATTEMPT, not on a timer: a message about a save that
+    // has just been tried again would be describing a fact that is no
+    // longer known.
+    setAuthoringSaveError(null);
     try {
       const profile = await getProfile();
       // Read AFTER the await, not before: `DraftReview` commits whatever is
@@ -3826,7 +3901,32 @@ function AppShell({ signIn }: { signIn: () => void }) {
       // to write it.
       notify(`Published v${version.version}.`);
     } catch (e) {
-      if (isAuthFailure(e)) handleModelError(e);
+      /*
+       * THE REFUSAL STAYS ON THE SCREEN. See `authoringSaveError` for why a
+       * toast was the wrong home for it.
+       *
+       * `not_permitted` is deliberately NOT routed through
+       * `handleModelError`. That function answers it with
+       * NOT_PERMITTED_MESSAGE — "Your account does not have access to
+       * LexPrompt. Ask your IT team to add you." — which is a different fact
+       * and, here, a false one: the caller is signed in, has a role, and can
+       * read every matter in the firm. They are short of ONE bar, on ONE
+       * route. `requireRole.ts` already writes the sentence that says so
+       * ("This needs the partner role, and your LexPrompt role is
+       * reviewer…"), naming the role and who to ask, and it is shown
+       * verbatim rather than replaced by a broader claim about their
+       * account. Every other auth-class failure keeps the handling it had.
+       */
+      const refusedByRole = e instanceof ModelError && e.code === 'not_permitted';
+      setAuthoringSaveError(
+        e instanceof Error && e.message
+          ? e.message
+          : 'The playbook could not be saved, and the reason was not reported.',
+      );
+      if (refusedByRole) {
+        // Nothing else: the sentence is on the screen, beside the draft it
+        // is about, and it does not expire.
+      } else if (isAuthFailure(e)) handleModelError(e);
       else notify(e instanceof Error ? e.message : 'The playbook could not be saved.', 'error');
     } finally {
       setSavingAuthoringDraft(false);
@@ -4760,6 +4860,14 @@ function AppShell({ signIn }: { signIn: () => void }) {
               onSave={handleSaveDraftAsV1}
               onDiscard={handleDiscardDraft}
               saving={savingAuthoringDraft}
+              // The same `roleState` the playbook editor and the changeset
+              // review already read. Publishing a v1 from a draft is the
+              // same act as publishing from the editor, and `ROUTE_POLICY`
+              // gives the two routes the same bar (R-E8: two routes to one
+              // act must not have two different bars) — so the screens must
+              // not have two different gates either.
+              role={roleState}
+              saveError={authoringSaveError}
             />
           ) : (
             <div className="p-8 font-ui text-ui text-ink-3">No draft in progress.</div>
