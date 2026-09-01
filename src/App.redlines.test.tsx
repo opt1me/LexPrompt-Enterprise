@@ -78,9 +78,10 @@ vi.mock('./lib/db/reviews', () => ({
 
 vi.mock('./lib/db/profile', () => ({
   getProfile: async () => ({ id: 'u1', initials: 'AB', name: 'A B' }),
-  // See App.authoring.test.tsx's copy of this comment: keeps `useRole()`'s
-  // App-level gate in its harmless `unknown` state for this file's purposes.
-  getCachedRole: () => undefined,
+  // See App.authoring.test.tsx's copy of this comment: this flow ends in
+  // `DraftReview`'s `Save as v1`, which publishes a version and is
+  // `partner` in `ROUTE_POLICY` — so the person driving it is one.
+  getCachedRole: () => 'partner' as const,
 }));
 
 // Task 18: see App.authoring.test.tsx's copy of this comment — the model
@@ -244,14 +245,14 @@ function nothingWasWritten() {
   expect(savePlaybookMock).not.toHaveBeenCalled();
 }
 
-/** Library → Create Template → Learn from redlines. Leaves the app on
+/** Library → Create playbook → Learn from redlines. Leaves the app on
  *  precedent intake. */
 async function openRedlinesIntake() {
   act(() => { root.render(<App />); });
   await flush();
   click(buttonNamed(/^playbooks$/i));
   await flush();
-  click(buttonNamed(/create template/i));
+  click(buttonNamed(/create playbook/i));
   click(buttonNamed(/learn from redlines/i));
   await flush();
 }
@@ -404,7 +405,7 @@ describe('the redlines route is reachable from the chooser (Task 10A)', () => {
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
 
     const redlinesCard = buttonNamed(/learn from redlines/i);
     expect(redlinesCard).toBeTruthy();
@@ -743,7 +744,7 @@ describe('warns before navigating away from a live learning session (R-F6)', () 
     await flush();
 
     expect(container.textContent).not.toMatch(/bring in what you negotiated/i);
-    expect(container.textContent).toMatch(/create template/i);
+    expect(container.textContent).toMatch(/create playbook/i);
   });
 
   it('does not ask at all when the session has no documents yet', async () => {
@@ -754,7 +755,7 @@ describe('warns before navigating away from a live learning session (R-F6)', () 
     await flush();
 
     expect(confirmSpy).not.toHaveBeenCalled();
-    expect(container.textContent).toMatch(/create template/i);
+    expect(container.textContent).toMatch(/create playbook/i);
   });
 
   it('also asks from "What we learned", not only from precedent intake', async () => {

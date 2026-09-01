@@ -32,6 +32,32 @@ export interface MatterActivityProps {
   matterId?: string;
   /** The rows themselves, for a caller that has them already. */
   rows?: ActivityRow[];
+  /**
+   * A SIGNATURE OF WHAT THIS TAB HAS CHANGED. When it changes, the feed is
+   * read again.
+   *
+   * Found in a browser: two documents were added to a matter, both audit
+   * rows were written and correctly scoped, and this panel went on showing
+   * only *"You opened this matter"* until the page was reloaded by hand. It
+   * reads once on mount, and adding a document does not remount it — so the
+   * feed was a snapshot presented as a current account of the matter, which
+   * is this project's founding failure shape at a new surface.
+   *
+   * This is NOT a live subscription and must not be described as one. The
+   * three sources this feed reads (audited acts, disposition events, runs)
+   * are not in §8's outbox — `AppEvent` carries runs, dispositions, notes
+   * and assignments, and no audited act at all — so nothing pushes a
+   * `document.added` to any client. What this closes is the case the browser
+   * session actually hit and the one this tab can know about without
+   * inventing anything: work done HERE. A colleague's act still arrives on
+   * the next read.
+   *
+   * A signature rather than a counter, because the parse poll re-reads the
+   * document list every few seconds while a document is being read: an
+   * array identity would re-fetch the feed on every poll, and a length
+   * would miss an add-plus-delete.
+   */
+  refreshKey?: string;
 }
 
 // Complete literal class names per kind, never built by string
@@ -90,19 +116,19 @@ const VERB: Record<ActivityKind, { you: string; passive: string }> = {
  * than rendering nothing: a feed line that disappears reads as "nobody did
  * this", which is the blank-cell defect at a new surface.
  */
-const AUDIT_VERB: Record<string, { you: string; passive: string }> = {
+export const AUDIT_VERB: Record<string, { you: string; passive: string }> = {
   'matter.created': { you: 'You opened this matter', passive: 'opened this matter' },
   'matter.deleted': { you: 'You deleted this matter', passive: 'deleted this matter' },
-  'document.added': { you: 'You added a document to', passive: 'added a document to' },
-  'document.deleted': { you: 'You deleted a document from', passive: 'deleted a document from' },
+  'document.added': { you: 'You added a document', passive: 'added a document' },
+  'document.deleted': { you: 'You deleted a document', passive: 'deleted a document' },
   'playbook.published': { you: 'You published a playbook version', passive: 'published a playbook version' },
   'playbook.imported': { you: 'You imported a playbook', passive: 'imported a playbook' },
-  'review.created': { you: 'You created', passive: 'created' },
-  'review.deleted': { you: 'You deleted a review from', passive: 'deleted a review from' },
-  'run.started': { you: 'You started', passive: 'started' },
-  'run.cancelled': { you: 'You cancelled', passive: 'cancelled' },
-  'assignment.created': { you: 'You assigned', passive: 'assigned' },
-  'assignment.resolved': { you: 'You resolved an assignment on', passive: 'resolved an assignment on' },
+  'review.created': { you: 'You created a review', passive: 'created a review' },
+  'review.deleted': { you: 'You deleted a review', passive: 'deleted a review' },
+  'run.started': { you: 'You started a review run', passive: 'started a review run' },
+  'run.cancelled': { you: 'You cancelled a review run', passive: 'cancelled a review run' },
+  'assignment.created': { you: 'You asked a colleague to look at a clause', passive: 'asked a colleague to look at a clause' },
+  'assignment.resolved': { you: 'You resolved an assignment', passive: 'resolved an assignment' },
   'workspace.settings_changed': {
     you: 'You changed the workspace settings', passive: 'changed the workspace settings',
   },
@@ -140,10 +166,47 @@ function actor(entry: ActivityEntry): string {
   return userName(entry.byUserId) ?? UNRESOLVED_ACTOR_SENTENCE;
 }
 
+/**
+ * An action this browser does not recognise. It NAMES THE RAW ACTION as its
+ * subject rather than disappearing: a feed quietly shorter than what
+ * happened is the failure R-G9 named, and a client reading a newer server
+ * must not be the thing that shortens it.
+ */
+const UNKNOWN_AUDIT_VERB = { you: 'You made a change recorded as', passive: 'made a change recorded as' };
+
+/**
+ * ONE FEED LINE.
+ *
+ * ## An audited act takes no subject
+ *
+ * The audit arm of `GET /v1/matters/:id/activity` selects `null` for
+ * `review_name` — an audited act is recorded against the MATTER, and this
+ * feed is that matter's own page. Appending the subject anyway meant
+ * appending `activityEntries`' placeholder, and the screen read
+ * *"You added a document to This matter"*: a capital mid-sentence, naming
+ * the page the reader is already looking at, in a shape that reads like a
+ * cross-matter template nobody adjusted for the in-matter view.
+ *
+ * So every entry in `AUDIT_VERB` is a COMPLETE SENTENCE and nothing is
+ * appended to it. That is a property of the map, not of this function: a
+ * verb added there ending in "to" or "on" would render as a fragment, and
+ * `MatterActivity.test.tsx` asserts the whole map reads as sentences rather
+ * than pinning the two lines that happen to exist today.
+ *
+ * A disposition, a run or a note DOES belong to a review or a clause, and
+ * those keep their subject.
+ */
 function line(entry: ActivityEntry): string {
-  const verbs = entry.kind === 'audited' && entry.action
-    ? AUDIT_VERB[entry.action] ?? VERB.audited
-    : VERB[entry.kind];
+  if (entry.kind === 'audited' && entry.action) {
+    const verbs = AUDIT_VERB[entry.action];
+    if (!verbs) {
+      return entry.byYou
+        ? `${UNKNOWN_AUDIT_VERB.you} ${entry.action}`
+        : `${actor(entry)} ${UNKNOWN_AUDIT_VERB.passive} ${entry.action}`;
+    }
+    return entry.byYou ? verbs.you : `${actor(entry)} ${verbs.passive}`;
+  }
+  const verbs = VERB[entry.kind];
   const subject = entry.clauseTitle ?? entry.reviewName;
   return entry.byYou ? `${verbs.you} ${subject}` : `${actor(entry)} ${verbs.passive} ${subject}`;
 }
@@ -168,7 +231,7 @@ function line(entry: ActivityEntry): string {
  * assembled.
  */
 export function MatterActivity({
-  reviews, localUserId, matterId, rows,
+  reviews, localUserId, matterId, rows, refreshKey,
 }: MatterActivityProps) {
   const [fetched, setFetched] = useState<ActivityRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -206,7 +269,9 @@ export function MatterActivity({
         }
       });
     return () => { live = false; };
-  }, [matterId, rows]);
+    // `refreshKey` is in the dependency list, and that is the whole of the
+    // staleness fix — see the prop's docstring.
+  }, [matterId, rows, refreshKey]);
 
   const entries = matterActivity(reviews, localUserId, 20, rows ?? fetched ?? []);
 

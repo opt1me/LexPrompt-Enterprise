@@ -12,8 +12,38 @@ import {
   type AuthoringDraft,
   type DraftClause,
 } from '../../lib/authoringDraft';
+import { canPublish, type RoleState } from '../../lib/role';
 import type { PlaybookClause } from '../../types';
 import { uid } from '@lexprompt/core';
+
+/**
+ * WHY THIS SCREEN DOES NOT REUSE `PUBLISH_NEEDS_PARTNER_TITLE`.
+ *
+ * That sentence — *"Ask a colleague with that role, or an administrator, to
+ * publish this"* — is true of the playbook editor and of a changeset, where
+ * the thing being published is STORED and a partner can open it from their
+ * own machine. It is false here. An `AuthoringDraft` is session-only by
+ * design (R-E1): it lives in this tab's memory, is written to nothing, and
+ * is gone on reload. There is no "this" for a colleague to go and publish.
+ *
+ * So the wording differs because the FACT differs, and saying the shorter,
+ * shared sentence here would send a trainee off to ask a partner for
+ * something the partner cannot reach — a confidently wrong instruction,
+ * which is the failure mode this app's one rule is about. What a refused
+ * trainee can actually do is stated instead: keep this tab open and have a
+ * partner save it from this screen, or have their own role changed.
+ */
+export const DRAFT_NEEDS_PARTNER =
+  'Saving this draft publishes a house standard for the firm, and that needs the partner role.';
+
+/** The half that says what is actually available to do about it. Separate
+ *  from the sentence above because the two answer different questions —
+ *  "why can I not" and "what now" — and a reader who is refused needs the
+ *  second one to be findable. */
+export const DRAFT_CANNOT_BE_HANDED_OVER =
+  'This draft is held in this tab only. It is saved nowhere and is lost if you reload or navigate '
+  + 'away, so it cannot be handed to anyone else: ask a partner to save it from this screen while '
+  + 'it is open, or ask an administrator to change your role.';
 
 export interface DraftReviewProps {
   draft: AuthoringDraft;
@@ -22,6 +52,35 @@ export interface DraftReviewProps {
   onSave: () => void;
   onDiscard: () => void;
   saving?: boolean;
+  /**
+   * The signed-in user's role, in THREE states (`src/lib/role.ts`).
+   *
+   * Defaulted to `admin` for the same reason `TemplateEditor.role` and
+   * `ChangesetReview.role` are: every test of this component written before
+   * the gate existed has no opinion about roles, and a default of "not yet
+   * known" would silently rewrite what all of them assert.
+   *
+   * `unknown` renders NO save control and no refusal either — a permission
+   * that has not been read is not a permission that has been refused, and
+   * this project's load rule ("empty is not broken") applies to a
+   * permission exactly as it applies to a list. `failed` is PERMISSIVE: this
+   * gate is a courtesy and `requireRole.ts` is the control, so a network
+   * blip on `GET /v1/me` must not strand a genuine partner — and a reviewer
+   * who is not entitled still gets the 403, surfaced by `saveError` below.
+   */
+  role?: RoleState;
+  /**
+   * A save that was REFUSED or that failed, in words, kept on the screen
+   * until the next attempt.
+   *
+   * The reason this is a prop and not a toast: the refusal a trainee hits
+   * here is `POST /v1/playbooks/:id/versions` answering 403, and a
+   * three-second toast in the corner is indistinguishable from nothing
+   * happening at all — which is exactly how this defect was found, with a
+   * user clicking a button again and again. A refusal that decides the fate
+   * of half an hour's reviewing has to stay on the screen.
+   */
+  saveError?: string | null;
 }
 
 /** Same guard `useVerifyKeys` uses: without it, a reviewer typing "just
@@ -40,7 +99,10 @@ function isTyping(target: EventTarget | null): boolean {
  * here re-derives that rule: a gate correct in a pure function and ignored
  * by its only caller is this project's most repeated defect shape.
  */
-export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false }: DraftReviewProps) {
+export function DraftReview({
+  draft, onChange, onSave, onDiscard, saving = false,
+  role = { status: 'known', role: 'admin' }, saveError = null,
+}: DraftReviewProps) {
   const [activeId, setActiveId] = useState<string>(() => draft.clauses[0]?.id ?? '');
 
   /**
@@ -122,6 +184,10 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
   const activeClause = draft.clauses.find((c) => c.id === activeId);
   const canSave = canSaveDraft(draft);
   const saveLabel = saveGateLabel(draft);
+  // See `DraftReviewProps.role`: permissive for `failed`, silent for
+  // `unknown`, and only a KNOWN role below partner is refused.
+  const publishAllowed = role.status !== 'known' || canPublish(role.role);
+  const refusedByRole = role.status === 'known' && !publishAllowed;
   const reviewedCount = draft.clauses.filter((c) => c.disposition !== 'unreviewed').length;
 
   const handleKeep = (edits: Partial<PlaybookClause>) => {
@@ -219,11 +285,49 @@ export function DraftReview({ draft, onChange, onSave, onDiscard, saving = false
         </div>
         <div className="flex gap-3 shrink-0">
           <Button variant="ghost" onClick={handleDiscard} disabled={saving}>Discard</Button>
-          <Button onClick={handleSave} disabled={!canSave || saving} loading={saving}>
-            {saveLabel}
-          </Button>
+          {/* NO DEAD CONTROL. A `Save as v1` rendered for a role the API
+              will refuse is an affordance the app cannot deliver — the same
+              rule `SettingsPanel` follows one screen away, where a
+              non-admin is told "this is set by an administrator" and is
+              offered nothing to click. Hidden rather than disabled while
+              the role is still `unknown`, because a greyed-out button
+              during a load tells a partner they cannot publish. */}
+          {role.status !== 'unknown' && publishAllowed && (
+            <Button onClick={handleSave} disabled={!canSave || saving} loading={saving}>
+              {saveLabel}
+            </Button>
+          )}
         </div>
       </header>
+
+      {refusedByRole && (
+        <div
+          data-role-gate
+          className="mb-6 shrink-0 bg-chip-fill border border-rule rounded-card p-4 space-y-1"
+        >
+          <p className="font-ui text-ui text-ink-1">
+            {DRAFT_NEEDS_PARTNER} Your LexPrompt role is {role.role}.
+          </p>
+          <p className="font-ui text-ui-sm text-ink-3 leading-relaxed">
+            {DRAFT_CANNOT_BE_HANDED_OVER}
+          </p>
+        </div>
+      )}
+
+      {/* The 403 itself, kept on the screen. Rendered ALONGSIDE the gate
+          above rather than instead of it: the role can change between the
+          load that decided what to render and the click that was refused,
+          and a gate whose only enforcement is a hidden button is a
+          suggestion (CLAUDE.md says exactly this about `canSaveDraft`). */}
+      {saveError && (
+        <p
+          data-save-error
+          role="alert"
+          className="mb-6 shrink-0 font-ui text-ui text-risk-high bg-risk-high-tint border border-risk-high-edge rounded-card p-4 leading-relaxed"
+        >
+          {saveError}
+        </p>
+      )}
 
       <div className="flex-1 overflow-hidden grid grid-cols-1 md:grid-cols-[280px_1fr] gap-6">
         <ClauseRail

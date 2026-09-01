@@ -93,7 +93,20 @@ export function activityEntries(
       at: row.at,
       kind: kindOf(row),
       ...(row.clauseTitle ? { clauseTitle: row.clauseTitle } : {}),
-      reviewName: row.reviewName ?? 'This matter',
+      /*
+       * A DISPOSITION AND A RUN BOTH BELONG TO A REVIEW — both arms of the
+       * feed statement join `review` — so the fallback names one, in lower
+       * case, for the row whose `playbook_snapshot` carries no name.
+       *
+       * It used to read 'This matter', which reached the screen as
+       * "You added a document to This matter": a capital mid-sentence,
+       * naming the page the reader is already on. That was really TWO
+       * faults, and this is only the first. The second is that an AUDITED
+       * act has no review at all and should never have been given a subject
+       * — fixed in `MatterActivity.tsx`'s `line`, where every audit verb is
+       * now a complete sentence.
+       */
+      reviewName: row.reviewName ?? 'this review',
       ...(row.byUserId ? { byUserId: row.byUserId } : {}),
       byYou: row.byUserId === localUserId,
       ...(row.source === 'audit' ? { action: row.kind } : {}),

@@ -278,7 +278,7 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
     await flush();
 
     expect(container.textContent).toContain('another tab');
-    expect(container.textContent).not.toContain('No templates yet');
+    expect(container.textContent).not.toContain('No playbooks yet');
   });
 
   it('surfaces a generic load failure with a retry, never an empty library', async () => {
@@ -289,7 +289,7 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
     await flush();
 
     expect(container.textContent).toContain('could not be loaded');
-    expect(container.textContent).not.toContain('No templates yet');
+    expect(container.textContent).not.toContain('No playbooks yet');
     const retryButton = Array.from(container.querySelectorAll('button'))
       .find(b => /retry/i.test(b.textContent || ''));
     expect(retryButton).toBeTruthy();
@@ -310,7 +310,7 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
     await flush();
 
     expect(container.textContent).not.toContain('could not be loaded');
-    expect(container.textContent).toContain('No templates yet');
+    expect(container.textContent).toContain('No playbooks yet');
     expect(listPlaybooksMock).toHaveBeenCalledTimes(2);
   });
 
@@ -321,7 +321,7 @@ describe('App mount — playbook library load failure (Critical fix-round-1)', (
     clickNav(container, 'Playbooks');
     await flush();
 
-    expect(container.textContent).toContain('No templates yet');
+    expect(container.textContent).toContain('No playbooks yet');
     expect(container.textContent).not.toContain('could not be loaded');
   });
 });

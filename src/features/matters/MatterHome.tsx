@@ -95,6 +95,18 @@ export interface MatterHomeProps {
   onCreatePlaybook: () => void;
 }
 
+/**
+ * The matter content THIS TAB knows about, as a stable string.
+ *
+ * Adding a document writes an `audit_event` the activity feed shows, and the
+ * feed reads once on mount — so without this the panel went on describing
+ * the matter as it was when the screen opened. See
+ * `MatterActivityProps.refreshKey` for what this does and does not claim.
+ */
+function activityKey(documents: DocumentRecord[], reviews: Review[]): string {
+  return `${documents.map(d => d.id).sort().join(' ')}|${reviews.map(r => r.id).sort().join(' ')}`;
+}
+
 function formatDate(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
@@ -619,7 +631,17 @@ export function MatterHome({
       {reviewsError ? (
         <LoadErrorPanel compact message={reviewsError} onRetry={onRetryReviews} />
       ) : (
-        <MatterActivity reviews={reviews} localUserId={localUserId} matterId={matter.id} />
+        <MatterActivity
+          reviews={reviews}
+          localUserId={localUserId}
+          matterId={matter.id}
+          /* What this tab has changed, as a string — see
+             `MatterActivityProps.refreshKey`. Ids rather than counts, so an
+             add followed by a delete does not cancel out; sorted, so a
+             re-read that returns the same set in a different order is not
+             mistaken for a change. */
+          refreshKey={activityKey(documents, reviews)}
+        />
       )}
       </div>
 

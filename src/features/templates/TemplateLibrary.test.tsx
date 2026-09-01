@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect } from 'vitest';
-import { mount } from '../../test/mount';
+import { mount, click } from '../../test/mount';
 import { TemplateLibrary } from './TemplateLibrary';
 import { SCHEMA_VERSION, type Playbook, type PlaybookDraft } from '../../types';
 
@@ -77,5 +77,53 @@ describe('TemplateLibrary — a row says which of three states the playbook is i
     const c = mount(<TemplateLibrary templates={[notPublished]} {...wiring} />);
     expect(c.textContent).toMatch(/not published yet/i);
     expect(c.textContent).not.toMatch(/unpublished changes/i);
+  });
+});
+
+/*
+ * COPY DRIFT, THE SAME ONE AS THE HEADING ABOVE, ONE ROUND LATER.
+ *
+ * The redesign renamed Library → Playbooks. The `<h2>` was fixed when that
+ * was caught; the button under it still said "Create Template", the empty
+ * state still said "No templates yet", and the delete dialog still called a
+ * playbook a template — a page headed Playbooks whose every control names
+ * something else. Found in a browser, exactly as the heading was.
+ *
+ * This guards the screen as a whole rather than the four strings that were
+ * wrong, because "the strings that were wrong" is the list that already
+ * failed to stay complete once. It reads `innerHTML`, not `textContent`, so
+ * a `title` attribute is covered too — that is where one of the four was
+ * hiding.
+ */
+describe('TemplateLibrary — nothing visible on the Playbooks screen calls a playbook a template', () => {
+  /** The delete dialog is rendered only while it is open, so the scan has to
+   *  open it or it would be scanning a screen the copy is not on. */
+  function openDeleteDialog(c: HTMLElement): void {
+    const trash = Array.from(c.querySelectorAll('button'))
+      .find(b => /delete/i.test(b.getAttribute('title') ?? ''));
+    if (!trash) throw new Error('The delete control is not on this screen.');
+    click(trash);
+  }
+
+  it('scans a screen that actually has content on it', () => {
+    // The sanity half. A guard over an empty container passes vacuously,
+    // and eighteen guards in this project were found not guarding.
+    const c = mount(<TemplateLibrary templates={[playbook()]} {...wiring} />);
+    openDeleteDialog(c);
+    expect(c.innerHTML.length).toBeGreaterThan(500);
+    expect(c.textContent).toContain('Playbooks');
+    expect(c.textContent).toContain('permanently delete');
+  });
+
+  it('says "template" nowhere, in text or in a title attribute', () => {
+    const c = mount(<TemplateLibrary templates={[playbook()]} {...wiring} />);
+    openDeleteDialog(c);
+    expect(c.innerHTML).not.toMatch(/template/i);
+  });
+
+  it('names the empty state after playbooks too', () => {
+    const c = mount(<TemplateLibrary templates={[]} {...wiring} />);
+    expect(c.textContent).toContain('No playbooks yet.');
+    expect(c.innerHTML).not.toMatch(/template/i);
   });
 });

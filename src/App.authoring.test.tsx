@@ -5,6 +5,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import type { Playbook, PlaybookVersion } from './types';
 import type { AuthoringDraft } from './lib/authoringDraft';
+import { ModelError } from '@lexprompt/core';
 
 // No @testing-library/react in this project — a real react-dom root, driven
 // directly, exactly as App.test.tsx does.
@@ -58,11 +59,16 @@ vi.mock('./lib/db/reviews', () => ({
 vi.mock('./lib/db/profile', () => ({
   getProfile: async () => ({ id: 'u1', initials: 'AB', name: 'A B' }),
   // Task 16/17: `src/lib/role.ts`'s `useRole()` reads this off the SAME
-  // module — a stub returning `undefined` keeps the new App-level role gate
-  // permanently in its `unknown` state here, which is exactly what a test
-  // that isn't about roles needs: it never trips the `failed` branch, so
-  // `AppShell` renders exactly as it did before this module gained a role.
-  getCachedRole: () => undefined,
+  // module. It used to answer `undefined` — the App-level gate's harmless
+  // `unknown` state — which stopped being harmless for THIS file when
+  // `DraftReview` gained the same partner gate the playbook editor and the
+  // changeset review already had. `Save as v1` publishes a version, which
+  // `ROUTE_POLICY` puts at `partner`; a draft-review screen that offered it
+  // to a reviewer was the browser-found defect these flows must not
+  // reintroduce. So the flows below sign in as somebody who can actually
+  // finish them, and the refusal has its own tests rather than being the
+  // accidental state of every test in the file.
+  getCachedRole: () => 'partner' as const,
 }));
 
 // Task 18: the model choice is workspace configuration fetched from the
@@ -199,14 +205,14 @@ function contractTypeField(): HTMLInputElement {
   return input as HTMLInputElement;
 }
 
-/** Library → Create Template → Draft with AI → fill → generate. Leaves the
+/** Library → Create playbook → Draft with AI → fill → generate. Leaves the
  *  app on the draft review screen with two unreviewed clauses. */
 async function reachTheDraftReviewScreen() {
   act(() => { root.render(<App />); });
   await flush();
   click(buttonNamed(/^playbooks$/i));
   await flush();
-  click(buttonNamed(/create template/i));
+  click(buttonNamed(/create playbook/i));
   click(buttonNamed(/draft with ai/i));
   typeInto(contractTypeField(), 'Commercial Lease');
   click(buttonNamed(/draft the playbook/i));
@@ -274,7 +280,7 @@ describe('the authoring route is reachable from the library', () => {
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
 
     expect(buttonNamed(/draft with ai/i)).toBeTruthy();
     expect(buttonNamed(/build by hand/i)).toBeTruthy();
@@ -289,7 +295,7 @@ describe('the authoring route is reachable from the library', () => {
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
     click(buttonNamed(/build by hand/i));
     await flush();
 
@@ -425,7 +431,7 @@ describe('losing a draft is warned about by BOTH routes out of it (R-E4)', () =>
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
     click(buttonNamed(/draft with ai/i));
     typeInto(contractTypeField(), 'Commercial Lease');
 
@@ -443,7 +449,7 @@ describe('a generation failure keeps the form and everything typed into it (spec
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
     click(buttonNamed(/draft with ai/i));
     typeInto(contractTypeField(), 'Commercial Lease');
     click(buttonNamed(/draft the playbook/i));
@@ -466,7 +472,7 @@ describe('a matters load failure on the draft form reads as broken, not empty (M
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
     click(buttonNamed(/draft with ai/i));
 
     expect(container.textContent).toMatch(/matters list could not be loaded/i);
@@ -481,7 +487,7 @@ describe('a matters load failure on the draft form reads as broken, not empty (M
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
     click(buttonNamed(/draft with ai/i));
     expect(container.textContent).toMatch(/matters list could not be loaded/i);
 
@@ -506,7 +512,7 @@ describe('a ticked matter that contributed nothing is not credited (m2)', () => 
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
     click(buttonNamed(/draft with ai/i));
     typeInto(contractTypeField(), 'Commercial Lease');
 
@@ -598,7 +604,7 @@ describe('Save as v1 publishes what the screen holds, not a stale copy (Major 4)
 // and — the worse variant — did it straight past `confirmLeaveTemplate`,
 // taking a playbook's unpublished edits with it.
 describe('a slow generation does not follow the user off the screen (Major 5)', () => {
-  /** Library -> Create Template -> Draft with AI -> fill -> generate, with
+  /** Library -> Create playbook -> Draft with AI -> fill -> generate, with
    *  the generation left hanging. */
   async function startAGenerationThatNeverFinishes(): Promise<(draft: AuthoringDraft) => void> {
     let release: (draft: AuthoringDraft) => void = () => {};
@@ -607,7 +613,7 @@ describe('a slow generation does not follow the user off the screen (Major 5)', 
     await flush();
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
     click(buttonNamed(/draft with ai/i));
     typeInto(contractTypeField(), 'Commercial Lease');
     click(buttonNamed(/draft the playbook/i));
@@ -640,7 +646,7 @@ describe('a slow generation does not follow the user off the screen (Major 5)', 
 
     click(buttonNamed(/^playbooks$/i));
     await flush();
-    click(buttonNamed(/create template/i));
+    click(buttonNamed(/create playbook/i));
     click(buttonNamed(/build by hand/i));
     await flush();
     const nameField = container.querySelector('input[value="Untitled playbook"]') as HTMLInputElement;
@@ -657,5 +663,100 @@ describe('a slow generation does not follow the user off the screen (Major 5)', 
     expect(container.textContent).not.toMatch(/unsaved draft/i);
     expect((container.querySelector('input') as HTMLInputElement).value).toBe('Warehouse Lease');
     expect(confirmSpy).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * A 403 FROM THE PUBLISH ROUTE MUST REACH THE PERSON WHO CLICKED.
+ *
+ * Found in a browser, signed in as a trainee: `Save as v1` issued
+ * `POST /v1/playbooks/:id/versions`, the server answered 403 — correctly,
+ * the route is `partner` in `ROUTE_POLICY` — and the screen did not change.
+ * The refusal went to `notify()`, a three-second toast in the corner of a
+ * full-height screen, so the user clicked again and again with no idea why
+ * nothing was happening. A refusal nobody can see is indistinguishable from
+ * a bug, which is CLAUDE.md's opening rule failing at the exact moment of
+ * failure.
+ *
+ * `DraftReview` now hides the control from a role that cannot use it, and
+ * these tests are the OTHER half: the role is `partner` in this file's
+ * profile mock, so the click gets through the courtesy gate and is refused
+ * by the server — which is also the real case the gate cannot cover, a role
+ * that changed between the load and the click.
+ */
+describe('a refused publish is said out loud, and the draft survives it', () => {
+  /** The sentence `apps/api/src/auth/requireRole.ts` actually writes. */
+  const roleRefusal = new ModelError(
+    'This needs the partner role, and your LexPrompt role is reviewer. '
+    + 'Ask a colleague with that role, or ask an administrator to change yours.',
+    'not_permitted', 403,
+  );
+
+  async function refusedSave() {
+    publishAndPointMock.mockRejectedValue(roleRefusal);
+    await reachTheDraftReviewScreen();
+    keepEveryClause();
+    click(buttonNamed(/save as v1/i));
+    await flush();
+  }
+
+  it('puts the server\'s own refusal on the screen, where it stays', async () => {
+    await refusedSave();
+    const shown = container.querySelector('[data-save-error]');
+    expect(shown).toBeTruthy();
+    expect(shown!.textContent).toContain('This needs the partner role');
+    expect(shown!.textContent).toContain('ask an administrator to change yours');
+  });
+
+  it('does not tell a signed-in reviewer their account has no access to LexPrompt', async () => {
+    /*
+     * `handleModelError` answers every `not_permitted` with "Your account
+     * does not have access to LexPrompt. Ask your IT team to add you." That
+     * is a different fact, and here a false one: this caller is signed in,
+     * has a role, and can read every matter in the firm. They are short of
+     * ONE bar on ONE route, and the server already said so in words.
+     */
+    await refusedSave();
+    expect(container.textContent).not.toMatch(/does not have access to LexPrompt/i);
+    expect(container.textContent).not.toMatch(/ask your IT team/i);
+  });
+
+  it('leaves the reviewed draft exactly where it was, so nothing is lost to the refusal', async () => {
+    await refusedSave();
+    expect(container.textContent).toMatch(/unsaved draft/i);
+    expect(container.textContent).toContain('Break clause');
+    expect(container.textContent).toContain('Rent review');
+    // Still on the authoring screen, not navigated away to a playbook that
+    // was never published.
+    expect(window.location.pathname).toBe('/playbooks');
+  });
+
+  it('clears the refusal when the save is tried again', async () => {
+    await refusedSave();
+    expect(container.querySelector('[data-save-error]')).toBeTruthy();
+
+    publishAndPointMock.mockResolvedValue({
+      playbook: publishedPlaybook, version: publishedVersion,
+    });
+    click(buttonNamed(/save as v1/i));
+    await flush();
+
+    expect(container.querySelector('[data-save-error]')).toBeNull();
+    expect(window.location.pathname).toBe('/playbooks/pb-new');
+  });
+
+  it('reports a NON-role failure too, rather than swallowing it', async () => {
+    // Sanity check on the guard above: it reads the refusal that happened,
+    // not a fixture that is always present. An ordinary failure has to
+    // reach the same place, or the only failure this screen can state is
+    // the one test that put it there.
+    publishAndPointMock.mockRejectedValue(new Error('the version could not be written'));
+    await reachTheDraftReviewScreen();
+    keepEveryClause();
+    click(buttonNamed(/save as v1/i));
+    await flush();
+
+    expect(container.querySelector('[data-save-error]')?.textContent)
+      .toContain('the version could not be written');
   });
 });

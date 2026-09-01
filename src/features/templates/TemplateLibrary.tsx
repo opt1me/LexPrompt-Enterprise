@@ -42,7 +42,7 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
       <div className="flex justify-between items-end mb-8">
         <div>
           <h2 className="font-prose text-screen-title text-ink-1 mb-2">Playbooks</h2>
-          <p className="font-ui text-ui text-ink-3">Manage your contract review templates.</p>
+          <p className="font-ui text-ui text-ink-3">Manage your contract review playbooks.</p>
         </div>
         <div className="flex gap-4">
           <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
@@ -50,7 +50,7 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
             {!importing && <Upload className="w-4 h-4" />}
             Import
           </Button>
-          <Button onClick={onCreate}><Plus className="w-4 h-4" /> Create Template</Button>
+          <Button onClick={onCreate}><Plus className="w-4 h-4" /> Create playbook</Button>
         </div>
       </div>
 
@@ -81,7 +81,7 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
             <button
               onClick={(e) => { e.stopPropagation(); setDeleteId(t.id); }}
               className="absolute top-3 right-3 p-2 bg-card border border-rule text-ink-4 hover:text-risk-high hover:bg-risk-high-tint hover:border-risk-high-edge rounded-control transition-colors z-30"
-              title="Delete Template"
+              title="Delete playbook"
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -89,14 +89,14 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
         ))}
         {templates.length === 0 && (
           <div className="col-span-full font-ui text-ui text-ink-4 border border-dashed border-rule p-8 rounded-card text-center">
-            No templates yet. Create one to get started.
+            No playbooks yet. Create one to get started.
           </div>
         )}
       </div>
 
       <Modal
         isOpen={deleteId !== null}
-        title="Delete Template"
+        title="Delete playbook"
         onClose={() => setDeleteId(null)}
         footer={
           <>
@@ -106,7 +106,7 @@ export function TemplateLibrary({ templates, onOpen, onRun, onDelete, onCreate, 
         }
       >
         <p className="font-ui text-ui text-ink-3 leading-relaxed">
-          Are you sure you want to permanently delete this template? This action cannot be undone.
+          Are you sure you want to permanently delete this playbook? This action cannot be undone.
         </p>
       </Modal>
     </div>
