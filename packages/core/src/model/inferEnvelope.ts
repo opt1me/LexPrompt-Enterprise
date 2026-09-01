@@ -71,10 +71,62 @@ export function codeFromStatus(status: number): ModelErrorCode {
  * code nothing recognises falls through to the status, exactly like a body
  * that could not be read at all.
  */
+/**
+ * WHAT TO SAY WHEN THE BODY SAYS NOTHING.
+ *
+ * A refusal from LexPrompt's own API always carries an `error.message`
+ * written for a reader. A failure from something in FRONT of it does not: an
+ * nginx 502, an ingress 503, a gateway timeout, a proxy's HTML error page.
+ * The fallback used to be the bare string `HTTP ${status}`, and that is what
+ * a lawyer actually saw — "This verification was not saved: HTTP 502",
+ * observed in a browser with the API stopped. It is true, it is useless, and
+ * it is the only sentence in this app written in a vocabulary the reader does
+ * not share.
+ *
+ * The status is still carried on the `ModelError` and still shown in
+ * parentheses, because it is the one hard fact available and somebody
+ * debugging a deployment needs it. What changes is that it is no longer the
+ * whole message.
+ *
+ * `codeFromStatus` is deliberately NOT widened alongside this. Its own
+ * docstring settles that question — a 502 from an ingress is not evidence the
+ * firm's deployment is misconfigured, and a code drives which PANEL a reader
+ * is shown. Saying what happened and guessing why are different acts.
+ */
+function messageFromStatus(status: number): string {
+  // 502/503/504 all mean the same thing to a reader: something in front of
+  // LexPrompt answered instead of LexPrompt. Not a refusal — an interruption.
+  // The second sentence is the one that matters, and it is the same promise
+  // `makeApiClient`'s network branch makes, because it is the same situation
+  // reached by a different route.
+  if (status === 502 || status === 503 || status === 504) {
+    return `LexPrompt's server is not answering (HTTP ${status}). Your work is on the server, `
+      + 'not in this browser, so nothing is lost — but nothing can be read or saved until it '
+      + 'is back.';
+  }
+  if (status === 408) {
+    return `The request to LexPrompt's server timed out (HTTP ${status}). Nothing was saved. `
+      + 'Try again.';
+  }
+  if (status === 429) {
+    return `LexPrompt's server is refusing requests for the moment (HTTP ${status}). `
+      + 'Wait a little and try again.';
+  }
+  if (status >= 500) {
+    return `LexPrompt's server failed on this request (HTTP ${status}) and gave no reason. `
+      + 'Nothing was saved.';
+  }
+  // A 4xx with no envelope is still a refusal, and saying so is more than the
+  // number said on its own. What it does NOT do is invent a reason.
+  return `LexPrompt's server refused this request (HTTP ${status}) and gave no reason.`;
+}
+
 export function modelErrorFrom(status: number, body: unknown): ModelError {
   const error = (body as { error?: { code?: unknown; message?: unknown; callId?: unknown } } | null)?.error;
   const code = isModelErrorCode(error?.code) ? error.code : undefined;
-  const message = typeof error?.message === 'string' && error.message ? error.message : `HTTP ${status}`;
+  const message = typeof error?.message === 'string' && error.message
+    ? error.message
+    : messageFromStatus(status);
   const callId = typeof error?.callId === 'string' ? error.callId : undefined;
   const failure = new ModelError(message, code ?? codeFromStatus(status), status, callId);
   // THE ROW THAT WON TRAVELS WITH THE REFUSAL.
